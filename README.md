@@ -1,7 +1,7 @@
 # EmberBSD SDK
 
 Application interfaces, package contracts and developer tools for
-[EmberBSD](https://github.com/apovalixin/EmberBSD) — Unix for intelligent devices.
+[EmberBSD](https://github.com/oxtech-ember/EmberBSD) — Unix for intelligent devices.
 
 ## Purpose
 
@@ -28,26 +28,26 @@ ARM64 and RISC-V must be demonstrated; it is not implied by this repository.
 
 ## Related EmberBSD projects
 
-[EmberBSD](https://github.com/apovalixin/EmberBSD#emberbsd-ecosystem) is the
+[EmberBSD](https://github.com/oxtech-ember/EmberBSD#emberbsd-ecosystem) is the
 central project and the entry point for the ecosystem.
 
-- [EmberBSD](https://github.com/apovalixin/EmberBSD) — OS, drivers, boards and system builds.
-- [EmberBSD-Runtime](https://github.com/neonix20b/EmberBSD-Runtime) — application execution, lifecycle and shared device operations; design stage.
-- [EmberBSD-Ports](https://github.com/neonix20b/EmberBSD-Ports) — third-party recipes, patches and native dependencies.
-- [EmberBSD-Examples](https://github.com/neonix20b/EmberBSD-Examples) — standalone applications and reproducible demonstrations.
-- [Ember-Agent-Skills](https://github.com/neonix20b/Ember-Agent-Skills) — instructions for AI coding assistants and tested contributions.
+- [EmberBSD](https://github.com/oxtech-ember/EmberBSD) — OS, drivers, boards and system builds.
+- [EmberBSD-Runtime](https://github.com/oxtech-ember/EmberBSD-Runtime) — application execution, lifecycle and shared device operations; design stage.
+- [EmberBSD-Ports](https://github.com/oxtech-ember/EmberBSD-Ports) — third-party recipes, patches and native dependencies.
+- [EmberBSD-Examples](https://github.com/oxtech-ember/EmberBSD-Examples) — standalone applications and reproducible demonstrations.
+- [Ember-Agent-Skills](https://github.com/oxtech-ember/Ember-Agent-Skills) — instructions for AI coding assistants and tested contributions.
 
 ## Connect developer skills
 
 Install the developer instructions in a Codex CLI with plugin support:
 
 ```sh
-codex plugin marketplace add neonix20b/Ember-Agent-Skills --ref main
+codex plugin marketplace add oxtech-ember/Ember-Agent-Skills --ref main
 codex plugin add emberbsd-development@ember-agent-skills
 ```
 
 Start a new conversation and ask `$emberbsd-repository-guide` to identify real
 interfaces and validation steps for your application. This installs assistant
 skills; it does not create missing SDK commands. See the
-[installation, verification and update guide](https://github.com/neonix20b/Ember-Agent-Skills#install-in-codex)
+[installation, verification and update guide](https://github.com/oxtech-ember/Ember-Agent-Skills#install-in-codex)
 for the complete procedure and other assistant environments.
