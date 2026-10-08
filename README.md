@@ -35,19 +35,17 @@ central project and the entry point for the ecosystem.
 - [EmberBSD-Runtime](https://github.com/oxtech-ember/EmberBSD-Runtime) — application execution, lifecycle and shared device operations; design stage.
 - [EmberBSD-Ports](https://github.com/oxtech-ember/EmberBSD-Ports) — third-party recipes, patches and native dependencies.
 - [EmberBSD-Examples](https://github.com/oxtech-ember/EmberBSD-Examples) — standalone applications and reproducible demonstrations.
-- [Ember-Agent-Skills](https://github.com/oxtech-ember/Ember-Agent-Skills) — instructions for AI coding assistants and tested contributions.
+- [Ember-Agent-Skills](https://github.com/oxtech-ember/Ember-Agent-Skills) — portable developer skills for AI coding assistants and tested contributions.
 
 ## Connect developer skills
 
-Install the developer instructions in a Codex CLI with plugin support:
+[Ember Agent Skills](https://github.com/oxtech-ember/Ember-Agent-Skills) provides
+portable Agent Skills packaged with Agent Plugins. Load the package or the
+complete skill directory using your development environment's supported
+mechanism. Follow the [installation and validation guide](https://github.com/oxtech-ember/Ember-Agent-Skills#use-in-your-development-environment)
+for the shared format and the separately tested Codex adapter.
 
-```sh
-codex plugin marketplace add oxtech-ember/Ember-Agent-Skills --ref main
-codex plugin add emberbsd-development@ember-agent-skills
-```
-
-Start a new conversation and ask `$emberbsd-repository-guide` to identify real
-interfaces and validation steps for your application. This installs assistant
-skills; it does not create missing SDK commands. See the
-[installation, verification and update guide](https://github.com/oxtech-ember/Ember-Agent-Skills#install-in-codex)
-for the complete procedure and other assistant environments.
+Ask the `emberbsd-repository-guide` skill to identify real interfaces and
+validation steps for your application.
+The package supplies assistant instructions; it does not install a device runtime
+or create missing SDK interfaces.
