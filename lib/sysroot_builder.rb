@@ -70,15 +70,48 @@ module PrebuildSDK
       capture(@git, '-C', root, *arguments).first.strip
     end
 
-    def source(root)
+    def source(root, kind: nil)
       unless git(root, 'rev-parse', '--show-toplevel') == root &&
              git(root, 'status', '--porcelain=v1', '--untracked-files=all').empty?
         raise Error, "source must be a clean Git root: #{root}"
       end
+      # Git status can report a clean sparse or skip-worktree checkout.
+      # Require all tracked paths before any producer can write outputs.
+      if git(root, 'config', '--bool', '--default', 'false', '--get', 'core.sparseCheckout') == 'true'
+        raise Error, "sparse checkout is not a complete source tree: #{root}"
+      end
+      external_gitlinks = []
+      capture(@git, '-C', root, 'ls-files', '-v', '--stage', '-z').first.split("\0").each do |row|
+        header, name = row.split("\t", 2)
+        tag, mode, object, stage = header.split(' ')
+        # Lowercase tags mean assume-unchanged. S means skip-worktree.
+        raise Error, "source index must not hide tracked paths: #{root}: #{name}" unless tag == 'H'
+        unless stage == '0' && object.match?(/\A[0-9a-f]{40}\z/)
+          raise Error, "unsupported source index entry: #{root}: #{name}"
+        end
+        if mode == '160000'
+          unless kind == 'ports' && name == 'upstream/pkgsrc'
+            raise Error, "unexpected source gitlink: #{root}: #{name}"
+          end
+          # The selected verifier checks the explicit --pkgsrc export.
+          # This superproject pin does not qualify or fetch that gitlink.
+          external_gitlinks << { 'path' => name, 'commit' => object,
+                                 'usage' => 'not-used-by-selected-producer',
+                                 'verification' => 'explicit-pkgsrc-verified-separately',
+                                 'qualification' => 'not-assessed' }
+          next
+        end
+        unless %w[100644 100755 120000].include?(mode)
+          raise Error, "unsupported source index entry: #{root}: #{name}"
+        end
+        info = PrebuildSDK.entry(File.join(root, name))
+        present = mode == '120000' ? info&.symlink? : info&.file?
+        raise Error, "tracked source path is not materialized: #{root}: #{name}" unless present
+      end
       sha = git(root, 'rev-parse', '--verify', 'HEAD^{commit}')
       raise Error, "expected a full Git commit: #{root}" unless sha.match?(/\A[0-9a-f]{40}\z/)
 
-      { 'path' => root, 'commit' => sha }
+      { 'path' => root, 'commit' => sha, 'external_gitlinks' => external_gitlinks }
     end
 
     # The POSIX OS backend writes shell and make wrappers. Restrict its paths
@@ -247,6 +280,9 @@ module PrebuildSDK
       @host = RbConfig::CONFIG.fetch('host').gsub(/[^A-Za-z0-9_.+-]/, '_')
       profile = @host + '-' + @options.fetch('target')
       @paths['destination'] = output_path(@options.fetch('destination', File.join(sdk, 'sysroot')), sdk)
+      if Inventory.inside?(@paths.fetch('destination'), File.join(sdk, 'sysroot'))
+        raise Error, 'destination must not be below the active sysroot; use SDK/stages/NAME'
+      end
       %w[objects tools].zip(%w[os tools]).each do |name, directory|
         @paths[name] = output_path(@options.fetch(name, File.join(sdk, 'obj', directory, profile)), File.join(sdk, 'obj'))
       end
@@ -264,7 +300,7 @@ module PrebuildSDK
         Inventory.regular(File.join(@paths.fetch('os'), name))
       end
       Inventory.regular(File.join(@paths.fetch('ports'), VERIFIER))
-      @sources = %w[os ports].to_h { |name| [name, source(@paths.fetch(name))] }
+      @sources = %w[os ports].to_h { |name| [name, source(@paths.fetch(name), kind: name)] }
       git(@paths.fetch('os'), 'ls-files', '--error-unmatch', 'build.sh', 'Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk')
       git(@paths.fetch('ports'), 'ls-files', '--error-unmatch', VERIFIER)
       prefix = File.join(@paths.fetch('runtime-work'), 'stage/usr/pkg/gcc16')
@@ -540,7 +576,7 @@ module PrebuildSDK
       dispatch(@loader_command)
       dispatch(@install_command)
       copy_runtime
-      @sources.each { |name, expected| raise Error, "#{name} source changed during build" unless source(@paths.fetch(name)) == expected }
+      @sources.each { |name, expected| raise Error, "#{name} source changed during build" unless source(@paths.fetch(name), kind: name) == expected }
       raise Error, 'compiler changed during build' unless compiler == @compiler
       @receipt['outputs'] = Inventory.sysroot(@paths.fetch('destination'), @target.fetch('elf'), exclude: [RECEIPT, MARKER, LOG])
       interrupted!

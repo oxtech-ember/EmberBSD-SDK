@@ -52,6 +52,15 @@ module BuilderTests
     git(path, '-c', 'user.name=SDK fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Fixture source')
   end
 
+  def gitlink(root, name)
+    pin = git(root, 'rev-parse', 'HEAD')
+    FileUtils.mkdir_p(File.join(root, name))
+    git(root, 'update-index', '--add', '--cacheinfo', "160000,#{pin},#{name}")
+    git(root, '-c', 'user.name=SDK fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Fixture external pin')
+    assert(git(root, 'status', '--porcelain=v1').empty?)
+    pin
+  end
+
   def snapshot(root)
     result = {}
     Find.find(root) do |path|
@@ -293,6 +302,31 @@ module BuilderTests
       reject('destination must be new or empty') { builder(o).run }
       assert(snapshot(root) == before)
     end
+    test('nested destination cannot write into active sysroot') do |o, root|
+      write(o['sdk'] + '/sysroot/active', 'preserve')
+      File.symlink(o['sdk'], root + '/prebuild-sdk')
+      [o['sdk'], root + '/prebuild-sdk'].each do |sdk|
+        before = snapshot(root)
+        reject('destination must not be below the active sysroot') do
+          builder(o.merge('sdk' => sdk, 'destination' => sdk + '/sysroot/next')).run
+        end
+        assert(snapshot(root) == before, 'nested destination changed the active workspace')
+      end
+    end
+    test('nested destination is rejected even with empty active sysroot') do |o, root|
+      before = snapshot(root)
+      reject('destination must not be below the active sysroot') do
+        builder(o.merge('destination' => o['sdk'] + '/sysroot/next', 'plan' => true)).run
+      end
+      assert(snapshot(root) == before)
+    end
+    test('sibling stage plan preserves a nonempty active sysroot') do |o, root|
+      write(o['sdk'] + '/sysroot/active', 'preserve')
+      before = snapshot(root)
+      r = builder(o.merge('destination' => o['sdk'] + '/stages/next', 'plan' => true)).run
+      assert(r['paths']['destination'] == o['sdk'] + '/stages/next')
+      assert(snapshot(root) == before)
+    end
     %w[version triplet threads].zip(%w[15.2.0 other none]).each do |key, bad|
       test("reject compiler #{key}") do |o, root|
         control(o, key => bad)
@@ -333,6 +367,73 @@ module BuilderTests
     test('dirty Ports source rejected') do |o, _|
       write(o['ports'] + '/untracked', 'dirty')
       reject('clean Git root') { builder(o).run }
+    end
+    %w[os ports].each do |name|
+      test("sparse #{name} source with retained entry points is rejected") do |o, root|
+        checkout = o.fetch(name)
+        write(checkout + '/external/fixture.c', '/* Tracked source. */')
+        commit(checkout)
+        git(checkout, 'sparse-checkout', 'set', '--no-cone', '/*', '!/external/')
+        assert(!File.exist?(checkout + '/external/fixture.c'))
+        assert(git(checkout, 'status', '--porcelain=v1').empty?)
+        assert(File.file?(o['os'] + '/build.sh'))
+        assert(File.file?(o['ports'] + '/' + PrebuildSDK::SysrootBuilder::VERIFIER))
+        before = snapshot(root)
+        reject('sparse checkout is not a complete source tree') { builder(o).run }
+        assert(snapshot(root) == before, 'sparse source rejection mutated the fixture')
+      end
+      test("skip-worktree #{name} source is rejected without sparse config") do |o, root|
+        checkout = o.fetch(name)
+        write(checkout + '/external/fixture.c', '/* Tracked source. */')
+        commit(checkout)
+        git(checkout, 'update-index', '--skip-worktree', 'external/fixture.c')
+        File.unlink(checkout + '/external/fixture.c')
+        assert(git(checkout, 'status', '--porcelain=v1').empty?)
+        before = snapshot(root)
+        reject('source index must not hide tracked paths') { builder(o).run }
+        assert(snapshot(root) == before)
+      end
+    end
+    test('assume-unchanged source cannot hide an omitted tracked file') do |o, root|
+      write(o['os'] + '/external/fixture.c', '/* Tracked source. */')
+      commit(o['os'])
+      git(o['os'], 'update-index', '--assume-unchanged', 'external/fixture.c')
+      File.unlink(o['os'] + '/external/fixture.c')
+      assert(git(o['os'], 'status', '--porcelain=v1').empty?)
+      before = snapshot(root)
+      reject('source index must not hide tracked paths') { builder(o).run }
+      assert(snapshot(root) == before)
+    end
+    test('unused Ports pkgsrc gitlink records its pin without checkout') do |o, root|
+      pin = gitlink(o['ports'], 'upstream/pkgsrc')
+      before = snapshot(root)
+      r = builder(o.merge('plan' => true)).run
+      assert(r['sources']['ports']['external_gitlinks'] == [
+        { 'path' => 'upstream/pkgsrc', 'commit' => pin,
+          'usage' => 'not-used-by-selected-producer',
+          'verification' => 'explicit-pkgsrc-verified-separately',
+          'qualification' => 'not-assessed' }
+      ])
+      assert(r['sources']['os']['external_gitlinks'].empty?)
+      assert(Dir.empty?(o['ports'] + '/upstream/pkgsrc'))
+      assert(snapshot(root) == before, 'source inspection checked out or mutated the gitlink')
+    end
+    { 'os' => 'upstream/pkgsrc', 'ports' => 'external/unused' }.each do |name, path|
+      test("unexpected #{name} gitlink is rejected") do |o, root|
+        gitlink(o.fetch(name), path)
+        before = snapshot(root)
+        reject('unexpected source gitlink') { builder(o).run }
+        assert(snapshot(root) == before)
+      end
+    end
+    %w[skip-worktree assume-unchanged].each do |flag|
+      test("known Ports gitlink cannot hide behind #{flag}") do |o, root|
+        gitlink(o['ports'], 'upstream/pkgsrc')
+        git(o['ports'], 'update-index', '--' + flag, 'upstream/pkgsrc')
+        before = snapshot(root)
+        reject('source index must not hide tracked paths') { builder(o).run }
+        assert(snapshot(root) == before)
+      end
     end
     test('missing source subtree rejected') do |o, _|
       Dir.rmdir(o['os'] + '/lib')
