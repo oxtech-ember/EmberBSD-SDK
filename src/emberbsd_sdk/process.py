@@ -8,6 +8,7 @@ import signal
 import shutil
 import stat
 import subprocess
+import sys
 import time
 from .errors import SDKError, CommandError, ProcessOwnershipError
 from .paths import canonical_existing, entry, regular_file
@@ -45,18 +46,24 @@ def capture(argv, *, cwd=None, env=None, input=None):
 
 def require_posix():
     if os.name != 'posix':
-        raise SDKError('the producer backend requires a POSIX host; use Linux/WSL2 on Windows')
+        raise SDKError('producer operations require a qualified POSIX session backend')
 
 
 class SessionInspector:
-    """Enumerate one POSIX session with base-system ps and Python getsid().
+    """Enumerate a qualified Darwin build session with native birth identities.
 
     The host must expose all PIDs and session IDs. No producer starts until the
     executable and its required output profile pass a read-only probe.
+    Darwin uses public monotonic birth ticks and coherent PID/PPID/UID/state
+    rows. Its build producers must retain their effective UID. Traced or
+    reparented rows have no foreign-parent proof. Escaped setsid() producers,
+    including a parent that escapes before observation, are outside the scope.
     """
 
     def __init__(self, *, env=None):
         require_posix()
+        if sys.platform != 'darwin':
+            raise SDKError('producer session backend is not qualified on this host; layout and inspection tools remain available')
         if not hasattr(os, 'getsid'):
             raise SDKError('the producer backend requires POSIX getsid()')
         self.environment = sanitized_environment(env)
@@ -67,14 +74,26 @@ class SessionInspector:
         regular_file(self.executable)
         if not os.access(self.executable, os.X_OK):
             raise SDKError(f'POSIX ps is not executable: {self.executable}')
-        self.argv = [self.executable, '-e', '-o', 'pid=']
+        self.known = {}
+        self.uncertainty = None
+        self.uid = os.geteuid()
+        self.controller_sid = os.getsid(0)
+        from ._darwin_process import DarwinIdentity
+        self.identity = DarwinIdentity()
+        self.argv = [self.executable, '-e', '-o', 'pid=,ppid=,uid=,stat=']
         if os.getpid() not in self.members(os.getsid(0)):
             raise SDKError('POSIX ps cannot enumerate the current session')
+        # A negative SID cannot exist. Prove that this backend can also produce
+        # a complete negative result before it starts a writable producer.
+        self.members(-1)
 
     def describe(self):
-        return dict(backend='posix-ps-session-v1', argv=self.argv.copy(), scope='all process groups of the owned session')
+        return dict(backend='darwin-ps-rusage-session-v1', argv=self.argv.copy(),
+                    scope='all process groups of the owned session', uid=self.uid,
+                    credentials='producer must retain its effective UID',
+                    birth='public RUSAGE_INFO_V0 monotonic Mach ticks')
 
-    def _scan(self, sid):
+    def _rows(self):
         try:
             probe = subprocess.Popen(self.argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.environment)
             try:
@@ -89,35 +108,87 @@ class SessionInspector:
             raise SDKError(f'POSIX ps enumeration failed ({probe.returncode}): {stderr.decode("utf-8", "replace").strip()}')
         if len(stdout) > 8 * 1024 * 1024:
             raise SDKError('POSIX ps PID enumeration exceeds the size limit')
-        pids = set()
+        rows = {}
         for row in stdout.splitlines():
-            row = row.strip()
-            if not row:
+            columns = row.split()
+            if not columns:
                 continue
-            if not row.isdigit() or len(row) > 20 or int(row) <= 0:
+            if len(columns) != 4 or any(not x.isdigit() or len(x) > 20 for x in columns[:3]):
                 raise SDKError('unsupported PID output from POSIX ps enumeration')
-            pid = int(row)
-            if pid in pids:
-                raise SDKError('duplicate PID in POSIX ps enumeration')
-            pids.add(pid)
-        if os.getpid() not in pids:
+            pid = int(columns[0])
+            if pid <= 0 or pid > 2147483647 or pid in rows:
+                raise SDKError('invalid or duplicate PID in POSIX ps enumeration')
+            if int(columns[1]) > 2147483647 or int(columns[2]) > 4294967295:
+                raise SDKError('out-of-range process identity from POSIX ps enumeration')
+            if any(value > 127 or value < 33 for value in columns[3]):
+                raise SDKError('unsupported process state from POSIX ps enumeration')
+            rows[pid] = (int(columns[1]), int(columns[2]), columns[3])
+        if os.getpid() not in rows:
             raise SDKError('POSIX ps PID enumeration does not include the controller')
-        members, vanished = set(), False
-        for pid in sorted(pids):
-            # This exact child has exited after communicate(). It inherited the
-            # controller session and cannot be an owned producer member.
-            if pid == probe.pid:
+        # This exact, reaped probe inherited the controller session.
+        rows.pop(probe.pid, None)
+        return rows
+
+    def _scan(self, sid):
+        return self._scan_darwin(sid)
+
+    def _scan_darwin(self, sid):
+        # Cached identities were read before this snapshot. A matching birth
+        # read after it proves that the same parent spanned the child PPID row.
+        known = self.known
+        barrier = self.identity.now()
+        rows = self._rows()
+        members, uncertain, observed = set(), False, {}
+        failures = []
+        def birth_of(pid):
+            try:
+                return self.identity.birth(pid)
+            except SDKError as exc:
+                # Access can fail during exit or exec. This is no evidence of
+                # absence. Keep the negative result unknown unless another
+                # identity proof accounts for this row.
+                failures.append(str(exc))
+                return None
+        for pid, (ppid, uid, state) in sorted(rows.items()):
+            if uid != self.uid:
+                # This profile is for builds that retain their effective UID.
+                # Do not silently accept a visible violation of that contract.
+                try:
+                    if sid != self.controller_sid and os.getsid(pid) == sid:
+                        raise SDKError('owned producer changed its effective UID')
+                except ProcessLookupError:
+                    pass
+                except OSError as exc:
+                    raise SDKError(f'cannot inspect session identity for PID {pid}: {exc}') from exc
                 continue
+            before = birth_of(pid)
             try:
                 actual = os.getsid(pid)
             except ProcessLookupError:
-                vanished = True
-                continue
+                actual = None
             except OSError as exc:
                 raise SDKError(f'cannot inspect session identity for PID {pid}: {exc}') from exc
+            after = birth_of(pid)
             if actual == sid:
                 members.add(pid)
-        return members, vanished
+            if before is not None and before == after and before <= barrier and actual is not None:
+                observed[pid] = (before, actual)
+                continue
+            if actual == sid:
+                continue
+            parent = known.get(ppid)
+            if actual is None and pid != sid and ppid > 1 and b'X' not in state and parent is not None:
+                birth, parent_sid = parent
+                if parent_sid != sid and birth_of(ppid) == birth:
+                    # A process cannot join another existing POSIX session.
+                    # PPID1 and traced rows have no such parent proof.
+                    continue
+            # Reuse after the barrier, a changed birth, or an unclassified
+            # vanished process must not turn an owned fork into false emptiness.
+            uncertain = True
+        self.known = observed
+        self.uncertainty = failures[-1] if uncertain and failures else None
+        return members, uncertain
 
     def members(self, sid):
         deadline = time.monotonic() + 2
@@ -128,7 +199,9 @@ class SessionInspector:
             # A vanished parent can have forked after the PID snapshot. Do not
             # accept an empty session until every listed PID was accounted for.
             if time.monotonic() >= deadline:
-                raise SDKError('POSIX session enumeration did not reach a complete empty snapshot')
+                reason = getattr(self, 'uncertainty', None)
+                detail = f': {reason}' if reason else ''
+                raise SDKError('POSIX session enumeration did not reach a complete empty snapshot' + detail)
             time.sleep(.02)
 
 

@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 from unittest.mock import patch
+from unittest import skipUnless
 
 from test_core import TemporaryCase, SDK_SOURCE, header, archive
 from emberbsd_sdk import inventory, jsonio, process
@@ -472,7 +473,7 @@ class BuilderTests(TemporaryCase):
         for name in ('objects', 'tools'):
             self.assertTrue((Path(record['paths'][name]) / B.QUARANTINE).is_file())
 
-    def test_inspection_failure_quarantines_started_contexts(self):
+    def inspection_failure_quarantines(self, inject):
         from emberbsd_sdk.errors import ProcessOwnershipError
         original_start = process.OwnedProcessGroup.start
         original_members = process.SessionInspector.members
@@ -483,11 +484,11 @@ class BuilderTests(TemporaryCase):
             return pid
         def members(inspector, sid):
             if sid in started:
-                raise SDKError('injected active session inspection failure')
+                return inject(inspector, sid)
             return original_members(inspector, sid)
         try:
             with patch.object(process.OwnedProcessGroup, 'start', start), patch.object(process.SessionInspector, 'members', members):
-                with self.assertRaises(SDKError): self.run_builder()
+                with self.assertRaises(ProcessOwnershipError): self.run_builder()
         finally:
             # The fixture producer is bounded. Drain it using the unpatched backend.
             inspector = process.SessionInspector(env=process.sanitized_environment())
@@ -502,6 +503,19 @@ class BuilderTests(TemporaryCase):
         for name in ('objects', 'tools'):
             self.assertTrue((Path(receipt['paths'][name]) / B.QUARANTINE).is_file())
         self.refusal_unchanged('quarantined', destination=self.options['sdk'] + '/next', plan=True)
+
+    def test_inspection_failure_quarantines_started_contexts(self):
+        def inject(inspector, sid):
+            raise SDKError('injected active session inspection failure')
+        self.inspection_failure_quarantines(inject)
+
+    @skipUnless(sys.platform == 'darwin', 'Darwin native process profile')
+    def test_foreign_getsid_denied_quarantines_started_contexts(self):
+        def inject(inspector, sid):
+            rows = {2147000000: (1, inspector.uid + 1, b'R')}
+            with patch.object(inspector, '_rows', return_value=rows), patch.object(process.os, 'getsid', side_effect=PermissionError('injected foreign inspection refusal')):
+                return inspector._scan_darwin(sid)
+        self.inspection_failure_quarantines(inject)
 
 
 def compiler_refusal(key, bad):
