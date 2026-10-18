@@ -8,8 +8,8 @@ import signal
 import stat
 import subprocess
 import time
-from .errors import SDKError
-from .paths import entry
+from .errors import SDKError, CommandError
+from .paths import entry, regular_file
 
 
 def sanitized_environment(environment=None):
@@ -28,14 +28,17 @@ def _argv(argv):
     return result
 
 
-def capture(argv, *, cwd=None, env=None):
+def capture(argv, *, cwd=None, env=None, input=None):
     argv = _argv(argv)
+    if input is not None and not isinstance(input, bytes):
+        raise SDKError('command input must be bytes or None')
     try:
-        result = subprocess.run(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        options = {'stdin': subprocess.DEVNULL} if input is None else {'input': input}
+        result = subprocess.run(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, **options)
     except OSError as exc:
         raise SDKError(f'cannot run {argv!r}: {exc}') from exc
     if result.returncode:
-        raise SDKError(f'command failed ({result.returncode}): {argv!r}: {result.stderr.decode("utf-8", "replace").strip()}')
+        raise CommandError(result.returncode, argv, result.stdout, result.stderr)
     return result
 
 
@@ -74,6 +77,8 @@ class OwnedProcessGroup:
             return True
         except ProcessLookupError:
             return False
+        except PermissionError as exc:
+            raise SDKError(f'cannot inspect owned process group {self.pid}: {exc}') from exc
 
     def _drain(self, seconds):
         deadline = time.monotonic() + seconds
@@ -93,6 +98,8 @@ class OwnedProcessGroup:
                 os.killpg(self.pid, sig)
             except ProcessLookupError:
                 pass
+            except PermissionError as exc:
+                raise SDKError(f'cannot send signal {sig} to owned process group {self.pid}: {exc}') from exc
             if self._drain(delay):
                 return
         raise SDKError('owned process group did not disappear')
@@ -140,3 +147,48 @@ class ContextLocks:
 
     def __exit__(self, *args):
         self.close()
+
+
+def run_logged(argv, log, *, cwd=None, env=None, append=False):
+    """Run a checked producer and drain its owned group before closing its log.
+
+    Signal handlers are entrypoint policy. A handler can raise KeyboardInterrupt.
+    The caller must retain its context locks until this function returns.
+    """
+    require_posix()
+    argv = _argv(argv)
+    expected = regular_file(log) if append else None
+    flags = os.O_WRONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    flags |= os.O_APPEND if append else os.O_CREAT | os.O_EXCL
+    fd = os.open(log, flags, 0o644)
+    with os.fdopen(fd, 'ab' if append else 'wb') as output:
+        opened = os.fstat(output.fileno())
+        if not stat.S_ISREG(opened.st_mode):
+            raise SDKError(f'expected a regular producer log: {log}')
+        if expected is not None and (expected.st_dev, expected.st_ino) != (opened.st_dev, opened.st_ino):
+            raise SDKError(f'producer log changed before append: {log}')
+        group = OwnedProcessGroup(argv, cwd=cwd, env=env, stdout=output, stderr=output)
+        try:
+            group.start()
+            while (code := group.poll()) is None:
+                time.sleep(0.05)
+            if group.alive():
+                raise SDKError(f'producer left live descendants; inspect {log}')
+            if code:
+                raise CommandError(code, argv, log=os.fspath(log))
+            return subprocess.CompletedProcess(argv, code)
+        finally:
+            # A second signal must not interrupt descendant drainage.
+            previous = {}
+            if group.alive():
+                import threading
+                if threading.current_thread() is threading.main_thread():
+                    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+                        previous[number] = signal.signal(number, signal.SIG_IGN)
+                try:
+                    group.stop()
+                finally:
+                    for number, handler in previous.items():
+                        signal.signal(number, handler)
+            output.flush()
+            os.fsync(output.fileno())

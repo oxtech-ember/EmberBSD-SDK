@@ -65,21 +65,26 @@ def read_elf_dynamic(path, *, machine=None):
         if phnum and phoff < 64:
             raise SDKError(f'invalid ELF program-header offset: {path}')
         table = read_at(phoff, phnum * phentsize) if phnum else b''
-        loads, dynamics = [], []
-        relro = False
+        loads, memory_loads, dynamics, relro_ranges = [], [], [], []
         for index in range(phnum):
             kind, flags, offset, address, physical, filesz, memsz, align = struct.unpack_from('<IIQQQQQQ', table, index * 56)
-            if filesz > memsz or offset > size or filesz > size - offset:
+            if filesz > memsz or address + memsz > 1 << 64 or offset > size or filesz > size - offset:
                 raise SDKError(f'ELF segment outside file bounds: {path}')
             if kind == 1:
                 loads.append((address, offset, filesz))
+                memory_loads.append((address, memsz))
             elif kind == 2:
                 dynamics.append((offset, filesz))
             elif kind == 0x6474e552:
-                relro = True
+                relro_ranges.append((address, memsz))
+        if len(relro_ranges) > 1:
+            raise SDKError(f'multiple ELF RELRO segments: {path}')
+        for address, length in relro_ranges:
+            if length == 0 or not any(start <= address and address - start <= size and length <= size - (address - start) for start, size in memory_loads):
+                raise SDKError(f'ELF RELRO range is not inside a load segment: {path}')
         if len(dynamics) > 1:
             raise SDKError(f'multiple ELF dynamic segments: {path}')
-        result.update(soname=None, needed=[], rpath=None, runpath=None, relro=relro)
+        result.update(soname=None, needed=[], rpath=None, runpath=None, relro=bool(relro_ranges))
         if dynamics:
             offset, length = dynamics[0]
             if length == 0 or length > MAX_DYNAMIC or length % 16:

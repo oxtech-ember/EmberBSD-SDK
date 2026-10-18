@@ -132,7 +132,7 @@ class CoreTests(TemporaryCase):
             jsonio.write_json(file, {})
         self.assertEqual(file.read_bytes(), before)
         (self.root / 'alias').symlink_to(file)
-        with self.assertRaises(OSError):
+        with self.assertRaises((OSError, SDKError)):
             jsonio.write_json(self.root / 'alias', {}, exclusive=False)
         self.assertEqual(file.read_bytes(), before)
         jsonio.write_json(file, {'y': 2}, exclusive=False)
@@ -213,6 +213,59 @@ class CoreTests(TemporaryCase):
                 process.OwnedProcessGroup(['unused'], cwd=self.root, env={}, stdout=None, stderr=None)
             with self.assertRaisesRegex(SDKError, 'POSIX'):
                 process.ContextLocks([], self.root)
+
+class AdditionalCoreTests(TemporaryCase):
+    def test_relro_requires_positive_contained_memory_range(self):
+        file = self.write('elf', dynamic_elf())
+        self.assertTrue(elf.read_elf_dynamic(file)['relro'])
+        for offset, value in ((64 + 112 + 40, 0), (64 + 112 + 16, 0x900000), (64 + 112 + 40, 1000)):
+            data = bytearray(dynamic_elf()); struct.pack_into('<Q', data, offset, value); file.write_bytes(data)
+            with self.subTest(offset=offset, value=value), self.assertRaises(SDKError):
+                elf.read_elf_dynamic(file)
+        data = bytearray(dynamic_elf()); struct.pack_into('<I', data, 64 + 56, 0x6474e552); file.write_bytes(data)
+        with self.assertRaises(SDKError): elf.read_elf_dynamic(file)
+
+    def test_atomic_replacement_preserves_old_hardlinked_receipt(self):
+        receipt = self.write('receipt.json', '{"accepted":true}\n')
+        output = self.root / 'output.json'; os.link(receipt, output)
+        original = receipt.read_bytes(); original_inode = receipt.stat().st_ino
+        jsonio.write_json(output, {'new': 1}, exclusive=False)
+        self.assertEqual(receipt.read_bytes(), original)
+        self.assertEqual(receipt.stat().st_ino, original_inode)
+        self.assertNotEqual(output.stat().st_ino, original_inode)
+        self.assertEqual(jsonio.read_json(output), {'new': 1})
+
+    def test_capture_explicit_bytes_input(self):
+        result = process.capture([sys.executable, '-c', 'import sys;sys.stdout.buffer.write(sys.stdin.buffer.read())'], input=b'\x00\xff')
+        self.assertEqual(result.stdout, b'\x00\xff')
+        with self.assertRaises(SDKError): process.capture(['unused'], input='text')
+
+class CanonicalTraversalTests(TemporaryCase):
+    def test_symlink_parent_traversal_uses_filesystem_semantics(self):
+        (self.root / 'real/sub').mkdir(parents=True)
+        target = self.write('real/payload', 'preserve')
+        (self.root / 'alias').symlink_to('real/sub')
+        traversed = str(self.root / 'alias') + '/../payload'
+        self.assertEqual(paths.canonical_existing(traversed), str(target))
+        self.assertEqual(paths.canonical_new(traversed), str(target))
+        with self.assertRaisesRegex(SDKError, 'overlapping'):
+            paths.reject_overlap(traversed, target)
+        self.assertEqual(paths.canonical_new(str(self.root / 'alias') + '/../new/path'), str(self.root / 'real/new/path'))
+
+
+class CaseIdentityTests(TemporaryCase):
+    def test_case_alias_existing_ancestor_blocks_new_child_overlap(self):
+        source = self.root / 'Source'; source.mkdir()
+        alias = self.root / 'source'
+        if not alias.exists() or not os.path.samefile(source, alias):
+            self.skipTest('filesystem does not expose case aliases')
+        # Distinct directories must remain usable on the same filesystem.
+        other = self.root / 'Distinct'; other.mkdir()
+        paths.reject_overlap(source, other / 'new')
+        with self.assertRaisesRegex(SDKError, 'overlapping'):
+            paths.reject_overlap(source, alias / 'new-output')
+        self.assertTrue(paths.inside(alias / 'new-output', source))
+        self.assertFalse(paths.inside(alias, source))
 
 
 if __name__ == '__main__':

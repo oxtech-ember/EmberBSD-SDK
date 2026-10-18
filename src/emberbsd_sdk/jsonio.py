@@ -5,8 +5,9 @@
 import json
 import os
 import stat
+import secrets
 from .errors import SDKError
-from .paths import open_regular, verify_stable
+from .paths import entry, open_regular, verify_stable
 
 MAX_JSON = 16 * 1024 * 1024
 
@@ -88,15 +89,50 @@ def json_bytes(value):
 
 
 def write_json(path, value, exclusive=True, mode=0o644):
+    """Create a durable file, or atomically replace a regular file with a new inode."""
     data = json_bytes(value)
-    flags = os.O_WRONLY | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    path = os.fspath(path)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
     if exclusive:
-        flags |= os.O_EXCL
-    fd = os.open(path, flags, mode)
-    with os.fdopen(fd, 'wb') as handle:
-        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+        fd = os.open(path, flags, mode)
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        return
+    previous = entry(path)
+    if previous is not None and not stat.S_ISREG(previous.st_mode):
+        raise SDKError(f'expected a regular output JSON: {path}')
+    temporary = None
+    try:
+        for _ in range(128):
+            candidate = os.path.join(os.path.dirname(os.path.abspath(path)), '.' + os.path.basename(path) + '.' + secrets.token_hex(16))
+            try:
+                fd = os.open(candidate, flags, mode)
+                temporary = candidate
+                break
+            except FileExistsError:
+                continue
+        if temporary is None:
+            raise SDKError(f'cannot allocate an exclusive JSON staging file: {path}')
+        with os.fdopen(fd, 'wb') as handle:
+            if previous is not None:
+                os.fchmod(handle.fileno(), stat.S_IMODE(previous.st_mode))
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        current = entry(path)
+        if current is not None and not stat.S_ISREG(current.st_mode):
             raise SDKError(f'expected a regular output JSON: {path}')
-        handle.write(data)
-        handle.truncate()
-        handle.flush()
-        os.fsync(handle.fileno())
+        # replace never follows a destination alias or truncates a hardlink inode.
+        os.replace(temporary, path)
+        temporary = None
+        if os.name == 'posix':
+            directory = os.open(os.path.dirname(os.path.abspath(path)), os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    finally:
+        if temporary is not None:
+            os.unlink(temporary)

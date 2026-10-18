@@ -8,15 +8,19 @@ import stat
 from .errors import SDKError
 
 
-def path_string(value):
+def _raw_absolute(value):
     try:
         value = os.fspath(value)
         if not isinstance(value, str) or not value or any(ord(c) < 32 or ord(c) == 127 for c in value):
             raise ValueError('expected a nonempty path without control characters')
         value.encode('utf-8', 'strict')
-        return os.path.abspath(value)
+        return value if os.path.isabs(value) else os.path.join(os.getcwd(), value)
     except (TypeError, ValueError, UnicodeError) as exc:
         raise SDKError(f'invalid path: {exc}') from exc
+
+
+def path_string(value):
+    return os.path.normpath(_raw_absolute(value))
 
 
 def entry(value):
@@ -42,13 +46,13 @@ def regular_file(value):
 
 def canonical_existing(value):
     try:
-        return path_string(os.path.realpath(path_string(value), strict=True))
+        return path_string(os.path.realpath(_raw_absolute(value), strict=True))
     except OSError as exc:
         raise SDKError(str(exc)) from exc
 
 
 def canonical_new(value):
-    value = path_string(value)
+    value = _raw_absolute(value)
     tail = []
     current = value
     while entry(current) is None:
@@ -63,19 +67,34 @@ def canonical_new(value):
     return os.path.join(base, *reversed(tail))
 
 
+def relative_inside(value, root):
+    """Return a relative path within root, or None, using existing inode identity.
+
+    Empty means root itself. Existing ancestor identity also detects aliases on
+    case-insensitive filesystems without changing names on case-sensitive ones.
+    """
+    value, root = canonical_new(value), canonical_new(root)
+    root_info = entry(root)
+    current, tail = value, []
+    while True:
+        info = entry(current)
+        same_inode = root_info is not None and info is not None and (root_info.st_dev, root_info.st_ino) == (info.st_dev, info.st_ino)
+        if current == root or same_inode:
+            return os.path.join(*reversed(tail)) if tail else ''
+        parent, name = os.path.split(current)
+        if parent == current:
+            return None
+        tail.append(name)
+        current = parent
+
+
 def inside(value, root):
-    value, root = os.path.normpath(value), os.path.normpath(root)
-    try:
-        return value != root and os.path.commonpath((value, root)) == root
-    except ValueError:
-        return False
+    relative = relative_inside(value, root)
+    return relative is not None and relative != ''
 
 
 def reject_overlap(left, right):
-    a, b = canonical_new(left), canonical_new(right)
-    sa, sb = entry(a), entry(b)
-    same_inode = sa is not None and sb is not None and (sa.st_dev, sa.st_ino) == (sb.st_dev, sb.st_ino)
-    if a == b or inside(a, b) or inside(b, a) or same_inode:
+    if relative_inside(left, right) is not None or relative_inside(right, left) is not None:
         raise SDKError(f'overlapping input/output paths: {left} and {right}')
 
 
