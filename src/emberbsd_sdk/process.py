@@ -5,11 +5,12 @@
 import hashlib
 import os
 import signal
+import shutil
 import stat
 import subprocess
 import time
-from .errors import SDKError, CommandError
-from .paths import entry, regular_file
+from .errors import SDKError, CommandError, ProcessOwnershipError
+from .paths import canonical_existing, entry, regular_file
 
 
 def sanitized_environment(environment=None):
@@ -47,18 +48,107 @@ def require_posix():
         raise SDKError('the producer backend requires a POSIX host; use Linux/WSL2 on Windows')
 
 
-class OwnedProcessGroup:
-    """Own exactly one session. stop() retains ownership until the group drains."""
+class SessionInspector:
+    """Enumerate one POSIX session with base-system ps and Python getsid().
 
-    def __init__(self, argv, *, cwd, env, stdout, stderr):
+    The host must expose all PIDs and session IDs. No producer starts until the
+    executable and its required output profile pass a read-only probe.
+    """
+
+    def __init__(self, *, env=None):
+        require_posix()
+        if not hasattr(os, 'getsid'):
+            raise SDKError('the producer backend requires POSIX getsid()')
+        self.environment = sanitized_environment(env)
+        selected = shutil.which('ps', path=self.environment.get('PATH', os.defpath))
+        if selected is None:
+            raise SDKError('the producer backend requires base-system POSIX ps')
+        self.executable = canonical_existing(selected)
+        regular_file(self.executable)
+        if not os.access(self.executable, os.X_OK):
+            raise SDKError(f'POSIX ps is not executable: {self.executable}')
+        self.argv = [self.executable, '-e', '-o', 'pid=']
+        if os.getpid() not in self.members(os.getsid(0)):
+            raise SDKError('POSIX ps cannot enumerate the current session')
+
+    def describe(self):
+        return dict(backend='posix-ps-session-v1', argv=self.argv.copy(), scope='all process groups of the owned session')
+
+    def _scan(self, sid):
+        try:
+            probe = subprocess.Popen(self.argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.environment)
+            try:
+                stdout, stderr = probe.communicate(timeout=5)
+            except BaseException:
+                probe.kill()
+                probe.communicate()
+                raise
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise SDKError(f'cannot enumerate POSIX session members: {exc}') from exc
+        if probe.returncode != 0:
+            raise SDKError(f'POSIX ps enumeration failed ({probe.returncode}): {stderr.decode("utf-8", "replace").strip()}')
+        if len(stdout) > 8 * 1024 * 1024:
+            raise SDKError('POSIX ps PID enumeration exceeds the size limit')
+        pids = set()
+        for row in stdout.splitlines():
+            row = row.strip()
+            if not row:
+                continue
+            if not row.isdigit() or len(row) > 20 or int(row) <= 0:
+                raise SDKError('unsupported PID output from POSIX ps enumeration')
+            pid = int(row)
+            if pid in pids:
+                raise SDKError('duplicate PID in POSIX ps enumeration')
+            pids.add(pid)
+        if os.getpid() not in pids:
+            raise SDKError('POSIX ps PID enumeration does not include the controller')
+        members, vanished = set(), False
+        for pid in sorted(pids):
+            # This exact child has exited after communicate(). It inherited the
+            # controller session and cannot be an owned producer member.
+            if pid == probe.pid:
+                continue
+            try:
+                actual = os.getsid(pid)
+            except ProcessLookupError:
+                vanished = True
+                continue
+            except OSError as exc:
+                raise SDKError(f'cannot inspect session identity for PID {pid}: {exc}') from exc
+            if actual == sid:
+                members.add(pid)
+        return members, vanished
+
+    def members(self, sid):
+        deadline = time.monotonic() + 2
+        while True:
+            members, vanished = self._scan(sid)
+            if members or not vanished:
+                return members
+            # A vanished parent can have forked after the PID snapshot. Do not
+            # accept an empty session until every listed PID was accounted for.
+            if time.monotonic() >= deadline:
+                raise SDKError('POSIX session enumeration did not reach a complete empty snapshot')
+            time.sleep(.02)
+
+
+class OwnedProcessGroup:
+    """Own all process groups of one session. Keep the API v1 class name.
+
+    A descendant can change its PGID. A new session from setsid() is outside
+    this backend contract. Import does not enumerate or change any process.
+    """
+
+    def __init__(self, argv, *, cwd, env, stdout, stderr, inspector=None):
         require_posix()
         self.argv = _argv(argv)
         self.options = dict(cwd=cwd, env=env, stdout=stdout, stderr=stderr)
+        self.inspector = SessionInspector(env=env) if inspector is None else inspector
         self.child = None
 
     def start(self):
         if self.child is not None:
-            raise SDKError('owned process group is already started')
+            raise SDKError('owned session is already started')
         self.child = subprocess.Popen(self.argv, stdin=subprocess.DEVNULL, start_new_session=True, **self.options)
         return self.child.pid
 
@@ -69,23 +159,36 @@ class OwnedProcessGroup:
     def poll(self):
         return self.child.poll()
 
-    def alive(self):
-        if self.child is None:
-            return False
+    def _members(self):
         try:
-            os.killpg(self.pid, 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError as exc:
-            raise SDKError(f'cannot inspect owned process group {self.pid}: {exc}') from exc
+            return self.inspector.members(self.pid)
+        except SDKError as exc:
+            raise ProcessOwnershipError(self.pid, str(exc)) from exc
 
-    def _drain(self, seconds):
+    def alive(self):
+        return self.child is not None and bool(self._members())
+
+    def _signal(self, pid, number):
+        try:
+            if os.getsid(pid) != self.pid:
+                return
+            os.kill(pid, number)
+        except ProcessLookupError:
+            pass
+        except OSError as exc:
+            raise ProcessOwnershipError(self.pid, f'cannot signal owned PID {pid}: {exc}') from exc
+
+    def _drain(self, seconds, number):
         deadline = time.monotonic() + seconds
+        signalled = set()
         while True:
             self.child.poll()
-            if not self.alive():
+            members = self._members()
+            if not members:
                 return True
+            for pid in sorted(members - signalled):
+                self._signal(pid, number)
+                signalled.add(pid)
             if time.monotonic() >= deadline:
                 return False
             time.sleep(0.05)
@@ -93,16 +196,10 @@ class OwnedProcessGroup:
     def stop(self):
         if self.child is None:
             return
-        for sig, delay in ((signal.SIGTERM, 2), (signal.SIGKILL, 10)):
-            try:
-                os.killpg(self.pid, sig)
-            except ProcessLookupError:
-                pass
-            except PermissionError as exc:
-                raise SDKError(f'cannot send signal {sig} to owned process group {self.pid}: {exc}') from exc
-            if self._drain(delay):
+        for number, delay in ((signal.SIGTERM, 2), (signal.SIGKILL, 10)):
+            if self._drain(delay, number):
                 return
-        raise SDKError('owned process group did not disappear')
+        raise ProcessOwnershipError(self.pid, 'session members did not disappear')
 
 
 class ContextLocks:
@@ -150,13 +247,15 @@ class ContextLocks:
 
 
 def run_logged(argv, log, *, cwd=None, env=None, append=False):
-    """Run a checked producer and drain its owned group before closing its log.
+    """Run a checked producer and drain its owned session before closing its log.
 
     Signal handlers are entrypoint policy. A handler can raise KeyboardInterrupt.
     The caller must retain its context locks until this function returns.
+    If ProcessOwnershipError occurs, quarantine writable work before reuse.
     """
     require_posix()
     argv = _argv(argv)
+    group = OwnedProcessGroup(argv, cwd=cwd, env=env, stdout=None, stderr=None)
     expected = regular_file(log) if append else None
     flags = os.O_WRONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
     flags |= os.O_APPEND if append else os.O_CREAT | os.O_EXCL
@@ -167,26 +266,28 @@ def run_logged(argv, log, *, cwd=None, env=None, append=False):
             raise SDKError(f'expected a regular producer log: {log}')
         if expected is not None and (expected.st_dev, expected.st_ino) != (opened.st_dev, opened.st_ino):
             raise SDKError(f'producer log changed before append: {log}')
-        group = OwnedProcessGroup(argv, cwd=cwd, env=env, stdout=output, stderr=output)
+        group.options.update(stdout=output, stderr=output)
         try:
             group.start()
             while (code := group.poll()) is None:
                 time.sleep(0.05)
             if group.alive():
-                raise SDKError(f'producer left live descendants; inspect {log}')
+                raise SDKError(f'producer left live descendants in its owned session; inspect {log}')
             if code:
                 raise CommandError(code, argv, log=os.fspath(log))
             return subprocess.CompletedProcess(argv, code)
         finally:
             # A second signal must not interrupt descendant drainage.
             previous = {}
-            if group.alive():
+            if group.pid is not None:
                 import threading
                 if threading.current_thread() is threading.main_thread():
                     for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
                         previous[number] = signal.signal(number, signal.SIG_IGN)
                 try:
                     group.stop()
+                except ProcessOwnershipError as exc:
+                    raise ProcessOwnershipError(exc.sid, exc.reason, log=os.fspath(log)) from exc
                 finally:
                     for number, handler in previous.items():
                         signal.signal(number, handler)

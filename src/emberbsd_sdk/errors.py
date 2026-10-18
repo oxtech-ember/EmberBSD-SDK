@@ -18,3 +18,14 @@ class CommandError(SDKError):
         self.log = log
         detail = f'; inspect {log}' if log is not None else ': ' + stderr.decode('utf-8', 'replace').strip()
         super().__init__(f'command failed ({returncode}): {self.argv!r}{detail}')
+
+
+class ProcessOwnershipError(SDKError):
+    """The caller must quarantine writable work after an unproven session drain."""
+
+    def __init__(self, sid, reason, log=None):
+        self.sid = sid
+        self.reason = reason
+        self.log = log
+        detail = f'; inspect {log}' if log is not None else ''
+        super().__init__(f'cannot prove the drain of owned session {sid}: {reason}{detail}')

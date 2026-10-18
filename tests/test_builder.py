@@ -139,6 +139,7 @@ dest = Path(value('-D')); (dest / 'producer-argv.json').write_text(json.dumps(a)
 if c.get('build_fail'): raise SystemExit('Injected build failure')
 if c.get('build_wait'):
     if c.get('build_ignore_child') and os.fork() == 0:
+        if c.get('build_new_group'): os.setpgid(0, 0)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         (dest / 'descendant-pid').write_text(str(os.getpid()))
         while True:
@@ -408,15 +409,19 @@ class BuilderTests(TemporaryCase):
         except ProcessLookupError: return
         self.fail(f'owned producer still exists: {pid}')
 
-    def signal_case(self, descendant):
-        self.control(build_wait=True, build_ignore_child=descendant)
+    def signal_case(self, descendant, new_group=False, sent_signal=signal.SIGTERM):
+        self.control(build_wait=True, build_ignore_child=descendant, build_new_group=new_group)
         log = self.root / 'signal.log'
         with log.open('wb') as output:
             child = subprocess.Popen(self.cli(), stdout=output, stderr=output)
             self.addCleanup(lambda: child.poll() is None and (child.kill(), child.wait()))
             destination = Path(self.options['sdk']) / 'sysroot'
             producer = self.wait_file(destination / ('descendant-pid' if descendant else 'child-pid'))
-            child.send_signal(signal.SIGTERM)
+            if new_group:
+                leader = self.wait_file(destination / 'child-pid')
+                self.assertEqual(os.getsid(producer), leader)
+                self.assertEqual(os.getpgid(producer), producer)
+            child.send_signal(sent_signal)
             if descendant:
                 # The writer ignores TERM, so the caller must retain its locks
                 # while waiting to escalate to KILL.
@@ -427,7 +432,7 @@ class BuilderTests(TemporaryCase):
             self.assertEqual(child.wait(timeout=20), 130, log.read_bytes())
             self.assert_gone(producer)
         record = json.loads((destination / B.RECEIPT).read_text())
-        self.assertEqual(record['qualification'], 'incomplete'); self.assertIn('TERM', record['error'])
+        self.assertEqual(record['qualification'], 'incomplete'); self.assertIn(signal.Signals(sent_signal).name.removeprefix('SIG'), record['error'])
         self.assertTrue((destination / B.MARKER).is_file())
         with process.ContextLocks([record['paths']['objects']], Path(self.options['sdk']) / 'obj'):
             pass
@@ -437,10 +442,12 @@ class BuilderTests(TemporaryCase):
 
     def test_term_stops_child_before_lock_release(self): self.signal_case(False)
     def test_term_drains_ignoring_descendant(self): self.signal_case(True)
+    def test_term_drains_ignoring_new_group(self): self.signal_case(True, new_group=True)
+    def test_hup_drains_ignoring_new_group(self): self.signal_case(True, new_group=True, sent_signal=signal.SIGHUP)
 
-    def test_exited_producer_cannot_leave_writer(self):
+    def exited_producer_case(self, new_group):
         for status in (7, 0):
-            self.control(build_wait=True, build_ignore_child=True, build_orphan_exit=status)
+            self.control(build_wait=True, build_ignore_child=True, build_new_group=new_group, build_orphan_exit=status)
             destination = Path(self.options['sdk']) / f'stage-{status}'
             with self.assertRaisesRegex(SDKError, 'producer left live descendants'):
                 self.run_builder(destination=str(destination))
@@ -448,6 +455,9 @@ class BuilderTests(TemporaryCase):
             record = json.loads((destination / B.RECEIPT).read_text()); self.assertEqual(record['qualification'], 'incomplete')
             writer = Path(record['paths']['objects']) / 'fixture-writer.log'; before = writer.read_bytes(); time.sleep(0.2)
             self.assertEqual(writer.read_bytes(), before)
+
+    def test_exited_producer_cannot_leave_writer(self): self.exited_producer_case(False)
+    def test_exited_producer_cannot_leave_new_group_writer(self): self.exited_producer_case(True)
 
     def test_quarantine_when_group_cannot_drain(self):
         # Causal control: without a failed stop, accepted fixtures have no quarantine.
@@ -461,6 +471,37 @@ class BuilderTests(TemporaryCase):
         record = json.loads((Path(self.options['sdk']) / 'sysroot' / B.RECEIPT).read_text())
         for name in ('objects', 'tools'):
             self.assertTrue((Path(record['paths'][name]) / B.QUARANTINE).is_file())
+
+    def test_inspection_failure_quarantines_started_contexts(self):
+        from emberbsd_sdk.errors import ProcessOwnershipError
+        original_start = process.OwnedProcessGroup.start
+        original_members = process.SessionInspector.members
+        started = []
+        def start(group):
+            pid = original_start(group)
+            started.append(pid)
+            return pid
+        def members(inspector, sid):
+            if sid in started:
+                raise SDKError('injected active session inspection failure')
+            return original_members(inspector, sid)
+        try:
+            with patch.object(process.OwnedProcessGroup, 'start', start), patch.object(process.SessionInspector, 'members', members):
+                with self.assertRaises(SDKError): self.run_builder()
+        finally:
+            # The fixture producer is bounded. Drain it using the unpatched backend.
+            inspector = process.SessionInspector(env=process.sanitized_environment())
+            for sid in started:
+                for pid in inspector.members(sid):
+                    try: os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError: pass
+                deadline = time.monotonic() + 10
+                while inspector.members(sid) and time.monotonic() < deadline: time.sleep(.03)
+                self.assertFalse(inspector.members(sid))
+        receipt = json.loads((Path(self.options['sdk']) / 'sysroot' / B.RECEIPT).read_text())
+        for name in ('objects', 'tools'):
+            self.assertTrue((Path(receipt['paths'][name]) / B.QUARANTINE).is_file())
+        self.refusal_unchanged('quarantined', destination=self.options['sdk'] + '/next', plan=True)
 
 
 def compiler_refusal(key, bad):

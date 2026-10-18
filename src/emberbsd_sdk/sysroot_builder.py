@@ -14,7 +14,7 @@ import stat
 import sysconfig
 import time
 from . import API_VERSION, inventory, jsonio, paths, process, provenance, workspace
-from .errors import SDKError
+from .errors import SDKError, ProcessOwnershipError
 
 
 class BuildInterrupted(KeyboardInterrupt):
@@ -235,6 +235,7 @@ class SysrootBuilder:
         if not isinstance(jobs, str) or re.fullmatch('[1-9][0-9]*', jobs) is None:
             raise SDKError('jobs must be a positive integer')
         self.git_command, self.shell = self.find_command('git'), self.find_command('sh')
+        self.process_inspector = process.SessionInspector(env=self.environment)
         layout = workspace.inspect_layout(self.options['sdk'])
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
@@ -283,7 +284,7 @@ class SysrootBuilder:
             path = self.find_command(name)
             self.host_tools[name] = dict(path=path, sha256=inventory.sha256_file(path), version=''.join(self.capture(path, '--version')).strip())
         self.flags = self.FLAGS + [f'EXTERNAL_TOOLCHAIN={self.paths["compiler"]}', f'EMBER_EXTERNAL_GCC_RUNTIME={prefix}', f'HOST_CC={self.host_tools["cc"]["path"]}', f'HOST_CXX={self.host_tools["c++"]["path"]}']
-        self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python)
+        self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
         self.contexts = {name: self.inspect_context(self.paths[name]) for name in ('objects', 'tools')}
         self.build_command = [self.shell, os.path.join(self.paths['os'], 'build.sh'), '-U', '-u', '-j' + jobs, '-m', self.target['machine'], '-a', self.target['arch'], '-O', self.paths['objects'], '-T', self.paths['tools'], '-D', self.paths['destination']]
         for flag in self.flags + ['BUILDINFO=EmberBSD:' + self.sources['os']['commit']]:
@@ -329,24 +330,24 @@ class SysrootBuilder:
         if self.interrupted_signal:
             raise BuildInterrupted(f'received {self.interrupted_signal}')
 
-    def quarantine_contexts(self, pgid):
+    def quarantine_contexts(self, sid):
         for name in ('objects', 'tools'):
             path = os.path.join(self.paths[name], self.QUARANTINE)
             if paths.entry(path) is None:
-                jsonio.write_json(path, dict(reason='owned process group did not stop', pgid=pgid))
+                jsonio.write_json(path, dict(reason='owned session did not stop', sid=sid))
 
     def stop_group(self, group):
         try:
             group.stop()
         except (SDKError, OSError) as exc:
             self.quarantine_contexts(group.pid)
-            raise SDKError(f'cannot stop the owned process group; object contexts are quarantined: {exc}') from exc
+            raise ProcessOwnershipError(group.pid, f'object contexts are quarantined: {exc}') from exc
 
     def dispatch(self, argv):
         row = dict(argv=argv, status='running')
         self.commands.append(row)
         self.save_receipt()
-        group = process.OwnedProcessGroup(argv, cwd=self.paths['os'], env=self.environment, stdout=self.log, stderr=self.log)
+        group = process.OwnedProcessGroup(argv, cwd=self.paths['os'], env=self.environment, stdout=self.log, stderr=self.log, inspector=self.process_inspector)
         cleanup_attempted = False
         try:
             self.interrupted()
@@ -359,7 +360,7 @@ class SysrootBuilder:
                 time.sleep(0.05)
             row['exit_status'] = status if status >= 0 else None
             if group.alive():
-                row.update(status='failed', error='producer left live descendants in its process group')
+                row.update(status='failed', error='producer left live descendants in its owned session')
                 cleanup_attempted = True
                 self.stop_group(group)
                 self.save_receipt()
@@ -378,7 +379,7 @@ class SysrootBuilder:
             row['status'] = 'interrupted'
             raise
         finally:
-            if not cleanup_attempted and group.alive():
+            if not cleanup_attempted and group.pid is not None:
                 self.stop_group(group)
 
     def copy_runtime(self):
