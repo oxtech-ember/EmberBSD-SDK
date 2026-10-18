@@ -78,20 +78,19 @@ class SysrootBuilder:
         path = paths.build_path(value)
         # Inspect the selected spelling before canonicalization. Only the
         # explicitly adopted workspace root can be an output-path alias.
-        boundary_info = paths.real_directory(boundary)
-        current = path
-        while True:
+        logical_parts = tuple(part for part in self.logical_sdk.split(os.sep) if part)
+        selected_parts = []
+        current = os.path.sep
+        for name in path.split(os.sep):
+            if not name:
+                continue
+            selected_parts.append(name)
+            current = os.path.join(current, name)
             info = paths.entry(current)
-            if info is not None and stat.S_ISDIR(info.st_mode) and (info.st_dev, info.st_ino) == (boundary_info.st_dev, boundary_info.st_ino):
-                break
-            if current == self.logical_sdk and boundary == self.paths['sdk']:
-                break
             if info is not None and not stat.S_ISDIR(info.st_mode):
-                raise SDKError(f'output ancestor is not a real directory: {current}')
-            parent = os.path.dirname(current)
-            if parent == current:
-                break
-            current = parent
+                allowed_alias = stat.S_ISLNK(info.st_mode) and tuple(selected_parts) == logical_parts[:len(selected_parts)]
+                if not allowed_alias:
+                    raise SDKError(f'output ancestor is not a real directory: {current}')
         relative = paths.relative_inside(path, boundary)
         if relative is None or relative == '':
             raise SDKError(f'output must be inside {boundary}: {path}')

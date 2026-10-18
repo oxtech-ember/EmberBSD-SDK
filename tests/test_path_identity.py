@@ -92,6 +92,16 @@ class PathIdentityTests(TemporaryCase):
             builder.output_path(str(self.other / 'redirect') + '/../new', str(self.other))
         self.assertEqual((snapshot(self.base), snapshot(self.other)), before)
 
+    def test_builder_refuses_internal_alias_before_parent_traversal(self):
+        builder = SysrootBuilder({})
+        builder.logical_sdk = str(self.other)
+        builder.paths = {'sdk': str(self.other)}
+        (self.other / 'redirect').symlink_to(self.other / 'sub')
+        before = snapshot(self.base), snapshot(self.other)
+        with self.assertRaisesRegex(SDKError, 'not a real directory'):
+            builder.output_path(str(self.other / 'redirect') + '/../new', str(self.other))
+        self.assertEqual((snapshot(self.base), snapshot(self.other)), before)
+
     def test_inventory_refuses_alias_root_before_normalization(self):
         with self.assertRaisesRegex(SDKError, 'real ancestors'):
             inventory.snapshot_tree(self.selected)
