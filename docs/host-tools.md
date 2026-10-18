@@ -77,8 +77,9 @@ the role policy; SDK does not parse pkgsrc PLIST syntax.
 
 The operation validates the actual tree and every link before it removes
 anything. A link may traverse another role only through an explicit dependency.
-The dependency map permits transitive dependencies. Links must terminate in
-listed regular files. For example, a developer package may link into its exact
+The dependency map permits transitive dependencies. Links terminate in listed
+files or nonempty payload directories. Every member below a directory target
+must have a permitted owner. For example, a developer package may link into its exact
 runtime dependency; the runtime must not link back into the developer package.
 `keep_empty` lists existing empty directories that the selected role must retain.
 

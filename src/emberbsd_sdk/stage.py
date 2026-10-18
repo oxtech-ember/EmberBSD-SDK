@@ -38,7 +38,8 @@ def partition_stage(stage, full, partitions, selected, *, dependencies=None, kee
     each partition enumerate files and links, not directories. Their disjoint
     union must equal the actual complete stage. A partition may link into
     another partition only through declared dependencies (including transitive
-    dependencies). Links must resolve to listed regular files. ``keep_empty``
+    dependencies). Links resolve to listed files or nonempty payload directories;
+    all members below a directory target must have permitted owners. ``keep_empty``
     declares existing directories that the selected package must retain.
 
     All validation, link ownership checks and a second stable inventory finish
@@ -134,10 +135,17 @@ def partition_stage(stage, full, partitions, selected, *, dependencies=None, kee
                 raise SDKError(f'non-directory stage link component: {name} -> {current}')
             resolved.append(component)
         terminal = '/'.join(resolved)
-        if terminal not in actual or before[terminal]['kind'] != 'file':
-            raise SDKError(f'stage link must resolve to a listed regular file: {name}')
-        if owners[terminal] not in allowed[owners[name]]:
-            raise SDKError(f'link resolves to an undeclared partition: {name} -> {terminal}')
+        if terminal in actual and before[terminal]['kind'] == 'file':
+            targets = {terminal}
+        elif terminal in before and before[terminal]['kind'] == 'directory':
+            targets = {member for member in actual if member.startswith(terminal + '/')}
+            if not targets:
+                raise SDKError(f'stage directory link has no declared payload: {name}')
+        else:
+            raise SDKError(f'stage link must resolve to a listed file or payload directory: {name}')
+        for target in targets:
+            if owners[target] not in allowed[owners[name]]:
+                raise SDKError(f'link resolves to an undeclared partition: {name} -> {target}')
 
     if snapshot_tree(stage) != before:
         raise SDKError('stage changed during partition validation')

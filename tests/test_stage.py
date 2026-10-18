@@ -112,6 +112,31 @@ class StageTests(unittest.TestCase):
         self.select(selected='tools', dependencies={'tools': ['devel'], 'devel': ['runtime']})
         self.assertEqual(os.readlink(self.root / 'bin/another'), '../lib/runtime.so')
 
+    def test_sdk_versioned_directory_link_retains_metadata_and_links_through_it(self):
+        version = self.root / 'lib/metadata/78.3'
+        version.mkdir(parents=True)
+        (version / 'Makefile.inc').write_bytes(b'build metadata')
+        (version.parent / 'current').symlink_to('78.3')
+        (version.parent / 'Makefile.inc').symlink_to('current/Makefile.inc')
+        names = ['lib/metadata/78.3/Makefile.inc', 'lib/metadata/current',
+                 'lib/metadata/Makefile.inc']
+        self.full.extend(names)
+        self.parts['devel'].extend(names)
+        self.select(selected='devel')
+        self.assertEqual((version.parent / 'Makefile.inc').read_bytes(), b'build metadata')
+
+    def test_directory_link_cannot_expose_undeclared_role(self):
+        (self.root / 'directory-link').symlink_to('include')
+        self.full.append('directory-link')
+        self.parts['runtime'].append('directory-link')
+        self.refusal()
+
+    def test_empty_directory_link_refuses_without_mutation(self):
+        (self.root / 'directory-link').symlink_to('share/empty')
+        self.full.append('directory-link')
+        self.parts['runtime'].append('directory-link')
+        self.refusal()
+
     def test_external_and_cyclic_links_refuse_without_deleting_payload(self):
         link = self.root / 'lib/runtime.so'
         for target in ['/etc/passwd', '../../outside', 'runtime.so']:
