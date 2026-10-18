@@ -1,0 +1,106 @@
+# Build an EmberBSD sysroot
+
+The SDK builder orchestrates the existing EmberBSD and Ports producers. It
+builds target headers, OS CRT and libraries, the dynamic loader, and the audited
+GCC16 developer support. It does not install a system on a board.
+
+## Required inputs
+
+Use a qualified host process adapter with CPython 3.15 and the prerequisites of
+the selected OS/Ports builders. The current adapter requires Darwin.
+See [host platforms](host-platforms.md).
+Keep host tools and target inputs separate.
+
+Provide:
+
+- A Prebuild SDK workspace and a new or empty destination.
+- Clean, fully materialized EmberBSD and Ports Git superprojects at recorded commits.
+- The common GCC16.2.0 application cross compiler with the selected triplet and POSIX threads.
+- An accepted Ports runtime bootstrap work tree and its original GCC archive.
+- The exact prepared pkgsrc input used by that runtime build.
+
+The normal
+[Ports runtime verifier](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/runtime/README.md)
+must accept that stage. A kernel-only compiler or an arbitrary copy of GCC
+libraries cannot replace those inputs. Record the seed provenance separately
+from the newly produced sysroot.
+
+Sparse checkout, skip-worktree and assume-unchanged entries are rejected.
+Tracked files and links must be present with their recorded types.
+The Ports `upstream/pkgsrc` gitlink is recorded as an external pin without
+claiming its payload is qualified. The selected runtime verifier uses the
+explicit `--pkgsrc` export instead. No recursive pkgsrc checkout is required
+for that unused gitlink. Other gitlinks are rejected by this backend.
+
+## Preflight and plan
+
+Use the implemented script's help for the exact options:
+
+```sh
+python3 scripts/build-sysroot.py --help
+python3 scripts/build-sysroot.py \
+  --python /absolute/native/python3 \
+  --sdk-source /absolute/EmberBSD-SDK \
+  --sdk /absolute/prebuild-sdk \
+  --os /absolute/EmberBSD \
+  --ports /absolute/EmberBSD-Ports \
+  --compiler /absolute/gcc16-cross \
+  --runtime-work /absolute/gcc16-runtime-work \
+  --gcc-archive /absolute/gcc-16.2.0.tar.xz \
+  --pkgsrc /absolute/prepared-pkgsrc \
+  --target aarch64 --jobs 2 --plan
+```
+
+The plan validates inputs and reports the exact build commands. It does not
+compile or create a successful-build receipt. Remove `--plan` for the actual
+build only after the preflight succeeds.
+
+The default destination is the workspace's `sysroot`. A nonempty destination
+is rejected before build writes. For an update, select an explicit new stage
+such as `--destination /absolute/prebuild-sdk/stages/sysroot-next` inside the
+same shared workspace. A destination inside the active `sysroot` is rejected.
+Keep the active sysroot unchanged while other consumers use it.
+
+`--objects` and `--tools` can select existing compatible component paths under
+`obj`. Defaults use stable host/target names. Object reuse requires the recorded
+compiler, runtime, host, target and configuration context. The tool does not
+clear an incompatible context to make a build pass.
+
+## Producer sequence
+
+The selected OS source provides these operations:
+
+1. `build.sh -U -u` selects the common external GCC16 and the audited runtime.
+2. `tools libs` builds native tools, creates object directories and installs
+   target headers, CRT and libraries through the fork's own rules.
+3. The same generated make wrapper builds and installs `libexec/ld.elf_so`.
+4. The builder copies the verified GCC16 developer stage into `usr/pkg/gcc16`.
+5. It verifies the copied inventory and runs the normal runtime verifier again.
+
+The `libs` operation exists in the fork's
+[`build.sh`](https://github.com/oxtech-ember/EmberBSD/blob/main/build.sh).
+Its `buildlibs` implementation invokes `do-distrib-dirs`, `includes` and
+`do-lib`. The [OS runtime adapter](https://github.com/oxtech-ember/EmberBSD/blob/main/ember/boot/external-gcc-runtime.md)
+selects external GCC headers, CRT and libraries during compilation.
+The SDK does not duplicate their source recipes.
+
+The copied developer stage has no fabricated target package registration.
+Select actual runtime and developer package ownership when composing a Ports
+sysroot or device image. That package composition is a separate operation.
+
+## Output and acceptance
+
+A completed build records source pins, tool/runtime identities, actual commands,
+file/link inventory and SHA256 values. It checks required headers, CRT,
+libraries and loader, target ELF architecture, and contained relative links.
+An error retains an explicit incomplete state and its evidence; a previous
+artifact does not become the result of that failed build.
+
+A successful builder result qualifies a build artifact. Target execution,
+loader/runtime behavior, package closure and physical hardware remain separate
+checks. Run the producer's prebuilt consumers on the selected EmberBSD target.
+Do not claim those checks from command dispatch fixtures or `--plan` output.
+
+A releasable SDK also needs the [distribution checks](distribution.md), including
+host-platform and relocation acceptance. The initial workspace tests do not
+establish a complete sysroot build on every advertised future platform.

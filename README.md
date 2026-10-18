@@ -1,51 +1,105 @@
 # EmberBSD SDK
 
-Application interfaces, package contracts and developer tools for
-[EmberBSD](https://github.com/oxtech-ember/EmberBSD) — Unix for intelligent devices.
+Developer tools and build contracts for [EmberBSD](https://github.com/oxtech-ember/EmberBSD), Unix for intelligent devices.
 
-## Purpose
+## Prebuild SDK
 
-SDK is the planned developer-facing contract for EmberBSD applications.
-It will define supported API/ABI boundaries, application package metadata,
-target profiles, build tools, templates and compatibility checks. Developers
-and AI assistants should use the same documented tools and tests.
+Prebuild SDK is the shared development-host workspace for compiled objects,
+the target sysroot, binary packages and build receipts. Reuse one compatible
+workspace across tasks. Keep source checkouts separate from build outputs.
 
-SDK owns what an application may depend on and how developers build and validate
-it. Runtime will implement execution, lifecycle and device operations on the
-target. Ports owns third-party build recipes; Examples owns runnable scenarios.
-The operating system remains in the central EmberBSD repository.
+The first tools create and inspect that workspace. They use Python and its standard
+library. They do not download a compiler or qualify an existing sysroot.
 
-## Current state
+```sh
+python3 scripts/create-prebuild-sdk.py /absolute/prebuild-sdk
+python3 scripts/inspect-prebuild-sdk.py /absolute/prebuild-sdk
+```
 
-**Design stage.** This repository currently documents its purpose and boundaries.
-No stable application API/ABI, package format, scaffolding CLI or released SDK
-toolchain is available here. There is no SDK installation command yet.
-Use current public Examples and Ports instructions for existing workflows.
+To retain an existing build tree, create a named alias. The existing tree must
+already contain real `obj`, `sysroot` and `packages` directories.
 
-The first implementation must pair a versioned contract with Runtime behavior
-and an example that validates it. Wasm portability or compatibility between
-ARM64 and RISC-V must be demonstrated; it is not implied by this repository.
+```sh
+python3 scripts/create-prebuild-sdk.py /absolute/prebuild-sdk --adopt /absolute/build
+```
 
-## Related EmberBSD projects
+The sysroot builder uses clean OS/Ports sources and the accepted GCC16 runtime
+stage. Start with its help and the documented preflight:
 
-[EmberBSD](https://github.com/oxtech-ember/EmberBSD#emberbsd-ecosystem) is the
-central project and the entry point for the ecosystem.
+```sh
+python3 scripts/build-sysroot.py --help
+```
 
-- [EmberBSD](https://github.com/oxtech-ember/EmberBSD) — OS, drivers, boards and system builds.
-- [EmberBSD-Runtime](https://github.com/oxtech-ember/EmberBSD-Runtime) — application execution, lifecycle and shared device operations; design stage.
-- [EmberBSD-Ports](https://github.com/oxtech-ember/EmberBSD-Ports) — third-party recipes, patches and native dependencies.
-- [EmberBSD-Examples](https://github.com/oxtech-ember/EmberBSD-Examples) — standalone applications and reproducible demonstrations.
-- [Ember-Agent-Skills](https://github.com/oxtech-ember/Ember-Agent-Skills) — portable developer skills for AI coding assistants and tested contributions.
+See the [workspace contract](docs/prebuild-sdk.md),
+[build workflow](docs/build-workflow.md), [host platforms](docs/host-platforms.md),
+[shared host tools](docs/host-tools.md), and [sysroot builder](docs/sysroot.md).
+The [distribution guide](docs/distribution.md) defines the boundary for a future
+SDK release that accompanies a binary package profile.
 
-## Connect developer skills
+## Repository structure
 
-[Ember Agent Skills](https://github.com/oxtech-ember/Ember-Agent-Skills) provides
-portable Agent Skills packaged with Agent Plugins. Load the package or the
-complete skill directory using your development environment's supported
-mechanism. Follow the [installation and validation guide](https://github.com/oxtech-ember/Ember-Agent-Skills#use-in-your-development-environment)
-for the shared format and the separately tested Codex adapter.
+| Path | Purpose |
+| --- | --- |
+| `scripts/` | Host commands for workspace creation, inspection and sysroot builds |
+| `src/emberbsd_sdk/` | Shared Python modules for SDK and Ports host commands |
+| `tests/` | Executable contracts and refusal cases |
+| `docs/` | Layout, compiler/sysroot workflow, reuse and distribution boundaries |
+| [`SKILLS.md`](SKILLS.md) | AI assistant entry points and canonical skills |
 
-Ask the `emberbsd-repository-guide` skill to identify real interfaces and
-validation steps for your application.
-The package supplies assistant instructions; it does not install a device runtime
-or create missing SDK interfaces.
+Compiler and third-party recipes remain in
+[EmberBSD-Ports](https://github.com/oxtech-ember/EmberBSD-Ports).
+The [OS repository](https://github.com/oxtech-ember/EmberBSD) owns headers, libc,
+CRT, drivers and system build rules. SDK connects those producers; it does not
+maintain another compiler recipe or another libc.
+
+## Build and validation boundaries
+
+Build target code with the common GCC16 cross compiler on the development host.
+The selected target architecture, ABI and runtime must agree. Build-host tools
+remain host executables. Boards and VMs execute prepared acceptance programs.
+
+Workspace checks, compiler checks, sysroot builds, package closure and target
+execution are separate results. Record the exact sources, configuration,
+compiler, runtime and output hashes for a build. Equal directory names or
+package versions do not establish equivalent inputs.
+
+The workspace tools use portable filesystem APIs. The current producer backend
+uses a Darwin process adapter. Other build hosts require their own process
+backend and checks. Host and target platforms are independent inputs.
+Actual platform checks are recorded with the tests;
+portability intent does not establish an untested host or target.
+
+SDK scripts use Python and its standard library. Related Ports controllers use
+the same SDK modules. The control tools need no third-party Python packages.
+Optional third-party Ports profiles retain their upstream tool requirements;
+see the [dependency boundary](docs/build-workflow.md#required-tools).
+
+A stable application API/ABI, application package format, device runtime and
+redistributable binary SDK are still separate work. These workspace tools do
+not implement those contracts.
+
+## Check the tools
+
+Use CPython 3.15 and its standard library for the complete tool set.
+Run the contracts from this checkout:
+
+```sh
+python3 -m unittest discover -s tests -p 'test_*.py'
+```
+
+The tests use temporary filesystem trees and build-command fixtures. Their
+results do not establish a real sysroot build or target execution.
+
+## Related projects
+
+- [EmberBSD](https://github.com/oxtech-ember/EmberBSD): OS and system builds.
+- [Ports](https://github.com/oxtech-ember/EmberBSD-Ports): recipes, patches and dependency profiles.
+- [Examples](https://github.com/oxtech-ember/EmberBSD-Examples): runnable applications and demonstrations.
+- [Runtime](https://github.com/oxtech-ember/EmberBSD-Runtime): planned application execution and lifecycle contracts.
+- [Agent Skills](https://github.com/oxtech-ember/Ember-Agent-Skills): portable developer instructions for AI assistants.
+
+## License
+
+New SDK tools use [BSD-2-Clause](LICENSE). Each imported component retains its
+own license and provenance. AI-assisted migrations record their source baseline
+and origin in the change commits.

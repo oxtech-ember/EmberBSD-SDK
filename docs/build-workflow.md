@@ -1,0 +1,79 @@
+# Cross-build workflow
+
+## Select independent host and target inputs
+
+Choose a host environment that can run the required OS/Ports tools. Keep its
+native compiler and generators separate from the target GCC16 compiler.
+The current backend uses POSIX shell and make; CMake remains the build system
+for dependencies which use it upstream. The workspace tools use Python's standard
+library for paths, JSON and process invocation.
+The current process adapter requires Darwin. See [host platforms](host-platforms.md)
+for the Linux, WSL2 and native Windows boundaries.
+
+Select the target through the actual producer. The current common GCC16 paths
+use `aarch64--netbsd` or `x86_64--netbsd`. Preserve those fork ABI identifiers.
+A target selector or a passing layout check does not qualify an architecture.
+
+## Required tools
+
+SDK control scripts use CPython 3.15 and its standard library. They require no
+third-party Python packages, `pip` installation or virtual environment.
+
+| Operation | Required tools |
+| --- | --- |
+| Create or inspect a workspace | CPython 3.15 with its standard library |
+| Build the core sysroot | The qualified host process adapter, Python, Git, POSIX shell, the OS/Ports native build prerequisites, the common GCC16 and its verified runtime stage |
+| Build an optional package profile | The selected Ports recipe's documented prerequisites |
+
+The GCC16 sysroot profile uses Python for host control. Optional LLVM profiles
+also use upstream Python build tools and `lit`. Installed upstream utilities
+retain their own package dependencies. Record host and target Python roles
+separately. A target device does not need the host controller to run prepared
+acceptance programs.
+
+## Build the compiler with Ports
+
+Use the [GCC16 cross profile](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/cross/README.md).
+It owns source pins, Binutils, compiler options and compiler checks.
+Select its kernel-only mode only for artifacts which do not require a userland
+sysroot. Application builds need the matching EmberBSD headers, CRT and runtime.
+
+Use the [runtime bootstrap](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/bootstrap/README.md)
+for the target runtime and build-time C++ support. Its explicit
+[existing-compiler mode](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/bootstrap/external-compiler.md)
+records the common POSIX GCC16 without rebuilding compiler frontends.
+A recorded seed remains an input, not a new build result.
+
+## Build the sysroot
+
+Use the [SDK sysroot procedure](sysroot.md). It calls the fork's own build rules
+and selects the verified Ports runtime stage. Keep source revisions, compiler
+hashes, runtime receipts and output hashes together.
+
+The [OS external-runtime adapter](https://github.com/oxtech-ember/EmberBSD/blob/main/ember/boot/external-gcc-runtime.md)
+provides build-time paths. It does not install a target runtime provider or
+qualify a release. Follow the producer's current checks; SDK must not replace
+EmberBSD headers or libraries with upstream NetBSD files.
+
+## Build packages and applications
+
+Use [Ports](https://github.com/oxtech-ember/EmberBSD-Ports) profiles with the
+shared sysroot, object directory and package output. Supply real native
+metadata tools when a target executable cannot run on the host. Keep target
+ELF files out of the native tool prefix.
+
+Public applications stay in their own repositories or
+[Examples](https://github.com/oxtech-ember/EmberBSD-Examples).
+Read the selected example's actual build interface. SDK does not define a
+universal application CLI or device service.
+
+## Record separate acceptance levels
+
+Keep compiler preflight, actual target compilation, package checks, target
+execution and physical hardware results distinct. Run the existing
+[prebuilt compiler consumers](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/cross/compile-tests.py)
+on the selected target only after their cross build passes.
+
+A release also needs loader/runtime closure, ownership, licenses and consumer
+checks. See [distribution](distribution.md). Publish the SDK with the matching
+binary package cohort only after those results exist.
