@@ -7,7 +7,7 @@ import os
 import stat
 import secrets
 from .errors import SDKError
-from .paths import entry, open_regular, verify_stable
+from .paths import canonical_existing, entry, open_regular, path_string, verify_stable
 
 MAX_JSON = 16 * 1024 * 1024
 
@@ -91,7 +91,7 @@ def json_bytes(value):
 def write_json(path, value, exclusive=True, mode=0o644):
     """Create a durable file, or atomically replace a regular file with a new inode."""
     data = json_bytes(value)
-    path = os.fspath(path)
+    path = path_string(path)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
     if exclusive:
         fd = os.open(path, flags, mode)
@@ -103,10 +103,12 @@ def write_json(path, value, exclusive=True, mode=0o644):
     previous = entry(path)
     if previous is not None and not stat.S_ISREG(previous.st_mode):
         raise SDKError(f'expected a regular output JSON: {path}')
+    parent = canonical_existing(os.path.dirname(path))
+    path = os.path.join(parent, os.path.basename(path))
     temporary = None
     try:
         for _ in range(128):
-            candidate = os.path.join(os.path.dirname(os.path.abspath(path)), '.' + os.path.basename(path) + '.' + secrets.token_hex(16))
+            candidate = os.path.join(parent, '.' + os.path.basename(path) + '.' + secrets.token_hex(16))
             try:
                 fd = os.open(candidate, flags, mode)
                 temporary = candidate
@@ -128,7 +130,7 @@ def write_json(path, value, exclusive=True, mode=0o644):
         os.replace(temporary, path)
         temporary = None
         if os.name == 'posix':
-            directory = os.open(os.path.dirname(os.path.abspath(path)), os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+            directory = os.open(parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
             try:
                 os.fsync(directory)
             finally:

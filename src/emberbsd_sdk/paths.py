@@ -20,7 +20,7 @@ def _raw_absolute(value):
 
 
 def path_string(value):
-    return os.path.normpath(_raw_absolute(value))
+    return _raw_absolute(value)
 
 
 def entry(value):
@@ -59,6 +59,8 @@ def canonical_new(value):
         parent, name = os.path.split(current)
         if parent == current:
             raise SDKError(f'no existing ancestor: {value}')
+        if name in ('.', '..'):
+            raise SDKError(f'cannot resolve traversal through a missing ancestor: {value}')
         tail.append(name)
         current = parent
     base = canonical_existing(current)

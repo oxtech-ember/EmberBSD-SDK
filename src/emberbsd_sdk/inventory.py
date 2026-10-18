@@ -6,7 +6,7 @@ import hashlib
 import os
 import stat
 from .errors import SDKError
-from .paths import canonical_existing, inside, open_regular, real_directory, regular_file, stable_identity, verify_stable
+from .paths import canonical_existing, inside, open_regular, path_string, real_directory, regular_file, stable_identity, verify_stable
 from .elf import read_elf_header, read_archive
 
 
@@ -30,7 +30,7 @@ def sha256_file(path):
 
 
 def snapshot_tree(root, machine=None, exclude=()):
-    root = os.path.abspath(root)
+    root = path_string(root)
     real_directory(root)
     if canonical_existing(root) != root:
         raise SDKError(f'payload root must have real ancestors: {root}')
