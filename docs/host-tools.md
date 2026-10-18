@@ -65,6 +65,30 @@ filesystem and process behavior separate from command fixtures. Record the
 interpreter and platform for actual results. Type annotations document module
 interfaces; they do not replace input validation or runtime checks.
 
+## Partition a package stage
+
+`emberbsd_sdk.stage` provides `STAGE_PARTITION_API = 1` and
+`partition_stage(stage, full, partitions, selected, *, dependencies=None,
+keep_empty=())`. The package producer must own the stage exclusively.
+`full` lists every installed file and symbolic link. `partitions` maps each
+package role to its members. The roles must form a disjoint, exhaustive union.
+Directories are implicit. Package recipes parse their own manifests and define
+the role policy; SDK does not parse pkgsrc PLIST syntax.
+
+The operation validates the actual tree and every link before it removes
+anything. A link may traverse another role only through an explicit dependency.
+The dependency map permits transitive dependencies. Links must terminate in
+listed regular files. For example, a developer package may link into its exact
+runtime dependency; the runtime must not link back into the developer package.
+`keep_empty` lists existing empty directories that the selected role must retain.
+
+A second inventory must match before pruning starts. Validation failures leave
+the stage unchanged. An I/O failure during deletion fails the producer and may
+leave a partial stage. Do not package that stage. This API is not a concurrent
+filesystem transaction or a security boundary against another stage writer.
+The real filesystem contracts run on Linux with CPython 3.15. They do not qualify
+a target package, a package transaction, or a native Windows build host.
+
 ## Keep acceptance separate
 
 Platform qualification needs actual filesystem, process and producer checks
