@@ -15,6 +15,7 @@ import sysconfig
 import time
 from . import API_VERSION, inventory, jsonio, paths, process, provenance, workspace
 from .errors import SDKError, ProcessOwnershipError
+from .targets import TARGETS, target_definition
 
 
 class BuildInterrupted(KeyboardInterrupt):
@@ -22,10 +23,7 @@ class BuildInterrupted(KeyboardInterrupt):
 
 
 class SysrootBuilder:
-    TARGETS = {
-        'aarch64': dict(machine='evbarm', arch='aarch64', triplet='aarch64--netbsd', elf=183),
-        'amd64': dict(machine='amd64', arch='x86_64', triplet='x86_64--netbsd', elf=62),
-    }
+    TARGETS = TARGETS
     FLAGS = ('TOOLCHAIN_MISSING=yes MKGCCCMDS=no MKCOMPAT=no MKCXX=yes '
              'MKDEBUG=no MKDEBUGLIB=no MKX11=no MKLLVM=no MKLLVMRT=no MKLIBCXX=no MKKMOD=no MKGDB=no MKBINUTILS=no '
              'MKATF=no MKKYUA=no MKMAN=no MKDOC=no MKINFO=no MKHTML=no MKLINT=no '
@@ -227,15 +225,14 @@ class SysrootBuilder:
 
     def preflight(self):
         process.require_posix()
-        self.target = self.TARGETS.get(self.options.get('target'))
-        if self.target is None:
-            raise SDKError('target must be aarch64 or amd64')
+        self.target = target_definition(self.options.get('target'))
         jobs = self.options.get('jobs')
         if not isinstance(jobs, str) or re.fullmatch('[1-9][0-9]*', jobs) is None:
             raise SDKError('jobs must be a positive integer')
+        layout = workspace.inspect_layout(self.options['sdk'])
+        workspace.require_target(layout, self.options['target'])
         self.git_command, self.shell = self.find_command('git'), self.find_command('sh')
         self.process_inspector = process.SessionInspector(env=self.environment)
-        layout = workspace.inspect_layout(self.options['sdk'])
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         for name in ('os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'sdk-source'):
@@ -291,7 +288,7 @@ class SysrootBuilder:
         self.build_command.extend(('tools', 'libs'))
         self.loader_command = [os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine']), '-C', os.path.join(self.paths['os'], 'libexec/ld.elf_so'), '-j' + jobs, 'dependall']
         self.install_command = self.loader_command[:-1] + ['install']
-        self.receipt = dict(format='emberbsd-sysroot-build', version=1, scope='sysroot-build', qualification='not-built', execution_acceptance='not-run', paths=self.paths, sources=self.sources, previous_contexts=self.contexts, signature=self.signature, commands=self.commands, plan=[self.runtime_command, self.build_command, self.loader_command, self.install_command, self.runtime_command, self.runtime_command], working_directory=self.paths['os'], copy=dict(source=prefix, destination=os.path.join(self.paths['destination'], 'usr/pkg/gcc16'), verification='exact pre/copy/post inventory'), not_checked=['target execution', 'ABI compatibility', 'SDK release'])
+        self.receipt = dict(format='emberbsd-sysroot-build', version=1, scope='sysroot-build', qualification='not-built', execution_acceptance='not-run', workspace=layout, paths=self.paths, sources=self.sources, previous_contexts=self.contexts, signature=self.signature, commands=self.commands, plan=[self.runtime_command, self.build_command, self.loader_command, self.install_command, self.runtime_command, self.runtime_command], working_directory=self.paths['os'], copy=dict(source=prefix, destination=os.path.join(self.paths['destination'], 'usr/pkg/gcc16'), verification='exact pre/copy/post inventory'), not_checked=['target execution', 'ABI compatibility', 'SDK release'])
         return self.receipt
 
     def mkdirs(self, path, boundary):

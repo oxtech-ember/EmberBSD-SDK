@@ -69,7 +69,7 @@ def fixture(root, target='aarch64'):
     for name in ('os', 'ports', 'compiler', 'runtime', 'pkgsrc', 'sdk-source'):
         (root / name).mkdir()
     sdk, os_source, ports, compiler, work = (root / name for name in ('sdk', 'os', 'ports', 'compiler', 'runtime'))
-    create(sdk); control = root / 'control.json'; write(control, '{}')
+    create(sdk, target=target); control = root / 'control.json'; write(control, '{}')
     for name in ('include', 'lib', 'libexec/ld.elf_so', 'tools', 'share/mk', 'sys', 'distrib', 'etc'):
         (os_source / name).mkdir(parents=True, exist_ok=True)
     for name in ('Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk'):
@@ -202,6 +202,10 @@ class BuilderTests(TemporaryCase):
         record = self.run_builder(plan=True)
         self.assertEqual(snapshot(self.root), before)
         self.assertEqual(record['qualification'], 'not-built')
+        self.assertEqual(record['workspace']['target'], 'aarch64')
+        self.assertEqual(record['workspace']['triplet'], 'aarch64--netbsd')
+        self.assertEqual(record['workspace']['target_status'], 'declared')
+        self.assertEqual(record['workspace']['qualification'], 'not-assessed')
         self.assertEqual(record['execution_acceptance'], 'not-run')
         self.assertEqual(record['plan'][0][3], 'check')
         self.assertEqual(record['plan'][1][-2:], ['tools', 'libs'])
@@ -213,6 +217,21 @@ class BuilderTests(TemporaryCase):
         self.assertEqual(record['signature']['python']['api_version'], 1)
         self.assertEqual(record['sources']['sdk']['path'], self.options['sdk-source'])
         self.assertEqual(self.run_builder(plan=True), record)
+        self.assertEqual(snapshot(self.root), before)
+
+    def test_wrong_target_cli_refuses_without_writes(self):
+        before = snapshot(self.root)
+        result = subprocess.run(self.cli(target='amd64'), cwd=self.root, capture_output=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(b'workspace target mismatch', result.stderr)
+        self.assertEqual(snapshot(self.root), before)
+
+    def test_legacy_cli_refuses_without_migration(self):
+        (Path(self.options['sdk']) / '.prebuild-sdk.json').unlink()
+        before = snapshot(self.root)
+        result = subprocess.run(self.cli(), cwd=self.root, capture_output=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(b'workspace target is unknown', result.stderr)
         self.assertEqual(snapshot(self.root), before)
 
     def test_actual_subprocess_and_output_inspection(self):

@@ -6,22 +6,30 @@ Developer tools and build contracts for [EmberBSD](https://github.com/oxtech-emb
 
 Prebuild SDK is the shared development-host workspace for compiled objects,
 the target sysroot, binary packages and build receipts. Reuse one compatible
-workspace across tasks. Keep source checkouts separate from build outputs.
+workspace across tasks for one target. Use separate workspaces for `aarch64`
+and `amd64`. Keep source checkouts separate from build outputs.
 
 The first tools create and inspect that workspace. They use Python and its standard
 library. They do not download a compiler or qualify an existing sysroot.
 
 ```sh
-python3 scripts/create-prebuild-sdk.py /absolute/prebuild-sdk
-python3 scripts/inspect-prebuild-sdk.py /absolute/prebuild-sdk
+python3 scripts/create-prebuild-sdk.py /absolute/prebuild-sdk-aarch64 --target aarch64
+python3 scripts/create-prebuild-sdk.py /absolute/prebuild-sdk-amd64 --target amd64
+python3 scripts/inspect-prebuild-sdk.py /absolute/prebuild-sdk-aarch64
 ```
 
 To retain an existing build tree, create a named alias. The existing tree must
-already contain real `obj`, `sysroot` and `packages` directories.
+already contain real `obj`, `sysroot` and `packages` directories. An alias to a
+legacy tree supports inspection. It does not declare that tree's target.
 
 ```sh
 python3 scripts/create-prebuild-sdk.py /absolute/prebuild-sdk --adopt /absolute/build
 ```
+
+The canonical version 2 manifest declares the target and triplet. A directory
+name, alias or build-host architecture does not declare them. The sysroot builder
+refuses a legacy or version 1 workspace whose target is unknown. These tools do
+not migrate an active build tree or change its existing producer commands.
 
 The sysroot builder uses clean OS/Ports sources and the accepted GCC16 runtime
 stage. Start with its help and the documented preflight:

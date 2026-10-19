@@ -44,14 +44,14 @@ class WorkspaceTests(TemporaryCase):
         return subprocess.run([sys.executable, '-B', str(SDK_SOURCE / 'scripts' / (kind + '-prebuild-sdk.py')), *map(str, args)], cwd=self.root, capture_output=True)
 
     def test_create_and_read_only_inspect(self):
-        root = self.root / 'sdk'; result = w.create(root)
+        root = self.root / 'sdk'; result = w.create(root, target='aarch64')
         self.assertEqual(result['structural_status'], 'managed')
         self.assertEqual(result['qualification'], 'not-assessed')
-        self.assertEqual(json.loads((root / w.MANIFEST_NAME).read_text()), w.MANIFEST)
+        self.assertEqual(json.loads((root / w.MANIFEST_NAME).read_text()), w.target_manifest('aarch64'))
         self.assertTrue(all(not list((root / name).iterdir()) for name in w.DIRECTORIES))
         before = snapshot(root)
         self.assertEqual(w.inspect_layout(root), result)
-        with self.assertRaises(SDKError): w.create(root)
+        with self.assertRaises(SDKError): w.create(root, target='aarch64')
         self.assertEqual(snapshot(root), before)
 
     def test_legacy_adoption_idempotent(self):
@@ -64,14 +64,14 @@ class WorkspaceTests(TemporaryCase):
         self.assertEqual(snapshot(root), alias); self.assertEqual(snapshot(source), before)
 
     def test_managed_adoption_relative_alias(self):
-        source = self.root / 'source'; w.create(source)
+        source = self.root / 'source'; w.create(source, target='aarch64')
         root = self.root / 'sdk'; root.symlink_to('source')
         before, alias = snapshot(source), snapshot(root)
         self.assertEqual(w.create(root, adopt=source)['structural_status'], 'managed')
         self.assertEqual(snapshot(source), before); self.assertEqual(snapshot(root), alias)
 
     def test_receipts_missing_or_linked(self):
-        source = self.root / 'managed'; w.create(source); (source / 'receipts').rmdir()
+        source = self.root / 'managed'; w.create(source, target='aarch64'); (source / 'receipts').rmdir()
         with self.assertRaises(SDKError): w.inspect_layout(source)
         other = self.legacy(); (other / 'receipts').symlink_to(self.root)
         with self.assertRaises(SDKError): w.inspect_layout(other)
@@ -108,7 +108,7 @@ class WorkspaceTests(TemporaryCase):
         def collide(path, *args, **kwargs):
             if Path(path) == root: root.write_text('racing file')
             return original(path, *args, **kwargs)
-        with patch.object(w.os, 'mkdir', collide), self.assertRaises(SDKError): w.create(root)
+        with patch.object(w.os, 'mkdir', collide), self.assertRaises(SDKError): w.create(root, target='aarch64')
         self.assertEqual(root.read_text(), 'racing file')
 
     def test_unsupported_symlink_no_fallback(self):
@@ -119,21 +119,21 @@ class WorkspaceTests(TemporaryCase):
 
     def test_generic_paths_accept_spaces_unicode_and_refuse_controls(self):
         for name in ('', 'tab\tname', 'newline\nname', 'nul\0name'):
-            with self.assertRaises(SDKError): w.create('' if not name else self.root / name)
+            with self.assertRaises(SDKError): w.create('' if not name else self.root / name, target='aarch64')
         parent = self.root / 'space пример'; parent.mkdir()
         link = self.root / 'parent'; link.symlink_to(parent)
-        result = w.create(link / 'sdk')
+        result = w.create(link / 'sdk', target='aarch64')
         self.assertEqual(result['canonical_root'], str(parent / 'sdk'))
 
     def test_cli_argv_json_usage_and_error(self):
         root = self.root / 'sdk;$(literal)`quote` пример'
-        result = self.cli('create', root); self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.cli('create', root, '--target', 'aarch64'); self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)['logical_root'], str(root))
         result = self.cli('inspect', root); self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)['qualification'], 'not-assessed')
-        result = self.cli('create', root); self.assertEqual(result.returncode, 1); self.assertIn(b'error:', result.stderr)
+        result = self.cli('create', root, '--target', 'aarch64'); self.assertEqual(result.returncode, 1); self.assertIn(b'error:', result.stderr)
         for kind, args in (('inspect', ()), ('create', (root, '--unknown', root))):
-            result = self.cli(kind, *args); self.assertEqual(result.returncode, 2); self.assertIn(b'Usage:', result.stderr)
+            result = self.cli(kind, *args); self.assertEqual(result.returncode, 2); self.assertIn(b'usage:', result.stderr.lower())
         self.assertEqual(list(self.root.iterdir()), [root])
 
 
@@ -144,7 +144,7 @@ def collision_case(kind):
         elif kind == 'directory': root.mkdir()
         else: root.symlink_to(source if kind == 'symlink' else self.root / 'missing')
         before, payload = snapshot(root), snapshot(source)
-        with self.assertRaises(SDKError): w.create(root)
+        with self.assertRaises(SDKError): w.create(root, target='aarch64')
         if kind != 'symlink':
             with self.assertRaises(SDKError): w.create(root, adopt=source)
         self.assertEqual(snapshot(root), before); self.assertEqual(snapshot(source), payload)
@@ -165,7 +165,7 @@ def child_case(name, kind):
 
 def malformed_case(text):
     def test(self):
-        source = self.root / 'source'; w.create(source)
+        source = self.root / 'source'; w.create(source, target='aarch64')
         (source / w.MANIFEST_NAME).write_bytes(text)
         before = snapshot(source)
         with self.assertRaises(SDKError): w.inspect_layout(source)
@@ -197,7 +197,7 @@ def mkdir_failure_case(failure):
                 if count == failure:
                     (root / 'foreign').write_text('do not remove'); raise OSError('injected fault')
             return original(path, *args, **kwargs)
-        with patch.object(w.os, 'mkdir', fail), self.assertRaises(SDKError): w.create(root)
+        with patch.object(w.os, 'mkdir', fail), self.assertRaises(SDKError): w.create(root, target='aarch64')
         self.assertEqual((root / 'foreign').read_text(), 'do not remove')
         self.assertTrue((root / w.INCOMPLETE_NAME).is_file())
         with self.assertRaises(SDKError): w.inspect_layout(root)
@@ -216,7 +216,7 @@ def late_failure_case(phase):
                 if str(path) == str(root / w.INCOMPLETE_NAME): raise OSError('injected fault')
                 return original(path, *args, **kwargs)
             context = patch.object(w.os, 'unlink', fail)
-        with context, self.assertRaises(SDKError): w.create(root)
+        with context, self.assertRaises(SDKError): w.create(root, target='aarch64')
         self.assertTrue((root / w.INCOMPLETE_NAME).is_file())
         with self.assertRaises(SDKError): w.inspect_layout(root)
     return test

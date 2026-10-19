@@ -19,7 +19,7 @@ class PathIdentityTests(TemporaryCase):
     def setUp(self):
         super().setUp()
         self.base, self.other = self.root / 'base', self.root / 'other'
-        workspace.create(self.base); workspace.create(self.other)
+        workspace.create(self.base, target='aarch64'); workspace.create(self.other, target='aarch64')
         (self.other / 'sub').mkdir()
         (self.base / 'alias').symlink_to(self.other / 'sub')
         self.selected = str(self.base / 'alias') + '/..'
@@ -34,7 +34,7 @@ class PathIdentityTests(TemporaryCase):
 
     def test_create_new_uses_existing_parent_traversal(self):
         before = snapshot(self.base)
-        result = workspace.create(self.selected + '/new-sdk')
+        result = workspace.create(self.selected + '/new-sdk', target='aarch64')
         self.assertEqual(result['canonical_root'], str(self.other / 'new-sdk'))
         self.assertFalse((self.base / 'new-sdk').exists())
         self.assertEqual(snapshot(self.base), before)
@@ -42,11 +42,11 @@ class PathIdentityTests(TemporaryCase):
     def test_create_existing_refuses_without_touching_either_tree(self):
         before = snapshot(self.base), snapshot(self.other)
         with self.assertRaises(SDKError):
-            workspace.create(self.selected)
+            workspace.create(self.selected, target='aarch64')
         self.assertEqual((snapshot(self.base), snapshot(self.other)), before)
 
     def test_adopt_destination_uses_existing_parent_traversal(self):
-        source = self.root / 'source'; workspace.create(source)
+        source = self.root / 'source'; workspace.create(source, target='aarch64')
         before = snapshot(self.base), snapshot(source)
         result = workspace.create(self.selected + '/adopted', adopt=source)
         self.assertEqual(result['canonical_root'], str(source))
@@ -64,7 +64,7 @@ class PathIdentityTests(TemporaryCase):
     def test_layout_cli_preserves_literal_path_identity(self):
         before = snapshot(self.base)
         for command, selected in (('inspect', self.selected), ('create', self.selected + '/cli-sdk')):
-            row = subprocess.run([sys.executable, '-B', '-I', '-S', str(SDK_SOURCE / 'scripts' / (command + '-prebuild-sdk.py')), selected], cwd='/', capture_output=True)
+            row = subprocess.run([sys.executable, '-B', '-I', '-S', str(SDK_SOURCE / 'scripts' / (command + '-prebuild-sdk.py')), selected, *(['--target', 'aarch64'] if command == 'create' else [])], cwd='/', capture_output=True)
             self.assertEqual(row.returncode, 0, row.stderr)
             self.assertTrue(os.path.samefile(selected, json.loads(row.stdout)['canonical_root']))
         self.assertEqual(snapshot(self.base), before)

@@ -13,7 +13,7 @@ Keep host tools and target inputs separate.
 
 Provide:
 
-- A Prebuild SDK workspace and a new or empty destination.
+- A version 2 Prebuild SDK workspace with the selected target and a new or empty destination.
 - Clean, fully materialized EmberBSD and Ports Git superprojects at recorded commits.
 - The common GCC16.2.0 application cross compiler with the selected triplet and POSIX threads.
 - An accepted Ports runtime bootstrap work tree and its original GCC archive.
@@ -41,7 +41,7 @@ python3 scripts/build-sysroot.py --help
 python3 scripts/build-sysroot.py \
   --python /absolute/native/python3 \
   --sdk-source /absolute/EmberBSD-SDK \
-  --sdk /absolute/prebuild-sdk \
+  --sdk /absolute/prebuild-sdk-aarch64 \
   --os /absolute/EmberBSD \
   --ports /absolute/EmberBSD-Ports \
   --compiler /absolute/gcc16-cross \
@@ -55,9 +55,16 @@ The plan validates inputs and reports the exact build commands. It does not
 compile or create a successful-build receipt. Remove `--plan` for the actual
 build only after the preflight succeeds.
 
+The builder first compares `--target` with the canonical layout declaration.
+An unknown or different target fails before compiler, runtime or producer
+queries and before output writes. A version 1 or manifestless tree remains
+available to inspection and existing external producers. This builder does not
+infer its target or migrate it. Create a separate version 2 workspace for new
+builds; keep active build trees unchanged.
+
 The default destination is the workspace's `sysroot`. A nonempty destination
 is rejected before build writes. For an update, select an explicit new stage
-such as `--destination /absolute/prebuild-sdk/stages/sysroot-next` inside the
+such as `--destination /absolute/prebuild-sdk-aarch64/stages/sysroot-next` inside the
 same shared workspace. A destination inside the active `sysroot` is rejected.
 Keep the active sysroot unchanged while other consumers use it.
 
