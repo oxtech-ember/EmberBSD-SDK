@@ -43,8 +43,15 @@
           "ports_host_compilers": {
             "cc": "gcc-16",
             "cxx": "g++-16",
+            "cpp": "cpp-16",
             "version": "16.2.0",
             "os_bootstrap_cflags": "-O2 -std=gnu17"
+          },
+          "header_rpc_preprocessor": {
+            "when": "Install OS headers before the target compiler is available.",
+            "command": "Native cpp-16 as a single executable path",
+            "selection": "Set TOOL_RPCGEN for the includes invocation to RPCGEN_CPP=<native-cpp> <native-nbrpcgen>. Preserve the target CPP setting for later library builds.",
+            "evidence": "Record the native CPP wrapper, driver and cc1 hashes. Check the generated rpcb_prot.h declarations required by libc."
           },
           "sdk_final_host_compilers": "The sysroot builder selects native cc and c++ from PATH. The reference uses the base GCC14 with its GNU C17 default.",
           "generated_make": "OS native tools provide nbmake and nbgmake. The reference nbgmake is GNU Make 3.81.",
@@ -73,6 +80,11 @@
           "required_for_sdk_build": false,
           "tools": ["Ruby with JSON, YAML and Minitest"],
           "scope": "OS and Ports repository validators; not SDK Python imports."
+        },
+        "optional_source_analysis": {
+          "required_for_sdk_build": false,
+          "tools": ["Cppcheck", "GCC -fanalyzer", "Clang Static Analyzer", "Valgrind Memcheck"],
+          "scope": "Development checks for compatible native C programs. These tools do not establish target execution acceptance."
         }
       },
       "permissions": {
