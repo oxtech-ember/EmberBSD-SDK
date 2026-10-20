@@ -38,6 +38,18 @@ class StreamTests(TemporaryCase):
         self.assertFalse(caught.exception.stderr_truncated)
         self.assertIn('fixture parser', str(caught.exception.__cause__))
 
+    def test_failed_capture_retains_bounded_binary_stdout_and_status(self):
+        for limit, expected in ((32, b'\0payload'), (8, b'\0payload'),
+                                (3, b'\0pa'), (0, b'')):
+            with self.subTest(limit=limit), self.assertRaises(CommandError) as caught:
+                stream.capture_streamed(self.command(
+                    'import os;os.write(1,b"\\0payload");os.write(2,b"reason");raise SystemExit(97)'),
+                    stdout_limit=limit)
+            self.assertEqual(caught.exception.returncode, 97)
+            self.assertEqual(caught.exception.stdout, expected)
+            self.assertEqual(caught.exception.stderr, b'reason')
+            self.assertEqual(caught.exception.stdout_truncated, limit < 8)
+
     def test_parser_failure_on_success_is_not_hidden(self):
         def reject(reader):
             raise ValueError('invalid payload')
@@ -112,8 +124,10 @@ class StreamTests(TemporaryCase):
 
     def test_completed_signal_retains_negative_returncode(self):
         with self.assertRaises(CommandError) as caught:
-            stream.capture_streamed(self.command('import os,signal;os.kill(os.getpid(),signal.SIGTERM)'))
+            stream.capture_streamed(self.command('import os,signal;os.write(1,b"signal");os.kill(os.getpid(),signal.SIGTERM)'))
         self.assertEqual(caught.exception.returncode, -signal.SIGTERM)
+        self.assertEqual(caught.exception.stdout, b'signal')
+        self.assertFalse(caught.exception.stdout_truncated)
 
     def test_missing_executable_closes_pipe_descriptors(self):
         with self.assertRaises(OSError):

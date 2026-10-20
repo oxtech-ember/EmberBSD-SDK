@@ -156,12 +156,18 @@ def capture_streamed(argv, *, stdout_limit=CHUNK, **options):
     if type(stdout_limit) is not int or stdout_limit < 0:
         raise SDKError('stdout limit must be a nonnegative integer')
 
+    data = bytearray()
+
     def consume(reader):
-        data = bytearray()
         while chunk := reader.read(min(CHUNK, stdout_limit - len(data) + 1)):
             data.extend(chunk)
             if len(data) > stdout_limit:
                 raise SDKError('producer stdout exceeds the capture limit')
         return bytes(data)
 
-    return run_streamed(argv, consume, **options)
+    try:
+        return run_streamed(argv, consume, **options)
+    except CommandError as error:
+        error.stdout = bytes(data[:stdout_limit])
+        error.stdout_truncated = len(data) > stdout_limit
+        raise

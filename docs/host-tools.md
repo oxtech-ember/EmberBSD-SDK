@@ -98,7 +98,10 @@ It rejects stdout above the explicit limit. An output/parser error still drains
 the pipes and checks the producer's completed status. A nonzero producer status
 raises `CommandError` with that exact status and bounded stderr. It takes
 precedence over a parser error. This includes status 97 and negative signal
-statuses. The error also has a `stderr_truncated` flag.
+statuses. The error also has a `stderr_truncated` flag. For `capture_streamed`,
+the error contains the stdout prefix in `stdout`. This prefix is at most
+`stdout_limit` bytes. Its `stdout_truncated` flag is true if the output exceeded
+the limit. The extra byte used to detect overflow is not exposed.
 
 Both functions reuse `OwnedProcessGroup`. They do not create another process
 backend. A producer that leaves a live descendant is rejected. Session drainage
