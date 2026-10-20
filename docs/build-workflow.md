@@ -33,18 +33,33 @@ acceptance programs.
 
 ## Cloud environment description
 
-[`cloud-init.json`](../cloud-init.json) describes the Debian 13 x86_64 host
-profile for an AArch64 GCC16 build. It uses the custom
+[`cloud-init.json`](../cloud-init.json) describes common SDK build requirements,
+host capabilities and concrete reference configurations. It uses the custom
 `emberbsd-cloud-environment` format, version `1`. It is declarative JSON, not
 standard cloud-init user data. SDK commands do not install dependencies, grant
 permissions or select a build profile from this file.
 
-Map its path roles to caller-owned directories. Prepare clean source inputs
-before the build. The profile separates standard-library SDK control tools,
-native/Ports build dependencies and optional Ruby repository validators.
-Resource figures describe an observed host allocation; they are not minimums
-or proof of a complete build. Keep actual build and target-execution receipts
-separate from the environment description.
+Always select both `common` and a `host_environments` entry. Read them with the
+chosen concrete `profiles` entry. Requirements are additive; a profile does not
+weaken the common contract. WSL2 also uses the `linux` host requirements. Map the common path roles
+to caller-owned directories and prepare clean source inputs before the build.
+No merge or host detection is performed by this file.
+
+Linux x86_64 and ARM64, macOS, and WSL2 need native tools for their own OS and CPU.
+The host CPU does not select the EmberBSD target. WSL2 runs the Linux tools inside
+the guest; it does not establish a native Windows backend. Each environment
+records the scope of available checks and the checks still required.
+The WSL2 Linux filesystem is recommended for sources and build outputs. Other
+mounts must pass the same case, link, mode and locking checks; a path prefix alone
+does not establish compatibility.
+
+The `debian13-x86_64-aarch64` profile retains the observed Debian package and
+bootstrap choices. They are examples, not dependencies for every host. To add
+a profile, choose a host environment, declare independent `host` and `target`
+fields, and record that host's native tool providers and qualification evidence.
+Keep package managers, versions and resource observations in that profile.
+Resource figures are not minimums or proof of a complete build. Keep actual
+build and target-execution receipts separate from the environment description.
 
 Read the description with Python's standard library from the SDK root:
 
@@ -57,8 +72,12 @@ description = json.loads(Path("cloud-init.json").read_text(encoding="utf-8"))
 if description["format"] != "emberbsd-cloud-environment" or description["version"] != 1:
     raise SystemExit("Unsupported cloud environment description")
 profile = description["profiles"]["debian13-x86_64-aarch64"]
-print(json.dumps(profile["dependencies"], indent=2))
-print(json.dumps(profile["permissions"], indent=2))
+host = description["host_environments"][profile["host_environment"]]
+print(json.dumps(description["common"], indent=2))
+if "uses_host_environment" in host:
+    print(json.dumps(description["host_environments"][host["uses_host_environment"]], indent=2))
+print(json.dumps(host, indent=2))
+print(json.dumps(profile, indent=2))
 PY
 ```
 

@@ -2,9 +2,245 @@
   "format": "emberbsd-cloud-environment",
   "version": 1,
   "execution": "declarative-only",
-  "description": "SDK cloud build requirements. This is not standard machine cloud-init user data.",
+  "description": "Portable SDK build requirements and host-specific reference configurations. This is not standard machine cloud-init user data.",
+  "composition": "Both common and a selected host_environments entry are required. Also read its uses_host_environment entry, if present, and add the chosen profile requirements. Profiles provide concrete examples; they do not weaken common requirements or qualify untested hosts. No automatic merge, installation or profile selection is implemented.",
+  "common": {
+    "host_and_target": "Select host OS and CPU independently from the target architecture and triplet. Native compilers and generators must execute on the selected host; target libraries remain in the sysroot.",
+    "path_roles": {
+      "sources": "Clean, fully materialized OS, Ports and SDK source checkouts.",
+      "workspace": "Target-specific Prebuild SDK, prepared pkgsrc export, objects, stages and receipts.",
+      "cache": "Verified source archives and downloaded native packages.",
+      "temporary": "Temporary files and native configuration probes.",
+      "host_tools": "Caller-owned native tool and interpreter prefix."
+    },
+    "dependencies": {
+      "sdk_control": {
+        "python": "CPython 3.15 with its standard library, including ctypes and POSIX process modules",
+        "third_party_python_packages": []
+      },
+      "native_and_ports_build": {
+        "base_commands": [
+          "POSIX shell and utilities",
+          "bash",
+          "git",
+          "make",
+          "awk",
+          "tar",
+          "xz",
+          "bzip2",
+          "patch",
+          "perl",
+          "m4",
+          "curl"
+        ],
+        "base_compilers": "Native C and C++ compilers, linker, development headers and libraries for the selected host. The selected OS/Ports producer determines compatible versions and flags.",
+        "ports_host_compilers": {
+          "requirement": "The current GCC16 cross recipe requires host-executable GCC and G++ major version 16; Clang is not a substitute for this recipe.",
+          "selectors": [
+            "HOST_CC",
+            "HOST_CXX"
+          ],
+          "defaults": [
+            "gcc-16",
+            "g++-16"
+          ],
+          "provider": "Supply compatible native binaries or a verified native source build. Package names and installation methods belong to the host profile."
+        },
+        "sdk_final_host_compilers": "The sysroot builder selects native cc and c++ from PATH. These are separate from Ports HOST_CC/HOST_CXX and the target GCC16 compiler.",
+        "header_rpc_preprocessor": {
+          "when": "Install OS headers before the target compiler is available.",
+          "command": "A compatible native C preprocessor as a single executable path",
+          "selection": "Set TOOL_RPCGEN for the includes invocation to RPCGEN_CPP=<native-cpp> <native-nbrpcgen>. Preserve the target CPP setting for later library builds.",
+          "evidence": "Record the native preprocessor and its executed components. Check the generated rpcb_prot.h declarations required by libc."
+        },
+        "generated_make": "OS native tools provide nbmake and a host GNU make. Use the GNU make provider and selector accepted by the selected Ports entry point.",
+        "host_math": "Ports builds GMP 6.3.0, MPFR 4.2.2 and MPC 1.4.1 from its pinned sources.",
+        "optional_ports_profiles": "Additional profiles retain their upstream tools, such as CMake or LLVM build dependencies. They are not SDK Python imports."
+      },
+      "python_source_bootstrap": {
+        "when": "CPython 3.15 is not already available for the selected host",
+        "source": "Official CPython source; verify the selected release and commit.",
+        "required_module_support": {
+          "ctypes": "The native foreign-function library and development files needed by the selected CPython build, normally libffi.",
+          "ssl": "Compatible OpenSSL development files and certificate trust for the Ports HTTPS download path.",
+          "posix": "The selected host's native development tools and POSIX process interfaces."
+        },
+        "producer_specific_module_support": {
+          "zlib": "Required when the Ports runtime relink recovery reads its gzip-compressed backup through Python tarfile."
+        },
+        "optional_module_libraries": [
+          "bzip2",
+          "SQLite",
+          "liblzma",
+          "readline",
+          "ncurses",
+          "gdbm"
+        ],
+        "platform_module_providers": "Optional uuid and database modules use the providers available on the selected host; a separate package is not required when the system supplies them.",
+        "scope": "SDK control requires its imported standard-library modules, including ctypes and POSIX process support. Ports HTTPS downloads also need ssl. Optional module coverage does not establish or limit unrelated SDK build capabilities."
+      },
+      "optional_repository_validation": {
+        "required_for_sdk_build": false,
+        "tools": [
+          "Ruby with JSON, YAML and Minitest"
+        ],
+        "scope": "OS and Ports repository validators; not SDK Python imports."
+      },
+      "optional_source_analysis": {
+        "required_for_sdk_build": false,
+        "tools": [
+          "Cppcheck",
+          "GCC -fanalyzer",
+          "Clang Static Analyzer",
+          "Valgrind Memcheck"
+        ],
+        "scope": "Development checks for compatible native C programs. These tools do not establish target execution acceptance."
+      }
+    },
+    "permissions": {
+      "filesystem": {
+        "read_roles": [
+          "sources",
+          "workspace",
+          "cache",
+          "temporary",
+          "host_tools"
+        ],
+        "read_system": [
+          "Native executables, development headers and libraries",
+          "HTTPS certificates and selected source/package trust metadata"
+        ],
+        "write_roles": [
+          "workspace",
+          "cache",
+          "temporary",
+          "host_tools"
+        ],
+        "capabilities": [
+          "Case-sensitive paths and relative symbolic links",
+          "Executable file modes and native execution from build paths",
+          "Exclusive creation, atomic rename, fsync and POSIX flock"
+        ],
+        "path_constraints": "Use real absolute paths without whitespace. Keep source inputs separate from writable build outputs."
+      },
+      "process": {
+        "operations": [
+          "Spawn native subprocesses and create POSIX sessions",
+          "Inspect process identities and signal owned same-UID session members",
+          "Wait for and reap owned child processes"
+        ],
+        "scope": "Producers retain their effective UID and session. The selected native backend must prove that owned writers have stopped before releasing build locks.",
+        "restriction_policy": "The selected host backend adds its native visibility and API requirements. Missing capabilities fail preflight or ownership verification."
+      },
+      "network": {
+        "purpose": "Acquire public source checkouts, pinned archives and signed native packages.",
+        "transport": "HTTPS with certificate verification",
+        "hosts": [
+          "github.com",
+          "codeload.github.com",
+          "objects.githubusercontent.com",
+          "gcc.gnu.org",
+          "ftp.gnu.org",
+          "www.mpfr.org",
+          "sourceware.org"
+        ],
+        "host_provider_policy": "Add the selected native tool or package provider's endpoints in the concrete host profile. This description does not install a network allowlist.",
+        "integrity": "Verify source commits and Ports archive hashes. Verify native packages with the selected provider's signed metadata and checksums.",
+        "offline": "Existing verified inputs can be reused without downloading them."
+      },
+      "privilege": {
+        "root_required_for_build": false,
+        "conditions": "Native tools and source inputs are already accessible; outputs use caller-owned paths and unprivileged OS staging.",
+        "raw_device_access_required": false,
+        "host_provisioning": "Installing a host OS, WSL2, development tools or system packages can require separate administrator permissions. They are not producer permissions."
+      }
+    },
+    "resources": {
+      "minimums": "Not established. Size disk space for source archives, independent build trees, installed stages and receipts.",
+      "selection": "Choose jobs and disk capacity for the actual host. Reference allocations do not establish portable minimums."
+    },
+    "acceptance": "Keep filesystem/process contracts, actual compiler and sysroot builds, cross-link checks and EmberBSD target execution as separate evidence. A listed architecture or passing preflight is not complete build qualification.",
+    "producers": {
+      "os": "https://github.com/oxtech-ember/EmberBSD",
+      "compiler_and_runtime": "https://github.com/oxtech-ember/EmberBSD-Ports/tree/main/profiles/development-toolchain",
+      "sdk": "scripts/build-sysroot.py",
+      "workflow": "docs/build-workflow.md"
+    }
+  },
+  "host_environments": {
+    "linux": {
+      "system": "Linux",
+      "host_architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "process_backend": "linux-proc-pidfd-session-v1",
+      "requirements": {
+        "filesystem": "Readable /proc enumeration and PID stat/status records for the current PID namespace, including identities needed to account for owned descendants.",
+        "process": [
+          "CLOCK_BOOTTIME and process birth ticks",
+          "pidfd_open and pidfd_send_signal",
+          "PR_GET_CHILD_SUBREAPER",
+          "PR_SET_CHILD_SUBREAPER in each private Python supervisor",
+          "Reap producer descendants in their private supervisor without changing the controller subreaper setting"
+        ],
+        "native_tools": "Provide Linux executables and development libraries for the host CPU and libc. Select a distribution package provider or a verified native source build."
+      },
+      "qualification": {
+        "x86_64": "Filesystem, process and fixture-producer contracts were checked on Linux 6.18 with CPython 3.15. Ports also documents Debian x86_64 kernel cross-compiler checks.",
+        "aarch64": "The Linux backend has no CPU selector. Native ARM64 tool availability and actual filesystem, process and complete build checks are still required on that host.",
+        "complete_build": "Require receipts for the selected distribution, host CPU, tool versions, target and source revisions."
+      }
+    },
+    "macos": {
+      "system": "Darwin",
+      "host_architectures": [
+        "arm64",
+        "x86_64"
+      ],
+      "process_backend": "darwin-ps-rusage-session-v1",
+      "requirements": {
+        "process": [
+          "Base-system ps with pid, ppid, uid and stat fields",
+          "POSIX session inspection and signals",
+          "Public proc_pid_rusage RUSAGE_INFO_V0 and mach_absolute_time through standard-library ctypes and /usr/lib/libproc.dylib"
+        ],
+        "native_tools": "Provide native development tools, a compatible macOS SDK and host-executable GCC/G++16 for the Ports GCC16 recipe.",
+        "sdk_selection": "The documented Ports workflow uses SDKROOT when host GCC cannot locate system libraries. xcrun --show-sdk-path selects the installed macOS SDK.",
+        "filesystem": "Use a case-sensitive build filesystem with the common link and executable-mode capabilities."
+      },
+      "qualification": {
+        "arm64": "The SDK documents initial workspace contracts on macOS arm64. Ports documents AArch64 application cross-compiler checks on Apple Silicon macOS.",
+        "x86_64": "The Darwin backend has no CPU selector. The selected native tools and actual contracts still need host-specific checks.",
+        "complete_build": "These scoped results do not establish a fresh complete SDK build for arbitrary macOS versions or host CPUs."
+      }
+    },
+    "wsl2": {
+      "system": "Linux",
+      "runs_inside": "WSL2 on Windows",
+      "uses_host_environment": "linux",
+      "host_architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "requirements": {
+        "execution": "Run Python, Git, SDK/Ports controllers and every native build tool inside the selected WSL2 Linux distribution. Select executables for the Linux guest architecture, not Windows .exe files.",
+        "filesystem": "Require case-sensitive paths, symbolic links, executable modes and locks for sources and build outputs. The Linux guest filesystem is recommended. Windows-mounted paths such as /mnt/c require validation of the same properties; their location alone establishes neither compatibility nor incompatibility.",
+        "process": "The actual WSL2 kernel and security settings must satisfy all Linux process backend requirements."
+      },
+      "qualification": "The Linux backend is available to the guest. ARM64 and x86_64 WSL2 distributions still require their own actual contracts and full SDK build checks; bare Linux results do not qualify WSL2."
+    },
+    "native-windows": {
+      "system": "Windows",
+      "process_backend": null,
+      "qualification": "No native Windows producer backend or binary SDK is qualified. Current OS/Ports producers require POSIX tools. Windows Python workspace inspection alone does not qualify a build.",
+      "current_route": "Use the WSL2 Linux guest requirements, subject to their pending qualification."
+    }
+  },
   "profiles": {
     "debian13-x86_64-aarch64": {
+      "role": "reference-configuration",
+      "host_environment": "linux",
       "host": {
         "system": "Linux",
         "distribution": "Debian",
@@ -22,109 +258,56 @@
         "complete_build": "Requires successful compiler, runtime, sysroot and cross-link receipts for the selected inputs.",
         "target_execution": "Separate acceptance on EmberBSD."
       },
-      "path_roles": {
-        "sources": "Clean, fully materialized OS, Ports and SDK source checkouts.",
-        "workspace": "Target-specific Prebuild SDK, prepared pkgsrc export, objects, stages and receipts.",
-        "cache": "Verified source archives and downloaded native packages.",
-        "temporary": "Temporary files and native configuration probes.",
-        "host_tools": "Caller-owned native tool and interpreter prefix."
-      },
       "dependencies": {
-        "sdk_control": {
-          "python": "CPython 3.15 with its standard library, including ctypes and POSIX process modules",
-          "third_party_python_packages": []
+        "base_compilers": "Debian 13 GCC14 is the observed base compiler for native bootstrap and CPython source builds.",
+        "ports_host_compilers": {
+          "cc": "gcc-16",
+          "cxx": "g++-16",
+          "cpp": "cpp-16",
+          "version": "16.2.0",
+          "os_bootstrap_cflags": "-O2 -std=gnu17"
         },
-        "native_and_ports_build": {
-          "base_commands": [
-            "POSIX shell and utilities", "bash", "git", "make", "tar",
-            "xz", "bzip2", "patch", "perl", "m4", "curl"
+        "header_rpc_preprocessor": "The reference selects native cpp-16 during the includes step and records its wrapper, driver and cc1 hashes.",
+        "sdk_final_host_compilers": "The sysroot builder selects native cc and c++ from PATH. The reference uses the base GCC14 with its GNU C17 default.",
+        "generated_make": "OS native tools provide nbmake and nbgmake. The reference nbgmake is GNU Make 3.81.",
+        "private_debian_package_extraction": {
+          "commands": [
+            "apt-get",
+            "dpkg-deb"
           ],
-          "base_compilers": "Native C and C++ compilers with development headers, linker and libraries. Debian 13 GCC14 is the reference base compiler.",
-          "ports_host_compilers": {
-            "cc": "gcc-16",
-            "cxx": "g++-16",
-            "cpp": "cpp-16",
-            "version": "16.2.0",
-            "os_bootstrap_cflags": "-O2 -std=gnu17"
-          },
-          "header_rpc_preprocessor": {
-            "when": "Install OS headers before the target compiler is available.",
-            "command": "Native cpp-16 as a single executable path",
-            "selection": "Set TOOL_RPCGEN for the includes invocation to RPCGEN_CPP=<native-cpp> <native-nbrpcgen>. Preserve the target CPP setting for later library builds.",
-            "evidence": "Record the native CPP wrapper, driver and cc1 hashes. Check the generated rpcb_prot.h declarations required by libc."
-          },
-          "sdk_final_host_compilers": "The sysroot builder selects native cc and c++ from PATH. The reference uses the base GCC14 with its GNU C17 default.",
-          "generated_make": "OS native tools provide nbmake and nbgmake. The reference nbgmake is GNU Make 3.81.",
-          "host_math": "Ports builds GMP 6.3.0, MPFR 4.2.2 and MPC 1.4.1 from its pinned sources.",
-          "private_debian_package_extraction": {
-            "commands": ["apt-get", "dpkg-deb"],
-            "trust": ["Debian archive signing keys", "system HTTPS certificate store"],
-            "gcc_runtime_packages": [
-              "libgcc-s1", "libstdc++6", "libcc1-0", "libgomp1", "libitm1",
-              "libatomic1", "libquadmath0", "libgmp10", "libmpfr6",
-              "libmpc3", "libisl23", "libzstd1", "zlib1g"
-            ],
-            "policy": "Use packages compatible with the base host. Extract into host_tools; retain the system loader and libc."
-          }
+          "trust": [
+            "Debian archive signing keys",
+            "system HTTPS certificate store"
+          ],
+          "gcc_runtime_packages": [
+            "libgcc-s1",
+            "libstdc++6",
+            "libcc1-0",
+            "libgomp1",
+            "libitm1",
+            "libatomic1",
+            "libquadmath0",
+            "libgmp10",
+            "libmpfr6",
+            "libmpc3",
+            "libisl23",
+            "libzstd1",
+            "zlib1g"
+          ],
+          "policy": "Use packages compatible with the base host. Extract into host_tools; retain the system loader and libc."
         },
         "python_source_bootstrap": {
-          "when": "CPython 3.15 is not already available",
-          "source": "Official CPython v3.15.0; verify the selected source commit.",
-          "development_libraries": [
-            "OpenSSL", "zlib", "libffi", "bzip2", "SQLite", "liblzma",
-            "readline", "ncurses", "uuid", "gdbm"
-          ],
-          "scope": "Native interpreter build with the full reference host module set."
-        },
-        "optional_repository_validation": {
-          "required_for_sdk_build": false,
-          "tools": ["Ruby with JSON, YAML and Minitest"],
-          "scope": "OS and Ports repository validators; not SDK Python imports."
-        },
-        "optional_source_analysis": {
-          "required_for_sdk_build": false,
-          "tools": ["Cppcheck", "GCC -fanalyzer", "Clang Static Analyzer", "Valgrind Memcheck"],
-          "scope": "Development checks for compatible native C programs. These tools do not establish target execution acceptance."
+          "source": "Official CPython v3.15.0; record its verified source commit and executable hash.",
+          "checked_modules": ["ctypes", "ssl", "sqlite3", "bz2", "lzma", "readline", "curses", "json"],
+          "scope": "Observed module checks for this reference interpreter, not a complete optional-module build."
         }
       },
       "permissions": {
-        "filesystem": {
-          "read_roles": ["sources", "workspace", "cache", "temporary", "host_tools"],
-          "read_system": [
-            "Native executables, development headers and libraries",
-            "HTTPS certificates and package signing keys",
-            "/proc enumeration and stat/status records in the current PID namespace"
-          ],
-          "write_roles": ["workspace", "cache", "temporary", "host_tools"],
-          "capabilities": [
-            "Case-sensitive paths and relative symbolic links",
-            "Executable file modes and native execution from build paths",
-            "Exclusive creation, atomic rename, fsync and POSIX flock"
-          ],
-          "path_constraints": "Use real absolute paths without whitespace. Keep source inputs separate from writable build outputs."
-        },
-        "process": {
-          "operations": [
-            "Spawn native subprocesses and create sessions",
-            "Read CLOCK_BOOTTIME and process birth identities",
-            "Use pidfd_open and pidfd_send_signal for owned same-UID session members",
-            "Read PR_GET_CHILD_SUBREAPER",
-            "Set PR_SET_CHILD_SUBREAPER in each private supervisor",
-            "Wait for and reap the supervisor's producer descendants"
-          ],
-          "scope": "Producers retain their effective UID and session. Reaping is confined to the private supervisor.",
-          "restriction_policy": "Missing procfs visibility or blocked process APIs cause preflight or ownership verification to fail."
-        },
         "network": {
-          "purpose": "Acquire public source checkouts, pinned archives and signed native packages.",
-          "transport": "HTTPS with certificate verification",
-          "hosts": [
-            "github.com", "codeload.github.com", "objects.githubusercontent.com",
-            "deb.debian.org", "gcc.gnu.org", "ftp.gnu.org", "www.mpfr.org",
-            "sourceware.org"
+          "additional_hosts": [
+            "deb.debian.org"
           ],
-          "integrity": "Verify source commits, Ports archive hashes, signed Debian repository metadata and downloaded package hashes.",
-          "offline": "Existing verified inputs can be reused without downloading them."
+          "integrity": "Verify signed Debian repository metadata and downloaded package hashes."
         },
         "privilege": {
           "root_required": false,
@@ -143,12 +326,6 @@
           "scope": "Observed host allocation, not a completed SDK build qualification."
         },
         "minimums": "Not established. Size disk space for source archives, independent build trees, installed stages and receipts."
-      },
-      "producers": {
-        "os": "https://github.com/oxtech-ember/EmberBSD",
-        "compiler_and_runtime": "https://github.com/oxtech-ember/EmberBSD-Ports/tree/main/profiles/development-toolchain",
-        "sdk": "scripts/build-sysroot.py",
-        "workflow": "docs/build-workflow.md"
       }
     }
   }
