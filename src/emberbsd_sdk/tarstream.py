@@ -14,6 +14,7 @@ import tarfile
 from .errors import SDKError
 
 TAR_STREAM_API = 1
+TAR_HEADER_FACTS_API = 1
 CHUNK = 1024 * 1024
 BLOCK = 512
 
@@ -53,6 +54,10 @@ class TarRecord:
     typeflag: bytes
     size: int
     payload: object
+    uid: int | None = None
+    gid: int | None = None
+    uname: bytes | None = None
+    gname: bytes | None = None
 
     def read(self, size):
         return self.payload.read(size)
@@ -87,7 +92,9 @@ def tar_records(stream):
         payload = _Payload(stream, info.size)
         try:
             yield TarRecord(name, header[157:257].split(b'\0', 1)[0],
-                            kind, info.size, payload)
+                            kind, info.size, payload, info.uid, info.gid,
+                            header[265:297].split(b'\0', 1)[0],
+                            header[297:329].split(b'\0', 1)[0])
             while payload.read(CHUNK):
                 pass
             _read_exact(stream, (-info.size) % BLOCK)

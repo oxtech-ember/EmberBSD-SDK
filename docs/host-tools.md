@@ -81,6 +81,42 @@ filesystem and process behavior separate from command fixtures. Record the
 interpreter and platform for actual results. Type annotations document module
 interfaces; they do not replace input validation or runtime checks.
 
+## Publish an owned directory
+
+`emberbsd_sdk.publication` provides `DIRECTORY_PUBLICATION_API = 1`.
+`require_directory_publication()` checks the host and native symbol without
+filesystem writes. Call it before starting a producer. An old API1 source can
+lack this capability; check the constant explicitly before using the module.
+
+`publish_directory_noreplace(source, destination)` moves a real directory to a
+new destination entry. It returns `None` on success. Parent aliases are resolved;
+the source leaf must not be a symlink. An existing file, directory or symlink at
+the destination is never replaced. A destination created after path validation
+is also protected by the native operation.
+
+Darwin uses `renamex_np` with `RENAME_EXCL`. Linux uses libc `renameat2` with
+`AT_FDCWD` and `RENAME_NOREPLACE`. A missing symbol or another host is unsupported.
+Native errors retain their errno. A filesystem that refuses the operation, or a
+cross-filesystem move, does not cause an ordinary rename or copy fallback.
+The availability check cannot qualify each destination filesystem.
+
+The caller must own the source and both parent directories throughout the call.
+The API does not lock those paths against another writer. It does not validate
+packages, drain producers, delete work, or establish crash durability. Those
+contracts remain with the caller and the existing process APIs.
+
+The wrapper derives from the BSD-licensed Ports
+[`bundle-gcc16.py`](https://github.com/oxtech-ember/EmberBSD-Ports/blob/2313b5f8d9b124369310f2b9f4f9a94c4852861f/profiles/installer-desktop/bundle-gcc16.py).
+The fixed native ABI follows Darwin `sys/stdio.h`, Linux UAPI
+[`fs.h`](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fs.h) and
+[`fcntl.h`](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fcntl.h),
+and the libc `renameat2` declaration.
+
+Run `python3 -m unittest discover -s tests -p 'test_publication.py'`.
+The filesystem cases execute the current host's native operation. Separate ABI
+fixtures check Darwin and Linux arguments and injected failures. Darwin results
+do not establish an actual Linux filesystem run or native Windows support.
+
 ## Read a binary producer stream
 
 `emberbsd_sdk.stream` provides `PRODUCER_STREAM_API = 1`.
@@ -125,6 +161,13 @@ Names, links and type flags remain bytes. `record.read(size)` reads at most one
 MiB. Advancing the iterator drains unread payload and padding. A prior record
 cannot be read after the iterator advances. A zero header ends traversal; the
 producer wrapper drains remaining output. The reader never extracts a file.
+
+`TAR_HEADER_FACTS_API = 1` adds raw ownership facts to each yielded record:
+integer `uid` and `gid`, and byte strings `uname` and `gname`. Owner names stop at
+the first NUL byte; they are not decoded or normalized. These are fixed-header
+facts, without PAX overrides. The consumer still owns effective PAX policy.
+The existing five-argument `TarRecord` constructor remains valid. Its omitted
+ownership fields are `None`, which means unknown, not root ownership.
 
 The standard-library `TarInfo.frombuf` validates each 512-byte header and its
 numeric fields. The SDK retains the raw name, prefix, link and type fields.

@@ -42,6 +42,45 @@ class ShortReads:
 
 
 class TarStreamTests(unittest.TestCase):
+    def test_header_facts_preserve_ids_and_raw_owner_bytes(self):
+        import emberbsd_sdk.tarstream as module
+        info = tarfile.TarInfo('file')
+        info.uid, info.gid = 12345, 54321
+        info.uname, info.gname = 'user\udcff', 'group\udcfe'
+        raw = info.tobuf(format=tarfile.USTAR_FORMAT, encoding='ascii', errors='surrogateescape')
+        record = next(tar_records(io.BytesIO(raw)))
+        self.assertEqual(getattr(module, 'TAR_HEADER_FACTS_API', None), 1)
+        self.assertEqual((record.uid, record.gid, record.uname, record.gname),
+                         (12345, 54321, b'user\xff', b'group\xfe'))
+        self.assertIs(type(record.uid), int)
+        self.assertIs(type(record.gid), int)
+
+    def test_legacy_record_constructor_has_unknown_header_facts(self):
+        from emberbsd_sdk.tarstream import TarRecord
+        payload = io.BytesIO(b'x')
+        record = TarRecord(b'name', b'link', b'0', 1, payload)
+        self.assertEqual((record.uid, record.gid, record.uname, record.gname),
+                         (None, None, None, None))
+        self.assertEqual(record.read(1), b'x')
+
+    def test_header_facts_do_not_apply_pax_owner_overrides(self):
+        data = entry('pax', pax(b'uid', b'99') + pax(b'uname', b'other'), b'x')
+        data += entry('raw', b'')
+        records = tar_records(io.BytesIO(data))
+        extended = next(records)
+        self.assertEqual(pax_records(extended.read(CHUNK)),
+                         {b'uid': b'99', b'uname': b'other'})
+        record = next(records)
+        self.assertEqual((record.uid, record.gid, record.uname, record.gname),
+                         (0, 0, b'', b''))
+        self.assertEqual(list(records), [])
+
+    def test_gnu_base256_owner_ids_remain_typed_header_values(self):
+        info = tarfile.TarInfo('wide')
+        info.uid, info.gid = 2**35, -1
+        record = next(tar_records(io.BytesIO(info.tobuf(format=tarfile.GNU_FORMAT))))
+        self.assertEqual((record.uid, record.gid), (2**35, -1))
+
     def test_version_and_short_reads_skip_data_and_keep_raw_fields(self):
         source = ShortReads(entry('parent/file', b'x' * 1234) +
                             entry('directory///', b'', b'5') +
