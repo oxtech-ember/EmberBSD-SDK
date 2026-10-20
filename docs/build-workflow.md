@@ -7,8 +7,8 @@ native compiler and generators separate from the target GCC16 compiler.
 The current backend uses POSIX shell and make; CMake remains the build system
 for dependencies which use it upstream. The workspace tools use Python's standard
 library for paths, JSON and process invocation.
-The current process adapter requires Darwin. See [host platforms](host-platforms.md)
-for the Linux, WSL2 and native Windows boundaries.
+The current process adapters support Darwin and Linux. See
+[host platforms](host-platforms.md) for qualification and WSL2/Windows boundaries.
 
 Select the target through the actual producer. The current common GCC16 paths
 use `aarch64--netbsd` or `x86_64--netbsd`. Preserve those fork ABI identifiers.
@@ -30,6 +30,41 @@ also use upstream Python build tools and `lit`. Installed upstream utilities
 retain their own package dependencies. Record host and target Python roles
 separately. A target device does not need the host controller to run prepared
 acceptance programs.
+
+## Cloud environment description
+
+[`cloud-init.json`](../cloud-init.json) describes the Debian 13 x86_64 host
+profile for an AArch64 GCC16 build. It uses the custom
+`emberbsd-cloud-environment` format, version `1`. It is declarative JSON, not
+standard cloud-init user data. SDK commands do not install dependencies, grant
+permissions or select a build profile from this file.
+
+Map its path roles to caller-owned directories. Prepare clean source inputs
+before the build. The profile separates standard-library SDK control tools,
+native/Ports build dependencies and optional Ruby repository validators.
+Resource figures describe an observed host allocation; they are not minimums
+or proof of a complete build. Keep actual build and target-execution receipts
+separate from the environment description.
+
+Read the description with Python's standard library from the SDK root:
+
+```sh
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+description = json.loads(Path("cloud-init.json").read_text(encoding="utf-8"))
+if description["format"] != "emberbsd-cloud-environment" or description["version"] != 1:
+    raise SystemExit("Unsupported cloud environment description")
+profile = description["profiles"]["debian13-x86_64-aarch64"]
+print(json.dumps(profile["dependencies"], indent=2))
+print(json.dumps(profile["permissions"], indent=2))
+PY
+```
+
+This checks the format identifier and selects the described profile. It does
+not validate installed tools or enforce a sandbox policy. Follow the producer
+CLIs below, record selected source and tool identities, and verify their outputs.
 
 ## Build the compiler with Ports
 

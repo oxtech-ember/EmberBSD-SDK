@@ -82,6 +82,10 @@ the same SDK modules. The control tools need no third-party Python packages.
 Optional third-party Ports profiles retain their upstream tool requirements;
 see the [dependency boundary](docs/build-workflow.md#required-tools).
 
+The declarative [cloud-init.json](cloud-init.json) lists cloud build dependencies
+and permissions for Debian 13 x86_64 targeting AArch64. See its
+[format and usage](docs/build-workflow.md#cloud-environment-description).
+
 A stable application API/ABI, application package format, device runtime and
 redistributable binary SDK are still separate work. These workspace tools do
 not implement those contracts.

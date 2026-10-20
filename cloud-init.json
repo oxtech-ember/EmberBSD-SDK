@@ -1,0 +1,143 @@
+{
+  "format": "emberbsd-cloud-environment",
+  "version": 1,
+  "execution": "declarative-only",
+  "description": "SDK cloud build requirements. This is not standard machine cloud-init user data.",
+  "profiles": {
+    "debian13-x86_64-aarch64": {
+      "host": {
+        "system": "Linux",
+        "distribution": "Debian",
+        "release": "13",
+        "architecture": "x86_64"
+      },
+      "target": {
+        "system": "EmberBSD",
+        "architecture": "aarch64",
+        "triplet": "aarch64--netbsd",
+        "compiler": "GCC 16.2.0"
+      },
+      "qualification": {
+        "process_backend": "Native Linux filesystem and process contracts passed with CPython 3.15.",
+        "complete_build": "Requires successful compiler, runtime, sysroot and cross-link receipts for the selected inputs.",
+        "target_execution": "Separate acceptance on EmberBSD."
+      },
+      "path_roles": {
+        "sources": "Clean, fully materialized OS, Ports and SDK source checkouts.",
+        "workspace": "Target-specific Prebuild SDK, prepared pkgsrc export, objects, stages and receipts.",
+        "cache": "Verified source archives and downloaded native packages.",
+        "temporary": "Temporary files and native configuration probes.",
+        "host_tools": "Caller-owned native tool and interpreter prefix."
+      },
+      "dependencies": {
+        "sdk_control": {
+          "python": "CPython 3.15 with its standard library, including ctypes and POSIX process modules",
+          "third_party_python_packages": []
+        },
+        "native_and_ports_build": {
+          "base_commands": [
+            "POSIX shell and utilities", "bash", "git", "make", "tar",
+            "xz", "bzip2", "patch", "perl", "m4", "curl"
+          ],
+          "base_compilers": "Native C and C++ compilers with development headers, linker and libraries. Debian 13 GCC14 is the reference base compiler.",
+          "ports_host_compilers": {
+            "cc": "gcc-16",
+            "cxx": "g++-16",
+            "version": "16.2.0",
+            "os_bootstrap_cflags": "-O2 -std=gnu17"
+          },
+          "sdk_final_host_compilers": "The sysroot builder selects native cc and c++ from PATH. The reference uses the base GCC14 with its GNU C17 default.",
+          "generated_make": "OS native tools provide nbmake and nbgmake. The reference nbgmake is GNU Make 3.81.",
+          "host_math": "Ports builds GMP 6.3.0, MPFR 4.2.2 and MPC 1.4.1 from its pinned sources.",
+          "private_debian_package_extraction": {
+            "commands": ["apt-get", "dpkg-deb"],
+            "trust": ["Debian archive signing keys", "system HTTPS certificate store"],
+            "gcc_runtime_packages": [
+              "libgcc-s1", "libstdc++6", "libcc1-0", "libgomp1", "libitm1",
+              "libatomic1", "libquadmath0", "libgmp10", "libmpfr6",
+              "libmpc3", "libisl23", "libzstd1", "zlib1g"
+            ],
+            "policy": "Use packages compatible with the base host. Extract into host_tools; retain the system loader and libc."
+          }
+        },
+        "python_source_bootstrap": {
+          "when": "CPython 3.15 is not already available",
+          "source": "Official CPython v3.15.0; verify the selected source commit.",
+          "development_libraries": [
+            "OpenSSL", "zlib", "libffi", "bzip2", "SQLite", "liblzma",
+            "readline", "ncurses", "uuid", "gdbm"
+          ],
+          "scope": "Native interpreter build with the full reference host module set."
+        },
+        "optional_repository_validation": {
+          "required_for_sdk_build": false,
+          "tools": ["Ruby with JSON, YAML and Minitest"],
+          "scope": "OS and Ports repository validators; not SDK Python imports."
+        }
+      },
+      "permissions": {
+        "filesystem": {
+          "read_roles": ["sources", "workspace", "cache", "temporary", "host_tools"],
+          "read_system": [
+            "Native executables, development headers and libraries",
+            "HTTPS certificates and package signing keys",
+            "/proc enumeration and stat/status records in the current PID namespace"
+          ],
+          "write_roles": ["workspace", "cache", "temporary", "host_tools"],
+          "capabilities": [
+            "Case-sensitive paths and relative symbolic links",
+            "Executable file modes and native execution from build paths",
+            "Exclusive creation, atomic rename, fsync and POSIX flock"
+          ],
+          "path_constraints": "Use real absolute paths without whitespace. Keep source inputs separate from writable build outputs."
+        },
+        "process": {
+          "operations": [
+            "Spawn native subprocesses and create sessions",
+            "Read CLOCK_BOOTTIME and process birth identities",
+            "Use pidfd_open and pidfd_send_signal for owned same-UID session members",
+            "Read PR_GET_CHILD_SUBREAPER",
+            "Set PR_SET_CHILD_SUBREAPER in each private supervisor",
+            "Wait for and reap the supervisor's producer descendants"
+          ],
+          "scope": "Producers retain their effective UID and session. Reaping is confined to the private supervisor.",
+          "restriction_policy": "Missing procfs visibility or blocked process APIs cause preflight or ownership verification to fail."
+        },
+        "network": {
+          "purpose": "Acquire public source checkouts, pinned archives and signed native packages.",
+          "transport": "HTTPS with certificate verification",
+          "hosts": [
+            "github.com", "codeload.github.com", "objects.githubusercontent.com",
+            "deb.debian.org", "gcc.gnu.org", "ftp.gnu.org", "www.mpfr.org",
+            "sourceware.org"
+          ],
+          "integrity": "Verify source commits, Ports archive hashes, signed Debian repository metadata and downloaded package hashes.",
+          "offline": "Existing verified inputs can be reused without downloading them."
+        },
+        "privilege": {
+          "root_required": false,
+          "conditions": "Native packages are extracted into a caller-owned prefix; OS installation uses unprivileged staging.",
+          "raw_device_access_required": false,
+          "system_package_installation_required": false
+        }
+      },
+      "resources": {
+        "reference": {
+          "cpu_quota_cores": 4,
+          "memory_limit_gib": 32,
+          "build_jobs": 4,
+          "linux_kernel": "6.18",
+          "python": "3.15.0",
+          "scope": "Observed host allocation, not a completed SDK build qualification."
+        },
+        "minimums": "Not established. Size disk space for source archives, independent build trees, installed stages and receipts."
+      },
+      "producers": {
+        "os": "https://github.com/oxtech-ember/EmberBSD",
+        "compiler_and_runtime": "https://github.com/oxtech-ember/EmberBSD-Ports/tree/main/profiles/development-toolchain",
+        "sdk": "scripts/build-sysroot.py",
+        "workflow": "docs/build-workflow.md"
+      }
+    }
+  }
+}
