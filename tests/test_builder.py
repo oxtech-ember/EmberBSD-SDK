@@ -439,7 +439,8 @@ class BuilderTests(TemporaryCase):
             producer = self.wait_file(destination / ('descendant-pid' if descendant else 'child-pid'))
             if new_group:
                 leader = self.wait_file(destination / 'child-pid')
-                self.assertEqual(os.getsid(producer), leader)
+                self.assertEqual(os.getsid(producer), os.getsid(leader))
+                self.assertNotEqual(os.getsid(producer), os.getsid(child.pid))
                 self.assertEqual(os.getpgid(producer), producer)
             child.send_signal(sent_signal)
             if descendant:
@@ -499,10 +500,10 @@ class BuilderTests(TemporaryCase):
         started = []
         def start(group):
             pid = original_start(group)
-            started.append(pid)
+            started.append(group)
             return pid
         def members(inspector, sid):
-            if sid in started:
+            if sid in [group.pid for group in started]:
                 return inject(inspector, sid)
             return original_members(inspector, sid)
         try:
@@ -511,13 +512,9 @@ class BuilderTests(TemporaryCase):
         finally:
             # The fixture producer is bounded. Drain it using the unpatched backend.
             inspector = process.SessionInspector(env=process.sanitized_environment())
-            for sid in started:
-                for pid in inspector.members(sid):
-                    try: os.kill(pid, signal.SIGKILL)
-                    except ProcessLookupError: pass
-                deadline = time.monotonic() + 10
-                while inspector.members(sid) and time.monotonic() < deadline: time.sleep(.03)
-                self.assertFalse(inspector.members(sid))
+            for group in started:
+                group.stop()
+                self.assertFalse(inspector.members(group.pid))
         receipt = json.loads((Path(self.options['sdk']) / 'sysroot' / B.RECEIPT).read_text())
         for name in ('objects', 'tools'):
             self.assertTrue((Path(receipt['paths'][name]) / B.QUARANTINE).is_file())

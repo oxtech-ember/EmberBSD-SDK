@@ -37,16 +37,32 @@ working directory. Check exit status and retain diagnostic output. Keep
 platform process control behind the declared backend; POSIX process groups
 do not establish native Windows support.
 
-The current producer backend uses Darwin's base-system `ps` and public
-`proc_pid_rusage` interface. Python's standard-library `ctypes` calls that
-interface. No additional package is required. Birth identities distinguish PID
-reuse from processes that disappeared during inspection. The backend checks its
-native prerequisites before it starts a producer.
+The Darwin producer backend uses base-system `ps` and the public
+`proc_pid_rusage` interface through Python's standard-library `ctypes`. Linux
+reads coherent session and birth fields from `/proc/PID/stat`. It pins each
+process directory while it reads the effective UID from `/proc/PID/status`.
+Linux sends signals through pidfds so PID reuse cannot redirect a signal.
+No additional Python package is required.
+
+Linux starts a private Python supervisor as each owned session's leader. The
+producer inherits that session. Its ID is known before the supervisor can start
+writable work. The supervisor acts as a child subreaper and reports the
+producer's actual exit status. It waits for all its children before it confirms
+shutdown. This contains orphan reaping without changing the controller's process-wide state
+or waiting for unrelated children. Zombies remain owned until reaped.
+Supervisor failure makes shutdown unproven and raises `ProcessOwnershipError`.
+
+For an unsupervised Linux snapshot, vanished PIDs and births in or after the
+snapshot's clock tick make an empty result uncertain. An owned session becomes
+empty only after its supervisor proves that no descendants remain. Unrelated
+process churn cannot substitute for this proof. The backends check their native
+prerequisites before they start a producer.
 
 The backend must stop all process groups in its owned session before it
 releases object locks. Commands must retain their effective UID and must not
 start a different session. This contract does not contain arbitrary detached
-daemons. Other hosts require a separately qualified process backend.
+daemons. Hosts other than Darwin and Linux require a separately qualified
+process backend.
 
 `CommandError` retains the completed command's exit status or signal.
 `ProcessOwnershipError` means that producer shutdown could not be confirmed.

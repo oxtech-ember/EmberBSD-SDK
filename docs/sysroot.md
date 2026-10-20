@@ -7,7 +7,7 @@ GCC16 developer support. It does not install a system on a board.
 ## Required inputs
 
 Use a qualified host process adapter with CPython 3.15 and the prerequisites of
-the selected OS/Ports builders. The current adapter requires Darwin.
+the selected OS/Ports builders. Process adapters are available for Darwin and Linux.
 See [host platforms](host-platforms.md).
 Keep host tools and target inputs separate.
 

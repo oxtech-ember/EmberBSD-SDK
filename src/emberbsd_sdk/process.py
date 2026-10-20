@@ -50,7 +50,7 @@ def require_posix():
 
 
 class SessionInspector:
-    """Enumerate a qualified Darwin build session with native birth identities.
+    """Enumerate a qualified build session with native birth identities.
 
     The host must expose all PIDs and session IDs. No producer starts until the
     executable and its required output profile pass a read-only probe.
@@ -62,10 +62,19 @@ class SessionInspector:
 
     def __init__(self, *, env=None):
         require_posix()
-        if sys.platform != 'darwin':
+        if sys.platform not in ('darwin', 'linux'):
             raise SDKError('producer session backend is not qualified on this host; layout and inspection tools remain available')
         if not hasattr(os, 'getsid'):
             raise SDKError('the producer backend requires POSIX getsid()')
+        if sys.platform == 'linux':
+            from ._linux_process import LinuxSession
+            self.native = LinuxSession()
+            self.uid = self.native.uid
+            self.uncertainty = None
+            if os.getpid() not in self.members(os.getsid(0)):
+                raise SDKError('Linux proc cannot enumerate the current session')
+            self.members(-1)
+            return
         self.environment = sanitized_environment(env)
         selected = shutil.which('ps', path=self.environment.get('PATH', os.defpath))
         if selected is None:
@@ -88,12 +97,20 @@ class SessionInspector:
         self.members(-1)
 
     def describe(self):
+        if hasattr(self, 'native'):
+            return dict(backend='linux-proc-pidfd-session-v1',
+                        scope='all process groups of the owned session', uid=self.uid,
+                        credentials='producer must retain its effective UID',
+                        birth='proc stat starttime in CLOCK_BOOTTIME ticks',
+                        reaping='isolated child subreaper for each producer')
         return dict(backend='darwin-ps-rusage-session-v1', argv=self.argv.copy(),
                     scope='all process groups of the owned session', uid=self.uid,
                     credentials='producer must retain its effective UID',
                     birth='public RUSAGE_INFO_V0 monotonic Mach ticks')
 
     def _rows(self):
+        if hasattr(self, 'native'):
+            return self.native.rows()
         try:
             probe = subprocess.Popen(self.argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.environment)
             try:
@@ -130,6 +147,8 @@ class SessionInspector:
         return rows
 
     def _scan(self, sid):
+        if hasattr(self, 'native'):
+            return self.native.scan(sid, self._rows)
         return self._scan_darwin(sid)
 
     def _scan_darwin(self, sid):
@@ -222,7 +241,18 @@ class OwnedProcessGroup:
     def start(self):
         if self.child is not None:
             raise SDKError('owned session is already started')
-        self.child = subprocess.Popen(self.argv, stdin=subprocess.DEVNULL, start_new_session=True, **self.options)
+        if hasattr(self.inspector, 'native'):
+            from ._linux_process import LinuxChild
+            self.child = LinuxChild(self.argv, self.options)
+            try:
+                self.child.start()
+            except SDKError as exc:
+                raise ProcessOwnershipError(self.child.pid, str(exc)) from exc
+            finally:
+                if self.child.pid is not None:
+                    self.inspector.native.supervised[self.child.pid] = self.child
+        else:
+            self.child = subprocess.Popen(self.argv, stdin=subprocess.DEVNULL, start_new_session=True, **self.options)
         return self.child.pid
 
     @property
@@ -230,7 +260,10 @@ class OwnedProcessGroup:
         return None if self.child is None else self.child.pid
 
     def poll(self):
-        return self.child.poll()
+        try:
+            return self.child.poll()
+        except SDKError as exc:
+            raise ProcessOwnershipError(self.pid, str(exc)) from exc
 
     def _members(self):
         try:
@@ -242,6 +275,12 @@ class OwnedProcessGroup:
         return self.child is not None and bool(self._members())
 
     def _signal(self, pid, number):
+        if hasattr(self.inspector, 'native'):
+            try:
+                self.inspector.native.signal(pid, self.pid, number)
+            except SDKError as exc:
+                raise ProcessOwnershipError(self.pid, str(exc)) from exc
+            return
         try:
             if os.getsid(pid) != self.pid:
                 return
@@ -255,11 +294,14 @@ class OwnedProcessGroup:
         deadline = time.monotonic() + seconds
         signalled = set()
         while True:
-            self.child.poll()
+            self.poll()
             members = self._members()
             if not members:
                 return True
-            for pid in sorted(members - signalled):
+            native = getattr(self.inspector, 'native', None)
+            # Linux repeats process-bound signals. Clock ticks alone cannot
+            # distinguish two uses of one PID within the same tick.
+            for pid in sorted(members if native is not None else members - signalled):
                 self._signal(pid, number)
                 signalled.add(pid)
             if time.monotonic() >= deadline:
@@ -267,7 +309,7 @@ class OwnedProcessGroup:
             time.sleep(0.05)
 
     def stop(self):
-        if self.child is None:
+        if self.pid is None:
             return
         for number, delay in ((signal.SIGTERM, 2), (signal.SIGKILL, 10)):
             if self._drain(delay, number):

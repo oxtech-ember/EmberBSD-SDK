@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import time
+from unittest import skipUnless
 from unittest.mock import patch
 from test_core import TemporaryCase, SDK_SOURCE
 from emberbsd_sdk import process
@@ -52,7 +53,7 @@ if os.fork() == 0:
         time.sleep(.02)
     os._exit(0)
 while not Path({str(pidfile)!r}).exists(): time.sleep(.01)
-Path({str(root / 'leader.ready')!r}).write_text(str(os.getpid()))
+Path({str(root / 'leader.ready')!r}).write_text(str(os.getsid(0)))
 '''
         producer += f'os._exit({status})\n' if status is not None else 'time.sleep(30)\n'
         driver = '''import signal,sys
@@ -106,6 +107,7 @@ except SDKError as exc:
             with self.subTest(signal=number):
                 self.run_case(f'signal-{number}', sent_signal=number)
 
+    @skipUnless(sys.platform == 'darwin', 'Darwin base-system ps prerequisite')
     def test_missing_ps_refuses_before_log_or_launch(self):
         marker = self.root / 'started'
         with self.assertRaisesRegex(SDKError, 'ps'):
@@ -113,6 +115,7 @@ except SDKError as exc:
         self.assertFalse(marker.exists())
         self.assertFalse((self.root / 'log').exists())
 
+    @skipUnless(sys.platform == 'darwin', 'Darwin base-system ps prerequisite')
     def test_unsupported_ps_output_refuses_before_start(self):
         directory = self.root / 'bin'; directory.mkdir()
         ps = directory / 'ps'; ps.write_text('#!/bin/sh\nprintf "unsupported\\n"\n'); ps.chmod(0o755)

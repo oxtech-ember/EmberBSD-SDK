@@ -89,7 +89,7 @@ class SnapshotTests(TemporaryCase):
 
     def test_unqualified_host_refuses_before_launch_or_log(self):
         marker, log = self.root / 'started', self.root / 'log'
-        with patch.object(process.sys, 'platform', 'linux'):
+        with patch.object(process.sys, 'platform', 'freebsd'):
             with self.assertRaisesRegex(SDKError, 'not qualified'):
                 process.run_logged([sys.executable, '-c', f'open({str(marker)!r},"w").close()'], log)
         self.assertFalse(marker.exists())
@@ -122,7 +122,7 @@ class SnapshotTests(TemporaryCase):
                 self.assertEqual(inspector.members(99999999), set())
         self.assertEqual(len(calls), 5)
 
-    @skipUnless(sys.platform == 'darwin', 'Darwin native birth-identity profile')
+    @skipUnless(sys.platform in ('darwin', 'linux'), 'Qualified native process profile')
     def test_owned_fork_after_snapshot_is_found_before_drain(self):
         ready, trigger, pidfile = (self.root / name for name in ('ready', 'trigger', 'pid'))
         code = f'''import os,time,signal
