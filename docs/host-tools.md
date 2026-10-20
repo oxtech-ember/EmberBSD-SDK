@@ -81,6 +81,73 @@ filesystem and process behavior separate from command fixtures. Record the
 interpreter and platform for actual results. Type annotations document module
 interfaces; they do not replace input validation or runtime checks.
 
+## Read a binary producer stream
+
+`emberbsd_sdk.stream` provides `PRODUCER_STREAM_API = 1`.
+`run_streamed(argv, consume, *, cwd=None, env=None, stderr_limit=1048576,
+timeout=None)` calls `consume(reader)` with binary stdout. The reader accepts
+explicit read sizes from zero through one MiB. Short reads are valid. The
+callback must not retain the reader after it returns. Unread output is drained.
+The returned `StreamResult` contains the callback value, stderr bytes and a
+`stderr_truncated` flag. Stderr is drained concurrently. Only its first
+`stderr_limit` bytes are retained. The limit is at most one MiB.
+
+`capture_streamed(argv, *, stdout_limit=1048576, **options)` uses the same
+producer contract and returns captured stdout as `StreamResult.value`.
+It rejects stdout above the explicit limit. An output/parser error still drains
+the pipes and checks the producer's completed status. A nonzero producer status
+raises `CommandError` with that exact status and bounded stderr. It takes
+precedence over a parser error. This includes status 97 and negative signal
+statuses. The error also has a `stderr_truncated` flag.
+
+Both functions reuse `OwnedProcessGroup`. They do not create another process
+backend. A producer that leaves a live descendant is rejected. Session drainage
+finishes before return or exception. A signal handler can interrupt a read;
+the CLI owns those handlers. A second signal cannot interrupt session drainage.
+An optional finite positive timeout bounds the read/drain phase. The existing
+session-stop grace periods apply after interruption. The callback must also
+bound its own processing; the SDK cannot preempt arbitrary Python code.
+
+`ProcessOwnershipError` remains distinct and takes precedence over other
+failures. A consumer must retain and quarantine its writable work. Neither
+function publishes, deletes or authenticates that work. An old API1 source may
+lack this additive module. Consumers must check `PRODUCER_STREAM_API` explicitly
+and report the missing capability before starting a producer.
+
+## Inspect raw tar records
+
+`emberbsd_sdk.tarstream` provides `TAR_STREAM_API = 1`.
+`tar_records(stream)` yields `TarRecord(name, linkname, typeflag, size, payload)`.
+Names, links and type flags remain bytes. `record.read(size)` reads at most one
+MiB. Advancing the iterator drains unread payload and padding. A prior record
+cannot be read after the iterator advances. A zero header ends traversal; the
+producer wrapper drains remaining output. The reader never extracts a file.
+
+The standard-library `TarInfo.frombuf` validates each 512-byte header and its
+numeric fields. The SDK retains the raw name, prefix, link and type fields.
+It does not use `tarfile` stream traversal: that traversal applies PAX size
+replacements and sparse transforms before a consumer can inspect them.
+`x` and `g` records remain visible, including their original payload lengths.
+Unknown and sparse member types also remain visible to consumer policy.
+
+`pax_records(data, *, limit=1048576)` parses byte-counted records. It returns
+byte keys and values, including empty values and sparse keys. The last duplicate
+value wins. It rejects malformed, truncated and oversized record data. Consumers
+must check an extension's declared size before reading its body, enforce their
+member-type and path rules, reject unsupported sparse metadata, and apply their
+own global/local PAX policy. Package manifests, ELF limits and package trust
+remain Ports policy. These modules do not qualify an archive or a package set.
+
+Run the focused contracts from the SDK checkout:
+
+```sh
+python3 -m unittest discover -s tests -p 'test_stream.py'
+python3 -m unittest discover -s tests -p 'test_tarstream.py'
+```
+
+The process tests use real host subprocesses and synthetic parser failures.
+They do not install packages or establish target execution.
+
 ## Partition a package stage
 
 `emberbsd_sdk.stage` provides `STAGE_PARTITION_API = 1` and
