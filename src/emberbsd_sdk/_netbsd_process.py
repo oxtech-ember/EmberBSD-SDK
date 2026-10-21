@@ -214,8 +214,13 @@ class NetBSDSession:
         owner.pump()
         if owner.tree.active.get(pid) != birth:
             return
-        if row is None or (row.uid, row.sid) != (self.uid, sid):
-            raise SDKError('NetBSD signal identity is missing or foreign')
+        if row is None:
+            # NOTE_CHILD precedes SACTIVE; KERN_PROC2 omits SIDL embryos.
+            # Keep the kernel lifetime active. The drain retries its census
+            # within the existing deadline, without signalling an unknown row.
+            return
+        if (row.uid, row.sid) != (self.uid, sid):
+            raise SDKError('NetBSD signal identity is foreign')
         try:
             if os.getsid(pid) == sid:
                 os.kill(pid, number)

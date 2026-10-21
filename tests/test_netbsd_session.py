@@ -99,6 +99,65 @@ class KernelEventTests(unittest.TestCase):
             native.signal(50, 50, signal.SIGTERM)
             kill.assert_not_called()
 
+    def embryo_session(self):
+        n = self.n
+        self.tree.accept([self.event(51, n.CHILD, 50), self.event(50, n.EXIT)])
+        owner = types.SimpleNamespace(tree=self.tree, pump=lambda: None,
+                                      reap=unittest.mock.Mock())
+        native = object.__new__(n.NetBSDSession)
+        native.uid = os.geteuid()
+        native.supervised = {50: owner}
+        native.rows = lambda: {}
+        return native, owner
+
+    def test_child_note_before_census_visibility_defers_signal(self):
+        native, owner = self.embryo_session()
+        with patch.object(os, 'kill') as kill, patch.object(os, 'getsid', return_value=50):
+            self.assertEqual(native.scan(50, native.rows), ({51}, False))
+            native.signal(51, 50, signal.SIGTERM)
+            kill.assert_not_called()
+            self.assertEqual(owner.tree.active, {51: 2})
+            owner.reap.assert_not_called()
+            native.rows = lambda: {51: self.n.ProcessRow(51, 50, 50, native.uid, 2)}
+            native.signal(51, 50, signal.SIGTERM)
+            kill.assert_called_once_with(51, signal.SIGTERM)
+
+    def embryo_group(self, native):
+        group = object.__new__(process.OwnedProcessGroup)
+        group.child = types.SimpleNamespace(pid=50, poll=lambda: 0)
+        group.inspector = types.SimpleNamespace(native=native,
+            members=lambda sid: native.scan(sid, native.rows)[0])
+        return group
+
+    def test_missing_census_child_retains_existing_drain_deadline(self):
+        native, owner = self.embryo_session()
+        group = self.embryo_group(native)
+        with patch.object(process.time, 'monotonic', side_effect=[0, 2]), patch.object(os, 'kill') as kill:
+            self.assertFalse(group._drain(1, signal.SIGKILL))
+            kill.assert_not_called()
+        self.assertEqual(owner.tree.active, {51: 2})
+        owner.reap.assert_not_called()
+
+    def test_cancel_cleanup_retries_child_when_census_becomes_visible(self):
+        native, owner = self.embryo_session()
+        group = self.embryo_group(native)
+        def visible_after_retry(delay):
+            self.assertEqual(delay, 0.05)
+            native.rows = lambda: {51: self.n.ProcessRow(51, 50, 50, native.uid, 2)}
+        def exit_after_signal(pid, number):
+            self.assertEqual((pid, number), (51, signal.SIGTERM))
+            self.tree.accept([self.event(pid, self.n.EXIT)])
+        with patch.object(process.time, 'sleep', side_effect=visible_after_retry), \
+             patch.object(os, 'getsid', return_value=50), \
+             patch.object(os, 'kill', side_effect=exit_after_signal) as kill:
+            try:
+                raise KeyboardInterrupt
+            except KeyboardInterrupt:
+                group.stop()
+            kill.assert_called_once_with(51, signal.SIGTERM)
+        self.assertEqual(owner.tree.active, {})
+        owner.reap.assert_called_once()
+
     def test_foreign_session_and_uid_cannot_be_signalled(self):
         n = self.n
         for sid, uid in [(9, os.geteuid()), (50, os.geteuid() + 1)]:

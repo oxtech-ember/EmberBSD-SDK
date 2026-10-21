@@ -93,6 +93,11 @@ and [`wait.h`](https://github.com/NetBSD/src/blob/4decc303f104deb1589104682b60bf
 The fork hook attaches child tracking before the child becomes runnable.
 The kernel creates separate CHILD and EXIT notes, so an immediate child exit
 does not overwrite the child-creation record.
+A CHILD note can precede census visibility: [`kern_fork.c`](https://github.com/NetBSD/src/blob/4decc303f104deb1589104682b60bfb13cfb6a92/sys/kern/kern_fork.c#L531-L565)
+queues tracking before SACTIVE, while [`kern_proc.c`](https://github.com/NetBSD/src/blob/4decc303f104deb1589104682b60bfb13cfb6a92/sys/kern/kern_proc.c#L2029-L2033)
+omits SIDL embryos. A missing census row retains the active kernel lifetime.
+Cleanup defers its signal and retries within the existing drain deadline.
+It cannot establish emptiness or permit a signal without a matching UID/session.
 
 Before native acceptance, use host GCC16 to compile and run
 `tests/netbsd_process_abi.c` against the actual host headers. Then run
