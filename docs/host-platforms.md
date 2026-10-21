@@ -102,16 +102,29 @@ It cannot establish emptiness or permit a signal without a matching UID/session.
 Before native acceptance, use host GCC16 to compile and run
 `tests/netbsd_process_abi.c` against the actual host headers. Then run
 `PYTHONPATH=src:tests python3.15 -m unittest discover -s tests -p 'test_netbsd*.py'`.
-Python 3.13 can run the preliminary native probe and contracts. CPython 3.15
-and the full native suite remain the qualification gate. Tests cover gated
-launch, process-group changes, orphan writers, rapid fork/exit, ignored TERM,
-KILL drainage, cancellation and an unrelated sentinel. Injected event tests
-cover PID reuse and lost tracking. macOS model checks do not qualify NetBSD.
-Preliminary native NetBSD 11 amd64 checks pass with Python 3.13.15: all 26
-NetBSD process contracts execute, including the six kernel scenarios. The
-GCC16 header probe confirms offsets 116/136/360, prefix 368 and full record
-size 680. Native CPython 3.15 and full producer qualification remain pending.
-No successful SDK compiler producer or target cross-build is claimed.
+Tests cover gated launch, process-group changes, orphan writers, rapid
+fork/exit, ignored TERM, KILL drainage, cancellation and an unrelated sentinel.
+Injected event tests cover PID reuse, lost tracking and census-delayed embryos.
+macOS model checks do not qualify NetBSD.
+
+Native NetBSD 11 amd64 process control passes all 29 contracts with CPython 3.15,
+including the six kernel scenarios. The GCC16 probe against actual host headers
+confirms PID/UID/state offsets 116/136/360, prefix 368 and full record size 680.
+These checks qualify `process.run_logged` and its owned-session mechanism.
+They do not qualify a real SDK compiler producer or target cross-build.
+
+The complete native SDK suite does not pass: 310 tests report one failure,
+16 errors and 28 skips. Fifteen errors and the failure reach unsupported
+directory publication or sysroot import. The remaining stream test expects
+`OSError` for a missing executable; the gated launcher instead exits 127,
+which the stream reports as `CommandError`. The complete stream interface
+is not qualified on NetBSD. These tests remain enabled and failing there.
+
+Exclusive directory publication has no qualified NetBSD implementation. `publication._native_rename` supports Darwin `renamex_np` and
+Linux `renameat2` only. It refuses NetBSD; no check-then-rename fallback replaces
+its atomic no-replace contract. Sysroot import requires that operation and is
+unsupported on NetBSD. A successful process backend does not qualify sysroot
+publication, transfer/import or the complete SDK host profile.
 
 ## Windows through WSL2
 

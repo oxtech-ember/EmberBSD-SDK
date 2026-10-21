@@ -5,6 +5,11 @@ sysroot through a shared directory. Use CPython 3.15 and its standard library.
 The commands need no compiler, network client or third-party Python package.
 Mount the selected file share before calling them.
 
+Sysroot import requires native atomic directory publication without replacement.
+That operation supports Darwin and Linux. It refuses NetBSD, even when the
+NetBSD process-control contracts pass. The complete transfer/import workflow
+is not qualified on NetBSD; see [host platforms](host-platforms.md).
+
 This is a sysroot transfer format. It does not distribute the native compiler,
 reuse another host's objects, qualify relocation, or publish a binary SDK release.
 The normal [distribution acceptance](distribution.md) still applies.

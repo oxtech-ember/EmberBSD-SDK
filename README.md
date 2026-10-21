@@ -79,9 +79,13 @@ compiler, runtime and output hashes for a build. Equal directory names or
 package versions do not establish equivalent inputs.
 
 The workspace tools use portable filesystem APIs. Producer control has Darwin,
-Linux and a gated NetBSD 11 amd64 process adapter. NetBSD has preliminary native
-Python 3.13 process checks; CPython 3.15 native qualification remains pending.
-Other build hosts require their own process backend and checks. Host and target platforms are independent inputs.
+Linux and a gated NetBSD 11 amd64 process adapter. NetBSD process control passes
+29 native contracts with CPython 3.15 and the GCC16 host-header ABI probe.
+This qualifies the logged-producer interface, not the complete SDK on NetBSD.
+Exclusive directory publication and sysroot import remain unsupported there;
+the complete native SDK suite does not pass. See [host platforms](docs/host-platforms.md).
+Other build hosts require their own process backend and checks.
+Host and target platforms are independent inputs.
 Actual platform checks are recorded with the tests;
 portability intent does not establish an untested host or target.
 
