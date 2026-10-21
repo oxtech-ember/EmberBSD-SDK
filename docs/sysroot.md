@@ -108,6 +108,8 @@ loader/runtime behavior, package closure and physical hardware remain separate
 checks. Run the producer's prebuilt consumers on the selected EmberBSD target.
 Do not claim those checks from command dispatch fixtures or `--plan` output.
 
+Use [sysroot transfer](sysroot-transfer.md) to export this completed output and
+restore a pinned copy into a new local directory on a developer host.
 A releasable SDK also needs the [distribution checks](distribution.md), including
 host-platform and relocation acceptance. The initial workspace tests do not
 establish a complete sysroot build on every advertised future platform.

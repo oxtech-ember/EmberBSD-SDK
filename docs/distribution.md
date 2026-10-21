@@ -1,7 +1,10 @@
 # Future SDK and binary package distribution
 
-This document defines the release boundary. A binary SDK export command and a
-published SDK channel are not implemented by the workspace initializer.
+This document defines the release boundary. The implemented
+[sysroot transfer commands](sysroot-transfer.md) export and import a completed
+builder output with pinned hashes and portable provenance. They do not supply
+a native compiler, authenticate a release, or qualify relocation and target
+execution. A complete binary SDK and a published SDK channel remain separate work.
 
 ## Keep the workspace and release separate
 

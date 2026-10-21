@@ -41,14 +41,17 @@ python3 scripts/build-sysroot.py --help
 See the [workspace contract](docs/prebuild-sdk.md),
 [build workflow](docs/build-workflow.md), [host platforms](docs/host-platforms.md),
 [shared host tools](docs/host-tools.md), and [sysroot builder](docs/sysroot.md).
-The [distribution guide](docs/distribution.md) defines the boundary for a future
-SDK release that accompanies a binary package profile.
+Use [sysroot export and import](docs/sysroot-transfer.md) to exchange verified
+build outputs through a file share. Bundles preserve inventory and provenance;
+import restores a new local tree without replacing an existing destination.
+The [distribution guide](docs/distribution.md) defines the additional boundary
+for a future SDK release that accompanies a binary package profile.
 
 ## Repository structure
 
 | Path | Purpose |
 | --- | --- |
-| `scripts/` | Host commands for workspace creation, inspection and sysroot builds |
+| `scripts/` | Host commands for workspace creation, inspection, sysroot builds and transfers |
 | `src/emberbsd_sdk/` | Shared Python modules for SDK and Ports host commands |
 | `tests/` | Executable contracts and refusal cases |
 | `docs/` | Layout, compiler/sysroot workflow, reuse and distribution boundaries |
