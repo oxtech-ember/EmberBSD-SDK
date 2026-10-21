@@ -3,8 +3,9 @@
 This document defines the release boundary. The implemented
 [sysroot transfer commands](sysroot-transfer.md) export and import a completed
 builder output with pinned hashes and portable provenance. They do not supply
-a native compiler, authenticate a release, or qualify relocation and target
-execution. A complete binary SDK and a published SDK channel remain separate work.
+a native compiler or authenticate a release. The transfer commands alone do not
+qualify relocation or target execution. A complete binary SDK and a published
+SDK channel remain separate work.
 
 ## Keep the workspace and release separate
 

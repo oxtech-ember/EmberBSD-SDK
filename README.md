@@ -47,6 +47,10 @@ import restores a new local tree without replacing an existing destination.
 The [distribution guide](docs/distribution.md) defines the additional boundary
 for a future SDK release that accompanies a binary package profile.
 
+A [source-built AArch64 check](docs/sysroot-transfer.md#source-built-aarch64-check)
+on macOS arm64 passed SMB export/import and C/C++ consumer links at a new path.
+Target execution and compiler distribution remain separate checks.
+
 ## Repository structure
 
 | Path | Purpose |

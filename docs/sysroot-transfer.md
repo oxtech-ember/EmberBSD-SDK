@@ -155,3 +155,48 @@ A macOS arm64 run also transfers a fixture through an SMB 3.1.1 share,
 disconnects and reconnects the share, and imports it at a new local path.
 This qualifies that byte-store round trip, not live SMB builds, a second Mac,
 Linux/WSL2, target execution, package closure or a relocatable SDK release.
+
+## Source-built AArch64 check
+
+On 2026-10-21, macOS 27.0.1 arm64 built an AArch64 sysroot on case-sensitive
+APFS with CPython 3.15.0, GCC 16.2.0 and Ports Binutils 2.47.
+The normal SDK builder accepted headers, OS CRT, base libraries, the loader,
+and the verified GCC runtime with POSIX threads, libgomp and libatomic.
+
+| Input | Source commit |
+| --- | --- |
+| EmberBSD | `32afa976de8d28799739978f80cc3fca08928145` |
+| EmberBSD-Ports | `95b66026c82d0405aa6d691c80b443a3f2a81d1c` |
+| EmberBSD-SDK | `5c6e8f5189044886051c2c0a069465e060730fd6` |
+| OS bootstrap seed | `7d4cb79185717c8ed37d3630e058c91fa1f566a3` |
+
+Export and import through SMB passed after disconnecting and reconnecting the
+share. The restored inventory matched all 4,501 entries and 139,088,986 bytes
+of regular files. The compressed payload is 38,329,498 bytes.
+The accepted manifest SHA256 is:
+
+```text
+20c63b43f9db788ac3f3d80366844c0e436e0e92fb6faf39df244fcbf346f17b
+```
+
+The original and restored trees passed the Ports
+[cross-compile tests](https://github.com/oxtech-ember/EmberBSD-Ports/blob/95b66026c82d0405aa6d691c80b443a3f2a81d1c/profiles/development-toolchain/cross/README.md).
+Coverage includes C11 atomics/TLS, C++20 constexpr evaluation and a C++ shared
+library boundary. The existing OpenMP and 256-byte C++ atomic consumers also
+passed plain and LTO links against `libgomp.so.1` and `libatomic.so.3`.
+
+Additional restored-path checks selected C++ headers with `-nostdinc++` and
+explicit sysroot include directories. Dependency files and linker maps selected
+that tree's headers, CRT and runtime libraries. They showed no fallback to the
+compiler seed or original sysroot. Target ELF files had no host dynamic paths.
+These checks used the same host compiler at its original path.
+
+Freeze the producer tree before export. Keep file-manager metadata out of the
+payload and close file-manager views during transfer checks. Finder can update
+`.DS_Store` files while a tree is being inventoried. The integrity checks remain
+strict; do not rewrite a build receipt to accept changed files.
+
+This run did not execute the target programs, test a second Mac or Intel Mac,
+or qualify compiler relocation, package closure or a complete binary SDK.
+The bundle contains target files; each developer supplies a matching native
+GCC16 cross compiler for application builds.
