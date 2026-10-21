@@ -129,10 +129,13 @@ class NetBSDSession:
             curtain, size = ctypes.c_int(), ctypes.c_size_t(ctypes.sizeof(ctypes.c_int))
             if byname(b'security.curtain', ctypes.byref(curtain), ctypes.byref(size), None, 0) or size.value != 4 or curtain.value != 0:
                 raise SDKError('NetBSD process enumeration requires security.curtain=0')
-            with select.kqueue() as queue:
+            queue = select.kqueue()
+            try:
                 event = select.kevent(os.getpid(), filter=PROC,
                     flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE, fflags=EXIT)
                 queue.control([event], 0, 0)
+            finally:
+                queue.close()
         except (AttributeError, OSError) as exc:
             raise SDKError(f'NetBSD native process preflight failed: {exc}') from exc
         own = self.rows().get(os.getpid())

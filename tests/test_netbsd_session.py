@@ -238,3 +238,28 @@ class GateTests(unittest.TestCase):
         self.assertTrue(child.released)
         self.assertFalse(child.reaped)
         proc.wait.assert_not_called()
+
+class PreflightCompatibilityTests(unittest.TestCase):
+    def test_kqueue_without_context_manager_is_closed(self):
+        from contextlib import ExitStack
+        from emberbsd_sdk import _netbsd_process as n
+        class Queue:
+            closed = False
+            def control(self, *args): return []
+            def close(self): self.closed = True
+        queue = Queue()
+        library = unittest.mock.Mock()
+        library.sysctlbyname.return_value = 0
+        row = n.ProcessRow(os.getpid(), os.getppid(), os.getsid(0), os.geteuid(), 2)
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sys, 'platform', 'netbsd11'))
+            stack.enter_context(patch.object(n.platform, 'machine', return_value='amd64'))
+            stack.enter_context(patch.object(n.ctypes, 'CDLL', return_value=library))
+            stack.enter_context(patch.object(n.NetBSDSession, 'rows', return_value={row.pid: row}))
+            for name, value in [('kqueue', lambda: queue), ('kevent', unittest.mock.Mock()),
+                    ('KQ_EV_ADD', 1), ('KQ_EV_ENABLE', 4), ('KQ_NOTE_TRACK', 1),
+                    ('KQ_NOTE_TRACKERR', 2), ('KQ_NOTE_CHILD', 4),
+                    ('KQ_NOTE_FORK', n.FORK), ('KQ_NOTE_EXIT', n.EXIT)]:
+                stack.enter_context(patch.object(n.select, name, value, create=True))
+            n.NetBSDSession()
+        self.assertTrue(queue.closed)
