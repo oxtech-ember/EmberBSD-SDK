@@ -78,9 +78,10 @@ execution are separate results. Record the exact sources, configuration,
 compiler, runtime and output hashes for a build. Equal directory names or
 package versions do not establish equivalent inputs.
 
-The workspace tools use portable filesystem APIs. Producer control has Darwin
-and Linux process adapters. Other build hosts require their own process backend
-and checks. Host and target platforms are independent inputs.
+The workspace tools use portable filesystem APIs. Producer control has Darwin,
+Linux and a gated NetBSD 11 amd64 process adapter. The NetBSD adapter still
+requires native qualification before build use. Other build hosts require their
+own process backend and checks. Host and target platforms are independent inputs.
 Actual platform checks are recorded with the tests;
 portability intent does not establish an untested host or target.
 

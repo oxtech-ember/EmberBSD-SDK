@@ -55,6 +55,55 @@ Do not run Darwin tools on Linux, or Linux tools on native Windows. Build and
 distribute host tools for the declared host environment. Target ELF libraries
 remain separate from those native tools.
 
+## NetBSD 11 amd64 qualification
+
+The NetBSD adapter uses standard-library `select.kqueue`, `os.waitid` and
+`ctypes` for libc `sysctl`. It reads a caller-sized `KERN_PROC2` prefix for
+PID, PPID, SID, effective UID and state. It never treats `p_ustart` wall-clock
+seconds or microseconds as a birth identity. The initial ABI profile is
+NetBSD 11 amd64. Other versions and architectures fail before producer start.
+`security.curtain` must be zero for the all-process census profile.
+
+A private Python launcher waits on a pipe before exec. The controller installs
+`EVFILT_PROC` with `NOTE_TRACK`, `NOTE_FORK` and `NOTE_EXIT` before releasing it.
+Kernel-generated `NOTE_CHILD` and terminal `NOTE_EXIT` events define owned
+lifetimes. `NOTE_TRACKERR`, an unknown event or a failed event read makes
+shutdown unproven. The backend never repairs that error with a ps fallback.
+A full event batch is drained before an empty result is accepted.
+
+The root PID is kept waitable with `waitid(WNOWAIT)` until every tracked
+lifetime has exited. Only then does the controller reap that exact child.
+This reserves the session identifier while descendants change process groups
+or outlive their parent. Exit notes establish that tracked writers have exited;
+this controller does not adopt orphan zombies from the system init process.
+
+Signals check the current tracked lifetime, native effective UID and session
+before `kill`. This retains the Darwin check-then-kill contract. It does not
+provide Linux pidfd atomic signalling. A producer must retain its effective
+UID and session. `setsid()` escapes remain outside the supported build profile;
+a visible credential or session change is an ownership error. Do not run setuid
+producers, debuggers that consume the controller's child status, or another
+waiter for the retained root PID.
+
+The source mechanisms are pinned to NetBSD netbsd-11
+[`4decc303f104deb1589104682b60bfb13cfb6a92`](https://github.com/NetBSD/src/tree/4decc303f104deb1589104682b60bfb13cfb6a92):
+[`sysctl.h`](https://github.com/NetBSD/src/blob/4decc303f104deb1589104682b60bfb13cfb6a92/sys/sys/sysctl.h),
+[`kern_event.c`](https://github.com/NetBSD/src/blob/4decc303f104deb1589104682b60bfb13cfb6a92/sys/kern/kern_event.c),
+and [`wait.h`](https://github.com/NetBSD/src/blob/4decc303f104deb1589104682b60bfb13cfb6a92/sys/sys/wait.h).
+The fork hook attaches child tracking before the child becomes runnable.
+The kernel creates separate CHILD and EXIT notes, so an immediate child exit
+does not overwrite the child-creation record.
+
+Before native acceptance, use host GCC16 to compile and run
+`tests/netbsd_process_abi.c` against the actual host headers. Then run
+`PYTHONPATH=src:tests python3.15 -m unittest discover -s tests -p 'test_netbsd*.py'`.
+Python 3.13 can run the preliminary native probe and contracts. CPython 3.15
+and the full native suite remain the qualification gate. Tests cover gated
+launch, process-group changes, orphan writers, rapid fork/exit, ignored TERM,
+KILL drainage, cancellation and an unrelated sentinel. Injected event tests
+cover PID reuse and lost tracking. macOS model checks do not qualify NetBSD.
+No native NetBSD acceptance or successful compiler producer is claimed yet.
+
 ## Windows through WSL2
 
 The first Windows build path uses a Linux distribution under WSL2. Run the SDK,

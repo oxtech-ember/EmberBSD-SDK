@@ -62,10 +62,19 @@ class SessionInspector:
 
     def __init__(self, *, env=None):
         require_posix()
-        if sys.platform not in ('darwin', 'linux'):
+        if sys.platform not in ('darwin', 'linux') and sys.platform != 'netbsd11':
             raise SDKError('producer session backend is not qualified on this host; layout and inspection tools remain available')
         if not hasattr(os, 'getsid'):
             raise SDKError('the producer backend requires POSIX getsid()')
+        if sys.platform == 'netbsd11':
+            from ._netbsd_process import NetBSDSession
+            self.native = NetBSDSession()
+            self.uid = self.native.uid
+            self.uncertainty = None
+            if os.getpid() not in self.members(os.getsid(0)):
+                raise SDKError('NetBSD cannot enumerate the current session')
+            self.members(-1)
+            return
         if sys.platform == 'linux':
             from ._linux_process import LinuxSession
             self.native = LinuxSession()
@@ -98,6 +107,8 @@ class SessionInspector:
 
     def describe(self):
         if hasattr(self, 'native'):
+            if hasattr(self.native, 'describe'):
+                return self.native.describe()
             return dict(backend='linux-proc-pidfd-session-v1',
                         scope='all process groups of the owned session', uid=self.uid,
                         credentials='producer must retain its effective UID',
@@ -253,8 +264,11 @@ class OwnedProcessGroup:
         if self.child is not None:
             raise SDKError('owned session is already started')
         if hasattr(self.inspector, 'native'):
-            from ._linux_process import LinuxChild
-            self.child = LinuxChild(self.argv, self.options)
+            if hasattr(self.inspector.native, 'child'):
+                self.child = self.inspector.native.child(self.argv, self.options)
+            else:
+                from ._linux_process import LinuxChild
+                self.child = LinuxChild(self.argv, self.options)
             try:
                 self.child.start()
             except SDKError as exc:
