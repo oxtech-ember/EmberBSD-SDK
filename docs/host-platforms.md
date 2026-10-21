@@ -31,6 +31,15 @@ The supervisor enables `PR_SET_CHILD_SUBREAPER` in its own process. It reaps the
 producer's orphan descendants and confirms that no children remain. It does not
 change the controller's subreaper setting or consume unrelated children.
 
+Darwin `ps` prints numeric UIDs with a signed format, although `uid_t` is
+unsigned 32-bit. The adapter normalizes values from -2147483648 through -1
+to their unsigned identities before ownership checks. It retains unsigned
+UIDs through 4294967295. PID and PPID parsing remains unsigned and bounded.
+See Apple's [ps UID format](https://github.com/apple-oss-distributions/adv_cmds/blob/main/ps/keyword.c)
+and [uid_t definition](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/_types.h).
+The actual-parser contracts cover signed UIDs, malformed rows and foreign
+ownership refusal. These checks do not qualify a compiler or target build.
+
 Both backends check their native prerequisites before a producer starts. The
 producer must retain its effective UID and session. Linux needs readable procfs
 for the current PID namespace and a kernel with pidfd support. Restricted

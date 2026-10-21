@@ -130,16 +130,27 @@ class SessionInspector:
             columns = row.split()
             if not columns:
                 continue
-            if len(columns) != 4 or any(not x.isdigit() or len(x) > 20 for x in columns[:3]):
+            if len(columns) != 4 or any(not x.isdigit() or len(x) > 20 for x in columns[:2]):
                 raise SDKError('unsupported PID output from POSIX ps enumeration')
             pid = int(columns[0])
             if pid <= 0 or pid > 2147483647 or pid in rows:
                 raise SDKError('invalid or duplicate PID in POSIX ps enumeration')
-            if int(columns[1]) > 2147483647 or int(columns[2]) > 4294967295:
+            uid_text = columns[2]
+            signed_uid = sys.platform == 'darwin' and uid_text.startswith(b'-')
+            digits = uid_text[1:] if signed_uid else uid_text
+            if not digits.isdigit() or len(uid_text) > 20:
+                raise SDKError('unsupported UID output from POSIX ps enumeration')
+            uid = int(uid_text)
+            if signed_uid:
+                if uid < -2147483648 or uid >= 0:
+                    raise SDKError('out-of-range UID from POSIX ps enumeration')
+                # Darwin ps uses signed UIDFMT for the unsigned 32-bit uid_t.
+                uid += 4294967296
+            if int(columns[1]) > 2147483647 or uid > 4294967295:
                 raise SDKError('out-of-range process identity from POSIX ps enumeration')
             if any(value > 127 or value < 33 for value in columns[3]):
                 raise SDKError('unsupported process state from POSIX ps enumeration')
-            rows[pid] = (int(columns[1]), int(columns[2]), columns[3])
+            rows[pid] = (int(columns[1]), uid, columns[3])
         if os.getpid() not in rows:
             raise SDKError('POSIX ps PID enumeration does not include the controller')
         # This exact, reaped probe inherited the controller session.
