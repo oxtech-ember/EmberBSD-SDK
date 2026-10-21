@@ -102,7 +102,11 @@ and the full native suite remain the qualification gate. Tests cover gated
 launch, process-group changes, orphan writers, rapid fork/exit, ignored TERM,
 KILL drainage, cancellation and an unrelated sentinel. Injected event tests
 cover PID reuse and lost tracking. macOS model checks do not qualify NetBSD.
-No native NetBSD acceptance or successful compiler producer is claimed yet.
+Preliminary native NetBSD 11 amd64 checks pass with Python 3.13.15: all 26
+NetBSD process contracts execute, including the six kernel scenarios. The
+GCC16 header probe confirms offsets 116/136/360, prefix 368 and full record
+size 680. Native CPython 3.15 and full producer qualification remain pending.
+No successful SDK compiler producer or target cross-build is claimed.
 
 ## Windows through WSL2
 
