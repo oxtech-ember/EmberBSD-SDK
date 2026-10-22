@@ -49,6 +49,8 @@ identify affected consumers, and verify explicit artifact receipts. These tools
 leave builds and fixes to the coding agent and existing Ports producers.
 Use [release preparation and tags](docs/release-tags.md) to set the source
 product version before building and tag the checked OS, Ports, and SDK commits.
+Use [OS release composition](docs/os-release.md) for complete OS producer orchestration,
+kit verification and immutable GitHub publication.
 The [distribution guide](docs/distribution.md) defines the additional boundary
 for a future SDK release that accompanies a binary package profile.
 
@@ -60,7 +62,7 @@ Target execution and compiler distribution remain separate checks.
 
 | Path | Purpose |
 | --- | --- |
-| `scripts/` | Host commands for workspace creation, inspection, sysroot builds and transfers |
+| `scripts/` | Host commands for workspace creation, inspection, sysroot builds, transfers and OS release composition |
 | `src/emberbsd_sdk/` | Shared Python modules for SDK and Ports host commands |
 | `tests/` | Executable contracts and refusal cases |
 | `docs/` | Layout, compiler/sysroot workflow, reuse and distribution boundaries |

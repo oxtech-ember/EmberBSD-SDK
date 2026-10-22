@@ -118,3 +118,6 @@ The Python module `emberbsd_sdk.ports_release` provides `PORTS_RELEASE_API = 1`.
 It exposes `prepare_release` and `create_release`. The check runner uses the
 existing SDK process backend. Its [host qualification limits](host-platforms.md)
 also apply to release checks.
+
+Binary OS kits use the separate [OS release composition](os-release.md) contract.
+Source version tags do not publish or qualify those binaries.

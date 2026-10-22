@@ -87,7 +87,7 @@ The selected OS source provides these operations:
 The `libs` operation exists in the fork's
 [`build.sh`](https://github.com/oxtech-ember/EmberBSD/blob/main/build.sh).
 Its `buildlibs` implementation invokes `do-distrib-dirs`, `includes` and
-`do-lib`. The [OS runtime adapter](https://github.com/oxtech-ember/EmberBSD/blob/main/ember/boot/external-gcc-runtime.md)
+`do-lib`. The [OS runtime adapter](https://github.com/oxtech-ember/EmberBSD/blob/main/tools/docs/external-gcc-runtime.md)
 selects external GCC headers, CRT and libraries during compilation.
 The SDK does not duplicate their source recipes.
 

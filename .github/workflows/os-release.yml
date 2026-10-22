@@ -1,0 +1,104 @@
+name: Complete OS release producer
+
+'on':
+  workflow_dispatch:
+    inputs:
+      profile:
+        type: choice
+        options: [aarch64-sysroot, amd64]
+        required: true
+      os_source:
+        description: Absolute clean and fully materialized OS checkout
+        required: true
+      os_commit:
+        description: Exact full OS commit in that checkout
+        required: true
+      ports_source:
+        description: Absolute clean and fully materialized Ports checkout
+        required: true
+      ports_commit:
+        description: Exact full Ports commit in that checkout
+        required: true
+      workspace:
+        description: Existing target-declared shared SDK workspace
+        required: true
+      compiler:
+        description: Common verified GCC16 compiler prefix
+        required: true
+      runtime_work:
+        description: Verified Ports runtime work directory
+        required: true
+      gcc_archive:
+        description: Original GCC source archive used by the runtime
+        required: true
+      pkgsrc:
+        description: Exact prepared pkgsrc input for runtime verification
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: complete-os-release-${{ inputs.workspace }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: [self-hosted, emberbsd-release]
+    timeout-minutes: 720
+    env:
+      PROFILE: ${{ inputs.profile }}
+      OS_SOURCE: ${{ inputs.os_source }}
+      OS_COMMIT: ${{ inputs.os_commit }}
+      PORTS_SOURCE: ${{ inputs.ports_source }}
+      PORTS_COMMIT: ${{ inputs.ports_commit }}
+      SDK_WORKSPACE: ${{ inputs.workspace }}
+      COMPILER: ${{ inputs.compiler }}
+      RUNTIME_WORK: ${{ inputs.runtime_work }}
+      GCC_ARCHIVE: ${{ inputs.gcc_archive }}
+      PKGSRC: ${{ inputs.pkgsrc }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify explicitly pinned sources and host Python
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess, sys
+          if sys.version_info < (3, 15):
+              raise SystemExit('The prepared runner must provide Python 3.15+')
+          for name in ('OS', 'PORTS'):
+              pin = os.environ[name + '_COMMIT']
+              if not re.fullmatch('[0-9a-f]{40}', pin):
+                  raise SystemExit('A full commit is required for ' + name)
+              actual = subprocess.check_output(['git', '-C', os.environ[name + '_SOURCE'], 'rev-parse', 'HEAD'], text=True).strip()
+              if actual != pin:
+                  raise SystemExit('Source pin mismatch for ' + name)
+          PY
+          printf 'DESTINATION=%s/stages/release-%s-%s\n' "$SDK_WORKSPACE" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - name: Plan and build with common GCC16 inputs
+        run: |
+          set -- --profile "$PROFILE" --python "$(command -v python3)" \
+            --sdk-source "$GITHUB_WORKSPACE" --sdk "$SDK_WORKSPACE" \
+            --os-source "$OS_SOURCE" --ports "$PORTS_SOURCE" --compiler "$COMPILER" \
+            --runtime-work "$RUNTIME_WORK" --gcc-archive "$GCC_ARCHIVE" --pkgsrc "$PKGSRC" \
+            --destination "$DESTINATION" --jobs 4
+          python3 -B scripts/build-os-release.py "$@" --plan
+          python3 -B scripts/build-os-release.py "$@"
+      - name: Preserve producer evidence
+        if: always() && env.DESTINATION != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: os-release-evidence-${{ inputs.os_commit }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          path: |
+            ${{ env.DESTINATION }}/.prebuild-sdk-build.json
+            ${{ env.DESTINATION }}/.prebuild-sdk-build.log
+            ${{ env.DESTINATION }}/build-profile.json
+            ${{ env.DESTINATION }}/build-success
+      - name: Identify retained candidate and acceptance boundary
+        if: always() && env.DESTINATION != ''
+        run: |
+          printf 'Producer destination: `%s`\n\n' "$DESTINATION" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Retain this candidate for kit preparation and target qualification. This job does not publish a release or qualify a VM or board.\n' >> "$GITHUB_STEP_SUMMARY"

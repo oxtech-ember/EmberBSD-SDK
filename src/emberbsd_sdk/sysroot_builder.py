@@ -281,6 +281,7 @@ class SysrootBuilder:
             self.host_tools[name] = dict(path=path, sha256=inventory.sha256_file(path), version=''.join(self.capture(path, '--version')).strip())
         self.flags = self.FLAGS + [f'EXTERNAL_TOOLCHAIN={self.paths["compiler"]}', f'EMBER_EXTERNAL_GCC_RUNTIME={prefix}', f'HOST_CC={self.host_tools["cc"]["path"]}', f'HOST_CXX={self.host_tools["c++"]["path"]}']
         self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
+        self.configure_signature()
         self.contexts = {name: self.inspect_context(self.paths[name]) for name in ('objects', 'tools')}
         self.build_command = [self.shell, os.path.join(self.paths['os'], 'build.sh'), '-U', '-u', '-j' + jobs, '-m', self.target['machine'], '-a', self.target['arch'], '-O', self.paths['objects'], '-T', self.paths['tools'], '-D', self.paths['destination']]
         for flag in self.flags + ['BUILDINFO=EmberBSD:' + self.sources['os']['commit']]:
@@ -411,6 +412,19 @@ class SysrootBuilder:
         if self.verify_runtime() != self.runtime_record:
             raise SDKError('runtime inputs changed during copy')
 
+    def configure_signature(self):
+        """Allow a producer profile to bind its flags before object reuse checks."""
+
+    def build_payload(self):
+        """Run the producer sequence under the shared ownership contract."""
+        for command in (self.build_command, self.loader_command, self.install_command):
+            self.dispatch(command)
+        self.copy_runtime()
+
+    def inspect_payload(self):
+        return inventory.sysroot(self.paths['destination'], self.target['elf'],
+                                 exclude=(self.RECEIPT, self.MARKER, self.LOG))
+
     def run(self):
         self.preflight()
         if self.options.get('plan'):
@@ -434,9 +448,7 @@ class SysrootBuilder:
             self.receipt['qualification'] = 'incomplete'
             self.save_receipt()
             self.prepare_contexts()
-            for command in (self.build_command, self.loader_command, self.install_command):
-                self.dispatch(command)
-            self.copy_runtime()
+            self.build_payload()
             for name, expected in self.sources.items():
                 if self.source(expected['path'], name) != expected:
                     raise SDKError(f'{name} source changed during build')
@@ -444,7 +456,7 @@ class SysrootBuilder:
                 raise SDKError('compiler changed during build')
             if self.python_identity() != self.python:
                 raise SDKError('Python or SDK implementation changed during build')
-            self.receipt['outputs'] = inventory.sysroot(self.paths['destination'], self.target['elf'], exclude=(self.RECEIPT, self.MARKER, self.LOG))
+            self.receipt['outputs'] = self.inspect_payload()
             self.interrupted()
             self.receipt['qualification'] = 'built-and-inspected'
             self.save_receipt()

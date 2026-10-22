@@ -104,7 +104,7 @@ Use the [SDK sysroot procedure](sysroot.md). It calls the fork's own build rules
 and selects the verified Ports runtime stage. Keep source revisions, compiler
 hashes, runtime receipts and output hashes together.
 
-The [OS external-runtime adapter](https://github.com/oxtech-ember/EmberBSD/blob/main/ember/boot/external-gcc-runtime.md)
+The [OS external-runtime adapter](https://github.com/oxtech-ember/EmberBSD/blob/main/tools/docs/external-gcc-runtime.md)
 provides build-time paths. It does not install a target runtime provider or
 qualify a release. Follow the producer's current checks; SDK must not replace
 EmberBSD headers or libraries with upstream NetBSD files.
