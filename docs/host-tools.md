@@ -289,3 +289,10 @@ not establish a new compiler build, package transaction or hardware result.
 package graphs, creates immutable locks and update plans, and checks explicit
 result receipts against current artifact bytes. It never executes producers.
 See [Ports update plans](ports-plan.md) for schemas, CLI commands, and limits.
+
+## Prepare and tag a release
+
+`emberbsd_sdk.ports_release` provides `PORTS_RELEASE_API = 1`. It prepares the
+canonical source version and a source manifest before building. It validates
+the selected build receipts and optional checks before creating release tags.
+See [release preparation](release-tags.md) for the two-phase procedure and limits.

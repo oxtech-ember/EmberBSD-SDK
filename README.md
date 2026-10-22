@@ -47,6 +47,8 @@ import restores a new local tree without replacing an existing destination.
 Use [Ports update plans](docs/ports-plan.md) to compare evaluated package graphs,
 identify affected consumers, and verify explicit artifact receipts. These tools
 leave builds and fixes to the coding agent and existing Ports producers.
+Use [release preparation and tags](docs/release-tags.md) to set the source
+product version before building and tag the checked OS, Ports, and SDK commits.
 The [distribution guide](docs/distribution.md) defines the additional boundary
 for a future SDK release that accompanies a binary package profile.
 
