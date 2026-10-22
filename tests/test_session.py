@@ -149,5 +149,6 @@ except SDKError as exc:
 
     def test_empty_session_requires_a_complete_scan(self):
         inspector = object.__new__(process.SessionInspector)
+        inspector.empty_snapshot_timeout = 2
         with patch.object(inspector, '_scan', side_effect=[(set(), True), ({123}, False)]):
             self.assertEqual(inspector.members(42), {123})

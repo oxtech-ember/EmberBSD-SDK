@@ -13,10 +13,11 @@ import threading
 import time
 
 from .errors import SDKError, CommandError, ProcessOwnershipError
-from .process import OwnedProcessGroup, _argv
+from .process import OwnedProcessGroup, _argv, _empty_snapshot_timeout
 
 PRODUCER_STREAM_API = 1
 PRODUCER_INPUT_API = 1
+PRODUCER_INSPECTION_API = 1
 CHUNK = 1024 * 1024
 
 
@@ -85,7 +86,7 @@ class _Reader:
 
 
 def run_streamed(argv, consume, *, cwd=None, env=None,
-                 stderr_limit=CHUNK, timeout=None, input=None):
+                 stderr_limit=CHUNK, timeout=None, input=None, empty_snapshot_timeout=2):
     """Consume stdout bytes, then check producer status and drain its session.
 
     ``consume(reader)`` must use bounded reads and must not retain the reader.
@@ -97,6 +98,7 @@ def run_streamed(argv, consume, *, cwd=None, env=None,
     The file remains open through session drainage and closes on every outcome.
     Signal handlers belong to the CLI, as with ``process.run_logged``.
     """
+    empty_snapshot_timeout = _empty_snapshot_timeout(empty_snapshot_timeout)
     argv = _argv(argv)
     if not callable(consume):
         raise SDKError('stream consumer must be callable')
@@ -118,7 +120,8 @@ def run_streamed(argv, consume, *, cwd=None, env=None,
                 source.write(input)
                 source.seek(0)
             group = OwnedProcessGroup(argv, cwd=cwd, env=env, stdout=None, stderr=None,
-                                      stdin=subprocess.DEVNULL if source is None else source)
+                                      stdin=subprocess.DEVNULL if source is None else source,
+                                      empty_snapshot_timeout=empty_snapshot_timeout)
             stdout, output = os.pipe()
             descriptors.extend((stdout, output))
             stderr, errors = os.pipe()

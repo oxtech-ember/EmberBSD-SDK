@@ -49,6 +49,12 @@ def require_posix():
         raise SDKError('producer operations require a qualified POSIX session backend')
 
 
+def _empty_snapshot_timeout(value):
+    if type(value) not in (int, float) or not 0 < value <= sys.float_info.max:
+        raise SDKError('empty snapshot timeout must be finite and positive')
+    return value
+
+
 class SessionInspector:
     """Enumerate a qualified build session with native birth identities.
 
@@ -60,7 +66,8 @@ class SessionInspector:
     including a parent that escapes before observation, are outside the scope.
     """
 
-    def __init__(self, *, env=None):
+    def __init__(self, *, env=None, empty_snapshot_timeout=2):
+        self.empty_snapshot_timeout = _empty_snapshot_timeout(empty_snapshot_timeout)
         require_posix()
         if sys.platform not in ('darwin', 'linux') and sys.platform != 'netbsd11':
             raise SDKError('producer session backend is not qualified on this host; layout and inspection tools remain available')
@@ -232,7 +239,7 @@ class SessionInspector:
         return members, uncertain
 
     def members(self, sid):
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + self.empty_snapshot_timeout
         while True:
             members, vanished = self._scan(sid)
             if members or not vanished:
@@ -253,11 +260,14 @@ class OwnedProcessGroup:
     this backend contract. Import does not enumerate or change any process.
     """
 
-    def __init__(self, argv, *, cwd, env, stdout, stderr, stdin=subprocess.DEVNULL, inspector=None):
+    def __init__(self, argv, *, cwd, env, stdout, stderr, stdin=subprocess.DEVNULL,
+                 inspector=None, empty_snapshot_timeout=2):
+        empty_snapshot_timeout = _empty_snapshot_timeout(empty_snapshot_timeout)
         require_posix()
         self.argv = _argv(argv)
         self.options = dict(cwd=cwd, env=env, stdout=stdout, stderr=stderr, stdin=stdin)
-        self.inspector = SessionInspector(env=env) if inspector is None else inspector
+        self.inspector = (SessionInspector(env=env, empty_snapshot_timeout=empty_snapshot_timeout)
+                          if inspector is None else inspector)
         self.child = None
 
     def start(self):

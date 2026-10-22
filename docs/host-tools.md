@@ -146,8 +146,8 @@ do not establish an actual Linux filesystem run or native Windows support.
 
 `emberbsd_sdk.stream` provides `PRODUCER_STREAM_API = 1`.
 `run_streamed(argv, consume, *, cwd=None, env=None, stderr_limit=1048576,
-timeout=None, input=None)` calls `consume(reader)` with binary stdout. The reader
-accepts explicit read sizes from zero through one MiB. Short reads are valid. The
+timeout=None, input=None, empty_snapshot_timeout=2)` calls `consume(reader)`
+with binary stdout. The reader accepts explicit read sizes from zero through one MiB. Short reads are valid. The
 callback must not retain the reader after it returns. Unread output is drained.
 The returned `StreamResult` contains the callback value, stderr bytes and a
 `stderr_truncated` flag. Stderr is drained concurrently. Only its first
@@ -177,13 +177,29 @@ configured temporary directory and may fail before a producer starts. The read
 deadline begins after producer startup; it does not bound input staging.
 Consumers that pass input must check `PRODUCER_INPUT_API` before startup.
 
+The additive `PRODUCER_INSPECTION_API = 1` capability accepts a finite positive
+`empty_snapshot_timeout`, in seconds. The default is 2. It bounds each attempt
+to prove an empty session when process rows change during inspection. A caller
+can select a larger budget for concurrent build activity. Unknown rows still
+block empty-session proof. The polling interval and ownership checks do not
+change. Persistent uncertainty still fails after this budget. This budget is
+separate from the producer read timeout and the stop grace periods. It also
+applies to the inspector's startup probes, before the read timeout starts.
+Invalid budgets fail before input staging or producer startup. Consumers that
+set this option must check `PRODUCER_INSPECTION_API` before startup.
+
+`SessionInspector(env=None, empty_snapshot_timeout=2)` owns this policy.
+`OwnedProcessGroup(..., empty_snapshot_timeout=2)` forwards the option when it
+creates an inspector. An explicit inspector retains its own policy.
+
 Both functions reuse `OwnedProcessGroup`. They do not create another process
 backend. A producer that leaves a live descendant is rejected. Session drainage
 finishes before return or exception. A signal handler can interrupt a read;
 the CLI owns those handlers. A second signal cannot interrupt session drainage.
-An optional finite positive timeout bounds the read/drain phase. The existing
-session-stop grace periods apply after interruption. The callback must also
-bound its own processing; the SDK cannot preempt arbitrary Python code.
+An optional finite positive timeout bounds waiting for output. A session
+inspection can use its own budget before the next read-timeout check. The
+existing session-stop grace periods apply after interruption. The callback must
+also bound its own processing; the SDK cannot preempt arbitrary Python code.
 
 `ProcessOwnershipError` remains distinct and takes precedence over other
 failures. A consumer must retain and quarantine its writable work. Neither
