@@ -81,6 +81,29 @@ filesystem and process behavior separate from command fixtures. Record the
 interpreter and platform for actual results. Type annotations document module
 interfaces; they do not replace input validation or runtime checks.
 
+## Inspect one process identity
+
+`emberbsd_sdk.process_identity` provides `PROCESS_IDENTITY_API = 1`.
+`process_identity(pid)` reads a native process birth identity, executable path,
+and exact argument tuple. It returns `None` for an absent process. It sends no
+signal. The caller must validate a positive integer PID and recheck the full
+identity immediately before an owned operation. PID alone does not prove
+ownership. This snapshot does not make later signals process-bound.
+
+Darwin uses the existing public `proc_pid_rusage` birth identity, `proc_pidpath`,
+and `KERN_PROCARGS2`. It requires conventional nonempty `argv[0]` because the
+native record does not distinguish an empty first argument from alignment NULs.
+Later empty arguments, whitespace, quotes and shell characters remain distinct.
+Linux pins the process directory and reads `stat`, `cmdline` and `exe`.
+Repeated birth, executable and argv observations must agree. The native APIs do
+not provide an atomic snapshot of all three fields.
+
+Run `python3 -m unittest discover -s tests -p 'test_process_identity.py'`.
+Native Darwin checks exercised exact argv, exit, and birth preservation across
+`exec`. Parser fixtures cover malformed records. The Linux implementation has
+not been executed in that acceptance; it needs a native Linux run before Linux
+qualification.
+
 ## Publish an owned directory
 
 `emberbsd_sdk.publication` provides `DIRECTORY_PUBLICATION_API = 1`.
