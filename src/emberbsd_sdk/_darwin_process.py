@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-"""Read Darwin process birth ticks. Load native APIs only during preflight.
+"""Read Darwin process birth and exit ticks. Load native APIs during preflight.
 
 AI-assisted implementation for EmberBSD. The ABI is from Apple's public
 libproc.h and sys/resource.h: proc_pid_rusage, RUSAGE_INFO_V0. It uses the
@@ -21,7 +21,7 @@ class _Usage(ctypes.Structure):
 
 
 class DarwinIdentity:
-    """Use monotonic Mach birth ticks, not wall-clock start times."""
+    """Use monotonic Mach lifetime ticks, not wall-clock start times."""
 
     def __init__(self):
         if ctypes.sizeof(_Usage) != 96 or _Usage.start.offset != 80:
@@ -44,7 +44,7 @@ class DarwinIdentity:
     def now(self):
         return int(self.clock())
 
-    def birth(self, pid):
+    def _record(self, pid):
         record = _Usage()
         ctypes.set_errno(0)
         if self.usage(pid, 0, ctypes.byref(record)) != 0:
@@ -54,4 +54,22 @@ class DarwinIdentity:
             raise SDKError(f'cannot read Darwin birth identity for PID {pid}: {os.strerror(error)}')
         if record.start <= 0:
             raise SDKError(f'invalid Darwin birth identity for PID {pid}')
-        return int(record.start)
+        return record
+
+    def birth(self, pid):
+        # Session ownership still observes the birth of unreaped processes.
+        record = self._record(pid)
+        return None if record is None else int(record.start)
+
+    def lifetime(self, pid):
+        """Return native (birth, exit) ticks, or None after the PID is absent.
+
+        A zero exit tick is not evidence of termination. Unreaped exited
+        processes retain their birth tick and have a nonzero exit tick.
+        """
+        record = self._record(pid)
+        if record is None:
+            return None
+        if record.exit and record.exit < record.start:
+            raise SDKError(f'invalid Darwin exit identity for PID {pid}')
+        return int(record.start), int(record.exit)

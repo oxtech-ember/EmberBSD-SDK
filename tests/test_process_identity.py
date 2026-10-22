@@ -5,7 +5,9 @@ from pathlib import Path
 import struct
 import subprocess
 import sys
+import time
 import unittest
+from unittest.mock import Mock
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.process_identity import _Darwin, _darwin_arguments, process_identity
 
@@ -52,14 +54,98 @@ class IdentityTests(unittest.TestCase):
                 _darwin_arguments(corrupt)
 
     def test_darwin_repeated_argv_refuses_exec_race(self):
-        from unittest.mock import Mock
         reader = _Darwin.__new__(_Darwin)
         reader.identity = Mock()
-        reader.identity.birth.side_effect = [42, 42]
+        reader.identity.lifetime.side_effect = [(42, 0), (42, 0)]
         reader.executable = Mock(return_value='/usr/bin/example')
         reader.arguments = Mock(side_effect=[('example', 'before'), ('example', 'after')])
         with self.assertRaisesRegex(SDKError, 'identity changed'):
             reader.snapshot(123)
+
+    def darwin_reader(self, lifetimes, *, argv_error=None):
+        reader = _Darwin.__new__(_Darwin)
+        reader.identity = Mock()
+        reader.identity.lifetime.side_effect = lifetimes
+        reader.executable = Mock(return_value='/usr/bin/example')
+        reader.arguments = Mock(return_value=('example', 'argument'))
+        if argv_error is not None:
+            reader.arguments.side_effect = argv_error
+        return reader
+
+    def test_darwin_confirmed_unreaped_exit_needs_no_argv_access(self):
+        reader = self.darwin_reader([(42, 50)])
+        self.assertIsNone(reader.snapshot(123))
+        reader.executable.assert_not_called()
+        reader.arguments.assert_not_called()
+
+    def test_darwin_live_permission_error_is_not_absence(self):
+        reader = self.darwin_reader([(42, 0), (42, 0)],
+                                    argv_error=SDKError('live argv: Operation not permitted'))
+        with self.assertRaisesRegex(SDKError, 'live argv: Operation not permitted'):
+            reader.snapshot(123)
+
+    def test_darwin_exit_during_argv_error_is_confirmed_by_same_birth(self):
+        reader = self.darwin_reader([(42, 0), (42, 50)],
+                                    argv_error=SDKError('argv access denied after exit'))
+        self.assertIsNone(reader.snapshot(123))
+
+    def test_darwin_error_without_exit_tick_stays_unproven(self):
+        reader = self.darwin_reader([(42, 0), None],
+                                    argv_error=SDKError('argv access denied before absence'))
+        with self.assertRaisesRegex(SDKError, 'argv access denied before absence'):
+            reader.snapshot(123)
+
+    def test_darwin_recycled_exited_pid_is_not_absence(self):
+        for error in (None, SDKError('argv access denied')):
+            with self.subTest(error=error):
+                reader = self.darwin_reader([(42, 0), (43, 50)], argv_error=error)
+                with self.assertRaisesRegex(SDKError, 'identity changed'):
+                    reader.snapshot(123)
+
+    def test_darwin_exit_after_reading_argv_is_absence(self):
+        reader = self.darwin_reader([(42, 0), (42, 50)])
+        self.assertIsNone(reader.snapshot(123))
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'requires native Darwin rusage exit ticks')
+    def test_native_darwin_live_unreaped_and_reaped(self):
+        from emberbsd_sdk._darwin_process import DarwinIdentity
+        identity = DarwinIdentity()
+        incoming, outgoing = os.pipe()
+        pid = os.fork()
+        if pid == 0:
+            os.close(outgoing)
+            os.read(incoming, 1)
+            os._exit(0)
+        os.close(incoming)
+        try:
+            live = identity.lifetime(pid)
+            self.assertIsNotNone(live)
+            self.assertGreater(live[0], 0)
+            self.assertEqual(live[1], 0)
+            self.assertEqual(identity.birth(pid), live[0])
+            self.assertEqual(process_identity(pid).birth, live[0])
+            os.close(outgoing)
+            outgoing = None
+            deadline = time.monotonic() + 5
+            while True:
+                ended = identity.lifetime(pid)
+                self.assertIsNotNone(ended)
+                if ended[1]:
+                    break
+                self.assertLess(time.monotonic(), deadline, 'no unreaped exit tick observed')
+                time.sleep(.01)
+            self.assertEqual(ended[0], live[0])
+            self.assertGreaterEqual(ended[1], live[0])
+            # The owned-session backend still sees an unreaped PID's birth.
+            self.assertEqual(identity.birth(pid), live[0])
+            self.assertIsNone(process_identity(pid))
+        finally:
+            if outgoing is not None:
+                os.close(outgoing)
+            os.waitpid(pid, 0)
+        self.assertIsNone(identity.lifetime(pid))
+        self.assertIsNone(identity.birth(pid))
+        self.assertIsNone(process_identity(pid))
 
     def test_invalid_pids(self):
         for value in (True, None, '1', 0, -1, 2**31):

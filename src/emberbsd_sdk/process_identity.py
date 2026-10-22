@@ -97,19 +97,38 @@ class _Darwin:
         return _darwin_arguments(buffer.raw[:size.value])
 
     def snapshot(self, pid):
-        before = self.identity.birth(pid)
+        before = self.identity.lifetime(pid)
         if before is None:
             return None
-        first = self.executable(pid)
-        argv = self.arguments(pid)
-        repeated = self.arguments(pid)
-        second = self.executable(pid)
-        after = self.identity.birth(pid)
+        birth, exited = before
+        if exited:
+            return None
+        try:
+            first = self.executable(pid)
+            argv = self.arguments(pid)
+            repeated = self.arguments(pid)
+            second = self.executable(pid)
+        except SDKError:
+            # Darwin may deny argv access after exit, before the parent reaps
+            # its child. Permission errors for a live or unproven PID remain
+            # failures. A recycled PID cannot prove the earlier process exited.
+            after = self.identity.lifetime(pid)
+            if after is not None:
+                if birth != after[0]:
+                    raise SDKError('process identity changed during the Darwin snapshot')
+                if after[1]:
+                    return None
+            raise
+        after = self.identity.lifetime(pid)
         if after is None:
             return None
-        if before != after or first is None or first != second or argv is None or argv != repeated:
+        if birth != after[0]:
             raise SDKError('process identity changed during the Darwin snapshot')
-        return ProcessIdentity(pid, after, second, argv, 'darwin-rusage-procargs-v1')
+        if after[1]:
+            return None
+        if first is None or first != second or argv is None or argv != repeated:
+            raise SDKError('process identity changed during the Darwin snapshot')
+        return ProcessIdentity(pid, birth, second, argv, 'darwin-rusage-procargs-v1')
 
 
 def _linux_snapshot(pid):
