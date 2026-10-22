@@ -216,8 +216,8 @@ class LinuxChild:
             helper = os.path.join(os.path.dirname(__file__), '_linux_supervisor.py')
             self.supervisor = subprocess.Popen(
                 [sys.executable, '-B', '-I', '-S', helper, str(write), *self.argv],
-                stdin=subprocess.DEVNULL, pass_fds=(write,),
-                start_new_session=True, **self.options)
+                pass_fds=(write,), start_new_session=True,
+                **{'stdin': subprocess.DEVNULL, **self.options})
             # The kernel creates this SID before the helper can launch work.
             # It remains known even if the helper dies before its first report.
             self.pid = self.supervisor.pid

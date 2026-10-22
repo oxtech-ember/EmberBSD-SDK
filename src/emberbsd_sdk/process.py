@@ -253,10 +253,10 @@ class OwnedProcessGroup:
     this backend contract. Import does not enumerate or change any process.
     """
 
-    def __init__(self, argv, *, cwd, env, stdout, stderr, inspector=None):
+    def __init__(self, argv, *, cwd, env, stdout, stderr, stdin=subprocess.DEVNULL, inspector=None):
         require_posix()
         self.argv = _argv(argv)
-        self.options = dict(cwd=cwd, env=env, stdout=stdout, stderr=stderr)
+        self.options = dict(cwd=cwd, env=env, stdout=stdout, stderr=stderr, stdin=stdin)
         self.inspector = SessionInspector(env=env) if inspector is None else inspector
         self.child = None
 
@@ -277,7 +277,7 @@ class OwnedProcessGroup:
                 if self.child.pid is not None:
                     self.inspector.native.supervised[self.child.pid] = self.child
         else:
-            self.child = subprocess.Popen(self.argv, stdin=subprocess.DEVNULL, start_new_session=True, **self.options)
+            self.child = subprocess.Popen(self.argv, start_new_session=True, **self.options)
         return self.child.pid
 
     @property

@@ -8,6 +8,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from unittest.mock import patch
 from test_core import TemporaryCase, SDK_SOURCE
@@ -18,6 +19,102 @@ from emberbsd_sdk.errors import SDKError, CommandError, ProcessOwnershipError
 class StreamTests(TemporaryCase):
     def command(self, code):
         return [sys.executable, '-B', '-I', '-S', '-c', code]
+
+    def test_exact_binary_regular_file_input_and_output(self):
+        payload = bytes(range(256)) + b'\0\xffinput\n'
+        files = []
+        factory = tempfile.TemporaryFile
+        def temporary():
+            result = factory()
+            files.append(result)
+            return result
+        command = self.command('import os,stat,sys;'
+            'assert stat.S_ISREG(os.fstat(0).st_mode);'
+            'sys.stdout.buffer.write(sys.stdin.buffer.read());'
+            'sys.stderr.buffer.write(b"input\\x00diagnostic")')
+        with patch.object(stream.tempfile, 'TemporaryFile', temporary):
+            result = stream.capture_streamed(command, input=payload, timeout=5)
+        self.assertEqual(stream.PRODUCER_INPUT_API, 1)
+        self.assertEqual((result.value, result.stderr), (payload, b'input\0diagnostic'))
+        self.assertEqual(len(files), 1)
+        self.assertTrue(files[0].closed)
+
+    def test_input_above_pipe_capacity_does_not_block_output(self):
+        payload = bytes(range(256)) * 16384
+        prefix = b'output-before-input' * 16384
+        code = ('import os,signal,sys;signal.alarm(10);'
+                'sys.stdout.buffer.write(b"output-before-input"*16384);sys.stdout.buffer.flush();'
+                'sys.stdout.buffer.write(sys.stdin.buffer.read())')
+        # A pipe writer that blocks before reading stdout cannot satisfy this
+        # producer. Its alarm also bounds a regressed implementation's child.
+        result = stream.capture_streamed(self.command(code), input=payload,
+                                         stdout_limit=len(prefix) + len(payload), timeout=5)
+        self.assertEqual(result.value, prefix + payload)
+
+    def test_run_streamed_input_and_default_eof(self):
+        result = stream.run_streamed(self.command('import sys;sys.stdout.buffer.write(sys.stdin.buffer.read())'),
+                                     lambda reader: reader.read(7), input=b'\0value\xff', timeout=5)
+        self.assertEqual(result.value, b'\0value\xff')
+        with patch.object(stream.tempfile, 'TemporaryFile') as temporary:
+            result = stream.capture_streamed(self.command('import sys;assert sys.stdin.buffer.read()==b""'))
+        self.assertEqual(result.value, b'')
+        temporary.assert_not_called()
+
+    def test_invalid_input_refuses_before_allocation_and_producer(self):
+        for value in ('text', bytearray(b'bytes'), memoryview(b'bytes'), False, 1, []):
+            with self.subTest(input_type=type(value).__name__), \
+                    patch.object(stream, 'OwnedProcessGroup') as producer, \
+                    patch.object(stream.tempfile, 'TemporaryFile') as temporary:
+                with self.assertRaisesRegex(SDKError, 'bytes or None'):
+                    stream.capture_streamed(['not-started'], input=value)
+                with self.assertRaisesRegex(SDKError, 'bytes or None'):
+                    stream.run_streamed(['not-started'], lambda reader: None, input=value)
+                producer.assert_not_called()
+                temporary.assert_not_called()
+
+    def test_input_file_closes_if_preflight_fails(self):
+        source = tempfile.TemporaryFile()
+        with patch.object(stream.tempfile, 'TemporaryFile', return_value=source), \
+                patch.object(stream, 'OwnedProcessGroup', side_effect=SDKError('fixture preflight failure')):
+            with self.assertRaisesRegex(SDKError, 'fixture preflight failure'):
+                stream.capture_streamed(['not-started'], input=b'payload')
+        self.assertTrue(source.closed)
+
+    def test_deadline_with_input_stops_owned_descendant(self):
+        leader, descendant, writer = (self.root / name for name in ('leader', 'descendant', 'writes'))
+        payload = b'binary\0input\xff' * 8192
+        code = f'''import os,signal,sys,time
+from pathlib import Path
+assert sys.stdin.buffer.read()==b'binary\\0input\\xff'*8192
+Path({str(leader)!r}).write_text(str(os.getpid()))
+if os.fork()==0:
+    os.setpgid(0,0)
+    signal.signal(signal.SIGTERM,signal.SIG_IGN)
+    Path({str(descendant)!r}).write_text(str(os.getpid()))
+    deadline=time.monotonic()+20
+    while time.monotonic()<deadline:
+        with Path({str(writer)!r}).open('ab') as output: output.write(b'x')
+        time.sleep(.02)
+    os._exit(0)
+time.sleep(20)
+'''
+        files = []
+        factory = tempfile.TemporaryFile
+        def temporary():
+            source = factory()
+            files.append(source)
+            return source
+        with patch.object(stream.tempfile, 'TemporaryFile', temporary):
+            with self.assertRaisesRegex(SDKError, 'deadline'):
+                stream.capture_streamed(self.command(code), input=payload, timeout=2)
+        self.assertTrue(files[0].closed)
+        for path in (leader, descendant):
+            pid = int(path.read_text())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+        before = writer.read_bytes()
+        time.sleep(.1)
+        self.assertEqual(writer.read_bytes(), before)
 
     def test_binary_capture_and_concurrent_bounded_stderr(self):
         result = stream.capture_streamed(self.command(

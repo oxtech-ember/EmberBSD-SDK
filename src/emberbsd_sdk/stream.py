@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import os
 import selectors
 import signal
+import subprocess
+import tempfile
 import threading
 import time
 
@@ -14,6 +16,7 @@ from .errors import SDKError, CommandError, ProcessOwnershipError
 from .process import OwnedProcessGroup, _argv
 
 PRODUCER_STREAM_API = 1
+PRODUCER_INPUT_API = 1
 CHUNK = 1024 * 1024
 
 
@@ -82,7 +85,7 @@ class _Reader:
 
 
 def run_streamed(argv, consume, *, cwd=None, env=None,
-                 stderr_limit=CHUNK, timeout=None):
+                 stderr_limit=CHUNK, timeout=None, input=None):
     """Consume stdout bytes, then check producer status and drain its session.
 
     ``consume(reader)`` must use bounded reads and must not retain the reader.
@@ -90,6 +93,8 @@ def run_streamed(argv, consume, *, cwd=None, env=None,
     A signal or deadline stops the session. ProcessOwnershipError takes priority
     over other errors; the caller must retain and quarantine writable work.
     Stderr is drained concurrently. Only its first ``stderr_limit`` bytes remain.
+    Optional bytes input is staged in a temporary regular file before startup.
+    The file remains open through session drainage and closes on every outcome.
     Signal handlers belong to the CLI, as with ``process.run_logged``.
     """
     argv = _argv(argv)
@@ -100,11 +105,20 @@ def run_streamed(argv, consume, *, cwd=None, env=None,
     if timeout is not None and (type(timeout) not in (int, float) or
                                not 0 < timeout < float('inf')):
         raise SDKError('stream timeout must be finite and positive')
-    group = OwnedProcessGroup(argv, cwd=cwd, env=env, stdout=None, stderr=None)
+    if input is not None and not isinstance(input, bytes):
+        raise SDKError('producer input must be bytes or None')
+    group = None
+    source = None
     descriptors = []
     reader = None
     with selectors.DefaultSelector() as selector:
         try:
+            if input is not None:
+                source = tempfile.TemporaryFile()
+                source.write(input)
+                source.seek(0)
+            group = OwnedProcessGroup(argv, cwd=cwd, env=env, stdout=None, stderr=None,
+                                      stdin=subprocess.DEVNULL if source is None else source)
             stdout, output = os.pipe()
             descriptors.extend((stdout, output))
             stderr, errors = os.pipe()
@@ -139,19 +153,23 @@ def run_streamed(argv, consume, *, cwd=None, env=None,
                 reader.active = False
             previous = {}
             try:
-                if group.pid is not None:
+                if group is not None and group.pid is not None:
                     if threading.current_thread() is threading.main_thread():
                         for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
                             previous[number] = signal.signal(number, signal.SIG_IGN)
                     group.stop()
             finally:
-                for number, handler in previous.items():
-                    signal.signal(number, handler)
-                for fd in descriptors:
-                    os.close(fd)
+                try:
+                    for number, handler in previous.items():
+                        signal.signal(number, handler)
+                    for fd in descriptors:
+                        os.close(fd)
+                finally:
+                    if source is not None:
+                        source.close()
 
 
-def capture_streamed(argv, *, stdout_limit=CHUNK, **options):
+def capture_streamed(argv, *, stdout_limit=CHUNK, input=None, **options):
     """Capture bounded output with the same ownership and status contract."""
     if type(stdout_limit) is not int or stdout_limit < 0:
         raise SDKError('stdout limit must be a nonnegative integer')
@@ -166,7 +184,7 @@ def capture_streamed(argv, *, stdout_limit=CHUNK, **options):
         return bytes(data)
 
     try:
-        return run_streamed(argv, consume, **options)
+        return run_streamed(argv, consume, input=input, **options)
     except CommandError as error:
         error.stdout = bytes(data[:stdout_limit])
         error.stdout_truncated = len(data) > stdout_limit

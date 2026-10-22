@@ -85,9 +85,10 @@ interfaces; they do not replace input validation or runtime checks.
 
 `emberbsd_sdk.process_identity` provides `PROCESS_IDENTITY_API = 1`.
 `process_identity(pid)` reads a native process birth identity, executable path,
-and exact argument tuple. It returns `None` for an absent process. It sends no
-signal. The caller must validate a positive integer PID and recheck the full
-identity immediately before an owned operation. PID alone does not prove
+and exact argument tuple. It returns `None` for an absent process or a Darwin
+process with a confirmed exit record, including an unreaped child. It sends no
+signal. A live access refusal does not prove absence. The caller must validate
+a positive integer PID and recheck the full identity before an owned operation. PID alone does not prove
 ownership. This snapshot does not make later signals process-bound.
 
 Darwin uses the existing public `proc_pid_rusage` birth identity, `proc_pidpath`,
@@ -99,9 +100,10 @@ Repeated birth, executable and argv observations must agree. The native APIs do
 not provide an atomic snapshot of all three fields.
 
 Run `python3 -m unittest discover -s tests -p 'test_process_identity.py'`.
-Native Darwin checks exercised exact argv, exit, and birth preservation across
-`exec`. Parser fixtures cover malformed records. The Linux implementation has
-not been executed in that acceptance; it needs a native Linux run before Linux
+Native Darwin checks exercised exact argv, live/unreaped/reaped exit, and
+birth preservation across `exec`. Refusal tests preserve live access errors
+and reject a recycled birth identity. Parser fixtures cover malformed records.
+The Linux implementation has not been executed in that acceptance; it needs a native Linux run before Linux
 qualification.
 
 ## Publish an owned directory
@@ -144,14 +146,14 @@ do not establish an actual Linux filesystem run or native Windows support.
 
 `emberbsd_sdk.stream` provides `PRODUCER_STREAM_API = 1`.
 `run_streamed(argv, consume, *, cwd=None, env=None, stderr_limit=1048576,
-timeout=None)` calls `consume(reader)` with binary stdout. The reader accepts
-explicit read sizes from zero through one MiB. Short reads are valid. The
+timeout=None, input=None)` calls `consume(reader)` with binary stdout. The reader
+accepts explicit read sizes from zero through one MiB. Short reads are valid. The
 callback must not retain the reader after it returns. Unread output is drained.
 The returned `StreamResult` contains the callback value, stderr bytes and a
 `stderr_truncated` flag. Stderr is drained concurrently. Only its first
 `stderr_limit` bytes are retained. The limit is at most one MiB.
 
-`capture_streamed(argv, *, stdout_limit=1048576, **options)` uses the same
+`capture_streamed(argv, *, stdout_limit=1048576, input=None, **options)` uses the same
 producer contract and returns captured stdout as `StreamResult.value`.
 It rejects stdout above the explicit limit. An output/parser error still drains
 the pipes and checks the producer's completed status. A nonzero producer status
@@ -161,6 +163,19 @@ statuses. The error also has a `stderr_truncated` flag. For `capture_streamed`,
 the error contains the stdout prefix in `stdout`. This prefix is at most
 `stdout_limit` bytes. Its `stdout_truncated` flag is true if the output exceeded
 the limit. The extra byte used to detect overflow is not exposed.
+
+The additive `PRODUCER_INPUT_API = 1` capability accepts `input=None` or bytes.
+`None` keeps standard input at `/dev/null`. Bytes, including an empty value,
+are staged in a private `tempfile.TemporaryFile` and rewound before the producer
+starts. The producer receives a regular file as standard input. The controller
+does not write a pipe while it waits to read stdout or stderr. This supports
+input larger than a pipe buffer and producers that write output before reading
+input. The temporary file closes on success, refusal, startup failure, timeout
+and interruption, after any required session drainage. Invalid input types fail
+before temporary-file allocation or producer startup. Staging uses the host's
+configured temporary directory and may fail before a producer starts. The read
+deadline begins after producer startup; it does not bound input staging.
+Consumers that pass input must check `PRODUCER_INPUT_API` before startup.
 
 Both functions reuse `OwnedProcessGroup`. They do not create another process
 backend. A producer that leaves a live descendant is rejected. Session drainage

@@ -247,8 +247,8 @@ class NetBSDChild:
         try:
             helper = os.path.join(os.path.dirname(__file__), '_netbsd_launcher.py')
             self.process = subprocess.Popen([sys.executable, '-B', '-I', '-S', helper,
-                str(read), *self.argv], stdin=subprocess.DEVNULL,
-                pass_fds=(read,), start_new_session=True, **self.options)
+                str(read), *self.argv], pass_fds=(read,), start_new_session=True,
+                **{'stdin': subprocess.DEVNULL, **self.options})
             self.pid = self.process.pid
             self.native.supervised[self.pid] = self
             self.tree = TrackedTree(self.pid)
