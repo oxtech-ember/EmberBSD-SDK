@@ -44,6 +44,9 @@ See the [workspace contract](docs/prebuild-sdk.md),
 Use [sysroot export and import](docs/sysroot-transfer.md) to exchange verified
 build outputs through a file share. Bundles preserve inventory and provenance;
 import restores a new local tree without replacing an existing destination.
+Use [Ports update plans](docs/ports-plan.md) to compare evaluated package graphs,
+identify affected consumers, and verify explicit artifact receipts. These tools
+leave builds and fixes to the coding agent and existing Ports producers.
 The [distribution guide](docs/distribution.md) defines the additional boundary
 for a future SDK release that accompanies a binary package profile.
 

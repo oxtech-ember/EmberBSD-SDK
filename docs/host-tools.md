@@ -282,3 +282,10 @@ on the declared host. Start the Windows build path in WSL2 as described in
 Historical receipts keep their original inputs and hashes. A replacement
 verifier must authenticate that history explicitly. A language migration does
 not establish a new compiler build, package transaction or hardware result.
+
+## Plan Ports updates
+
+`emberbsd_sdk.ports_plan` provides `PORTS_PLAN_API = 1`. It validates evaluated
+package graphs, creates immutable locks and update plans, and checks explicit
+result receipts against current artifact bytes. It never executes producers.
+See [Ports update plans](ports-plan.md) for schemas, CLI commands, and limits.
