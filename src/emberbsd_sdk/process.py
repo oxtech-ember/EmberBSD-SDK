@@ -219,15 +219,20 @@ class SessionInspector:
             after = birth_of(pid)
             if actual == sid:
                 members.add(pid)
-            if before is not None and before == after and before <= barrier and actual is not None:
+            if before is not None and before == after and actual is not None:
+                # This identity is valid for the next snapshot's parent proof,
+                # even when it cannot identify the PID row in this snapshot.
                 observed[pid] = (before, actual)
-                continue
+                if before <= barrier:
+                    continue
             if actual == sid:
                 continue
             parent = known.get(ppid)
-            if actual is None and pid != sid and ppid > 1 and b'X' not in state and parent is not None:
+            if pid != sid and ppid > 1 and b'X' not in state and parent is not None:
                 birth, parent_sid = parent
                 if parent_sid != sid and birth_of(ppid) == birth:
+                    # The continuous foreign parent excludes ownership of the
+                    # row, whether its PID vanished or was reused afterwards.
                     # A process cannot join another existing POSIX session.
                     # PPID1 and traced rows have no such parent proof.
                     continue

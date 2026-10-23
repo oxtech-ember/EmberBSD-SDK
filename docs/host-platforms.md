@@ -40,6 +40,17 @@ and [uid_t definition](https://github.com/apple-oss-distributions/xnu/blob/main/
 The actual-parser contracts cover signed UIDs, malformed rows and foreign
 ownership refusal. These checks do not qualify a compiler or target build.
 
+Darwin can classify an uncertain PID row through a continuous foreign parent.
+This applies both when the child disappears and when its PID now names a
+different process. The parent must keep the same recorded birth identity across
+the row snapshot. Session leaders, reparented or traced rows, and changed parent
+identities do not use this proof. A stable identity read after the snapshot can
+seed the next snapshot's cache; it does not establish the current row's identity.
+If a child and its parent both disappear before their identities can be checked,
+the result remains uncertain. Heavy unrelated fork activity can therefore still
+cause a checked refusal at preflight or after a successful producer exit.
+The parent-proof regression does not establish general immunity to such churn.
+
 Both backends check their native prerequisites before a producer starts. The
 producer must retain its effective UID and session. Linux needs readable procfs
 for the current PID namespace and a kernel with pidfd support. Restricted

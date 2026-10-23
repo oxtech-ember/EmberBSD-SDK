@@ -37,6 +37,7 @@ class SnapshotTests(TemporaryCase):
         inspector.uid = 501
         inspector.controller_sid = 7
         inspector.known = {} if known is None else known
+        self.inspector = inspector
         def session(pid):
             value = sids.get(pid)
             if isinstance(value, BaseException):
@@ -66,6 +67,29 @@ class SnapshotTests(TemporaryCase):
 
     def test_reuse_after_snapshot_cannot_be_classified_by_foreign_sid(self):
         self.assertEqual(self.scan({10: (20, 501, b'R')}, {10: 201}, {10: 7}), (set(), True))
+
+    def test_post_barrier_foreign_child_has_continuous_parent_proof(self):
+        self.assertEqual(self.scan({10: (20, 501, b'R')}, {10: 201, 20: 100},
+            {10: 7}, {20: (100, 7)}), (set(), False))
+
+    def test_post_barrier_identity_is_cached_without_accepting_the_row(self):
+        self.assertEqual(self.scan({10: (20, 501, b'R')}, {10: 201}, {10: 7}), (set(), True))
+        self.assertEqual(self.inspector.known, {10: (201, 7)})
+
+    def test_post_barrier_parent_proof_retains_identity_guards(self):
+        cases = [
+            (42, 20, b'R', 100, 7),  # A session leader can have a foreign parent.
+            (10, 1, b'R', 100, 7),   # A reparented row has no ancestry proof.
+            (10, 20, b'RX', 100, 7), # Tracing can change the reported parent.
+            (10, 20, b'R', 201, 7),  # Parent PID reuse breaks continuity.
+            (10, 20, b'R', 100, 42), # An owned parent cannot exclude ownership.
+            (10, 20, b'R', None, 7), # An absent parent cannot prove continuity.
+        ]
+        for pid, ppid, state, parent_birth, parent_sid in cases:
+            with self.subTest(pid=pid, ppid=ppid, state=state, birth=parent_birth, sid=parent_sid):
+                self.assertEqual(self.scan({pid: (ppid, 501, state)},
+                    {pid: 201, ppid: parent_birth}, {pid: 7},
+                    {ppid: (100, parent_sid)}), (set(), True))
 
     def test_changed_birth_around_getsid_is_uncertain(self):
         self.assertEqual(self.scan({10: (20, 501, b'R')}, {10: [100, 101]}, {10: 7}), (set(), True))
