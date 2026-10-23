@@ -327,3 +327,5 @@ See [Ports update plans](ports-plan.md) for schemas, CLI commands, and limits.
 canonical source version and a source manifest before building. It validates
 the selected build receipts and optional checks before creating release tags.
 See [release preparation](release-tags.md) for the two-phase procedure and limits.
+
+For bounded Libtool configuration text, use the [scalar parser](libtool-config.md).
