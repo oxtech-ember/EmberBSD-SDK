@@ -21,8 +21,10 @@ Preparation requires Git and `patch` on PATH. Python uses only its standard
 library. The command verifies archive BLAKE2s, SHA512 and size against distinfo.
 It verifies every patch SHA1 with the pkgsrc RCS-line filtering rule. Archive
 extraction accepts only regular files and directories below one source root.
-It applies every patch with `patch -p0 -F0 --posix`, without reverse or interactive
-fallback. A failure does not publish a prepared root. Publication never
+It applies every patch with `patch -p0 -F0 --posix --no-backup-if-mismatch`, without reverse or
+interactive fallback. The explicit mismatch policy does not create backup files.
+Offsets remain valid. Reject files and unexpected backup files still fail
+validation. A failure does not publish a prepared root. Publication never
 replaces an existing destination. Atomic publication requires Darwin or Linux.
 
 Preparation API 1 accepts the normal distfile and patch pipeline. It rejects

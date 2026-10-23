@@ -227,7 +227,7 @@ def prepare_source(ports, archive, output):
                          'unsafe libedit patch path')
             staged_patch = temporary / row['name']
             staged_patch.write_bytes(patch_data)
-            process.capture([patch_tool, '-p0', '-F0', '--posix', '--batch', '--forward', '-i', str(staged_patch)],
+            process.capture([patch_tool, '-p0', '-F0', '--posix', '--batch', '--forward', '--no-backup-if-mismatch', '-i', str(staged_patch)],
                             cwd=str(root), env=process.sanitized_environment())
         _require(not any(p.name.endswith(('.orig', '.rej')) for p in root.rglob('*')), 'libedit patch left backup or reject files')
         (root / 'ports.distinfo').write_bytes(distinfo)

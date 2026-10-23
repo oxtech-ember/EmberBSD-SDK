@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
 """Exercise extraction and real patch application, including refusal paths."""
+import hashlib
 from pathlib import Path
 import subprocess
 from unittest.mock import patch
@@ -39,6 +40,40 @@ class LibeditTests(TemporaryCase):
         self.assertEqual((self.output / RECEIPT).stat().st_mode & 0o777, 0o444)
         with self.assertRaisesRegex(SDKError, 'already exists'):
             self.prepare()
+
+    def test_patch_offset_does_not_leave_backup(self):
+        patchfile = self.ports / RECIPE / 'patches/patch-input0'
+        before = patchfile.read_bytes()
+        after = before.replace(b'@@ -1 +1 @@', b'@@ -2 +2 @@')
+        patchfile.write_bytes(after)
+        distinfo = self.ports / RECIPE / 'distinfo'
+        def checksum(data):
+            return hashlib.sha1(b''.join(line for line in data.splitlines(keepends=True)
+                                        if b'$NetBSD' not in line)).hexdigest()
+        distinfo.write_text(distinfo.read_text().replace(checksum(before), checksum(after)))
+        self.commit()
+        self.prepare()
+        self.assertEqual((self.output / 'src/input0').read_text(), 'patched\n')
+        expected = {'src/input' + str(n) for n in range(7)}
+        expected.update(('doc/editline.3', 'ports.distinfo', RECEIPT))
+        self.assertEqual({str(p.relative_to(self.output)) for p in self.output.rglob('*')
+                          if p.is_file()}, expected)
+
+    def test_patch_backup_and_reject_files_are_still_refused(self):
+        from emberbsd_sdk import libedit
+        original = libedit.process.capture
+        for suffix in ('.orig', '.rej'):
+            with self.subTest(suffix=suffix):
+                def leave_file(argv, **kwargs):
+                    result = original(argv, **kwargs)
+                    if '-F0' in argv:
+                        Path(kwargs['cwd'], 'leftover' + suffix).write_text('unexpected')
+                    return result
+                with patch.object(libedit.process, 'capture', side_effect=leave_file):
+                    with self.assertRaisesRegex(SDKError, 'backup or reject'):
+                        self.prepare()
+                self.assertFalse(self.output.exists())
+                self.assertEqual(list(self.root.glob('.libedit-*')), [])
 
     def test_malformed_receipt_types_raise_sdkerror(self):
         import copy
