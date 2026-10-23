@@ -209,6 +209,8 @@ class FuzzChecks(unittest.TestCase):
 
     def test_optional_memcheck_records_unsupported_host(self):
         self.add_memcheck_binary()
+        self.manifest['host'] = {'system': 'Darwin', 'machine': 'arm64'}
+        self.save()
         with patch.object(fuzz.platform, 'system', return_value='Darwin'), \
              patch.object(fuzz.platform, 'machine', return_value='arm64'):
             self.run_fixture(memcheck='optional')
@@ -230,6 +232,8 @@ class FuzzChecks(unittest.TestCase):
 
     def test_required_memcheck_refuses_unsupported_host_before_run(self):
         self.add_memcheck_binary()
+        self.manifest['host'] = {'system': 'Darwin', 'machine': 'arm64'}
+        self.save()
         with patch.object(fuzz.platform, 'system', return_value='Darwin'), \
              patch.object(fuzz.platform, 'machine', return_value='arm64'):
             with self.assertRaisesRegex(SDKError, 'required but unsupported'):
