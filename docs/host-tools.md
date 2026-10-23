@@ -329,3 +329,9 @@ the selected build receipts and optional checks before creating release tags.
 See [release preparation](release-tags.md) for the two-phase procedure and limits.
 
 For bounded Libtool configuration text, use the [scalar parser](libtool-config.md).
+
+## Run diagnostic fuzz checks
+
+`emberbsd_sdk.fuzz_check` provides `FUZZ_CHECK_API = 1`. It runs prepared host
+libFuzzer targets and GCC16 corpus replays through the shared process backend.
+See [diagnostic fuzz checks](fuzz-check.md) for manifests and evidence limits.

@@ -9,6 +9,7 @@ Read [README.md](README.md) and the selected procedure before changing inputs.
 | Build the EmberBSD sysroot | [Sysroot procedure](docs/sysroot.md), `emberbsd-prebuild-sdk` |
 | Export or import a sysroot through a shared store | [Sysroot transfer procedure](docs/sysroot-transfer.md) |
 | Prepare GCC16 or cross-build a kernel | [emberbsd-build-kernel](https://github.com/oxtech-ember/Ember-Agent-Skills/blob/main/skills/emberbsd-build-kernel/SKILL.md) |
+| Run a diagnostic host fuzz campaign and check its evidence | [Diagnostic fuzz checks](docs/fuzz-check.md) |
 | Plan a Ports update and verify result evidence | [Ports planning procedure](docs/ports-plan.md), `emberbsd-port-software` |
 | Build, compose or publish an OS binary kit | [OS release procedure](docs/os-release.md); source checks and target qualification are separate |
 | Set the product version and tag checked sources | [Release preparation and tags](docs/release-tags.md), `emberbsd-port-software` |
@@ -21,7 +22,8 @@ compiler or device runtime. Manual use of the SDK procedures does not require
 an installed skill package.
 
 Keep build-host tools and target output separate. Use the common GCC16 for
-target compilation. Reuse compatible shared objects through their producers'
+target compilation. Clang is permitted for separate diagnostic host fuzz
+builds; these objects must not enter target packages or sysroots. Reuse compatible shared objects through their producers'
 checks. Record source, ABI, configuration and artifact provenance.
 
 Treat workspace structure, completed sysroot, installed package closure and

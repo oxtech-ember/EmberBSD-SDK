@@ -58,6 +58,9 @@ A [source-built AArch64 check](docs/sysroot-transfer.md#source-built-aarch64-che
 on macOS arm64 passed SMB export/import and C/C++ consumer links at a new path.
 Target execution and compiler distribution remain separate checks.
 
+Use [diagnostic fuzz checks](docs/fuzz-check.md) to run prepared Clang host
+fuzz targets, replay their corpus with GCC16 and verify portable evidence.
+
 ## Repository structure
 
 | Path | Purpose |
