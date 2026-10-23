@@ -160,7 +160,11 @@ class LinuxSession:
                 # A vanished PID may have forked after the directory snapshot.
                 uncertain = True
             elif row.sid == sid:
-                if row.uid != self.uid:
+                # Only a launched build has a supervisor record for its SID.
+                # Before launch, peers of the controller session may belong to
+                # another user, such as a sudo or CI runner process. They are
+                # not producers and cannot have changed a producer's identity.
+                if owner is not None and row.uid != self.uid:
                     raise SDKError('owned producer changed its effective UID')
                 if owner is None or pid != owner.pid:
                     members.add(pid)

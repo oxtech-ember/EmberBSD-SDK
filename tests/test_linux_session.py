@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 from unittest import skipUnless
 from unittest.mock import patch
 
@@ -79,8 +80,17 @@ class LinuxSessionTests(TemporaryCase):
         from emberbsd_sdk._linux_process import ProcessRow
         inspector = self.inspector()
         row = ProcessRow(10, 42, 42, os.geteuid() + 1, 100, b'R')
-        with patch.object(inspector, '_rows', return_value={10: row}), self.assertRaisesRegex(SDKError, 'effective UID'):
+        build = SimpleNamespace(pid=42, drained=lambda: False)
+        with patch.dict(inspector.native.supervised, {42: build}), patch.object(inspector, '_rows', return_value={10: row}), self.assertRaisesRegex(SDKError, 'effective UID'):
             inspector._scan(42)
+
+    def test_foreign_uid_session_peer_without_build_is_not_ownership_change(self):
+        from emberbsd_sdk._linux_process import ProcessRow
+        inspector = self.inspector()
+        for sid in (os.getsid(0), 42):
+            row = ProcessRow(10, 9, sid, os.geteuid() + 1, 100, b'S')
+            with self.subTest(sid=sid), patch.object(inspector.native, 'now', return_value=200), patch.object(inspector, '_rows', return_value={10: row}):
+                self.assertEqual(inspector._scan(sid), ({10}, False))
 
     def test_missing_proc_refuses_before_launch_or_log(self):
         marker, log = self.root / 'started', self.root / 'log'

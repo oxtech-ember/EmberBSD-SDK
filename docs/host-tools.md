@@ -55,7 +55,11 @@ Supervisor failure makes shutdown unproven and raises `ProcessOwnershipError`.
 For an unsupervised Linux snapshot, vanished PIDs and births in or after the
 snapshot's clock tick make an empty result uncertain. An owned session becomes
 empty only after its supervisor proves that no descendants remain. Unrelated
-process churn cannot substitute for this proof. The backends check their native
+process churn cannot substitute for this proof. The Linux effective-UID check
+applies only to a session with a supervisor record, which exists only after a
+build is launched. Before launch, the controller session can contain processes
+of another user, such as `sudo` or a CI runner. They are not producers and do
+not count as an ownership change. The backends check their native
 prerequisites before they start a producer.
 
 The backend must stop all process groups in its owned session before it

@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import time
+from unittest import skipUnless
 from unittest.mock import patch
 
 from test_core import TemporaryCase, SDK_SOURCE
@@ -90,6 +91,33 @@ while not Path({str(child)!r}).is_file(): time.sleep(.01)
         self.assert_stopped(descendant)
         writer = self.root / 'writer'; before = writer.read_bytes(); time.sleep(.15)
         self.assertEqual(writer.read_bytes(), before)
+
+    @skipUnless(sys.platform in ('darwin', 'linux'), 'qualified session backend')
+    def test_foreign_uid_controller_session_peer_is_not_a_build(self):
+        # A CI runner, sudo or systemd process of another user may share the
+        # controller session. No build exists yet, so it is no ownership change.
+        peer, controller_sid, euid = 2147483646, os.getsid(0), os.geteuid()
+        real_getsid = os.getsid
+        if sys.platform == 'linux':
+            from emberbsd_sdk import _linux_process as native
+            real_rows = native.LinuxSession.rows
+            row = native.ProcessRow(peer, os.getpid(), controller_sid, euid + 1, 1, b'S')
+            def rows(session):
+                return {**real_rows(session), peer: row}
+            injected = patch.object(native.LinuxSession, 'rows', rows)
+        else:
+            real_rows = process.SessionInspector._rows
+            def rows(inspector):
+                return {**real_rows(inspector), peer: (os.getpid(), euid + 1, b'S')}
+            injected = patch.object(process.SessionInspector, '_rows', rows)
+        def getsid(pid):
+            return controller_sid if pid == peer else real_getsid(pid)
+        marker, log = self.root / 'built', self.root / 'build.log'
+        with injected, patch.object(process.os, 'getsid', getsid):
+            inspector = process.SessionInspector()
+            self.assertIn(os.getpid(), inspector.members(controller_sid))
+            process.run_logged([sys.executable, '-B', '-c', f'open({str(marker)!r},"w").close()'], log)
+        self.assertTrue(marker.is_file())
 
     def test_non_posix_refusal_precedes_log_creation(self):
         with patch.object(process.os, 'name', 'nt'), self.assertRaisesRegex(SDKError, 'POSIX'):
