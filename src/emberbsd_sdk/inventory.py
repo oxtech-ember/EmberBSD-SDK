@@ -29,7 +29,20 @@ def sha256_file(path):
     return hash_file(path, 'sha256')
 
 
+INSTALLED_TREE_INVENTORY_API = 1
+
+
 def snapshot_tree(root, machine=None, exclude=()):
+    """Inspect a strict payload. Links must resolve within the payload root."""
+    return _snapshot_tree(root, machine, exclude, installed_links=False)
+
+
+def snapshot_installed_tree(root, exclude=()):
+    """Inspect existing files. Preserve link text without reading its destination."""
+    return _snapshot_tree(root, None, exclude, installed_links=True)
+
+
+def _snapshot_tree(root, machine, exclude, *, installed_links):
     root = path_string(root)
     real_directory(root)
     if canonical_existing(root) != root:
@@ -56,7 +69,14 @@ def snapshot_tree(root, machine=None, exclude=()):
             row = dict(mode=stat.S_IMODE(info.st_mode))
             if stat.S_ISLNK(info.st_mode):
                 target = os.readlink(path)
-                if os.path.isabs(target) or any(ord(char) < 32 or ord(char) == 127 for char in target) or not inside(canonical_existing(path), root):
+                if installed_links:
+                    if any(ord(char) < 32 or ord(char) == 127 for char in target):
+                        raise SDKError(f'control character in installed link target: {path}')
+                    try:
+                        target.encode('utf-8', 'strict')
+                    except UnicodeError as exc:
+                        raise SDKError(f'invalid UTF-8 installed link target: {path}') from exc
+                elif os.path.isabs(target) or any(ord(char) < 32 or ord(char) == 127 for char in target) or not inside(canonical_existing(path), root):
                     raise SDKError(f'absolute or escaped payload link: {path}')
                 row.update(kind='link', target=target)
             elif stat.S_ISDIR(info.st_mode):

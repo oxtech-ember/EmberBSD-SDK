@@ -91,6 +91,23 @@ filesystem and process behavior separate from command fixtures. Record the
 interpreter and platform for actual results. Type annotations document module
 interfaces; they do not replace input validation or runtime checks.
 
+## Inspect an installed tree
+
+`inventory.INSTALLED_TREE_INVENTORY_API = 1` provides
+`snapshot_installed_tree(root, exclude=())`. It uses the common inventory walker.
+It records real file bytes, hashes, modes and directory entries. It records each
+symbolic link's literal target text. Absolute, dangling, escaping and cyclic
+links are recorded without resolving or reading their destinations.
+Paths and link targets must contain valid UTF-8 and no control characters.
+Special files and changes during inspection cause refusal. The root must have
+real directory ancestors. Exclusions use the same relative entry names as
+`snapshot_tree`.
+
+The result describes an existing installation. It does not authenticate link
+destinations or qualify an archive. `snapshot_tree` retains its strict payload
+link checks and its existing ELF inspection arguments. Use that operation for
+prepared payloads and archive acceptance. The library API remains `1`.
+
 ## Inspect one process identity
 
 `emberbsd_sdk.process_identity` provides `PROCESS_IDENTITY_API = 1`.
