@@ -105,6 +105,12 @@ class InspectionBudgetTests(unittest.TestCase):
         factory.assert_not_called()
         self.assertIs(group.inspector, explicit)
 
+    def test_logged_producer_forwards_budget_before_creating_a_log(self):
+        with patch.object(process, 'OwnedProcessGroup', side_effect=SDKError('fixture boundary')) as factory:
+            with self.assertRaisesRegex(SDKError, 'fixture boundary'):
+                process.run_logged(['unused'], Path('/nonexistent/log'), empty_snapshot_timeout=120)
+        self.assertEqual(factory.call_args.kwargs['empty_snapshot_timeout'], 120)
+
     def test_stream_forwards_budget_before_producer_start(self):
         with patch.object(stream, 'OwnedProcessGroup', side_effect=SDKError('fixture boundary')) as factory:
             with self.assertRaisesRegex(SDKError, 'fixture boundary'):

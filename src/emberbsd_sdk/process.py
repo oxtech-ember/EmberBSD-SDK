@@ -405,7 +405,7 @@ class ContextLocks:
         self.close()
 
 
-def run_logged(argv, log, *, cwd=None, env=None, append=False):
+def run_logged(argv, log, *, cwd=None, env=None, append=False, empty_snapshot_timeout=2):
     """Run a checked producer and drain its owned session before closing its log.
 
     Signal handlers are entrypoint policy. A handler can raise KeyboardInterrupt.
@@ -414,7 +414,8 @@ def run_logged(argv, log, *, cwd=None, env=None, append=False):
     """
     require_posix()
     argv = _argv(argv)
-    group = OwnedProcessGroup(argv, cwd=cwd, env=env, stdout=None, stderr=None)
+    group = OwnedProcessGroup(argv, cwd=cwd, env=env, stdout=None, stderr=None,
+                              empty_snapshot_timeout=empty_snapshot_timeout)
     expected = regular_file(log) if append else None
     flags = os.O_WRONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
     flags |= os.O_APPEND if append else os.O_CREAT | os.O_EXCL

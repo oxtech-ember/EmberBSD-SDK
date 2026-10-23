@@ -205,7 +205,7 @@ class BuilderTests(TemporaryCase):
     def test_builder_allows_darwin_session_churn_without_weakening_proof(self):
         builder = B(self.options | dict(plan=True))
         builder.run()
-        self.assertEqual(builder.process_inspector.empty_snapshot_timeout, 30)
+        self.assertEqual(builder.process_inspector.empty_snapshot_timeout, 120)
 
     def test_read_only_plan_and_exact_native_commands(self):
         before = snapshot(self.root)

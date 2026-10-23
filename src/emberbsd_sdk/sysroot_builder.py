@@ -232,7 +232,8 @@ class SysrootBuilder:
         layout = workspace.inspect_layout(self.options['sdk'])
         workspace.require_target(layout, self.options['target'])
         self.git_command, self.shell = self.find_command('git'), self.find_command('sh')
-        self.process_inspector = process.SessionInspector(env=self.environment, empty_snapshot_timeout=30)
+        # Darwin PID churn can delay a complete empty snapshot after a producer exits.
+        self.process_inspector = process.SessionInspector(env=self.environment, empty_snapshot_timeout=120)
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         for name in ('os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'sdk-source', 'libedit-source'):
