@@ -117,7 +117,7 @@
           "host_tools"
         ],
         "capabilities": [
-          "Case-sensitive paths and relative symbolic links",
+          "Relative symbolic links; builds must work on case-insensitive paths",
           "Executable file modes and native execution from build paths",
           "Exclusive creation, atomic rename, fsync and POSIX flock"
         ],
@@ -208,7 +208,7 @@
         ],
         "native_tools": "Provide native development tools, a compatible macOS SDK and host-executable GCC/G++16 for the Ports GCC16 recipe.",
         "sdk_selection": "The documented Ports workflow uses SDKROOT when host GCC cannot locate system libraries. xcrun --show-sdk-path selects the installed macOS SDK.",
-        "filesystem": "Use a case-sensitive build filesystem with the common link and executable-mode capabilities."
+        "filesystem": "Use a build filesystem with the common link and executable-mode capabilities. Builds must work on case-insensitive filesystems, such as the default APFS volume."
       },
       "qualification": {
         "arm64": "The SDK documents initial workspace contracts on macOS arm64. Ports documents AArch64 application cross-compiler checks on Apple Silicon macOS.",
@@ -226,7 +226,7 @@
       ],
       "requirements": {
         "execution": "Run Python, Git, SDK/Ports controllers and every native build tool inside the selected WSL2 Linux distribution. Select executables for the Linux guest architecture, not Windows .exe files.",
-        "filesystem": "Require case-sensitive paths, symbolic links, executable modes and locks for sources and build outputs. The Linux guest filesystem is recommended. Windows-mounted paths such as /mnt/c require validation of the same properties; their location alone establishes neither compatibility nor incompatibility.",
+        "filesystem": "Require symbolic links, executable modes and locks for sources and build outputs. Builds must work on case-insensitive paths. The Linux guest filesystem is recommended. Windows-mounted paths such as /mnt/c require validation of the same properties; their location alone establishes neither compatibility nor incompatibility.",
         "process": "The actual WSL2 kernel and security settings must satisfy all Linux process backend requirements."
       },
       "qualification": "The Linux backend is available to the guest. ARM64 and x86_64 WSL2 distributions still require their own actual contracts and full SDK build checks; bare Linux results do not qualify WSL2."

@@ -81,8 +81,8 @@ remove only the private stage. SIGKILL or power loss can leave a
 is performed. This protocol does not claim crash durability.
 
 The destination filesystem must preserve the selected payload's names, modes
-and links, and support no-replace publication. A case-sensitive local filesystem
-is recommended. SMB can store the bundle even when it cannot host the restored
+and links, and support no-replace publication. A local filesystem is
+recommended. Builds must work on case-insensitive filesystems. SMB can store the bundle even when it cannot host the restored
 tree. A successful file transfer does not establish network-filesystem support
 for live build objects or distributed locks.
 
