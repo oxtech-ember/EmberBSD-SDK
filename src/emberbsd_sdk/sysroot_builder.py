@@ -13,7 +13,7 @@ import signal
 import stat
 import sysconfig
 import time
-from . import API_VERSION, inventory, jsonio, paths, process, provenance, workspace
+from . import API_VERSION, inventory, jsonio, libedit, paths, process, provenance, workspace
 from .errors import SDKError, ProcessOwnershipError
 from .targets import TARGETS, target_definition
 
@@ -235,10 +235,10 @@ class SysrootBuilder:
         self.process_inspector = process.SessionInspector(env=self.environment)
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
-        for name in ('os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'sdk-source'):
+        for name in ('os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'sdk-source', 'libedit-source'):
             self.paths[name] = paths.build_path(paths.canonical_existing(self.options[name]))
         self.paths['python'] = self.executable(self.options['python'])
-        for name in ('os', 'ports', 'compiler', 'runtime-work', 'pkgsrc', 'sdk-source'):
+        for name in ('os', 'ports', 'compiler', 'runtime-work', 'pkgsrc', 'sdk-source', 'libedit-source'):
             paths.real_directory(self.paths[name])
         paths.regular_file(self.paths['gcc-archive'])
         sdk = self.paths['sdk']
@@ -255,7 +255,7 @@ class SysrootBuilder:
             paths.reject_overlap(self.paths['destination'], os.path.join(sdk, name))
         for left, right in itertools.combinations(('destination', 'objects', 'tools'), 2):
             paths.reject_overlap(self.paths[left], self.paths[right])
-        for input_name in ('os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'sdk-source', 'python'):
+        for input_name in ('os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'sdk-source', 'python', 'libedit-source'):
             for output_name in ('destination', 'objects', 'tools'):
                 paths.reject_overlap(self.paths[input_name], self.paths[output_name])
         for name in ('include', 'lib', 'libexec/ld.elf_so', 'tools', 'share/mk', 'sys', 'distrib', 'etc'):
@@ -265,6 +265,7 @@ class SysrootBuilder:
         paths.regular_file(os.path.join(self.paths['ports'], self.VERIFIER))
         self.sources = {name: self.source(self.paths[name], name) for name in ('os', 'ports')}
         self.sources['sdk'] = self.source(self.paths['sdk-source'], 'sdk')
+        self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'])
         self.python = self.python_identity()
         self.git(self.paths['os'], 'ls-files', '--error-unmatch', 'build.sh', 'Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk')
         self.git(self.paths['ports'], 'ls-files', '--error-unmatch', self.VERIFIER)
@@ -279,8 +280,8 @@ class SysrootBuilder:
         for name in ('cc', 'c++'):
             path = self.find_command(name)
             self.host_tools[name] = dict(path=path, sha256=inventory.sha256_file(path), version=''.join(self.capture(path, '--version')).strip())
-        self.flags = self.FLAGS + [f'EXTERNAL_TOOLCHAIN={self.paths["compiler"]}', f'EMBER_EXTERNAL_GCC_RUNTIME={prefix}', f'HOST_CC={self.host_tools["cc"]["path"]}', f'HOST_CXX={self.host_tools["c++"]["path"]}']
-        self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
+        self.flags = self.FLAGS + [f'EXTERNAL_TOOLCHAIN={self.paths["compiler"]}', f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}', f'EMBER_EXTERNAL_GCC_RUNTIME={prefix}', f'HOST_CC={self.host_tools["cc"]["path"]}', f'HOST_CXX={self.host_tools["c++"]["path"]}']
+        self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
         self.configure_signature()
         self.contexts = {name: self.inspect_context(self.paths[name]) for name in ('objects', 'tools')}
         self.build_command = [self.shell, os.path.join(self.paths['os'], 'build.sh'), '-U', '-u', '-j' + jobs, '-m', self.target['machine'], '-a', self.target['arch'], '-O', self.paths['objects'], '-T', self.paths['tools'], '-D', self.paths['destination']]
@@ -422,6 +423,8 @@ class SysrootBuilder:
         self.copy_runtime()
 
     def inspect_payload(self):
+        self.receipt['libedit_installation'] = libedit.validate_installation(
+            self.paths['destination'], self.libedit_record, self.target['elf'])
         return inventory.sysroot(self.paths['destination'], self.target['elf'],
                                  exclude=(self.RECEIPT, self.MARKER, self.LOG))
 
@@ -448,7 +451,11 @@ class SysrootBuilder:
             self.receipt['qualification'] = 'incomplete'
             self.save_receipt()
             self.prepare_contexts()
+            if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports']) != self.libedit_record:
+                raise SDKError('libedit source changed before build')
             self.build_payload()
+            if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports']) != self.libedit_record:
+                raise SDKError('libedit source changed during build')
             for name, expected in self.sources.items():
                 if self.source(expected['path'], name) != expected:
                     raise SDKError(f'{name} source changed during build')

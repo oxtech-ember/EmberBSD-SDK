@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 from test_core import TemporaryCase, header, SDK_SOURCE
 from test_builder import fixture, write, commit, snapshot
+from libedit_fixture import installation_source
 from emberbsd_sdk import os_release as kit, jsonio
 from emberbsd_sdk.os_release_builder import OSReleaseBuilder, validate_profile
 from emberbsd_sdk.os_release_github import GitHub
@@ -283,6 +284,7 @@ else: raise SystemExit('unexpected operation')
 '''
     producer = ('CONTROL=' + repr(str(root / 'control.json')) + '\nELF=' + repr(header(183 if target == 'aarch64' else 62)) +
                 '\nBASE=' + repr(tar_bytes(base)) + '\nCOMP=' + repr(tar_bytes(comp)) + '\n') + producer
+    producer += "dest = Path(value('-D'))\n" + installation_source(183 if target == 'aarch64' else 62, arguments='args', control='control')
     write(source / 'fixture-producer.py', producer)
     commit(source)
     options['destination'] = str(Path(options['sdk']) / 'stages/release')
@@ -290,6 +292,40 @@ else: raise SystemExit('unexpected operation')
 
 
 class BuilderReleaseTests(TemporaryCase):
+    def test_release_rejects_incomplete_installed_libedit(self):
+        for failure in ('missing_libedit', 'missing_histedit', 'missing_editline_marker', 'wrong_editline_marker',
+                        'wrong_libedit_soname', 'extra_libedit_provider'):
+            with self.subTest(failure=failure):
+                root = self.root / failure; root.mkdir()
+                options = release_fixture(root, 'aarch64')
+                write(root / 'control.json', json.dumps({failure: True}))
+                with self.assertRaises((SDKError, OSError)):
+                    OSReleaseBuilder(options).run()
+                output = Path(options['destination'])
+                self.assertFalse((output / 'build-success').exists())
+                self.assertFalse((output / 'build-profile.json').exists())
+
+    def test_profile_binds_libedit_recipe_and_command(self):
+        options = release_fixture(self.root, 'aarch64')
+        receipt = OSReleaseBuilder(options).run()
+        profile = jsonio.read_json(Path(options['destination']) / 'build-profile.json')
+        for mutation in ('missing', 'ports', 'tree', 'command', 'installation'):
+            with self.subTest(mutation=mutation):
+                changed = copy.deepcopy(profile)
+                signature = changed['sdk_receipt']['signature']
+                if mutation == 'missing':
+                    del signature['libedit']
+                elif mutation == 'ports':
+                    signature['libedit']['recipe']['ports_commit'] = 'f' * 40
+                elif mutation == 'tree':
+                    signature['libedit']['tree_sha256'] = 'bad'
+                elif mutation == 'installation':
+                    changed['sdk_receipt']['libedit_installation']['distinfo_sha256'] = 'f' * 64
+                else:
+                    changed['commands'][0] = [v for v in changed['commands'][0] if not v.startswith('EMBER_LIBEDIT_SOURCE=')]
+                with self.assertRaises((SDKError, KeyError)):
+                    validate_profile(changed, receipt['sources']['os']['commit'], 'aarch64')
+
     def test_actual_aarch64_dispatch_prepare_and_profile(self):
         options = release_fixture(self.root, 'aarch64', '2.7+fixture')
         with patch.dict(os.environ, {'NOCHECKFLIST': 'yes', 'NOGCCERROR': 'yes', 'MAKEFLAGS': '-i', 'EMBER_VERSION': '9.9'}):

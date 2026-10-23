@@ -11,7 +11,7 @@ import re
 import shutil
 
 from .errors import SDKError
-from . import inventory, jsonio
+from . import inventory, jsonio, libedit
 from .sysroot_builder import SysrootBuilder
 from .targets import target_definition
 from .os_release import check, full_hash, tag, images, product_version, source_version, KERNEL, SYSROOT_SETS
@@ -35,6 +35,7 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell):
     definition = target_definition(target)
     flags = flags_for(target) + [f'EXTERNAL_TOOLCHAIN={paths["compiler"]}',
         f'EMBER_EXTERNAL_GCC_RUNTIME={paths["runtime-prefix"]}',
+        f'EMBER_LIBEDIT_SOURCE={paths["libedit-source"]}',
         f'HOST_CC={host["cc"]["path"]}', f'HOST_CXX={host["c++"]["path"]}',
         f'MKREPRO_TIMESTAMP={timestamp}', f'EMBER_BUILD_ID={sha}', f'BUILDINFO=EmberBSD:{sha}',
         f'KERNOBJDIR={paths["objects"]}/kernels']
@@ -78,6 +79,15 @@ def validate_profile(profile, sha, target):
           all(full_hash(v['commit'], 40) for v in receipt['sources'].values()), 'Mixed source receipts')
     signature = receipt['signature']
     check(signature['product_version'] == version, 'Mixed source product version')
+    libedit.validate_identity(signature['libedit'])
+    check(signature['libedit']['recipe']['ports_commit'] == receipt['sources']['ports']['commit'], 'Mixed libedit Ports source')
+    installed = receipt['libedit_installation']
+    check(isinstance(installed, dict) and set(installed) == {'distinfo_sha256', 'library', 'library_sha256', 'machine', 'soname'} and
+          installed['distinfo_sha256'] == signature['libedit']['recipe']['distinfo_sha256'] and
+          full_hash(installed['library_sha256']) and installed['machine'] == target_definition(target)['elf'] and
+          installed['soname'] == 'libedit.so.3' and isinstance(installed['library'], str) and
+          re.fullmatch(r'(?:lib|usr/lib)/libedit\.so\.3(?:\.[0-9]+)?', installed['library']) is not None,
+          'Incomplete native libedit installation receipt')
     compiler = signature['compiler']
     check(compiler['version'] == '16.2.0' and compiler['threads'] == 'posix' and
           compiler['triplet'] == target_definition(target)['triplet'], 'Unverified common GCC16 compiler')
@@ -91,7 +101,7 @@ def validate_profile(profile, sha, target):
     for key in ('GCC_RUNTIME_INPUTS_SHA256', 'GCC_RUNTIME_STAGE_SHA256', 'GCC_RUNTIME_LINKS_SHA256'):
         check(full_hash(metadata[key]), 'Missing runtime receipt hash')
     paths = receipt['paths']
-    for key in ('os', 'ports', 'sdk-source', 'compiler', 'runtime-prefix', 'objects', 'tools', 'destination'):
+    for key in ('os', 'ports', 'sdk-source', 'compiler', 'runtime-prefix', 'objects', 'tools', 'destination', 'libedit-source'):
         check(isinstance(paths[key], str) and paths[key].startswith('/') and not re.search(r'\s', paths[key]), 'Invalid producer path')
     check(signature['target'] == target_definition(target), 'Mixed target signature')
     flags, commands = producer_commands(target, paths, signature['host_tools'], sha, profile['source_timestamp'], profile['jobs'], profile['shell'])
@@ -152,6 +162,8 @@ class OSReleaseBuilder(SysrootBuilder):
 
     def inspect_payload(self):
         output = Path(self.paths['destination'])
+        self.receipt['libedit_installation'] = libedit.validate_installation(
+            output / 'dest', self.libedit_record, self.target['elf'])
         names = ([KERNEL] + ['release/evbarm-aarch64/binary/sets/' + n for n in SYSROOT_SETS]
                  if self.options['target'] == 'aarch64' else ['release/images/' + n for n in images(self.product_version)])
         hashes = {}

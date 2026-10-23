@@ -20,6 +20,8 @@ from emberbsd_sdk import inventory, jsonio, process
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.sysroot_builder import SysrootBuilder as B
 from emberbsd_sdk.workspace import create
+from emberbsd_sdk.libedit import prepare_source
+from libedit_fixture import recipe_fixture, installation_source
 
 
 def write(path, data, mode=0o644):
@@ -165,13 +167,16 @@ wrapper = Path(value('-T')) / 'bin' / {'nbmake-' + t['machine']!r}
 wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r}); wrapper.chmod(0o755)
 (wrapper.parent / 'fixture-destination').write_text(str(dest))
 '''
+    producer += installation_source(t['elf'])
     write(os_source / 'fixture-producer.py', producer)
     write(os_source / 'build.sh', '#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' -B ' + shlex.quote(str(os_source / 'fixture-producer.py')) + ' "$@"\n', 0o755)
     shutil.copytree(SDK_SOURCE / 'src', root / 'sdk-source/src', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    recipe_fixture(ports, root / 'libedit.tar.gz')
     for path in (os_source, ports, root / 'sdk-source'):
         git(path, 'init', '-q'); commit(path)
+    prepare_source(ports, root / 'libedit.tar.gz', root / 'libedit-source')
     write(root / 'gcc.tar.xz', 'Fixture archive; no extraction')
-    return {key: str(value) for key, value in {'sdk': sdk, 'os': os_source, 'ports': ports, 'compiler': compiler, 'runtime-work': work, 'gcc-archive': root / 'gcc.tar.xz', 'pkgsrc': root / 'pkgsrc', 'target': target, 'jobs': '2', 'python': sys.executable, 'sdk-source': root / 'sdk-source'}.items()}
+    return {key: str(value) for key, value in {'sdk': sdk, 'os': os_source, 'ports': ports, 'compiler': compiler, 'runtime-work': work, 'gcc-archive': root / 'gcc.tar.xz', 'pkgsrc': root / 'pkgsrc', 'target': target, 'jobs': '2', 'python': sys.executable, 'sdk-source': root / 'sdk-source', 'libedit-source': root / 'libedit-source'}.items()}
 
 
 class BuilderTests(TemporaryCase):
@@ -212,6 +217,8 @@ class BuilderTests(TemporaryCase):
         for flag in ('MKCXX=yes', 'MKGCCCMDS=no', 'MKLLVM=no', 'MKLLVMRT=no', 'MKLIBCXX=no'):
             self.assertIn(flag, record['plan'][1])
         self.assertNotIn('MKOBJDIRS=no', record['plan'][1])
+        self.assertIn('EMBER_LIBEDIT_SOURCE=' + self.options['libedit-source'], record['plan'][1])
+        self.assertEqual(record['signature']['libedit']['recipe']['ports_commit'], record['sources']['ports']['commit'])
         self.assertEqual(record['plan'][2][-1], 'dependall'); self.assertEqual(record['plan'][3][-1], 'install')
         self.assertEqual(record['paths']['destination'], self.options['sdk'] + '/sysroot')
         self.assertEqual(record['signature']['python']['api_version'], 1)
@@ -317,11 +324,50 @@ class BuilderTests(TemporaryCase):
         self.refusal_unchanged('must not hide tracked paths')
 
     def test_unused_pkgsrc_gitlink_records_pin_without_checkout(self):
-        pin = gitlink(self.options['ports'], 'upstream/pkgsrc'); before = snapshot(self.root)
+        pin = gitlink(self.options['ports'], 'upstream/pkgsrc')
+        updated = self.root / 'libedit-with-gitlink'
+        prepare_source(self.options['ports'], self.root / 'libedit.tar.gz', updated)
+        self.options['libedit-source'] = str(updated)
+        before = snapshot(self.root)
         record = self.run_builder(plan=True)
         self.assertEqual(record['sources']['ports']['external_gitlinks'], [dict(path='upstream/pkgsrc', commit=pin, usage='not-used-by-selected-producer', verification='explicit-pkgsrc-verified-separately', qualification='not-assessed')])
         self.assertFalse(list((Path(self.options['ports']) / 'upstream/pkgsrc').iterdir()))
         self.assertEqual(snapshot(self.root), before)
+
+    def test_installed_libedit_is_required_before_acceptance(self):
+        for failure in ('missing_libedit', 'missing_histedit', 'missing_readline', 'missing_editline_marker',
+                        'wrong_editline_marker', 'wrong_libedit_soname', 'extra_libedit_provider'):
+            with self.subTest(failure=failure):
+                root = self.root / failure; root.mkdir()
+                options = fixture(root)
+                write(root / 'control.json', json.dumps({failure: True}))
+                with self.assertRaises((SDKError, OSError)):
+                    B(options).run()
+                record = jsonio.read_json(root / 'sdk/sysroot' / B.RECEIPT)
+                self.assertEqual(record['qualification'], 'incomplete')
+                self.assertTrue((root / 'sdk/sysroot' / B.MARKER).exists())
+
+    def test_libedit_tamper_refuses_before_writes(self):
+        (Path(self.options['libedit-source']) / 'src/input0').write_text('changed')
+        self.refusal_unchanged('libedit source tree changed')
+
+    def test_libedit_replacement_invalidates_object_reuse(self):
+        self.run_builder()
+        updated = self.root / 'libedit-replacement'
+        prepare_source(self.options['ports'], self.root / 'libedit.tar.gz', updated)
+        self.refusal_unchanged('incompatible', **{'libedit-source': str(updated), 'destination': str(self.root / 'sdk/stages/next')})
+
+    def test_libedit_tamper_during_producer_leaves_incomplete_receipt(self):
+        original = B.build_payload
+        def changed(builder):
+            original(builder)
+            (Path(builder.paths['libedit-source']) / 'src/input0').write_text('changed')
+        with patch.object(B, 'build_payload', changed):
+            with self.assertRaisesRegex(SDKError, 'libedit source tree changed'):
+                self.run_builder()
+        receipt = jsonio.read_json(self.root / 'sdk/sysroot' / B.RECEIPT)
+        self.assertEqual(receipt['qualification'], 'incomplete')
+        self.assertTrue((self.root / 'sdk/sysroot' / B.MARKER).exists())
 
     def test_missing_source_subtree(self):
         (Path(self.options['os']) / 'lib').rmdir(); self.refusal_unchanged('real directory')

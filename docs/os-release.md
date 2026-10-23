@@ -12,6 +12,8 @@ They do not define another toolchain recipe. The migration originates in
 `EmberBSD@4a4c98bb99999836103d3fe63fd6f4c98013f0c5:ember/release/`
 and its `ember/tests/release-*.rb` contracts. The source license is BSD-2-Clause.
 
+See [libedit preparation](libedit.md) for the mandatory `--libedit-source` input.
+
 ## Build inputs and commands
 
 Read [sysroot inputs](sysroot.md#required-inputs) and
@@ -43,6 +45,7 @@ python3 scripts/build-os-release.py \
   --sdk /absolute/prebuild-sdk-aarch64 \
   --os-source /absolute/EmberBSD \
   --ports /absolute/EmberBSD-Ports \
+  --libedit-source /absolute/prepared-libedit \
   --compiler /absolute/gcc16-cross \
   --runtime-work /absolute/gcc16-runtime-work \
   --gcc-archive /absolute/gcc-16.2.0.tar.xz \

@@ -32,6 +32,8 @@ claiming its payload is qualified. The selected runtime verifier uses the
 explicit `--pkgsrc` export instead. No recursive pkgsrc checkout is required
 for that unused gitlink. Other gitlinks are rejected by this backend.
 
+See [libedit preparation](libedit.md) for the mandatory `--libedit-source` input.
+
 ## Preflight and plan
 
 Use the implemented script's help for the exact options:
@@ -44,6 +46,7 @@ python3 scripts/build-sysroot.py \
   --sdk /absolute/prebuild-sdk-aarch64 \
   --os /absolute/EmberBSD \
   --ports /absolute/EmberBSD-Ports \
+  --libedit-source /absolute/prepared-libedit \
   --compiler /absolute/gcc16-cross \
   --runtime-work /absolute/gcc16-runtime-work \
   --gcc-archive /absolute/gcc-16.2.0.tar.xz \

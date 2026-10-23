@@ -22,6 +22,7 @@ third-party Python packages, `pip` installation or virtual environment.
 | Operation | Required tools |
 | --- | --- |
 | Create or inspect a workspace | CPython 3.15 with its standard library |
+| Prepare libedit sources | Python with zlib support, Git and patch; see [libedit preparation](libedit.md) |
 | Build the core sysroot | The qualified host process adapter, Python, Git, POSIX shell, the OS/Ports native build prerequisites, the common GCC16 and its verified runtime stage |
 | Build an optional package profile | The selected Ports recipe's documented prerequisites |
 
@@ -101,7 +102,7 @@ A recorded seed remains an input, not a new build result.
 ## Build the sysroot
 
 Use the [SDK sysroot procedure](sysroot.md). It calls the fork's own build rules
-and selects the verified Ports runtime stage. Keep source revisions, compiler
+and selects the verified Ports runtime stage and [prepared libedit source](libedit.md). Keep source revisions, compiler
 hashes, runtime receipts and output hashes together.
 
 The [OS external-runtime adapter](https://github.com/oxtech-ember/EmberBSD/blob/main/tools/docs/external-gcc-runtime.md)

@@ -8,7 +8,7 @@
     "host_and_target": "Select host OS and CPU independently from the target architecture and triplet. Native compilers and generators must execute on the selected host; target libraries remain in the sysroot.",
     "path_roles": {
       "sources": "Clean, fully materialized OS, Ports and SDK source checkouts.",
-      "workspace": "Target-specific Prebuild SDK, prepared pkgsrc export, objects, stages and receipts.",
+      "workspace": "Target-specific Prebuild SDK, prepared pkgsrc export, verified libedit source, objects, stages and receipts.",
       "cache": "Verified source archives and downloaded native packages.",
       "temporary": "Temporary files and native configuration probes.",
       "host_tools": "Caller-owned native tool and interpreter prefix."
@@ -66,7 +66,7 @@
           "posix": "The selected host's native development tools and POSIX process interfaces."
         },
         "producer_specific_module_support": {
-          "zlib": "Required when the Ports runtime relink recovery reads its gzip-compressed backup through Python tarfile."
+          "zlib": "Required for libedit source preparation and when Ports runtime relink recovery reads its gzip-compressed backup through Python tarfile."
         },
         "optional_module_libraries": [
           "bzip2",
@@ -142,7 +142,8 @@
           "gcc.gnu.org",
           "ftp.gnu.org",
           "www.mpfr.org",
-          "sourceware.org"
+          "sourceware.org",
+          "thrysoee.dk"
         ],
         "host_provider_policy": "Add the selected native tool or package provider's endpoints in the concrete host profile. This description does not install a network allowlist.",
         "integrity": "Verify source commits and Ports archive hashes. Verify native packages with the selected provider's signed metadata and checksums.",
