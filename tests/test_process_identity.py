@@ -30,11 +30,15 @@ class IdentityTests(unittest.TestCase):
 
     def test_native_exec_keeps_birth(self):
         replacement = 'import sys; print("ready", flush=True); sys.stdin.buffer.read()'
-        code = ('import os,sys; sys.stdin.readline(); '
+        code = ('import os,sys; print("before-ready", flush=True); sys.stdin.readline(); '
                 f'os.execv(sys.executable, [sys.executable,"-c",{replacement!r},"after exec"])')
         child = subprocess.Popen([sys.executable, '-c', code], stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE)
         try:
+            # Framework Python can re-exec before the fixture code starts.
+            self.assertTrue(select.select([child.stdout], [], [], 5)[0],
+                            'initial interpreter did not become ready')
+            self.assertEqual(child.stdout.readline(), b'before-ready\n')
             before = process_identity(child.pid)
             self.assertIsNotNone(before)
             child.stdin.write(b'go\n'); child.stdin.flush()
@@ -45,8 +49,9 @@ class IdentityTests(unittest.TestCase):
             self.assertEqual(child.stdout.readline(), b'ready\n')
             after = process_identity(child.pid)
             self.assertIsNotNone(after)
-            self.assertEqual(after.argv,
-                             (sys.executable, '-c', replacement, 'after exec'))
+            self.assertEqual(after.argv[1:], ('-c', replacement, 'after exec'))
+            self.assertEqual(Path(after.argv[0]).resolve(),
+                             Path(after.executable).resolve())
             self.assertEqual(before.birth, after.birth)
         finally:
             try:
