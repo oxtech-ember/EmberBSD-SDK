@@ -2,6 +2,7 @@
 # Origin: EmberBSD (AI-assisted). Native read-only process identity contracts.
 import os
 from pathlib import Path
+import select
 import struct
 import subprocess
 import sys
@@ -28,22 +29,34 @@ class IdentityTests(unittest.TestCase):
         self.assertIsNone(process_identity(child.pid))
 
     def test_native_exec_keeps_birth(self):
-        code = 'import os,sys; sys.stdin.readline(); os.execv(sys.executable, [sys.executable,"-c","import sys; sys.stdin.buffer.read()","after exec"])'
-        child = subprocess.Popen([sys.executable, '-c', code], stdin=subprocess.PIPE)
+        replacement = 'import sys; print("ready", flush=True); sys.stdin.buffer.read()'
+        code = ('import os,sys; sys.stdin.readline(); '
+                f'os.execv(sys.executable, [sys.executable,"-c",{replacement!r},"after exec"])')
+        child = subprocess.Popen([sys.executable, '-c', code], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE)
         try:
             before = process_identity(child.pid)
+            self.assertIsNotNone(before)
             child.stdin.write(b'go\n'); child.stdin.flush()
-            import time
-            deadline = time.monotonic() + 5
-            while True:
-                after = process_identity(child.pid)
-                if after.argv[-1] == 'after exec':
-                    break
-                self.assertLess(time.monotonic(), deadline)
-                time.sleep(.01)
+            # Native identity fields are not atomic across exec. The ready
+            # line proves that the replacement has completed exec.
+            self.assertTrue(select.select([child.stdout], [], [], 5)[0],
+                            'replacement did not become ready after exec')
+            self.assertEqual(child.stdout.readline(), b'ready\n')
+            after = process_identity(child.pid)
+            self.assertIsNotNone(after)
+            self.assertEqual(after.argv,
+                             (sys.executable, '-c', replacement, 'after exec'))
             self.assertEqual(before.birth, after.birth)
         finally:
-            child.communicate(b'')
+            try:
+                child.communicate(b'', timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.communicate(timeout=5)
+                raise
+        self.assertEqual(child.returncode, 0)
+        self.assertIsNone(process_identity(child.pid))
 
     def test_darwin_parser_preserves_empty_and_shell_characters(self):
         args = [b'/usr/bin/test', b'two words', b'', b'$(false)', b'; exit 99']
