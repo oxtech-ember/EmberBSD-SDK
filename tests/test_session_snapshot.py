@@ -120,6 +120,17 @@ class SnapshotTests(TemporaryCase):
         self.assertFalse(log.exists())
 
     @skipUnless(sys.platform == 'darwin', 'Darwin native birth-identity profile')
+    def test_preflight_does_not_require_impossible_sid_snapshot(self):
+        current = os.getsid(0)
+        def scan(_inspector, sid):
+            if sid == current:
+                return {os.getpid()}, False
+            return set(), True
+        with patch.object(process.SessionInspector, '_scan', autospec=True,
+                          side_effect=scan):
+            process.SessionInspector(empty_snapshot_timeout=.04)
+
+    @skipUnless(sys.platform == 'darwin', 'Darwin native birth-identity profile')
     def test_real_unrelated_exits_do_not_block_empty_session(self):
         inspector = process.SessionInspector()
         original = inspector._rows

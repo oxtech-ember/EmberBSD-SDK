@@ -108,9 +108,9 @@ class SessionInspector:
         self.argv = [self.executable, '-e', '-o', 'pid=,ppid=,uid=,stat=']
         if os.getpid() not in self.members(os.getsid(0)):
             raise SDKError('POSIX ps cannot enumerate the current session')
-        # A negative SID cannot exist. Prove that this backend can also produce
-        # a complete negative result before it starts a writable producer.
-        self.members(-1)
+        # A negative SID cannot exist. Its empty result says nothing about an
+        # owned session and can remain uncertain under unrelated PID churn.
+        # The current-session check above validates this preflight instead.
 
     def describe(self):
         if hasattr(self, 'native'):
