@@ -202,6 +202,11 @@ class BuilderTests(TemporaryCase):
             args.extend(['--' + key, value])
         return [sys.executable, '-B', str(SDK_SOURCE / 'scripts/build-sysroot.py'), *args]
 
+    def test_builder_allows_darwin_session_churn_without_weakening_proof(self):
+        builder = B(self.options | dict(plan=True))
+        builder.run()
+        self.assertEqual(builder.process_inspector.empty_snapshot_timeout, 30)
+
     def test_read_only_plan_and_exact_native_commands(self):
         before = snapshot(self.root)
         record = self.run_builder(plan=True)
