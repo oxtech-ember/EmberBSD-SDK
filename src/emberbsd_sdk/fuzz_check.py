@@ -12,6 +12,7 @@ import re
 import shutil
 import stat
 import sys
+import xml.etree.ElementTree as ET
 
 from .errors import CommandError, SDKError
 from .jsonio import json_bytes, read_json, write_json
@@ -116,24 +117,35 @@ def validate_manifest(value, current=False):
         names.add(source['name'])
         paths.add(source['path'])
         artifact(source, current)
-    keys(value['tools'], 'clang gcc')
+    if not isinstance(value['tools'], dict) or not {'clang', 'gcc'} <= set(value['tools']):
+        raise SDKError('tools must include clang and gcc')
+    if set(value['tools']) - {'clang', 'gcc', 'clang_lsan', 'gcc_memcheck'}:
+        raise SDKError('unsupported fuzz compiler tool')
     for name, tool in value['tools'].items():
         keys(tool, 'path sha256 version flags')
         artifact(tool, current)
         if not isinstance(tool['version'], str) or not tool['version'].strip():
             raise SDKError('missing compiler version')
-        if name == 'gcc' and not re.search(r'\b16\.\d', tool['version']):
+        if name.startswith('gcc') and not re.search(r'\b16\.\d', tool['version']):
             raise SDKError('replay requires GCC16')
-        if name == 'clang' and 'clang' not in tool['version'].lower():
+        if name.startswith('clang') and 'clang' not in tool['version'].lower():
             raise SDKError('fuzzer requires Clang')
         if not isinstance(tool['flags'], list) or not tool['flags']:
             raise SDKError('missing compiler flags')
         for flag in tool['flags']:
             text(flag)
-    keys(value['binaries'], 'fuzzer replay')
+        if name == 'gcc_memcheck' and any('-fsanitize=' in flag for flag in tool['flags']):
+            raise SDKError('Memcheck replay must not use compiler sanitizers')
+    if not isinstance(value['binaries'], dict) or not {'fuzzer', 'replay'} <= set(value['binaries']):
+        raise SDKError('binaries must include fuzzer and replay')
+    if set(value['binaries']) - {'fuzzer', 'replay', 'lsan_probe', 'memcheck'}:
+        raise SDKError('unsupported fuzz binary')
     for binary in value['binaries'].values():
         keys(binary, 'path sha256')
         artifact(binary, current)
+    if ('memcheck' in value['binaries'] and
+            value['binaries']['memcheck']['sha256'] == value['binaries']['replay']['sha256']):
+        raise SDKError('Memcheck requires a separate replay binary without sanitizers')
     keys(value['corpus'], 'path files')
     if not Path(text(value['corpus']['path'])).is_absolute():
         raise SDKError('corpus path must be absolute')
@@ -158,12 +170,26 @@ def validate_manifest(value, current=False):
         raise SDKError('ASan must abort on error and declare leak detection')
     if options['UBSAN_OPTIONS'] != 'halt_on_error=1:print_stacktrace=1':
         raise SDKError('UBSan must halt on error')
+    if options['ASAN_OPTIONS'] == 'abort_on_error=1:detect_leaks=1' and 'lsan_probe' not in value['binaries']:
+        raise SDKError('LeakSanitizer requires a positive-control lsan_probe binary')
+    if 'lsan_probe' in value['binaries'] and 'clang_lsan' not in value['tools']:
+        raise SDKError('LeakSanitizer probe requires recorded Clang build flags')
+    if 'clang_lsan' in value['tools'] and 'lsan_probe' not in value['binaries']:
+        raise SDKError('clang_lsan tool record requires an lsan_probe binary')
+    if ('lsan_probe' in value['binaries'] and
+            not any(flag.startswith('-fsanitize=address')
+                    for flag in value['tools']['clang_lsan']['flags'])):
+        raise SDKError('LeakSanitizer probe requires an address-sanitized Clang build')
+    if 'memcheck' in value['binaries'] and 'gcc_memcheck' not in value['tools']:
+        raise SDKError('Memcheck replay requires recorded GCC16 build flags')
+    if 'gcc_memcheck' in value['tools'] and 'memcheck' not in value['binaries']:
+        raise SDKError('gcc_memcheck tool record requires a memcheck replay binary')
     if options['ASAN_OPTIONS'].endswith('=0') and not any('leak' in s.lower() for s in value['limitations']):
         raise SDKError('disabled leak detection requires an explicit limitation')
     return value
 
 
-def _command(argv, destination, env, timeout):
+def _command(argv, destination, env, timeout, *, allow_failure=False):
     record = {'argv': argv, 'status': None, 'timeout_seconds': timeout}
     try:
         result = capture_streamed(argv, env=env, cwd=str(destination.parent),
@@ -183,9 +209,103 @@ def _command(argv, destination, env, timeout):
     destination.with_suffix('.stdout').write_bytes(stdout)
     destination.with_suffix('.stderr').write_bytes(stderr)
     write_json(destination.with_suffix('.json'), record)
-    if record['status'] != 0:
+    if record['status'] != 0 and not allow_failure:
         raise SDKError(f'producer failed: {record["status"]}; {destination}')
     return stderr
+
+
+def _memcheck_platform():
+    system = platform.system()
+    machine = platform.machine().lower()
+    if system == 'Linux':
+        supported = {
+            'x86_64', 'amd64', 'i386', 'i486', 'i586', 'i686',
+            'ppc', 'powerpc', 'ppc64', 'powerpc64', 'ppc64le',
+            's390x', 'armv7l', 'armv8l', 'aarch64', 'arm64',
+            'mips', 'mipsel', 'mips64', 'mips64el', 'riscv64'
+        }
+        if machine in supported:
+            return None
+    elif system == 'FreeBSD':
+        if machine in {'i386', 'i486', 'i586', 'i686', 'x86', 'x86_64', 'amd64'}:
+            return None
+        if machine in {'aarch64', 'arm64'}:
+            try:
+                if int(platform.release().split('.')[0]) >= 14:
+                    return None
+            except ValueError:
+                pass
+    elif system == 'Darwin':
+        version = platform.mac_ver()[0]
+        try:
+            major_minor = tuple(int(part) for part in version.split('.')[:2])
+        except ValueError:
+            major_minor = ()
+        if machine in {'x86_64', 'amd64'} and major_minor and major_minor <= (11, 0):
+            return None
+        if machine in {'i386', 'i686', 'x86'} and major_minor and major_minor <= (10, 13):
+            return None
+    return f'{system}/{machine} is not supported by the current Valgrind platform matrix'
+
+
+def _memcheck_preflight(mode, env, binaries):
+    if mode not in {'off', 'optional', 'required'}:
+        raise SDKError('memcheck mode must be off, optional, or required')
+    if mode == 'off':
+        return {'requested': mode, 'status': 'disabled', 'reason': None,
+                'path': None, 'sha256': None}
+    reason = _memcheck_platform()
+    if reason is not None:
+        status = 'unsupported'
+    elif 'memcheck' not in binaries:
+        status, reason = 'unavailable', 'manifest has no uninstrumented GCC16 memcheck binary'
+    else:
+        found = shutil.which('valgrind', path=env.get('PATH'))
+        if found is None:
+            status, reason = 'unavailable', 'valgrind executable was not found in PATH'
+        else:
+            path = Path(found).resolve(strict=True)
+            if not path.is_file() or not os.access(path, os.X_OK):
+                raise SDKError(f'valgrind is not an executable regular file: {path}')
+            return {'requested': mode, 'status': 'ready', 'reason': None,
+                    'path': str(path), 'sha256': file_sha256(path)}
+    if mode == 'required':
+        raise SDKError(f'Memcheck is required but {status}: {reason}')
+    return {'requested': mode, 'status': status, 'reason': reason,
+            'path': None, 'sha256': None}
+
+
+def _memcheck_argv(tool_path, root, relative_path, xml_path):
+    return [tool_path, '--tool=memcheck',
+            '--error-exitcode=97', '--leak-check=full',
+            '--show-leak-kinds=all',
+            '--errors-for-leak-kinds=definite,indirect,possible',
+            '--track-origins=yes', '--xml=yes', f'--xml-file={xml_path}',
+            str(root / 'binaries/memcheck'), str(root / relative_path)]
+
+
+def _verify_lsan_canary(evidence, root, manifest, timeout):
+    if manifest['sanitizer_options']['ASAN_OPTIONS'] == 'abort_on_error=1:detect_leaks=0':
+        return {'status': 'disabled', 'canary': None}
+    name = 'lsan-canary'
+    command = read_json(evidence / 'logs' / f'{name}.json')
+    keys(command, 'argv status timeout_seconds')
+    if command['argv'] != [str(root / 'binaries/lsan_probe')]:
+        raise SDKError('LeakSanitizer canary command differs')
+    if command['timeout_seconds'] != timeout or type(command['status']) is not int or command['status'] == 0:
+        raise SDKError('LeakSanitizer canary did not fail as expected')
+    stderr = (evidence / 'logs' / f'{name}.stderr').read_bytes()
+    if b'LeakSanitizer: detected memory leaks' not in stderr or b'Direct leak of' not in stderr:
+        raise SDKError('LeakSanitizer canary lacks a leak report')
+    return {'status': 'passed', 'canary': f'logs/{name}'}
+
+
+def _xml_error_count(path):
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError as exc:
+        raise SDKError(f'invalid Valgrind XML report: {path}: {exc}') from exc
+    return len(root.findall('.//error'))
 
 
 def _copy(source, destination):
@@ -194,16 +314,20 @@ def _copy(source, destination):
 
 
 def run(manifest_path, output, *, runs=1000, seed=1, max_len=65536,
-        timeout=300, input_timeout=10, rss_limit_mb=2048):
+        timeout=300, input_timeout=10, rss_limit_mb=2048, memcheck='off'):
     limits = {'runs': integer(runs, 1, 10**9), 'seed': integer(seed, 1, 2**31-1),
               'max_len': integer(max_len, 1, 64*1024*1024),
               'timeout': integer(timeout, 1, 86400),
               'input_timeout': integer(input_timeout, 1, 3600),
               'rss_limit_mb': integer(rss_limit_mb, 64, 1048576)}
     manifest = validate_manifest(read_json(manifest_path), current=True)
+    base_env = {key: os.environ[key] for key in ('PATH', 'HOME', 'TMPDIR', 'LANG') if key in os.environ}
+    memcheck_plan = _memcheck_preflight(memcheck, base_env, manifest['binaries'])
     output = Path(output).absolute()
     for item in manifest['sources'] + manifest['build_logs'] + list(manifest['binaries'].values()) + list(manifest['tools'].values()):
         reject_overlap(output, item['path'])
+    if memcheck_plan['path'] is not None:
+        reject_overlap(output, memcheck_plan['path'])
     reject_overlap(output, manifest['corpus']['path'])
     output.mkdir(parents=False, exist_ok=False)
     (output / 'INCOMPLETE').write_text('No successful acceptance yet.\n', encoding='utf-8')
@@ -219,9 +343,39 @@ def run(manifest_path, output, *, runs=1000, seed=1, max_len=65536,
             _copy(Path(manifest['corpus']['path']) / item['path'], output / role / item['path'])
     (output / 'logs').mkdir()
     (output / 'crashes').mkdir()
+    if memcheck_plan['status'] == 'ready':
+        _copy(memcheck_plan['path'], output / 'tools/valgrind')
+        (output / 'tools/valgrind').chmod(0o755)
     # Do not inherit sanitizer settings or dynamic-loader overrides from a shell.
-    env = {key: os.environ[key] for key in ('PATH', 'HOME', 'TMPDIR', 'LANG') if key in os.environ}
+    env = dict(base_env)
     env.update(manifest['sanitizer_options'])
+    lsan = {'status': 'disabled', 'canary': None}
+    if manifest['sanitizer_options']['ASAN_OPTIONS'] == 'abort_on_error=1:detect_leaks=1':
+        canary_stderr = _command([str(output / 'binaries/lsan_probe')],
+                                 output / 'logs/lsan-canary', env, input_timeout,
+                                 allow_failure=True)
+        canary = read_json(output / 'logs/lsan-canary.json')
+        if (canary['status'] == 0 or
+                b'LeakSanitizer: detected memory leaks' not in canary_stderr or
+                b'Direct leak of' not in canary_stderr):
+            raise SDKError('LeakSanitizer positive control did not report its intentional leak')
+        lsan = {'status': 'passed', 'canary': 'logs/lsan-canary'}
+
+    memcheck_result = {'requested': memcheck, 'status': memcheck_plan['status'],
+                       'reason': memcheck_plan['reason'], 'tool': None, 'replay': []}
+    if memcheck_plan['status'] == 'ready':
+        _command([memcheck_plan['path'], '--version'],
+                 output / 'logs/memcheck-version', base_env, 30)
+        version = (output / 'logs/memcheck-version.stdout').read_text(
+            encoding='utf-8', errors='replace').strip()
+        if not version:
+            version = (output / 'logs/memcheck-version.stderr').read_text(
+                encoding='utf-8', errors='replace').strip()
+        if not version:
+            raise SDKError('Valgrind did not report its version')
+        memcheck_result['tool'] = {
+            'path': memcheck_plan['path'], 'sha256': memcheck_plan['sha256'],
+            'version': version, 'snapshot': 'tools/valgrind'}
     argv = [str(output / 'binaries/fuzzer'), str(output / 'corpus'),
             f'-runs={runs}', f'-seed={seed}', f'-max_len={max_len}',
             f'-timeout={input_timeout}', f'-rss_limit_mb={rss_limit_mb}',
@@ -240,6 +394,15 @@ def run(manifest_path, output, *, runs=1000, seed=1, max_len=65536,
             _command([str(output / 'binaries/replay'), str(output / relative_path)],
                      output / f'logs/replay-{index}', env, input_timeout)
             replay.append({'path': relative_path, 'sha256': item['sha256']})
+    if memcheck_plan['status'] == 'ready':
+        for index, item in enumerate(replay):
+            xml_path = output / f'logs/memcheck-{index}.xml'
+            _command(_memcheck_argv(memcheck_plan['path'], output, item['path'], xml_path),
+                     output / f'logs/memcheck-{index}', base_env, input_timeout)
+            if _xml_error_count(xml_path):
+                raise SDKError(f'Valgrind Memcheck reported errors for {item["path"]}')
+            memcheck_result['replay'].append(item)
+        memcheck_result['status'] = 'passed'
     validate_manifest(read_json(manifest_path), current=True)
     if read_json(manifest_path) != manifest:
         raise SDKError('manifest changed during execution')
@@ -247,10 +410,11 @@ def run(manifest_path, output, *, runs=1000, seed=1, max_len=65536,
         raise SDKError('crash artifacts remain')
     # Keep a failed run visibly incomplete until every result has been saved.
     (output / 'INCOMPLETE').unlink()
-    receipt = {'schema': 1, 'scope': 'diagnostic-host', 'complete': True,
+    receipt = {'schema': 2, 'scope': 'diagnostic-host', 'complete': True,
                'manifest_sha256': file_sha256(output / 'manifest.json'),
                'limits': limits, 'environment': env, 'replay': replay,
-               'corpus': corpus, 'files': tree_files(output)}
+               'corpus': corpus, 'files': tree_files(output),
+               'memory_checks': {'lsan': lsan, 'memcheck': memcheck_result}}
     write_json(output / 'evidence.json', receipt)
     verify(output)
     return file_sha256(output / 'evidence.json')
@@ -263,8 +427,14 @@ def verify(evidence, manifest_path=None, sha256=None):
     if sha256 is not None and file_sha256(evidence / 'evidence.json') != sha256:
         raise SDKError('trusted evidence digest differs')
     receipt = read_json(evidence / 'evidence.json')
-    keys(receipt, 'schema scope complete manifest_sha256 limits environment replay corpus files')
-    if receipt['schema'] != 1 or receipt['scope'] != 'diagnostic-host' or receipt['complete'] is not True:
+    base_fields = 'schema scope complete manifest_sha256 limits environment replay corpus files'
+    if receipt.get('schema') == 1:
+        keys(receipt, base_fields)
+    elif receipt.get('schema') == 2:
+        keys(receipt, base_fields + ' memory_checks')
+    else:
+        raise SDKError('unsupported evidence schema')
+    if receipt['scope'] != 'diagnostic-host' or receipt['complete'] is not True:
         raise SDKError('unsupported or incomplete evidence')
     files = [item for item in tree_files(evidence) if item['path'] != 'evidence.json']
     if files != receipt['files']:
@@ -272,6 +442,10 @@ def verify(evidence, manifest_path=None, sha256=None):
     if file_sha256(evidence / 'manifest.json') != receipt['manifest_sha256']:
         raise SDKError('manifest snapshot differs')
     manifest = validate_manifest(read_json(evidence / 'manifest.json'))
+    if receipt['schema'] == 1 and (
+            manifest['sanitizer_options']['ASAN_OPTIONS'] == 'abort_on_error=1:detect_leaks=1' or
+            'memcheck' in manifest['binaries']):
+        raise SDKError('evidence schema 1 cannot attest LSan or Memcheck results')
     if manifest_path is not None:
         current = validate_manifest(read_json(manifest_path), current=True)
         if current != manifest:
@@ -296,10 +470,16 @@ def verify(evidence, manifest_path=None, sha256=None):
     integer(limits['runs'], 1, 10**9)
     for name in ('seed', 'max_len', 'timeout', 'input_timeout', 'rss_limit_mb'):
         integer(limits[name], 1, 2**31-1)
-    for name in ['fuzz'] + [f'replay-{i}' for i in range(len(expected))]:
+    command_names = ['fuzz'] + [f'replay-{i}' for i in range(len(expected))]
+    if receipt['schema'] == 2 and manifest['sanitizer_options']['ASAN_OPTIONS'] == 'abort_on_error=1:detect_leaks=1':
+        command_names.append('lsan-canary')
+    root = None
+    for name in command_names:
         command = read_json(evidence / 'logs' / f'{name}.json')
         keys(command, 'argv status timeout_seconds')
-        if command['status'] != 0 or type(command['status']) is not int:
+        if type(command['status']) is not int:
+            raise SDKError(f'invalid command status: {name}')
+        if name != 'lsan-canary' and command['status'] != 0:
             raise SDKError(f'failed command: {name}')
         for suffix in ('stdout', 'stderr'):
             file_sha256(evidence / 'logs' / f'{name}.{suffix}')
@@ -307,17 +487,24 @@ def verify(evidence, manifest_path=None, sha256=None):
         if not isinstance(argv, list) or not argv:
             raise SDKError('missing command arguments')
         # Stored commands retain their original paths after evidence relocation.
-        root = Path(argv[0]).parent.parent
+        command_root = Path(argv[0]).parent.parent
         if name == 'fuzz':
-            wanted = [str(root / 'binaries/fuzzer'), str(root / 'corpus'),
+            root = command_root
+        elif command_root != root:
+            raise SDKError('command paths do not share one evidence root')
+        if name == 'fuzz':
+            wanted = [str(command_root / 'binaries/fuzzer'), str(command_root / 'corpus'),
                       f'-runs={limits["runs"]}', f'-seed={limits["seed"]}',
                       f'-max_len={limits["max_len"]}', f'-timeout={limits["input_timeout"]}',
                       f'-rss_limit_mb={limits["rss_limit_mb"]}', '-print_final_stats=1',
-                      f'-artifact_prefix={root / "crashes"}/']
+                      f'-artifact_prefix={command_root / "crashes"}/']
             budget = limits['timeout']
-        else:
+        elif name.startswith('replay-'):
             index = int(name.split('-')[1])
-            wanted = [str(root / 'binaries/replay'), str(root / expected[index]['path'])]
+            wanted = [str(command_root / 'binaries/replay'), str(command_root / expected[index]['path'])]
+            budget = limits['input_timeout']
+        else:
+            wanted = [str(command_root / 'binaries/lsan_probe')]
             budget = limits['input_timeout']
         if argv != wanted or command['timeout_seconds'] != budget:
             raise SDKError(f'command differs from the run contract: {name}')
@@ -328,6 +515,68 @@ def verify(evidence, manifest_path=None, sha256=None):
     for key, value in manifest['sanitizer_options'].items():
         if receipt['environment'].get(key) != value:
             raise SDKError('sanitizer environment differs')
+    if receipt['schema'] == 2:
+        checks = receipt['memory_checks']
+        keys(checks, 'lsan memcheck')
+        lsan = checks['lsan']
+        keys(lsan, 'status canary')
+        if lsan != _verify_lsan_canary(evidence, root, manifest, limits['input_timeout']):
+            raise SDKError('LeakSanitizer result differs from its positive control')
+
+        memcheck = checks['memcheck']
+        keys(memcheck, 'requested status reason tool replay')
+        mode = memcheck['requested']
+        if mode not in {'off', 'optional', 'required'}:
+            raise SDKError('invalid Memcheck request mode')
+        if mode == 'off':
+            if memcheck != {'requested': 'off', 'status': 'disabled', 'reason': None,
+                            'tool': None, 'replay': []}:
+                raise SDKError('disabled Memcheck fields differ')
+        elif memcheck['status'] in {'unsupported', 'unavailable'}:
+            if (mode != 'optional' or not isinstance(memcheck['reason'], str) or
+                    not memcheck['reason'] or memcheck['tool'] is not None or
+                    memcheck['replay']):
+                raise SDKError('optional Memcheck refusal is malformed')
+        elif memcheck['status'] == 'passed':
+            tool = memcheck['tool']
+            keys(tool, 'path sha256 version snapshot')
+            text(tool['path'])
+            text(tool['version'])
+            artifact({'path': str(evidence / relative(tool['snapshot'])),
+                      'sha256': tool['sha256']}, current=True)
+            if tool['snapshot'] != 'tools/valgrind':
+                raise SDKError('unexpected Valgrind tool snapshot path')
+            version_command = read_json(evidence / 'logs/memcheck-version.json')
+            keys(version_command, 'argv status timeout_seconds')
+            if (version_command['argv'] != [tool['path'], '--version'] or
+                    version_command['status'] != 0 or type(version_command['status']) is not int or
+                    version_command['timeout_seconds'] != 30):
+                raise SDKError('Valgrind version command differs')
+            version_output = (evidence / 'logs/memcheck-version.stdout').read_text(
+                encoding='utf-8', errors='replace').strip()
+            if not version_output:
+                version_output = (evidence / 'logs/memcheck-version.stderr').read_text(
+                    encoding='utf-8', errors='replace').strip()
+            if version_output != tool['version'] or tool['sha256'] != file_sha256(evidence / tool['snapshot']):
+                raise SDKError('Valgrind tool identity differs from its snapshot')
+            if memcheck['reason'] is not None:
+                raise SDKError('successful Memcheck must not have a refusal reason')
+            if memcheck['replay'] != expected:
+                raise SDKError('Memcheck replay coverage is incomplete')
+            for index, item in enumerate(expected):
+                log_name = f'memcheck-{index}'
+                xml_relative = f'logs/{log_name}.xml'
+                command = read_json(evidence / 'logs' / f'{log_name}.json')
+                keys(command, 'argv status timeout_seconds')
+                wanted = _memcheck_argv(tool['path'], root, item['path'], root / xml_relative)
+                if (command['argv'] != wanted or command['status'] != 0 or
+                        type(command['status']) is not int or
+                        command['timeout_seconds'] != limits['input_timeout']):
+                    raise SDKError(f'Memcheck command differs: {log_name}')
+                if _xml_error_count(evidence / xml_relative):
+                    raise SDKError(f'Memcheck XML contains errors: {xml_relative}')
+        else:
+            raise SDKError('unsupported or incomplete Memcheck result')
     return receipt
 
 
@@ -337,6 +586,7 @@ def main(argv=None):
     start = sub.add_parser('run')
     start.add_argument('--manifest', required=True)
     start.add_argument('--output', required=True)
+    start.add_argument('--memcheck', choices=('off', 'optional', 'required'), default='off')
     for flag, default in (('runs', 1000), ('seed', 1), ('max-len', 65536),
                           ('timeout', 300), ('input-timeout', 10), ('rss-limit-mb', 2048)):
         start.add_argument('--' + flag, type=int, default=default)

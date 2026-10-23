@@ -12,6 +12,10 @@ shipped EmberBSD objects with the common GCC16 compiler. A diagnostic replay
 executable also uses GCC16. A host replay does not qualify an EmberBSD binary,
 ABI, kernel, device or production package.
 
+LeakSanitizer uses ASan and requires an intentional-leak positive control.
+Memcheck uses a separate GCC16 replay binary without ASan or UBSan. Do not run
+an ASan binary under Valgrind.
+
 ## Prepare and run
 
 The build adapter writes a version 1 JSON manifest. Use an explicit SDK source
@@ -25,7 +29,8 @@ python3 scripts/fuzz-check.py run \
   --manifest /absolute/cairo-build/build.json \
   --output /absolute/cairo-check \
   --runs 10000 --seed 1 --max-len 65536 \
-  --timeout 300 --input-timeout 10 --rss-limit-mb 2048
+  --timeout 300 --input-timeout 10 --rss-limit-mb 2048 \
+  --memcheck optional
 python3 scripts/fuzz-check.py verify --evidence /absolute/cairo-check \
   --manifest /absolute/cairo-build/build.json
 ```
@@ -44,6 +49,22 @@ final corpus. The replay binary receives one filename as its only argument.
 It must execute the same harness on all bytes in that file and return nonzero
 on failure. Keep empty inputs in the seed corpus if that boundary matters.
 The fuzzer must use the standard libFuzzer command-line interface.
+
+When `ASAN_OPTIONS` enables leak detection, the runner first executes
+`binaries.lsan_probe` and requires a LeakSanitizer report for its intentional
+allocation. This positive control proves that the selected host runtime detects
+the test leak before the fuzzer's own result is accepted.
+
+`--memcheck off` skips Valgrind. `--memcheck optional` records `unsupported` or
+`unavailable` when the host cannot run it and does not call that a pass.
+`--memcheck required` refuses to start unless Valgrind is available on a
+supported platform. A Memcheck manifest supplies a separate
+`binaries.memcheck` replay built with GCC16 and without sanitizers. The runner
+uses full leak reports, origin tracking and a failing exit code for definite,
+indirect and possible leaks or memory errors. It replays every initial and
+generated corpus file. Still-reachable allocations are reported but are not
+treated as lost memory. The evidence records the Valgrind version, binary hash,
+commands, XML reports, statuses and hashes.
 
 All executed argv arrays, environment settings, statuses and output logs are
 retained. Output capture is bounded; truncation fails the run. Process controls
@@ -65,8 +86,8 @@ rejected. Required top-level fields are:
 | `scope` | `diagnostic-host` |
 | `host` | `{system, machine}` from Python `platform` |
 | `sources` | Nonempty list of `{name, revision, path, sha256}` |
-| `tools` | `clang` and `gcc`, each `{path, sha256, version, flags}` |
-| `binaries` | `fuzzer` and `replay`, each `{path, sha256}` |
+| `tools` | Required `clang` and `gcc`; optional `clang_lsan` and `gcc_memcheck`; each `{path, sha256, version, flags}` |
+| `binaries` | Required `fuzzer` and `replay`; optional `lsan_probe` and `memcheck`; each `{path, sha256}` |
 | `corpus` | `{path, files}`, where files are `{path, sha256}` records |
 | `build_logs` | Nonempty list of `{path, sha256}` |
 | `limitations` | Nonempty list of explicit scope limits |
@@ -82,27 +103,33 @@ produced an executable. The runner checks recorded file bytes before and after
 execution. It cannot discover omitted build inputs or infer a complete source
 closure from a caller's manifest. Review and test the owning adapter.
 
-Both tool paths must refer to real compiler files, not symlinks. Resolve a
-selected compiler before hashing it. The GCC version must be 16.x. Compiler
-flags are nonempty arrays. Target builds continue to require the normal
-compiler, sysroot and release validation independently.
+Compiler paths must refer to real files, not symlinks. Resolve a selected
+compiler before hashing it. GCC versions must be 16.x. Compiler flags are
+nonempty arrays. `clang_lsan` records the positive-control build flags;
+`gcc_memcheck` must have no `-fsanitize` flag. Target builds continue to require
+the normal compiler, sysroot and release validation independently.
 
-`ASAN_OPTIONS` is exactly `abort_on_error=1:detect_leaks=1`, or
-`abort_on_error=1:detect_leaks=0` with an explicit leak-check limitation.
+`ASAN_OPTIONS` is exactly `abort_on_error=1:detect_leaks=1` with an
+`lsan_probe`, or `abort_on_error=1:detect_leaks=0` with an explicit leak-check
+limitation.
 `UBSAN_OPTIONS` is exactly `halt_on_error=1:print_stacktrace=1`.
 The runner removes inherited loader and sanitizer overrides. It retains only
 `PATH`, `HOME`, `TMPDIR` and `LANG`, then adds these explicit options. A disabled
-leak detector is not a leak-check pass. Sanitizer checks do not replace Valgrind
-on a supported platform. Keep any unsupported runtime or dependency paths in
-the manifest limitations.
+leak detector is not a leak-check pass. The [Valgrind platform matrix](https://valgrind.org/info/platforms.html)
+lists Linux, FreeBSD and older Intel macOS targets; it does not list current
+macOS arm64 or a current NetBSD target. Keep unsupported runtime or dependency
+paths in the manifest limitations. An optional Memcheck result of
+`unsupported` or `unavailable` is not a pass. Memcheck's [official manual](https://valgrind.org/docs/manual/mc-manual.html)
+describes the checked memory errors and leak classes.
 
 ## Check evidence
 
 A successful run prints the SHA256 of `evidence.json`. The directory contains
 copied binaries, seed and final corpora, build logs, the manifest snapshot,
-command records and exact file hashes. Verification checks the snapshot hashes,
-mandatory files, requested completion count, zero command statuses and replay
-coverage. Both `run` and `verify` return nonzero on refusal.
+command records and exact file hashes. New runs use evidence schema 2. It checks
+LSan positive-control output and Memcheck mode, tool identity, XML reports and
+corpus coverage. The verifier continues to accept existing schema 1 receipts.
+Both `run` and `verify` return nonzero on refusal.
 
 ```sh
 python3 scripts/fuzz-check.py verify --evidence /absolute/cairo-check
@@ -131,6 +158,8 @@ finite campaign with proof of absence of defects.
 python3 -m unittest discover -s tests -p 'test_fuzz_check.py'
 ```
 
-The contracts use real host subprocess fixtures for failure, timeout and replay.
-They also check stale artifacts, corpus omission, evidence tampering and offline
-relocation. They do not substitute for a real library fuzz campaign.
+The contracts use host subprocess fixtures for failure, timeout, replay, LSan
+positive-control handling and Memcheck evidence. They also check stale
+artifacts, corpus omission, evidence tampering and offline relocation. Fixtures
+do not substitute for real sanitizer or Valgrind execution, or a real library
+fuzz campaign.

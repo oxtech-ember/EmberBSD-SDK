@@ -6,14 +6,16 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk import fuzz_check as fuzz
-from emberbsd_sdk.errors import SDKError
+from emberbsd_sdk.errors import CommandError, SDKError
 from emberbsd_sdk.jsonio import read_json, write_json
 
 
@@ -45,6 +47,23 @@ class FuzzChecks(unittest.TestCase):
         self.path = self.root / 'build.json'
         self.output = self.root / 'evidence'
         self.save()
+        self.capture_patch = patch.object(fuzz, 'capture_streamed', self.capture_fixture)
+        self.capture_patch.start()
+        self.addCleanup(self.capture_patch.stop)
+
+    @staticmethod
+    def capture_fixture(argv, *, env, cwd, timeout, **_options):
+        """Keep runner-contract tests independent of host process inspection."""
+        try:
+            result = subprocess.run(argv, env=env, cwd=cwd, timeout=timeout,
+                                    stdin=subprocess.DEVNULL, capture_output=True,
+                                    check=False)
+        except subprocess.TimeoutExpired as exc:
+            raise SDKError('fixture producer deadline expired') from exc
+        if result.returncode:
+            raise CommandError(result.returncode, argv, result.stdout, result.stderr)
+        return SimpleNamespace(value=result.stdout, stderr=result.stderr,
+                               stderr_truncated=False)
 
     def artifact(self, path):
         return {'path': str(path), 'sha256': fuzz.file_sha256(path)}
@@ -76,6 +95,144 @@ class FuzzChecks(unittest.TestCase):
         fuzz.verify(relocated, sha256=digest)
         with self.assertRaises(SDKError):
             fuzz.verify(relocated, sha256='0' * 64)
+
+    def test_v1_evidence_remains_verifiable(self):
+        self.run_fixture()
+        self.rewrite_receipt(lambda receipt: (receipt.pop('memory_checks'),
+                                              receipt.update(schema=1)))
+        self.assertEqual(fuzz.verify(self.output)['schema'], 1)
+
+    def test_lsan_requires_positive_control(self):
+        self.manifest['sanitizer_options']['ASAN_OPTIONS'] = 'abort_on_error=1:detect_leaks=1'
+        self.save()
+        with self.assertRaisesRegex(SDKError, 'positive-control lsan_probe'):
+            fuzz.validate_manifest(read_json(self.path))
+
+    def test_lsan_positive_control_is_checked_and_recorded(self):
+        probe = self.script('lsan_probe',
+                            "import sys\nprint('ERROR: LeakSanitizer: detected memory leaks',file=sys.stderr)\nprint('Direct leak of 37 byte',file=sys.stderr)\nraise SystemExit(1)\n")
+        self.manifest['binaries']['lsan_probe'] = self.artifact(probe)
+        self.manifest['tools']['clang_lsan'] = {
+            **self.artifact(Path(sys.executable).resolve()),
+            'version': 'clang version 23.1.4', 'flags': ['-fsanitize=address']}
+        self.manifest['sanitizer_options']['ASAN_OPTIONS'] = 'abort_on_error=1:detect_leaks=1'
+        self.manifest['limitations'] = ['Fixture output validates the LSan process contract only.']
+        self.save()
+        self.run_fixture()
+        receipt = read_json(self.output / 'evidence.json')
+        self.assertEqual(receipt['memory_checks']['lsan'],
+                         {'status': 'passed', 'canary': 'logs/lsan-canary'})
+
+    def test_v1_evidence_cannot_attest_lsan(self):
+        probe = self.script('lsan_probe',
+                            "import sys\nprint('ERROR: LeakSanitizer: detected memory leaks',file=sys.stderr)\nprint('Direct leak of 37 byte',file=sys.stderr)\nraise SystemExit(1)\n")
+        self.manifest['binaries']['lsan_probe'] = self.artifact(probe)
+        self.manifest['tools']['clang_lsan'] = {
+            **self.artifact(Path(sys.executable).resolve()),
+            'version': 'clang version 23.1.4', 'flags': ['-fsanitize=address']}
+        self.manifest['sanitizer_options']['ASAN_OPTIONS'] = 'abort_on_error=1:detect_leaks=1'
+        self.manifest['limitations'] = ['Fixture output validates the LSan process contract only.']
+        self.save()
+        self.run_fixture()
+        self.rewrite_receipt(lambda receipt: (receipt.pop('memory_checks'),
+                                              receipt.update(schema=1)))
+        with self.assertRaisesRegex(SDKError, 'schema 1 cannot attest LSan'):
+            fuzz.verify(self.output)
+
+    def test_lsan_canary_without_leak_report_is_rejected(self):
+        probe = self.script('lsan_probe', "raise SystemExit(1)\n")
+        self.manifest['binaries']['lsan_probe'] = self.artifact(probe)
+        self.manifest['tools']['clang_lsan'] = {
+            **self.artifact(Path(sys.executable).resolve()),
+            'version': 'clang version 23.1.4', 'flags': ['-fsanitize=address']}
+        self.manifest['sanitizer_options']['ASAN_OPTIONS'] = 'abort_on_error=1:detect_leaks=1'
+        self.save()
+        with self.assertRaisesRegex(SDKError, 'positive control'):
+            self.run_fixture()
+        self.assertTrue((self.output / 'INCOMPLETE').exists())
+
+    def add_memcheck_binary(self):
+        binary = self.script('memcheck',
+                             '# distinct uninstrumented replay fixture\nimport pathlib,sys\npathlib.Path(sys.argv[1]).read_bytes()\n')
+        self.manifest['binaries']['memcheck'] = self.artifact(binary)
+        self.manifest['tools']['gcc_memcheck'] = {
+            **self.artifact(Path(sys.executable).resolve()),
+            'version': 'gcc 16.2.0', 'flags': ['-O1', '-g', '-fno-omit-frame-pointer']}
+        self.save()
+
+    def install_fake_valgrind(self, *, errors=False):
+        bindir = self.root / 'fake-bin'
+        bindir.mkdir()
+        tool = bindir / 'valgrind'
+        error_value = 'True' if errors else 'False'
+        tool.write_text(
+            f'#!{sys.executable}\n'
+            'import pathlib,subprocess,sys\n'
+            "args=sys.argv[1:]\n"
+            "if args == ['--version']:\n print('valgrind-3.27.1')\n raise SystemExit(0)\n"
+            "xml=next(x.split('=',1)[1] for x in args if x.startswith('--xml-file='))\n"
+            "subprocess.run(args[-2:],check=True)\n"
+            f"pathlib.Path(xml).write_text('<valgrindoutput><error/>') if {error_value} else pathlib.Path(xml).write_text('<valgrindoutput><errorcounts/></valgrindoutput>')\n"
+            f"raise SystemExit(97 if {error_value} else 0)\n")
+        tool.chmod(0o755)
+        return bindir
+
+    def test_optional_memcheck_records_unsupported_host(self):
+        self.add_memcheck_binary()
+        with patch.object(fuzz.platform, 'system', return_value='Darwin'), \
+             patch.object(fuzz.platform, 'machine', return_value='arm64'):
+            self.run_fixture(memcheck='optional')
+        memcheck = read_json(self.output / 'evidence.json')['memory_checks']['memcheck']
+        self.assertEqual(memcheck['requested'], 'optional')
+        self.assertEqual(memcheck['status'], 'unsupported')
+        self.assertIsNone(memcheck['tool'])
+        self.assertTrue(memcheck['reason'])
+
+    def test_optional_memcheck_without_binary_is_unavailable(self):
+        self.manifest['host'] = {'system': 'Linux', 'machine': 'x86_64'}
+        self.save()
+        with patch.object(fuzz.platform, 'system', return_value='Linux'), \
+             patch.object(fuzz.platform, 'machine', return_value='x86_64'):
+            self.run_fixture(memcheck='optional')
+        memcheck = read_json(self.output / 'evidence.json')['memory_checks']['memcheck']
+        self.assertEqual(memcheck['status'], 'unavailable')
+        self.assertIn('no uninstrumented GCC16', memcheck['reason'])
+
+    def test_required_memcheck_refuses_unsupported_host_before_run(self):
+        self.add_memcheck_binary()
+        with patch.object(fuzz.platform, 'system', return_value='Darwin'), \
+             patch.object(fuzz.platform, 'machine', return_value='arm64'):
+            with self.assertRaisesRegex(SDKError, 'required but unsupported'):
+                self.run_fixture(memcheck='required')
+        self.assertFalse(self.output.exists())
+
+    def test_memcheck_executes_and_records_full_corpus(self):
+        self.add_memcheck_binary()
+        self.manifest['host'] = {'system': 'Linux', 'machine': 'x86_64'}
+        self.save()
+        bindir = self.install_fake_valgrind()
+        path = str(bindir) + os.pathsep + os.environ.get('PATH', os.defpath)
+        with patch.dict(os.environ, {'PATH': path}), \
+             patch.object(fuzz.platform, 'system', return_value='Linux'), \
+             patch.object(fuzz.platform, 'machine', return_value='x86_64'):
+            self.run_fixture(memcheck='optional')
+        memcheck = read_json(self.output / 'evidence.json')['memory_checks']['memcheck']
+        self.assertEqual(memcheck['status'], 'passed')
+        self.assertEqual(len(memcheck['replay']), 4)
+        self.assertIn('valgrind-3.27.1', memcheck['tool']['version'])
+
+    def test_memcheck_error_exit_keeps_run_incomplete(self):
+        self.add_memcheck_binary()
+        self.manifest['host'] = {'system': 'Linux', 'machine': 'x86_64'}
+        self.save()
+        bindir = self.install_fake_valgrind(errors=True)
+        path = str(bindir) + os.pathsep + os.environ.get('PATH', os.defpath)
+        with patch.dict(os.environ, {'PATH': path}), \
+             patch.object(fuzz.platform, 'system', return_value='Linux'), \
+             patch.object(fuzz.platform, 'machine', return_value='x86_64'):
+            with self.assertRaisesRegex(SDKError, 'producer failed: 97'):
+                self.run_fixture(memcheck='required')
+        self.assertTrue((self.output / 'INCOMPLETE').exists())
 
     def test_changed_source_refuses_current_validation(self):
         self.run_fixture()
