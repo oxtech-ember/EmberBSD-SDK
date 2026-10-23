@@ -13,8 +13,12 @@ executable also uses GCC16. A host replay does not qualify an EmberBSD binary,
 ABI, kernel, device or production package.
 
 LeakSanitizer uses ASan and requires an intentional-leak positive control.
-Memcheck uses a separate GCC16 replay binary without ASan or UBSan. Do not run
-an ASan binary under Valgrind.
+The runner keeps the RSS-limited libFuzzer campaign on ASan/UBSan, then replays
+each initial and generated corpus file in a separate Clang LSan executable.
+This avoids treating libFuzzer's process-lifetime RSS monitor as an application
+leak. The LSan replay does not cover mutations that were not retained in either
+corpus. Memcheck uses a separate GCC16 replay binary without ASan or UBSan. Do
+not run an ASan binary under Valgrind.
 
 ## Prepare and run
 
@@ -53,7 +57,10 @@ The fuzzer must use the standard libFuzzer command-line interface.
 When `ASAN_OPTIONS` enables leak detection, the runner first executes
 `binaries.lsan_probe` and requires a LeakSanitizer report for its intentional
 allocation. This positive control proves that the selected host runtime detects
-the test leak before the fuzzer's own result is accepted.
+the test leak. The runner then executes `binaries.lsan_replay` once for every
+initial and generated corpus file with leak detection enabled. A nonzero replay
+fails the run. The RSS-limited libFuzzer and GCC16 ASan/UBSan replays use
+`detect_leaks=0`; their retained inputs are covered by the separate LSan replay.
 
 `--memcheck off` skips Valgrind. `--memcheck optional` records `unsupported` or
 `unavailable` when the host cannot run it and does not call that a pass.
@@ -87,7 +94,7 @@ rejected. Required top-level fields are:
 | `host` | `{system, machine}` from Python `platform` |
 | `sources` | Nonempty list of `{name, revision, path, sha256}` |
 | `tools` | Required `clang` and `gcc`; optional `clang_lsan` and `gcc_memcheck`; each `{path, sha256, version, flags}` |
-| `binaries` | Required `fuzzer` and `replay`; optional `lsan_probe` and `memcheck`; each `{path, sha256}` |
+| `binaries` | Required `fuzzer` and `replay`; optional `lsan_probe`, `lsan_replay` and `memcheck`; each `{path, sha256}` |
 | `corpus` | `{path, files}`, where files are `{path, sha256}` records |
 | `build_logs` | Nonempty list of `{path, sha256}` |
 | `limitations` | Nonempty list of explicit scope limits |
@@ -109,9 +116,10 @@ nonempty arrays. `clang_lsan` records the positive-control build flags;
 `gcc_memcheck` must have no `-fsanitize` flag. Target builds continue to require
 the normal compiler, sysroot and release validation independently.
 
-`ASAN_OPTIONS` is exactly `abort_on_error=1:detect_leaks=1` with an
-`lsan_probe`, or `abort_on_error=1:detect_leaks=0` with an explicit leak-check
-limitation.
+`ASAN_OPTIONS` is exactly `abort_on_error=1:detect_leaks=1` with both
+`lsan_probe` and `lsan_replay`, or `abort_on_error=1:detect_leaks=0` with an
+explicit leak-check limitation. A positive control without LSan replay is not
+a LeakSanitizer result.
 `UBSAN_OPTIONS` is exactly `halt_on_error=1:print_stacktrace=1`.
 The runner removes inherited loader and sanitizer overrides. It retains only
 `PATH`, `HOME`, `TMPDIR` and `LANG`, then adds these explicit options. A disabled
@@ -126,10 +134,11 @@ describes the checked memory errors and leak classes.
 
 A successful run prints the SHA256 of `evidence.json`. The directory contains
 copied binaries, seed and final corpora, build logs, the manifest snapshot,
-command records and exact file hashes. New runs use evidence schema 2. It checks
-LSan positive-control output and Memcheck mode, tool identity, XML reports and
-corpus coverage. The verifier continues to accept existing schema 1 receipts.
-Both `run` and `verify` return nonzero on refusal.
+command records and exact file hashes. New runs use evidence schema 3. It checks
+LSan positive-control output and every LSan corpus replay, plus Memcheck mode,
+tool identity, XML reports and corpus coverage. The verifier continues to
+accept existing schema 1 and 2 receipts; old schema 1 receipts cannot attest
+LSan or Memcheck. Both `run` and `verify` return nonzero on refusal.
 
 ```sh
 python3 scripts/fuzz-check.py verify --evidence /absolute/cairo-check
@@ -159,7 +168,7 @@ python3 -m unittest discover -s tests -p 'test_fuzz_check.py'
 ```
 
 The contracts use host subprocess fixtures for failure, timeout, replay, LSan
-positive-control handling and Memcheck evidence. They also check stale
-artifacts, corpus omission, evidence tampering and offline relocation. Fixtures
-do not substitute for real sanitizer or Valgrind execution, or a real library
-fuzz campaign.
+positive-control and per-input replay handling, and Memcheck evidence. They also
+check stale artifacts, corpus omission, evidence tampering and offline
+relocation. Fixtures do not substitute for real sanitizer or Valgrind execution,
+or a real library fuzz campaign.

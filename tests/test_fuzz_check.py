@@ -80,6 +80,20 @@ class FuzzChecks(unittest.TestCase):
     def run_fixture(self, **kwargs):
         return fuzz.run(self.path, self.output, runs=10, **kwargs)
 
+    def add_lsan_binaries(self):
+        probe = self.script('lsan_probe',
+                            "import sys\nprint('ERROR: LeakSanitizer: detected memory leaks',file=sys.stderr)\nprint('Direct leak of 37 byte',file=sys.stderr)\nraise SystemExit(1)\n")
+        replay = self.script('lsan_replay',
+                             "import os,pathlib,sys\nprint(os.environ['ASAN_OPTIONS'])\npathlib.Path(sys.argv[1]).read_bytes()\n")
+        self.manifest['binaries']['lsan_probe'] = self.artifact(probe)
+        self.manifest['binaries']['lsan_replay'] = self.artifact(replay)
+        self.manifest['tools']['clang_lsan'] = {
+            **self.artifact(Path(sys.executable).resolve()),
+            'version': 'clang version 23.1.4', 'flags': ['-fsanitize=address']}
+        self.manifest['sanitizer_options']['ASAN_OPTIONS'] = 'abort_on_error=1:detect_leaks=1'
+        self.manifest['limitations'] = ['Fixture output validates the LSan process contract only.']
+        self.save()
+
     def rewrite_receipt(self, edit):
         receipt = read_json(self.output / 'evidence.json')
         edit(receipt)
@@ -105,34 +119,53 @@ class FuzzChecks(unittest.TestCase):
     def test_lsan_requires_positive_control(self):
         self.manifest['sanitizer_options']['ASAN_OPTIONS'] = 'abort_on_error=1:detect_leaks=1'
         self.save()
-        with self.assertRaisesRegex(SDKError, 'positive-control lsan_probe'):
+        with self.assertRaisesRegex(SDKError, 'lsan_probe and lsan_replay'):
             fuzz.validate_manifest(read_json(self.path))
 
-    def test_lsan_positive_control_is_checked_and_recorded(self):
-        probe = self.script('lsan_probe',
-                            "import sys\nprint('ERROR: LeakSanitizer: detected memory leaks',file=sys.stderr)\nprint('Direct leak of 37 byte',file=sys.stderr)\nraise SystemExit(1)\n")
+    def test_legacy_lsan_manifest_is_limited_to_canary_evidence(self):
+        probe = self.script('legacy_lsan_probe', 'raise SystemExit(1)\n')
         self.manifest['binaries']['lsan_probe'] = self.artifact(probe)
         self.manifest['tools']['clang_lsan'] = {
             **self.artifact(Path(sys.executable).resolve()),
             'version': 'clang version 23.1.4', 'flags': ['-fsanitize=address']}
         self.manifest['sanitizer_options']['ASAN_OPTIONS'] = 'abort_on_error=1:detect_leaks=1'
-        self.manifest['limitations'] = ['Fixture output validates the LSan process contract only.']
+        self.manifest['limitations'] = ['Legacy schema 2 can attest only its LSan positive control.']
         self.save()
+        legacy_manifest = read_json(self.path)
+        self.assertIs(fuzz.validate_manifest(legacy_manifest, legacy_lsan=True), legacy_manifest)
+        with self.assertRaisesRegex(SDKError, 'lsan_probe and lsan_replay'):
+            fuzz.validate_manifest(read_json(self.path))
+
+        self.add_lsan_binaries()
+        with self.assertRaisesRegex(SDKError, 'cannot attest per-input replay'):
+            fuzz.validate_manifest(read_json(self.path), legacy_lsan=True)
+
+    def test_lsan_positive_control_is_checked_and_recorded(self):
+        self.add_lsan_binaries()
         self.run_fixture()
         receipt = read_json(self.output / 'evidence.json')
-        self.assertEqual(receipt['memory_checks']['lsan'],
-                         {'status': 'passed', 'canary': 'logs/lsan-canary'})
+        lsan = receipt['memory_checks']['lsan']
+        self.assertEqual(lsan['status'], 'passed')
+        self.assertEqual(lsan['canary'], 'logs/lsan-canary')
+        self.assertEqual(len(lsan['replay']), 4)
+        self.assertEqual(lsan['environment']['ASAN_OPTIONS'], 'abort_on_error=1:detect_leaks=1')
+        self.assertEqual(receipt['environment']['ASAN_OPTIONS'], 'abort_on_error=1:detect_leaks=0')
+        self.assertIn('abort_on_error=1:detect_leaks=1',
+                      (self.output / 'logs/lsan-replay-0.stdout').read_text())
+
+    def test_lsan_replay_failure_keeps_run_incomplete(self):
+        self.add_lsan_binaries()
+        replay = self.script('lsan_replay',
+                             "import pathlib,sys\nraise SystemExit(23 if pathlib.Path(sys.argv[1]).read_bytes()==b'seed' else 0)\n")
+        self.manifest['binaries']['lsan_replay'] = self.artifact(replay)
+        self.save()
+        with self.assertRaisesRegex(SDKError, 'producer failed: 23'):
+            self.run_fixture()
+        self.assertTrue((self.output / 'INCOMPLETE').exists())
+        self.assertEqual(read_json(self.output / 'logs/lsan-replay-0.json')['status'], 23)
 
     def test_v1_evidence_cannot_attest_lsan(self):
-        probe = self.script('lsan_probe',
-                            "import sys\nprint('ERROR: LeakSanitizer: detected memory leaks',file=sys.stderr)\nprint('Direct leak of 37 byte',file=sys.stderr)\nraise SystemExit(1)\n")
-        self.manifest['binaries']['lsan_probe'] = self.artifact(probe)
-        self.manifest['tools']['clang_lsan'] = {
-            **self.artifact(Path(sys.executable).resolve()),
-            'version': 'clang version 23.1.4', 'flags': ['-fsanitize=address']}
-        self.manifest['sanitizer_options']['ASAN_OPTIONS'] = 'abort_on_error=1:detect_leaks=1'
-        self.manifest['limitations'] = ['Fixture output validates the LSan process contract only.']
-        self.save()
+        self.add_lsan_binaries()
         self.run_fixture()
         self.rewrite_receipt(lambda receipt: (receipt.pop('memory_checks'),
                                               receipt.update(schema=1)))
@@ -140,12 +173,9 @@ class FuzzChecks(unittest.TestCase):
             fuzz.verify(self.output)
 
     def test_lsan_canary_without_leak_report_is_rejected(self):
-        probe = self.script('lsan_probe', "raise SystemExit(1)\n")
+        self.add_lsan_binaries()
+        probe = self.script('bad_lsan_probe', "raise SystemExit(1)\n")
         self.manifest['binaries']['lsan_probe'] = self.artifact(probe)
-        self.manifest['tools']['clang_lsan'] = {
-            **self.artifact(Path(sys.executable).resolve()),
-            'version': 'clang version 23.1.4', 'flags': ['-fsanitize=address']}
-        self.manifest['sanitizer_options']['ASAN_OPTIONS'] = 'abort_on_error=1:detect_leaks=1'
         self.save()
         with self.assertRaisesRegex(SDKError, 'positive control'):
             self.run_fixture()

@@ -91,8 +91,10 @@ def artifact(value, current=False, absolute=True):
         raise SDKError(f'artifact hash mismatch: {path}')
 
 
-def validate_manifest(value, current=False):
+def validate_manifest(value, current=False, *, legacy_lsan=False):
     keys(value, 'schema name scope host sources tools binaries corpus build_logs limitations sanitizer_options')
+    if legacy_lsan and 'lsan_replay' in value.get('binaries', {}):
+        raise SDKError('legacy LeakSanitizer evidence cannot attest per-input replay')
     if value['schema'] != FUZZ_MANIFEST_VERSION or type(value['schema']) is not int:
         raise SDKError('unsupported fuzz manifest schema')
     text(value['name'])
@@ -138,7 +140,7 @@ def validate_manifest(value, current=False):
             raise SDKError('Memcheck replay must not use compiler sanitizers')
     if not isinstance(value['binaries'], dict) or not {'fuzzer', 'replay'} <= set(value['binaries']):
         raise SDKError('binaries must include fuzzer and replay')
-    if set(value['binaries']) - {'fuzzer', 'replay', 'lsan_probe', 'memcheck'}:
+    if set(value['binaries']) - {'fuzzer', 'replay', 'lsan_probe', 'lsan_replay', 'memcheck'}:
         raise SDKError('unsupported fuzz binary')
     for binary in value['binaries'].values():
         keys(binary, 'path sha256')
@@ -146,6 +148,12 @@ def validate_manifest(value, current=False):
     if ('memcheck' in value['binaries'] and
             value['binaries']['memcheck']['sha256'] == value['binaries']['replay']['sha256']):
         raise SDKError('Memcheck requires a separate replay binary without sanitizers')
+    if ('lsan_replay' in value['binaries'] and
+            value['binaries']['lsan_replay']['sha256'] in {
+                value['binaries']['fuzzer']['sha256'],
+                value['binaries']['replay']['sha256'],
+                value['binaries'].get('lsan_probe', {}).get('sha256')}):
+        raise SDKError('LeakSanitizer requires a separate non-fuzzer replay binary')
     keys(value['corpus'], 'path files')
     if not Path(text(value['corpus']['path'])).is_absolute():
         raise SDKError('corpus path must be absolute')
@@ -170,16 +178,23 @@ def validate_manifest(value, current=False):
         raise SDKError('ASan must abort on error and declare leak detection')
     if options['UBSAN_OPTIONS'] != 'halt_on_error=1:print_stacktrace=1':
         raise SDKError('UBSan must halt on error')
-    if options['ASAN_OPTIONS'] == 'abort_on_error=1:detect_leaks=1' and 'lsan_probe' not in value['binaries']:
-        raise SDKError('LeakSanitizer requires a positive-control lsan_probe binary')
+    lsan_binaries = {'lsan_probe'} if legacy_lsan else {'lsan_probe', 'lsan_replay'}
+    if options['ASAN_OPTIONS'] == 'abort_on_error=1:detect_leaks=1' and not lsan_binaries <= set(value['binaries']):
+        raise SDKError('LeakSanitizer requires positive-control lsan_probe and lsan_replay binaries')
     if 'lsan_probe' in value['binaries'] and 'clang_lsan' not in value['tools']:
         raise SDKError('LeakSanitizer probe requires recorded Clang build flags')
-    if 'clang_lsan' in value['tools'] and 'lsan_probe' not in value['binaries']:
-        raise SDKError('clang_lsan tool record requires an lsan_probe binary')
-    if ('lsan_probe' in value['binaries'] and
+    if 'lsan_replay' in value['binaries'] and 'clang_lsan' not in value['tools']:
+        raise SDKError('LeakSanitizer replay requires recorded Clang build flags')
+    clang_lsan_binaries = {'lsan_probe'} if legacy_lsan else {'lsan_probe', 'lsan_replay'}
+    if ('clang_lsan' in value['tools'] and not clang_lsan_binaries <= set(value['binaries'])):
+        raise SDKError('clang_lsan tool record requires lsan_probe and lsan_replay binaries')
+    if ({'lsan_probe', 'lsan_replay'} & set(value['binaries']) and
+            options['ASAN_OPTIONS'] != 'abort_on_error=1:detect_leaks=1'):
+        raise SDKError('LeakSanitizer binaries require leak detection to be enabled')
+    if ('lsan_replay' in value['binaries'] and
             not any(flag.startswith('-fsanitize=address')
                     for flag in value['tools']['clang_lsan']['flags'])):
-        raise SDKError('LeakSanitizer probe requires an address-sanitized Clang build')
+        raise SDKError('LeakSanitizer requires an address-sanitized Clang build')
     if 'memcheck' in value['binaries'] and 'gcc_memcheck' not in value['tools']:
         raise SDKError('Memcheck replay requires recorded GCC16 build flags')
     if 'gcc_memcheck' in value['tools'] and 'memcheck' not in value['binaries']:
@@ -346,20 +361,28 @@ def run(manifest_path, output, *, runs=1000, seed=1, max_len=65536,
     if memcheck_plan['status'] == 'ready':
         _copy(memcheck_plan['path'], output / 'tools/valgrind')
         (output / 'tools/valgrind').chmod(0o755)
-    # Do not inherit sanitizer settings or dynamic-loader overrides from a shell.
+    # Keep RSS-limited libFuzzer and GCC replay free of its process-lifetime
+    # RSS-monitor allocations. Check each retained input in a separate Clang
+    # LSan replay process, which has no libFuzzer worker thread.
+    lsan_enabled = manifest['sanitizer_options']['ASAN_OPTIONS'] == 'abort_on_error=1:detect_leaks=1'
     env = dict(base_env)
     env.update(manifest['sanitizer_options'])
-    lsan = {'status': 'disabled', 'canary': None}
-    if manifest['sanitizer_options']['ASAN_OPTIONS'] == 'abort_on_error=1:detect_leaks=1':
+    lsan_env = dict(env)
+    if lsan_enabled:
+        env['ASAN_OPTIONS'] = 'abort_on_error=1:detect_leaks=0'
+    lsan = {'status': 'disabled', 'canary': None, 'replay': [], 'environment': None}
+    if lsan_enabled:
         canary_stderr = _command([str(output / 'binaries/lsan_probe')],
-                                 output / 'logs/lsan-canary', env, input_timeout,
+                                 output / 'logs/lsan-canary', lsan_env, input_timeout,
                                  allow_failure=True)
         canary = read_json(output / 'logs/lsan-canary.json')
         if (canary['status'] == 0 or
                 b'LeakSanitizer: detected memory leaks' not in canary_stderr or
                 b'Direct leak of' not in canary_stderr):
             raise SDKError('LeakSanitizer positive control did not report its intentional leak')
-        lsan = {'status': 'passed', 'canary': 'logs/lsan-canary'}
+        lsan = {'status': 'passed', 'canary': 'logs/lsan-canary', 'replay': [],
+                'environment': {'ASAN_OPTIONS': lsan_env['ASAN_OPTIONS'],
+                                'UBSAN_OPTIONS': lsan_env['UBSAN_OPTIONS']}}
 
     memcheck_result = {'requested': memcheck, 'status': memcheck_plan['status'],
                        'reason': memcheck_plan['reason'], 'tool': None, 'replay': []}
@@ -394,6 +417,11 @@ def run(manifest_path, output, *, runs=1000, seed=1, max_len=65536,
             _command([str(output / 'binaries/replay'), str(output / relative_path)],
                      output / f'logs/replay-{index}', env, input_timeout)
             replay.append({'path': relative_path, 'sha256': item['sha256']})
+    if lsan_enabled:
+        for index, item in enumerate(replay):
+            _command([str(output / 'binaries/lsan_replay'), str(output / item['path'])],
+                     output / f'logs/lsan-replay-{index}', lsan_env, input_timeout)
+            lsan['replay'].append(item)
     if memcheck_plan['status'] == 'ready':
         for index, item in enumerate(replay):
             xml_path = output / f'logs/memcheck-{index}.xml'
@@ -410,7 +438,7 @@ def run(manifest_path, output, *, runs=1000, seed=1, max_len=65536,
         raise SDKError('crash artifacts remain')
     # Keep a failed run visibly incomplete until every result has been saved.
     (output / 'INCOMPLETE').unlink()
-    receipt = {'schema': 2, 'scope': 'diagnostic-host', 'complete': True,
+    receipt = {'schema': 3, 'scope': 'diagnostic-host', 'complete': True,
                'manifest_sha256': file_sha256(output / 'manifest.json'),
                'limits': limits, 'environment': env, 'replay': replay,
                'corpus': corpus, 'files': tree_files(output),
@@ -432,6 +460,8 @@ def verify(evidence, manifest_path=None, sha256=None):
         keys(receipt, base_fields)
     elif receipt.get('schema') == 2:
         keys(receipt, base_fields + ' memory_checks')
+    elif receipt.get('schema') == 3:
+        keys(receipt, base_fields + ' memory_checks')
     else:
         raise SDKError('unsupported evidence schema')
     if receipt['scope'] != 'diagnostic-host' or receipt['complete'] is not True:
@@ -441,10 +471,11 @@ def verify(evidence, manifest_path=None, sha256=None):
         raise SDKError('evidence inventory differs')
     if file_sha256(evidence / 'manifest.json') != receipt['manifest_sha256']:
         raise SDKError('manifest snapshot differs')
-    manifest = validate_manifest(read_json(evidence / 'manifest.json'))
+    manifest = validate_manifest(read_json(evidence / 'manifest.json'),
+                                 legacy_lsan=receipt.get('schema') == 2)
     if receipt['schema'] == 1 and (
             manifest['sanitizer_options']['ASAN_OPTIONS'] == 'abort_on_error=1:detect_leaks=1' or
-            'memcheck' in manifest['binaries']):
+            {'lsan_probe', 'lsan_replay', 'memcheck'} & set(manifest['binaries'])):
         raise SDKError('evidence schema 1 cannot attest LSan or Memcheck results')
     if manifest_path is not None:
         current = validate_manifest(read_json(manifest_path), current=True)
@@ -473,6 +504,8 @@ def verify(evidence, manifest_path=None, sha256=None):
     command_names = ['fuzz'] + [f'replay-{i}' for i in range(len(expected))]
     if receipt['schema'] == 2 and manifest['sanitizer_options']['ASAN_OPTIONS'] == 'abort_on_error=1:detect_leaks=1':
         command_names.append('lsan-canary')
+    if receipt['schema'] == 3 and manifest['sanitizer_options']['ASAN_OPTIONS'] == 'abort_on_error=1:detect_leaks=1':
+        command_names += ['lsan-canary'] + [f'lsan-replay-{i}' for i in range(len(expected))]
     root = None
     for name in command_names:
         command = read_json(evidence / 'logs' / f'{name}.json')
@@ -503,6 +536,11 @@ def verify(evidence, manifest_path=None, sha256=None):
             index = int(name.split('-')[1])
             wanted = [str(command_root / 'binaries/replay'), str(command_root / expected[index]['path'])]
             budget = limits['input_timeout']
+        elif name.startswith('lsan-replay-'):
+            index = int(name.rsplit('-', 1)[1])
+            wanted = [str(command_root / 'binaries/lsan_replay'),
+                      str(command_root / expected[index]['path'])]
+            budget = limits['input_timeout']
         else:
             wanted = [str(command_root / 'binaries/lsan_probe')]
             budget = limits['input_timeout']
@@ -513,15 +551,32 @@ def verify(evidence, manifest_path=None, sha256=None):
     if not done or int(done[-1]) < limits['runs'] or tree_files(evidence / 'crashes'):
         raise SDKError('fuzz completion is absent or crash artifacts remain')
     for key, value in manifest['sanitizer_options'].items():
-        if receipt['environment'].get(key) != value:
+        expected_value = value
+        if (receipt['schema'] == 3 and key == 'ASAN_OPTIONS' and
+                value == 'abort_on_error=1:detect_leaks=1'):
+            expected_value = 'abort_on_error=1:detect_leaks=0'
+        if receipt['environment'].get(key) != expected_value:
             raise SDKError('sanitizer environment differs')
-    if receipt['schema'] == 2:
+    if receipt['schema'] in {2, 3}:
         checks = receipt['memory_checks']
         keys(checks, 'lsan memcheck')
         lsan = checks['lsan']
-        keys(lsan, 'status canary')
-        if lsan != _verify_lsan_canary(evidence, root, manifest, limits['input_timeout']):
-            raise SDKError('LeakSanitizer result differs from its positive control')
+        if receipt['schema'] == 2:
+            keys(lsan, 'status canary')
+            if lsan != _verify_lsan_canary(evidence, root, manifest, limits['input_timeout']):
+                raise SDKError('LeakSanitizer result differs from its positive control')
+        else:
+            keys(lsan, 'status canary replay environment')
+            if manifest['sanitizer_options']['ASAN_OPTIONS'] == 'abort_on_error=1:detect_leaks=1':
+                canary = _verify_lsan_canary(evidence, root, manifest, limits['input_timeout'])
+                expected_lsan = {'status': 'passed', 'canary': canary['canary'],
+                                 'replay': expected,
+                                 'environment': {'ASAN_OPTIONS': 'abort_on_error=1:detect_leaks=1',
+                                                 'UBSAN_OPTIONS': manifest['sanitizer_options']['UBSAN_OPTIONS']}}
+                if lsan != expected_lsan:
+                    raise SDKError('LeakSanitizer replay evidence differs')
+            elif lsan != {'status': 'disabled', 'canary': None, 'replay': [], 'environment': None}:
+                raise SDKError('disabled LeakSanitizer result differs')
 
         memcheck = checks['memcheck']
         keys(memcheck, 'requested status reason tool replay')
