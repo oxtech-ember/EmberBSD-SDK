@@ -2,8 +2,10 @@
 
 ## Select independent host and target inputs
 
-Choose a host environment that can run the required OS/Ports tools. Keep its
-native compiler and generators separate from the target GCC16 compiler.
+Read the [SDK tool selection policy](tool-selection.md) before any build.
+Select SDK native GCC16 for host programs and SDK cross GCC16 for target code.
+Keep native generators separate from target files. Reject implicit system tools.
+The policy also identifies the current sysroot/release selector enforcement gap.
 The current backend uses POSIX shell and make; CMake remains the build system
 for dependencies which use it upstream. The workspace tools use Python's standard
 library for paths, JSON and process invocation.
@@ -54,8 +56,9 @@ The WSL2 Linux filesystem is recommended for sources and build outputs. Other
 mounts must pass the same case, link, mode and locking checks; a path prefix alone
 does not establish compatibility.
 
-The `debian13-x86_64-aarch64` profile retains the observed Debian package and
-bootstrap choices. They are examples, not dependencies for every host. To add
+The `debian13-x86_64-aarch64` profile retains historical Debian bootstrap observations.
+System GCC14 observations do not authorize new builds under the tool selection policy.
+To add
 a profile, choose a host environment, declare independent `host` and `target`
 fields, and record that host's native tool providers and qualification evidence.
 Keep package managers, versions and resource observations in that profile.
