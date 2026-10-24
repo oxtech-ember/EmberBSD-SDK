@@ -313,7 +313,8 @@ def _tools(value, *, inspect_inputs):
                  'source export utility must have an exact path and hash')
         path = _absolute(row['path'])
         _sha(row['sha256'])
-        _require(os.path.basename(path) == role and role not in _FORBIDDEN_TOOLS,
+        names = ('patch', 'gpatch') if role == 'patch' else ('git',)
+        _require(os.path.basename(path) in names and role not in _FORBIDDEN_TOOLS,
                  'source export utility path cannot substitute for a compiler or make')
         if inspect_inputs:
             info = os.lstat(path)

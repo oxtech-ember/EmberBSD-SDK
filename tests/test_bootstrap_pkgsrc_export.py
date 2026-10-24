@@ -10,7 +10,7 @@ from test_core import TemporaryCase
 from emberbsd_sdk.bootstrap_pkgsrc_export import (
     describe_export_source, export_source_manifest, create_export_plan,
     validate_export_source, validate_export_plan, validate_export_transfer_acceptance,
-    worker_main, run_export,
+    worker_main, run_export, _tools,
 )
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.inventory import sha256_file, snapshot_tree, transfer_inventory_equal
@@ -33,6 +33,65 @@ def commit(root, *paths):
     git(root, 'add', '-f', *(paths or ('.',)))
     git(root, '-c', 'user.name=SDK fixture', '-c', 'user.email=fixture@example.invalid',
         'commit', '-qm', 'Fixture source')
+
+
+class PkgsrcExportToolTests(TemporaryCase):
+    def tools(self, patch_name='patch'):
+        tools = {}
+        for role, name in (('git', 'git'), ('patch', patch_name)):
+            path = write(self.root / name, f'{role} fixture bytes\n')
+            path.chmod(0o755)
+            tools[role] = dict(path=str(path), sha256=sha256_file(path))
+        return tools
+
+    def test_patch_and_gpatch_are_exact_selected_patch_names(self):
+        for name in ('patch', 'gpatch'):
+            tools = self.tools(name)
+            for inspect_inputs in (False, True):
+                with self.subTest(name=name, inspect_inputs=inspect_inputs):
+                    self.assertEqual(_tools(tools, inspect_inputs=inspect_inputs), tools)
+
+    def test_other_patch_names_and_gpatch_for_git_are_refused(self):
+        for role, name in (('patch', 'other-patch'), ('patch', 'cc'),
+                           ('patch', 'make'), ('git', 'gpatch')):
+            tools = self.tools()
+            tools[role]['path'] = str(self.root / name)
+            with self.subTest(role=role, name=name), \
+                    self.assertRaisesRegex(SDKError, 'utility|compiler|make'):
+                _tools(tools, inspect_inputs=False)
+
+    def test_gpatch_hash_and_executable_checks_remain_required(self):
+        tools = self.tools('gpatch')
+        path = Path(tools['patch']['path'])
+        path.write_text('changed fixture bytes\n')
+        with self.assertRaisesRegex(SDKError, 'utility changed'):
+            _tools(tools, inspect_inputs=True)
+        tools['patch']['sha256'] = sha256_file(path)
+        path.chmod(0o644)
+        with self.assertRaisesRegex(SDKError, 'utility changed'):
+            _tools(tools, inspect_inputs=True)
+
+    def test_gpatch_symlink_and_directory_are_refused(self):
+        tools = self.tools('gpatch')
+        path = Path(tools['patch']['path'])
+        path.unlink()
+        path.symlink_to('git')
+        with self.assertRaisesRegex(SDKError, 'utility changed'):
+            _tools(tools, inspect_inputs=True)
+        path.unlink()
+        path.mkdir()
+        with self.assertRaisesRegex(SDKError, 'utility changed'):
+            _tools(tools, inspect_inputs=True)
+
+    def test_gpatch_still_requires_normalized_absolute_path_and_exact_roles(self):
+        tools = self.tools('gpatch')
+        for path in ('gpatch', str(self.root / 'child') + '/../gpatch'):
+            changed = {**tools, 'patch': {**tools['patch'], 'path': path}}
+            with self.subTest(path=path), self.assertRaisesRegex(SDKError, 'absolute|normalized'):
+                _tools(changed, inspect_inputs=False)
+        for changed in ({'patch': tools['patch']}, {**tools, 'cc': tools['git']}):
+            with self.assertRaisesRegex(SDKError, 'exactly selected'):
+                _tools(changed, inspect_inputs=False)
 
 
 class SourceFixture(TemporaryCase):

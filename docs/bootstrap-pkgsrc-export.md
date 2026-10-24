@@ -28,7 +28,10 @@ repository identifier in the source descriptor; the independent gate still
 checks the claimed commits against those upstream sources.
 
 The SDK accepts exactly two executable selections for this stage: Git and
-patch. The worker receives a restricted PATH containing those exact tool
+patch. The Git executable must be named `git`. The selected patch executable
+must be named `patch` or `gpatch`. The latter name supports GNU patch without
+an alias. Both selections retain their exact absolute path and SHA256 checks.
+The worker receives a restricted PATH containing those exact tool
 directories and the selected Python directory. Compiler and make names cannot
 be supplied through those selectors. The worker imports only
 `scripts/prepare-pkgsrc.py` from the hashed clean Ports source and passes the
