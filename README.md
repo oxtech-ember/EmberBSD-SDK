@@ -88,6 +88,8 @@ Reject implicit system compiler and build-tool selection.
 Use [native toolset validation](docs/native-toolset.md) to check an explicit bundle
 and an accepted producer receipt without running tools. This API does not implement
 a native bundle producer or supply qualified tools.
+Use [OS native-tool routing](docs/native-os-routing.md) to publish the OS-owned
+mapping from an accepted native toolset. The mapping does not admit a build.
 The selected target architecture, ABI and runtime must agree. Build-host tools
 remain host executables. Boards and VMs execute prepared acceptance programs.
 
