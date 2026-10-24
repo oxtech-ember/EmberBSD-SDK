@@ -124,6 +124,114 @@ while not Path({str(child)!r}).is_file(): time.sleep(.01)
             process.run_logged(['unused'], self.root / 'log')
         self.assertFalse((self.root / 'log').exists())
 
+    def test_invalid_runtime_timeout_precedes_backend_log_and_start(self):
+        for value in (True, False, 0, -1, float('nan'), float('inf'), -float('inf'), '1', 10 ** 10000):
+            with self.subTest(kind=type(value).__name__), patch.object(process, 'OwnedProcessGroup') as group:
+                with self.assertRaisesRegex(SDKError, 'timeout must be finite and positive'):
+                    process.run_logged(['unused'], self.root / 'invalid-timeout.log', timeout_seconds=value)
+                group.assert_not_called()
+                self.assertFalse((self.root / 'invalid-timeout.log').exists())
+
+    def test_default_runtime_timeout_does_not_add_a_clock_or_change_success(self):
+        group = Mock(pid=1234567, options={})
+        group.poll.side_effect = [None, 0]
+        group.alive.return_value = False
+        with patch.object(process, 'OwnedProcessGroup', return_value=group), \
+                patch.object(process.time, 'monotonic', side_effect=AssertionError('no default deadline')), \
+                patch.object(process.time, 'sleep'):
+            result = process.run_logged(['fixture'], self.root / 'default-timeout.log')
+        self.assertEqual(result.returncode, 0)
+        group.stop.assert_called_once_with()
+
+    def test_runtime_timeout_uses_monotonic_deadline_then_drains_before_return(self):
+        group = Mock(pid=1234567, options={})
+        group.poll.return_value = None
+        events = []
+        def start():
+            group.options['stdout'].write(b'retained combined fixture log\n')
+        group.start.side_effect = start
+        group.stop.side_effect = lambda: events.append('drained')
+        log = self.root / 'deadline.log'
+        with patch.object(process, 'OwnedProcessGroup', return_value=group), \
+                patch.object(process.time, 'monotonic', side_effect=[10.0, 10.5, 11.0]), \
+                patch.object(process.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(SDKError, 'runtime timeout.*deadline.log'):
+                process.run_logged(['fixture'], log, timeout_seconds=1)
+            events.append('returned')
+        self.assertEqual(events, ['drained', 'returned'])
+        self.assertEqual(sleep.call_count, 1)
+        self.assertEqual(log.read_bytes(), b'retained combined fixture log\n')
+        self.assertTrue(group.options['stdout'].closed)
+
+    def test_runtime_timeout_refuses_late_success_that_unbounded_mode_accepts(self):
+        for limit in (None, 1):
+            with self.subTest(limit=limit):
+                clock = [10.0]
+                group = Mock(pid=1234567, options={})
+                group.poll.side_effect = [None, None, 0]
+                group.alive.return_value = False
+                def advance(seconds):
+                    clock[0] += 1.0
+                with patch.object(process, 'OwnedProcessGroup', return_value=group), \
+                        patch.object(process.time, 'monotonic', side_effect=lambda: clock[0]), \
+                        patch.object(process.time, 'sleep', side_effect=advance):
+                    if limit is None:
+                        self.assertEqual(process.run_logged(['fixture'], self.root / 'unbounded.log').returncode, 0)
+                        self.assertEqual(clock[0], 12.0)
+                    else:
+                        with self.assertRaisesRegex(SDKError, 'runtime timeout'):
+                            process.run_logged(['fixture'], self.root / 'bounded.log', timeout_seconds=limit)
+                        self.assertEqual(clock[0], 11.0)
+                group.stop.assert_called_once_with()
+
+    def test_runtime_timeout_refuses_completion_first_observed_after_deadline(self):
+        for slow_start in (False, True):
+            with self.subTest(slow_start=slow_start):
+                clock = [10.0]
+                group = Mock(pid=1234567, options={})
+                group.poll.side_effect = [0] if slow_start else [None, 0]
+                def advance(*args):
+                    clock[0] = 12.0
+                if slow_start:
+                    group.start.side_effect = advance
+                log = self.root / ('slow-start.log' if slow_start else 'late-completion.log')
+                with patch.object(process, 'OwnedProcessGroup', return_value=group), \
+                        patch.object(process.time, 'monotonic', side_effect=lambda: clock[0]), \
+                        patch.object(process.time, 'sleep', side_effect=advance):
+                    with self.assertRaisesRegex(SDKError, 'runtime timeout'):
+                        process.run_logged(['fixture'], log, timeout_seconds=1)
+                group.stop.assert_called_once_with()
+                group.alive.assert_not_called()
+
+    def test_runtime_timeout_preserves_ownership_failure_and_its_log(self):
+        log = self.root / 'deadline-hold.log'
+        original = ProcessOwnershipError(1234567, 'incomplete timeout drain')
+        group = Mock(pid=original.sid, options={})
+        group.poll.side_effect = [None, 0]
+        group.stop.side_effect = original
+        with patch.object(process, 'OwnedProcessGroup', return_value=group), \
+                patch.object(process.time, 'monotonic', side_effect=[10.0, 11.0, 12.0]):
+            with self.assertRaises(ProcessOwnershipError) as raised:
+                process.run_logged(['fixture'], log, timeout_seconds=1)
+        self.assertEqual((raised.exception.sid, raised.exception.reason, raised.exception.log),
+                         (original.sid, original.reason, str(log)))
+        self.assertIs(raised.exception.__cause__, original)
+        self.assertIn('runtime timeout', str(original.__context__))
+
+    def test_runtime_timeout_drains_real_term_ignoring_descendant(self):
+        log = self.root / 'real-timeout.log'
+        argv = self.producer()
+        argv[-1] = 'print("retained timeout fixture", flush=True)\n' + argv[-1]
+        with self.assertRaisesRegex(SDKError, 'runtime timeout'):
+            process.run_logged(argv, log, env=process.sanitized_environment(), timeout_seconds=.5)
+        child = int((self.root / 'child.pid').read_text())
+        self.assert_stopped(child)
+        writer = self.root / 'writer'
+        before = writer.read_bytes()
+        time.sleep(.15)
+        self.assertEqual(writer.read_bytes(), before)
+        self.assertIn(b'retained timeout fixture', log.read_bytes())
+
     @skipUnless(sys.platform == 'darwin', 'requires native Darwin exit records')
     def test_stop_failure_reaps_leader_that_exits_during_inspection(self):
         from emberbsd_sdk._darwin_process import DarwinIdentity

@@ -402,14 +402,19 @@ class ContextLocks:
         self.close()
 
 
-def run_logged(argv, log, *, cwd=None, env=None, append=False, empty_snapshot_timeout=2):
+def run_logged(argv, log, *, cwd=None, env=None, append=False, empty_snapshot_timeout=2,
+               timeout_seconds=None):
     """Run a checked producer and drain its owned session before closing its log.
 
     Signal handlers are entrypoint policy. A handler can raise KeyboardInterrupt.
     The caller must retain its context locks until this function returns.
     If ProcessOwnershipError occurs, quarantine writable work before reuse.
     empty_snapshot_timeout bounds each empty-session proof, including startup.
+    timeout_seconds bounds runtime polling. Startup and drainage can take longer.
     """
+    if timeout_seconds is not None and (type(timeout_seconds) not in (int, float) or
+                                        not 0 < timeout_seconds <= sys.float_info.max):
+        raise SDKError('producer timeout must be finite and positive')
     empty_snapshot_timeout = _empty_snapshot_timeout(empty_snapshot_timeout)
     require_posix()
     argv = _argv(argv)
@@ -427,8 +432,14 @@ def run_logged(argv, log, *, cwd=None, env=None, append=False, empty_snapshot_ti
             raise SDKError(f'producer log changed before append: {log}')
         group.options.update(stdout=output, stderr=output)
         try:
+            deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
             group.start()
-            while (code := group.poll()) is None:
+            while True:
+                code = group.poll()
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise SDKError(f'producer runtime timeout ({timeout_seconds}s); inspect {log}')
+                if code is not None:
+                    break
                 time.sleep(0.05)
             if group.alive():
                 raise SDKError(f'producer left live descendants in its owned session; inspect {log}')

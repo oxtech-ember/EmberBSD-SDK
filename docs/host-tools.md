@@ -98,11 +98,23 @@ interfaces; they do not replace input validation or runtime checks.
 ## Run a logged producer
 
 `process.run_logged(argv, log, *, cwd=None, env=None, append=False,
-empty_snapshot_timeout=2)` uses the existing `OwnedProcessGroup` backend.
+empty_snapshot_timeout=2, timeout_seconds=None)` uses the existing `OwnedProcessGroup` backend.
 It returns `subprocess.CompletedProcess` on success. A failed command raises
 `CommandError` with the producer's status and log path. The default creates an
 exclusive log. `append=True` requires an existing regular log and retains its
 identity checks.
+
+`timeout_seconds` optionally accepts a finite positive `int` or `float`.
+The default `None` adds no runtime deadline. A monotonic deadline starts before
+owned leader startup and is checked while the producer is running.
+The deadline is checked after every poll, including a completed result.
+A completed result first observed at or after the deadline is refused.
+Expiry raises `SDKError` with the timeout reason and retained log path.
+The existing stop and full-session drain complete before return.
+Startup qualification, a startup call, inspection, and drain proofs can take additional time.
+This option does not promise a hard total wall-clock bound.
+Invalid values fail before backend qualification, log creation, or producer startup.
+An unproved drain still raises `ProcessOwnershipError`; callers must retain or quarantine work.
 
 `empty_snapshot_timeout` accepts a finite positive `int` or `float` in seconds.
 The default remains 2. The value reaches the inspector before its startup
