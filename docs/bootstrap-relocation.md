@@ -25,6 +25,21 @@ The original invocation is `gnu/bin/printf`. The final regular member remains
 `bin/gprintf`. The selected invocation is the relative alias `bin/printf`.
 This profile adds no member to the original 21-member profile or its results.
 
+The separate fixed
+[`darwin-installed-build-utilities-v1.json`](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/common-build-tools/bootstrap/darwin-installed-build-utilities-v1.json)
+profile has SHA256
+`a8144875daad5ce2f796ba7891a0ac915144fc179c17fc62ca3278b59cbe7d2e`.
+It names thirteen `coreutils-9.11` roles: `chgrp`, `chmod`, `chown`, `cp`,
+`install`, `ln`, `ls`, `mkdir`, `mv`, `rm`, `rmdir`, `touch`, and `sleep`.
+It also names `pkg_add` and `pkg_create` from `pkg_install-20260227nb3`, and
+`install-info` from `pkg_install-info-4.5nb3`.
+It includes the same libintl DSO.
+Coreutils regular names keep their `g` prefix and select relative aliases.
+The package installers retain their `sbin` paths.
+The `install-info` role selects `bin/pkg_install-info` without an alias.
+An unrelated `bin/install-info` file is outside this profile.
+Earlier profiles and their completed results remain unchanged.
+
 ## Fixed plan
 
 Use the existing `emberbsd-native-gcc16-producer-plan`, version 1,
@@ -53,6 +68,8 @@ Original absolute symlink chains must match the profile.
 
 `relocation_steps` constructs exactly 42 serial steps for the original profile.
 The printf profile constructs four steps: `gprintf` and libintl in each run.
+The build-utilities profile constructs 34 steps: sixteen executables and
+libintl in each run.
 Each step has `phase: transform` and `expected_exit: 0`.
 The selected tool must have the exact profile payload hash and a single
 `llvm-install-name-tool` invocation spelling.
@@ -62,8 +79,9 @@ No command suffix, arbitrary operation, or executable setup callback is accepted
 
 Each command writes a fresh output in `run-a` or `run-b` under the work root.
 The command removes all RPATH entries.
-For exactly 17 executables in the original profile, or `gprintf` in the printf
-profile, it changes the old absolute libintl load to
+For exactly 17 executables in the original profile, `gprintf` in the printf
+profile, or the thirteen coreutils members in the build-utilities profile,
+it changes the old absolute libintl load to
 `final_prefix/lib/libintl.8.dylib`.
 For the DSO, it sets the install ID to that same absolute path.
 The module does not add `@loader_path` or ambient search rules.
@@ -145,6 +163,17 @@ earlier history. Provision only the newly accepted `gprintf` and relative alias.
 The `printf` role requires its completed fixed derivation. The ordinary raw
 installed-package role list does not gain this role.
 
+The build-utilities profile also requires its own completed derivation.
+Keep separate derived histories for coreutils, pkg_install, pkg_install-info,
+and gettext-lib. Each history retains the unchanged original package metadata,
+known historical compiler, member hashes, and historical unknowns.
+One package's history cannot provide another package's roles.
+Compare the checked libintl output with an existing accepted library before
+provisioning new members. Do not replace that library or revise older results.
+The raw installed-package role lists remain unchanged.
+Input admission, actual utility behavior, and complete recipe execution are
+separate checks.
+
 ## Source and checks
 
 The finite format checks follow LLVM
@@ -160,5 +189,7 @@ This SDK implementation is original AI-assisted Python code under BSD-2-Clause.
 Run `python3 -m unittest discover -s tests -p test_bootstrap_relocation.py`.
 Run `python3 -m unittest discover -s tests -p test_bootstrap_relocation_printf.py`
 for the separate printf profile controls.
+Run `python3 -m unittest discover -s tests -p test_bootstrap_relocation_build_utilities.py`
+for the separate build and installation utility profile controls.
 These tests use synthetic Mach-O bytes and real fixture symlinks.
 They run no native tool and do not qualify the LLVM binary or a native SDK.
