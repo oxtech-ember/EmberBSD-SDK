@@ -15,11 +15,23 @@ _TEMPLATE_SHA256 = 'f6cd27cdc2bf3926de2816e6aaf2dc964e744d7cd42da298f2b073b3fb04
 _INSTANTIATED_SHA256 = 'c8e99fe7a77bd22b1e91af6f1bffa3d6a0dd2636c0ae9173e2ece2fdb9ced663'
 _LLD_TEMPLATE_RELATIVE = 'profiles/development-toolchain/bootstrap/darwin-llvm-mc-lld-seed.specs.in'
 _LLD_TEMPLATE_SHA256 = 'ef055eaac77dcb506165e366a984839820edc900c8e39bff5ce1e797945bd15b'
-_LLD_INSTANTIATED_SHA256 = 'bc8bda2a69069af27154c7da4ba3fa711136558a86a6076f012edf82544c64a2'
+# Each recorded macOS SDK version has its exact v2 instantiation identity.
+# Deployment stays 26.0. An unrecorded SDK version fails closed.
+_LLD_INSTANTIATED_SHA256 = {
+    '26.5': 'bc8bda2a69069af27154c7da4ba3fa711136558a86a6076f012edf82544c64a2',
+    '27.0': '3ca395b659b167215ba5dbf5eb6f0ef75641bf1e791d21e9c47b7b9f33b23786',
+}
+
+
+def _sdk_version(value):
+    version = value['sdk_version']
+    _require(isinstance(version, str) and version in _LLD_INSTANTIATED_SHA256,
+             'unsupported fixed seed SDK version')
+    return version
 
 
 def _sdk_metadata(value, descriptor, *, inspect_inputs):
-    _require(value['sdk_version'] == '26.5', 'unsupported fixed seed SDK version')
+    version = _sdk_version(value)
     reference = value['sdk_metadata']
     _require(isinstance(reference, dict) and set(reference) == {'path', 'sha256'},
              'fixed bootstrap SDK metadata needs an exact file reference')
@@ -34,10 +46,10 @@ def _sdk_metadata(value, descriptor, *, inspect_inputs):
     if inspect_inputs:
         metadata = _json(reference)
         _require(metadata.get('Version') == value['sdk_version'] and
-                 metadata.get('CanonicalName') == 'macosx26.5' and
+                 metadata.get('CanonicalName') == 'macosx' + version and
                  metadata.get('DefaultVariant') == 'macos' and
                  metadata.get('SupportedTargets', {}).get('macosx', {}).get('BuildVersionPlatformID') == '1',
-                 'fixed bootstrap requires the pinned macOS 26.5 SDK metadata')
+                 'fixed bootstrap requires the pinned macOS SDK metadata')
 
 
 def _binding(descriptor, *, inspect_inputs):
@@ -62,9 +74,12 @@ def _binding(descriptor, *, inspect_inputs):
                  'fixed bootstrap binding requires exact file references')
         _absolute(ref['path'])
         _sha(ref['sha256'])
+    if lld:
+        _sdk_version(value)
     _require(value['template_relative'] == (_LLD_TEMPLATE_RELATIVE if lld else _TEMPLATE_RELATIVE) and
              value['template']['sha256'] == (_LLD_TEMPLATE_SHA256 if lld else _TEMPLATE_SHA256) and
-             value['instantiated']['sha256'] == (_LLD_INSTANTIATED_SHA256 if lld else _INSTANTIATED_SHA256) and
+             value['instantiated']['sha256'] == (_LLD_INSTANTIATED_SHA256[value['sdk_version']]
+                                                 if lld else _INSTANTIATED_SHA256) and
              value['deployment'] == '26.0', 'unsupported Ports seed template or deployment')
     if lld:
         _sdk_metadata(value, descriptor, inspect_inputs=inspect_inputs)
@@ -81,7 +96,7 @@ def _binding(descriptor, *, inspect_inputs):
         instantiated = _bytes(value['instantiated'])
         expected = template.replace(b'@DEPLOYMENT@', b'26.0')
         if lld:
-            expected = expected.replace(b'@SDK_VERSION@', b'26.5')
+            expected = expected.replace(b'@SDK_VERSION@', value['sdk_version'].encode())
         _require(instantiated == expected,
                  'bootstrap specs differ from the fixed Ports instantiation')
         _require(inside(canonical_existing(specs), root) and

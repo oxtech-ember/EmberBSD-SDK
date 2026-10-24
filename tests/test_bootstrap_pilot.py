@@ -363,8 +363,9 @@ class FixedLLDBindingTests(FixedBindingTests):
         self.inventory_path = self.root / 'sdk-inventory.json'
         self.descriptor['host_abi'] = dict(headers=[dict(root=str(self.sdk), inventory={})])
         self.seal_sdk()
+        self.recorded = {'26.5': ref(specs)['sha256']}
         for name, value in (('_LLD_TEMPLATE_SHA256', ref(template)['sha256']),
-                             ('_LLD_INSTANTIATED_SHA256', ref(specs)['sha256'])):
+                             ('_LLD_INSTANTIATED_SHA256', self.recorded)):
             mock = patch.object(bootstrap_binding, name, value)
             mock.start()
             self.addCleanup(mock.stop)
@@ -385,8 +386,35 @@ class FixedLLDBindingTests(FixedBindingTests):
                 self.metadata = copy.deepcopy(original)
                 self.metadata[field] = value
                 self.seal_sdk()
-                with self.assertRaisesRegex(SDKError, 'pinned macOS 26.5 SDK metadata'):
+                with self.assertRaisesRegex(SDKError, 'pinned macOS SDK metadata'):
                     bootstrap_binding.seed_commands(self.descriptor)
+
+    def use_sdk(self, version, record=True):
+        specs = Path(self.binding['instantiated']['path'])
+        specs.write_bytes(('source-owned 26.0 %s fixture\n' % version).encode())
+        sha = hashlib.sha256(specs.read_bytes()).hexdigest()
+        if record:
+            self.recorded[version] = sha
+        self.binding.update(sdk_version=version, instantiated=dict(path=str(specs), sha256=sha))
+        self.metadata.update(Version=version, CanonicalName='macosx' + version)
+        self.seal_sdk()
+
+    def test_recorded_current_sdk_version_is_accepted(self):
+        self.use_sdk('27.0')
+        commands = bootstrap_binding.seed_commands(self.descriptor)
+        self.assertEqual(commands['cc'][-1], '-mmacosx-version-min=26.0')
+        self.assertEqual(commands['cc'][-2], '-specs=' + self.binding['instantiated']['path'])
+
+    def test_unrecorded_sdk_version_is_refused(self):
+        self.use_sdk('27.1', record=False)
+        with self.assertRaisesRegex(SDKError, 'unsupported fixed seed SDK version'):
+            bootstrap_binding.seed_commands(self.descriptor)
+
+    def test_recorded_version_needs_its_own_instantiation(self):
+        self.use_sdk('27.0')
+        self.binding['instantiated']['sha256'] = self.recorded['26.5']
+        with self.assertRaisesRegex(SDKError, 'unsupported Ports seed template'):
+            bootstrap_binding.seed_commands(self.descriptor)
 
     def test_sdk_metadata_cannot_use_another_root_or_inventory_hash(self):
         original = copy.deepcopy(self.binding['sdk_metadata'])

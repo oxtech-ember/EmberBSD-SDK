@@ -93,17 +93,27 @@ mapping. Its template path is
 `profiles/development-toolchain/bootstrap/darwin-llvm-mc-lld-seed.specs.in`.
 The exact template SHA256 is
 `ef055eaac77dcb506165e366a984839820edc900c8e39bff5ce1e797945bd15b`.
-The exact instantiation SHA256 is
-`bc8bda2a69069af27154c7da4ba3fa711136558a86a6076f012edf82544c64a2`.
-Only `@DEPLOYMENT@` to `26.0` and `@SDK_VERSION@` to `26.5` are substituted.
+Only `@DEPLOYMENT@` to `26.0` and `@SDK_VERSION@` to the installed macOS SDK
+version are substituted. Each supported SDK version has one recorded exact
+instantiation SHA256:
+
+| SDK version | Instantiation SHA256 |
+| --- | --- |
+| `27.0` (current) | `3ca395b659b167215ba5dbf5eb6f0ef75641bf1e791d21e9c47b7b9f33b23786` |
+| `26.5` | `bc8bda2a69069af27154c7da4ba3fa711136558a86a6076f012edf82544c64a2` |
+
+Use the current SDK that is installed on the host. To support a new SDK, add
+its version and instantiation hash to this table and the SDK code.
+An SDK version that has no recorded row fails closed.
 The Ports template appends the modern platform option to the existing link
 spec. It does not replace collect2 or the upstream link command.
 
-The v2 binding has two additional required fields: `sdk_version: 26.5`
-(a string) and `sdk_metadata`, an exact file reference.
+The v2 binding has two additional required fields: `sdk_version`, a recorded
+version string such as `27.0`, and `sdk_metadata`, an exact file reference.
 The reference path must equal `SDKSettings.json` in exactly one declared
 `host_abi.headers` root. Its SHA256 must equal that root's pinned inventory row.
-Current metadata must have `Version: 26.5`, `CanonicalName: macosx26.5`,
+Current metadata must have `Version` equal to `sdk_version`,
+`CanonicalName` equal to `macosx` followed by that version,
 `DefaultVariant: macos`, and
 `SupportedTargets.macosx.BuildVersionPlatformID: 1`, all strings.
 Compiler defaults in that ABI metadata are data. They do not select a tool.
