@@ -1,0 +1,438 @@
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 EmberBSD contributors.
+# Developed with AI assistance. Fixtures do not qualify a real native toolset.
+
+import copy
+import hashlib
+import json
+from pathlib import Path
+import struct
+import sys
+import tempfile
+import unittest
+from unittest.mock import Mock, patch
+from types import SimpleNamespace
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+
+from emberbsd_sdk.darwin_runtime import (capture_darwin_runtime_audit,
+    darwin_runtime_closure, validate_darwin_runtime_closure, _runtime_cache_uuid)
+from emberbsd_sdk.errors import SDKError
+from emberbsd_sdk.inventory import snapshot_tree
+
+
+A = '/usr/lib/A.dylib'
+ALIAS = '/usr/lib/Alias.dylib'
+B = '/usr/lib/B.dylib'
+BASE = 0x180000000
+
+
+def command(kind, name, *, current=0x10000, compatibility=0x10000, flags=None):
+    text = name.encode() + b'\0'
+    if flags is not None:
+        size = (28 + len(text) + 7) // 8 * 8
+        return struct.pack('<7I', kind, size, 28, 0x1a741800, current,
+            compatibility, flags) + text.ljust(size - 28, b'\0')
+    size = (24 + len(text) + 7) // 8 * 8
+    return struct.pack('<6I', kind, size, 24, 0, current, compatibility) + text.ljust(size - 24, b'\0')
+
+
+def macho(address, loads=(), *, install_name=None, cached=False, uuid=1, lazy=None):
+    commands = [struct.pack('<II16s', 0x1b, 24, uuid.to_bytes(16, 'little'))]
+    commands.append(struct.pack('<II16s4Q4I', 0x19, 72, b'__TEXT',
+        address, 0x400, 0, 0x400, 5, 5, 0, 0))
+    commands.append(struct.pack('<6I', 0x32, 24, 1, 0x10000, 0x10000, 0))
+    if install_name:
+        commands.append(command(0xd, install_name))
+    commands.extend(load if isinstance(load, bytes) else command(*load) for load in loads)
+    blob = b''
+    if lazy:
+        if isinstance(lazy, bytes):
+            blob = lazy
+        else:
+            name, flags = lazy
+            blob = struct.pack('<IIHHIII', 24, 0, flags, 1, 0, 0, 24) + name.encode() + b'\0'
+        blob_size = (len(blob) + 255) // 256 * 256
+        commands.append(struct.pack('<II16s4Q4I', 0x19, 72, b'__LINKEDIT',
+            address + 0x400, blob_size, 0x400, blob_size, 1, 1, 0, 0))
+        commands.append(struct.pack('<4I', 0x3a, 16, 0x400, len(blob)))
+    data = b''.join(commands)
+    header = struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 6 if install_name else 2,
+        len(commands), len(data), 0x80000000 if cached else 0, 0)
+    return (header + data).ljust(0x400, b'\0') + (blob.ljust(blob_size, b'\0') if lazy else b'')
+
+
+def repeated_lazy_symbols(count, symbol_size):
+    name = B.encode() + b'\0'
+    path_offset = 24 + count * 4
+    symbol_offset = path_offset + len(name)
+    return (struct.pack('<IIHHIII', path_offset, 0, 0, 1, 0, count, 24) +
+            struct.pack('<I', symbol_offset) * count + name + b's' * symbol_size + b'\0')
+
+
+def trie(entries):
+    rows = sorted(entries.items())
+    start = 2 + sum(len(name.encode()) + 2 for name, _ in rows)
+    assert start + 3 * len(rows) < 128
+    data = bytearray([0, len(rows)])
+    for i, (name, index) in enumerate(rows):
+        data += name.encode() + b'\0' + bytes([start + i * 3])
+    for name, index in rows:
+        data += bytes([1, index, 0])
+    return bytes(data)
+
+
+class Fixture:
+    def __init__(self, test):
+        backend = patch('emberbsd_sdk.darwin_runtime._runtime_cache_uuid',
+                        return_value=(1).to_bytes(16, 'little').hex())
+        backend.start()
+        test.addCleanup(backend.stop)
+        temporary = tempfile.TemporaryDirectory()
+        test.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.bundle = self.root / 'bundle'
+        self.cache = self.root / 'cache'
+        self.bundle.mkdir()
+        self.cache.mkdir()
+        self.main = self.cache / 'dyld_shared_cache_arm64e'
+        self.sub = self.cache / (self.main.name + '.01')
+        self.tool = self.bundle / 'cc'
+        self.tool.write_bytes(macho(0x100000000, [(0xc, ALIAS)]))
+        self.inventory_path = self.root / 'cache-inventory.json'
+        self.audit_path = self.root / 'runtime-audit.json'
+        data = bytearray(8192)
+        self.header(data, BASE + 4096, 8192, 2)
+        data[0x400:0x800] = macho(BASE + 4096 + 0x400, [(0xc, B)],
+            install_name=A, cached=True, uuid=3)
+        data[0x1400:0x1800] = macho(BASE + 4096 + 0x1400, [(0x8000001f, A)],
+            install_name=B, cached=True, uuid=4)
+        self.sub.write_bytes(data)
+        data = bytearray(4096)
+        self.header(data, BASE, 4096, 1)
+        struct.pack_into('<QQ', data, 0xe0, BASE, 12288)
+        struct.pack_into('<II', data, 0x188, 1200, 1)
+        struct.pack_into('<16sQ32s', data, 1200, (2).to_bytes(16, 'little'), 4096, b'.01')
+        struct.pack_into('<II', data, 0x1c0, 680, 2)
+        struct.pack_into('<3Q2I', data, 680, BASE + 4096 + 0x400, 0, 0, 1024, 0)
+        struct.pack_into('<3Q2I', data, 712, BASE + 4096 + 0x1400, 0, 0, 1088, 0)
+        data[1024:1024 + len(A) + 1] = A.encode() + b'\0'
+        data[1088:1088 + len(B) + 1] = B.encode() + b'\0'
+        tree = trie({A: 0, ALIAS: 0, B: 1})
+        struct.pack_into('<QQ', data, 0x108, BASE + 1500, len(tree))
+        data[1500:1500 + len(tree)] = tree
+        self.main.write_bytes(data)
+        self.descriptor = dict(host=dict(os='Darwin', cpu='arm64'),
+            bundle_root=str(self.bundle), tools=dict(cc=dict(path=str(self.tool), kind='native')),
+            host_abi=dict(libraries=[dict(root=str(self.cache), inventory=None)]))
+        self.refresh_inventory()
+
+    def header(self, data, address, size, uuid):
+        data[:16] = b'dyld_v1  arm64e\0'
+        struct.pack_into('<II', data, 0x10, 568, 1)
+        data[0x58:0x68] = uuid.to_bytes(16, 'little')
+        struct.pack_into('<I', data, 0xd8, 1)
+        struct.pack_into('<I', data, 0x16c, 0x1b0000)
+        struct.pack_into('<3Q2I', data, 568, address, size, 0, 5, 5)
+
+    def reference(self, path, value):
+        data = (json.dumps(value, sort_keys=True) + '\n').encode()
+        path.write_bytes(data)
+        return dict(path=str(path), sha256=hashlib.sha256(data).hexdigest())
+
+    def refresh_inventory(self):
+        self.descriptor['host_abi']['libraries'][0]['inventory'] = self.reference(
+            self.inventory_path, snapshot_tree(str(self.cache)))
+
+    def capture(self):
+        return capture_darwin_runtime_audit(self.descriptor, cache_main=str(self.main))
+
+    def accepted(self):
+        audit = self.capture()
+        ref = self.reference(self.audit_path, audit)
+        return audit, darwin_runtime_closure(audit, ref)
+
+
+class DarwinRuntimeTests(unittest.TestCase):
+    def test_alias_subcache_cycle_and_versions(self):
+        f = Fixture(self)
+        audit, closure = f.accepted()
+        self.assertEqual(set(closure), {str(f.tool), A, ALIAS, B})
+        self.assertEqual(closure[ALIAS]['dependencies'], [B])
+        self.assertEqual(audit['nodes'][ALIAS]['image']['install_name'], A)
+        span = audit['nodes'][ALIAS]['image']['segments'][0]['spans'][0]
+        self.assertEqual(span, dict(file=f.sub.name, offset=0x400, size=0x400))
+        validate_darwin_runtime_closure(closure, f.descriptor)
+
+    def test_live_cache_uuid_must_match(self):
+        f = Fixture(self)
+        audit, closure = f.accepted()
+        with patch('emberbsd_sdk.darwin_runtime._runtime_cache_uuid', return_value='f' * 32):
+            with self.assertRaisesRegex(SDKError, 'not the current process runtime cache'):
+                validate_darwin_runtime_closure(closure, f.descriptor)
+
+    def test_dyld_service_has_a_typed_signature_and_no_library_search(self):
+        def fill(value):
+            value[:] = bytes(range(16))
+            return True
+        query = Mock(side_effect=fill)
+        with patch('emberbsd_sdk.darwin_runtime.sys.platform', 'darwin'), \
+             patch('ctypes.CDLL', return_value=SimpleNamespace(_dyld_get_shared_cache_uuid=query)) as library:
+            self.assertEqual(_runtime_cache_uuid(), bytes(range(16)).hex())
+            library.assert_called_once_with(None)
+            self.assertEqual(len(query.argtypes), 1)
+            query.side_effect = lambda value: False
+            with self.assertRaisesRegex(SDKError, 'no dyld shared cache'):
+                _runtime_cache_uuid()
+
+    def test_dyld_service_import_failure_is_typed(self):
+        with patch('emberbsd_sdk.darwin_runtime.sys.platform', 'darwin'), \
+             patch.dict(sys.modules, {'ctypes': None}):
+            with self.assertRaisesRegex(SDKError, 'runtime cache service is unavailable'):
+                _runtime_cache_uuid()
+
+    def test_ordinary_file_dylib_is_kept(self):
+        f = Fixture(self)
+        library = f.bundle / 'library.dylib'
+        library.write_bytes(macho(0x100000000, [(0xc, ALIAS)], install_name=str(library)))
+        f.tool.write_bytes(macho(0x100000000, [(0xc, str(library))]))
+        audit, closure = f.accepted()
+        self.assertEqual(closure[str(library)]['sha256'], hashlib.sha256(library.read_bytes()).hexdigest())
+        validate_darwin_runtime_closure(closure, f.descriptor)
+
+    def test_cached_weak_edge_cannot_select_an_existing_off_cache_file(self):
+        f = Fixture(self)
+        library = f.bundle / 'library.dylib'
+        library.write_bytes(macho(0x100000000, [(0xc, B)], install_name=str(library)))
+        content = bytearray(f.sub.read_bytes())
+        content[0x400:0x800] = macho(BASE + 4096 + 0x400,
+            [(0xc, B), (0x80000018, str(library))], install_name=A, cached=True, uuid=3)
+        f.sub.write_bytes(content)
+        f.refresh_inventory()
+        with self.assertRaisesRegex(SDKError, 'cached weak dependency exists outside the cache'):
+            f.capture()
+
+    def test_omitted_dependency_is_refused(self):
+        f = Fixture(self)
+        audit, closure = f.accepted()
+        closure[str(f.tool)]['dependencies'] = []
+        with self.assertRaisesRegex(SDKError, 'complete audited graph'):
+            validate_darwin_runtime_closure(closure, f.descriptor)
+
+    def test_changed_unparsed_cache_bytes_are_refused(self):
+        f = Fixture(self)
+        audit, closure = f.accepted()
+        data = bytearray(f.sub.read_bytes())
+        data[-1] ^= 1
+        f.sub.write_bytes(data)
+        with self.assertRaisesRegex(SDKError, 'cache inventory changed'):
+            validate_darwin_runtime_closure(closure, f.descriptor)
+
+    def test_subcache_uuid_is_checked(self):
+        f = Fixture(self)
+        data = bytearray(f.sub.read_bytes())
+        data[0x58] ^= 1
+        f.sub.write_bytes(data)
+        f.refresh_inventory()
+        with self.assertRaisesRegex(SDKError, 'subcache UUID mismatch'):
+            f.capture()
+
+    def test_wrong_audit_bytes_are_refused(self):
+        f = Fixture(self)
+        audit, closure = f.accepted()
+        audit['nodes'][ALIAS]['image']['uuid'] = '0' * 32
+        ref = f.reference(f.audit_path, audit)
+        for row in closure.values():
+            if 'cache_image' in row:
+                row['cache_image'] = ref
+        with self.assertRaisesRegex(SDKError, 'differs from current bytes'):
+            validate_darwin_runtime_closure(closure, f.descriptor)
+
+    def test_relative_dependency_is_not_a_fallback(self):
+        f = Fixture(self)
+        f.tool.write_bytes(macho(0x100000000, [(0xc, '@rpath/A.dylib')]))
+        with self.assertRaisesRegex(SDKError, '@rpath runtime loads are not supported'):
+            f.capture()
+
+    def test_missing_weak_dependency_has_an_explicit_null_edge(self):
+        f = Fixture(self)
+        missing = str(f.bundle / 'optional.dylib')
+        f.tool.write_bytes(macho(0x100000000, [(0xc, ALIAS), (0x80000018, missing)]))
+        audit, closure = f.accepted()
+        edge = audit['nodes'][str(f.tool)]['image']['loads'][1]
+        self.assertEqual(edge['command'], 0x80000018)
+        self.assertEqual(edge['name'], missing)
+        self.assertIsNone(edge['target'])
+        self.assertEqual(closure[str(f.tool)]['dependencies'], [ALIAS])
+        validate_darwin_runtime_closure(closure, f.descriptor)
+        Path(missing).write_bytes(macho(0x100000000, [(0xc, ALIAS)], install_name=missing))
+        with self.assertRaisesRegex(SDKError, 'differs from current bytes'):
+            validate_darwin_runtime_closure(closure, f.descriptor)
+
+    def test_missing_nonweak_dependencies_are_refused(self):
+        for kind in (0xc, 0x8000001f, 0x20, 0x80000023):
+            with self.subTest(command=kind):
+                f = Fixture(self)
+                f.tool.write_bytes(macho(0x100000000, [(kind, str(f.bundle / 'absent.dylib'))]))
+                with self.assertRaisesRegex(SDKError, 'required Darwin runtime dependency is absent'):
+                    f.capture()
+
+    def test_wrong_platform_and_newer_minos_are_refused(self):
+        for offset, value, message in ((8, 2, 'supported macOS'), (12, 0x1c0000, 'newer macOS')):
+            with self.subTest(value=value):
+                f = Fixture(self)
+                data = bytearray(f.tool.read_bytes())
+                struct.pack_into('<I', data, 32 + 24 + 72 + offset, value)
+                f.tool.write_bytes(data)
+                with self.assertRaisesRegex(SDKError, message):
+                    f.capture()
+
+    def test_missing_weak_dependency_race_is_refused(self):
+        f = Fixture(self)
+        missing = str(f.bundle / 'optional.dylib')
+        f.tool.write_bytes(macho(0x100000000, [(0xc, ALIAS), (0x80000018, missing)]))
+        original = snapshot_tree
+        def appeared(root):
+            rows = original(root)
+            Path(missing).write_bytes(macho(0x100000000, install_name=missing))
+            return rows
+        with patch('emberbsd_sdk.darwin_runtime.snapshot_tree', appeared):
+            with self.assertRaisesRegex(SDKError, 'dependency appeared'):
+                f.capture()
+
+    def test_dylib_versions_are_preserved_without_an_invented_loader_gate(self):
+        f = Fixture(self)
+        content = bytearray(f.tool.read_bytes())
+        # Header + UUID + segment + dylib command's compatibility field.
+        struct.pack_into('<I', content, 32 + 24 + 72 + 24 + 20, 0x20000)
+        f.tool.write_bytes(content)
+        audit = f.capture()
+        self.assertEqual(audit['nodes'][str(f.tool)]['image']['loads'][0]['compatibility_version'], 0x20000)
+        self.assertEqual(audit['nodes'][ALIAS]['image']['dylib_version']['current'], 0x10000)
+
+    def test_modern_dylib_use_weakness_is_recorded(self):
+        f = Fixture(self)
+        missing = str(f.bundle / 'optional.dylib')
+        f.tool.write_bytes(macho(0x100000000, [(0xc, ALIAS), command(0xc, missing, flags=1)]))
+        audit = f.capture()
+        edge = audit['nodes'][str(f.tool)]['image']['loads'][1]
+        self.assertEqual((edge['command'], edge['attributes'], edge['encoding'], edge['target']),
+                         (0xc, 1, 'dylib-use', None))
+
+    def test_unknown_dependency_encodings_fail_closed(self):
+        for kind in (0x80000077,):
+            with self.subTest(command=kind):
+                f = Fixture(self)
+                data = bytearray(f.tool.read_bytes())
+                struct.pack_into('<I', data, 32 + 24 + 72, kind)
+                f.tool.write_bytes(data)
+                with self.assertRaisesRegex(SDKError, 'unsupported Mach-O load command'):
+                    f.capture()
+
+    def test_lazy_linkedit_load_and_weak_absence(self):
+        for flags, name in ((0, ALIAS), (2, ALIAS), (0x8002, ALIAS), (1, None)):
+            with self.subTest(flags=flags):
+                f = Fixture(self)
+                name = name or str(f.bundle / 'optional.dylib')
+                f.tool.write_bytes(macho(0x100000000, [(0xc, B)], lazy=(name, flags)))
+                audit = f.capture()
+                edge = audit['nodes'][str(f.tool)]['image']['loads'][1]
+                self.assertEqual(edge['command'], 0x3a)
+                self.assertEqual(edge['encoding'], 'lazy-load-info')
+                self.assertEqual(edge['target'], None if flags & 1 else ALIAS)
+                self.assertEqual(audit['nodes'][str(f.tool)]['image']['lazy_info'][0]['flags'], flags)
+
+    def test_lazy_linkedit_bounds_are_checked(self):
+        f = Fixture(self)
+        data = bytearray(macho(0x100000000, [(0xc, B)], lazy=(ALIAS, 0)))
+        struct.pack_into('<I', data, 0x400 + 16, 0xffffffff)
+        f.tool.write_bytes(data)
+        with self.assertRaisesRegex(SDKError, 'invalid lazy dylib metadata'):
+            f.capture()
+
+    def test_lazy_symbol_count_has_an_explicit_limit(self):
+        f = Fixture(self)
+        f.tool.write_bytes(macho(0x100000000, [(0xc, ALIAS)],
+            lazy=repeated_lazy_symbols(4097, 1)))
+        with self.assertRaisesRegex(SDKError, 'symbol count exceeds the supported limit'):
+            f.capture()
+
+    def test_repeated_lazy_symbol_offsets_cannot_expand_past_the_budget(self):
+        f = Fixture(self)
+        f.tool.write_bytes(macho(0x100000000, [(0xc, ALIAS)],
+            lazy=repeated_lazy_symbols(4096, 4096)))
+        with self.assertRaisesRegex(SDKError, 'decoded symbols exceed the audit byte budget'):
+            f.capture()
+
+    def test_lazy_symbol_supported_limits_are_inclusive(self):
+        f = Fixture(self)
+        f.tool.write_bytes(macho(0x100000000, [(0xc, ALIAS)],
+            lazy=repeated_lazy_symbols(4096, 256)))
+        audit = f.capture()
+        symbols = audit['nodes'][str(f.tool)]['image']['lazy_info'][0]['symbols']
+        self.assertEqual(len(symbols), 4096)
+        self.assertEqual(sum(len(symbol.encode('utf-8')) for symbol in symbols), 1024 * 1024)
+
+    def test_lazy_symbol_byte_budget_is_shared_by_all_images(self):
+        f = Fixture(self)
+        f.tool.write_bytes(macho(0x100000000, [(0xc, ALIAS)],
+            lazy=repeated_lazy_symbols(200, 3072)))
+        other = f.bundle / 'other'
+        other.write_bytes(f.tool.read_bytes())
+        f.descriptor['tools']['other'] = dict(path=str(other), kind='native')
+        with self.assertRaisesRegex(SDKError, 'decoded symbols exceed the audit byte budget'):
+            f.capture()
+
+    def test_dyld_implicit_system_edge_is_explicit(self):
+        f = Fixture(self)
+        system = '/usr/lib/libSystem.B.dylib'
+        f.tool.write_bytes(macho(0x100000000))
+        tree = trie({A: 0, ALIAS: 0, B: 1, system: 0})
+        data = bytearray(f.main.read_bytes())
+        struct.pack_into('<QQ', data, 0x108, BASE + 1500, len(tree))
+        data[1500:1500 + len(tree)] = tree
+        f.main.write_bytes(data)
+        f.refresh_inventory()
+        audit, closure = f.accepted()
+        edge = audit['nodes'][str(f.tool)]['image']['implicit_loads'][0]
+        self.assertIsNone(edge['command'])
+        self.assertEqual(edge['reason'], 'dyld-synthesized-libSystem')
+        self.assertEqual(closure[str(f.tool)]['dependencies'], [system])
+        validate_darwin_runtime_closure(closure, f.descriptor)
+
+    def test_trie_cycle_is_refused(self):
+        f = Fixture(self)
+        data = bytearray(f.main.read_bytes())
+        # First root edge points back to root. Alias lookup must terminate.
+        data[1500 + 2 + len(A) + 1] = 0
+        f.main.write_bytes(data)
+        f.refresh_inventory()
+        with self.assertRaisesRegex(SDKError, 'cache dylib trie'):
+            f.capture()
+
+    def test_inventory_read_race_is_refused(self):
+        f = Fixture(self)
+        original = snapshot_tree
+        def changed(root):
+            rows = original(root)
+            data = bytearray(f.sub.read_bytes())
+            data[-1] ^= 1
+            f.sub.write_bytes(data)
+            return rows
+        with patch('emberbsd_sdk.darwin_runtime.snapshot_tree', changed):
+            with self.assertRaisesRegex(SDKError, 'changed'):
+                f.capture()
+
+    def test_non_darwin_and_undeclared_cache_root_are_refused(self):
+        f = Fixture(self)
+        descriptor = copy.deepcopy(f.descriptor)
+        descriptor['host']['os'] = 'Linux'
+        with self.assertRaisesRegex(SDKError, 'Darwin host'):
+            capture_darwin_runtime_audit(descriptor, cache_main=str(f.main))
+        f.descriptor['host_abi']['libraries'] = []
+        with self.assertRaisesRegex(SDKError, 'explicit native ABI library root'):
+            f.capture()
+
+
+if __name__ == '__main__':
+    unittest.main()
