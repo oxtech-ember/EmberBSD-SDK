@@ -171,6 +171,7 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     from .bootstrap_make import MAKE_PROBE_FORMAT, make_probe_sources, verify_make_step
     from .bootstrap_producer import PRODUCER_FORMAT, metadata_paths
     from .bootstrap_program import program_outputs, program_sources, verify_program_step
+    from .bootstrap_gnu_program import GNU_PROGRAM_STAGES, prepare_gnu_work
     from .bootstrap_recipe import BOOTSTRAP_FORMAT, prepare_recipe_work, validate_link_control
     from .bootstrap_seed import load_bootstrap_seed
     from .native_toolset import _json
@@ -184,7 +185,9 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     plan = _json(bootstrap_plan)
     make_probe = profile == 'make'
     metadata = profile == 'producer' and plan.get('stage') == 'metadata'
-    program = profile == 'producer' and plan.get('stage') in ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap')
+    gnu_program = profile == 'producer' and plan.get('stage') in GNU_PROGRAM_STAGES
+    program = profile == 'producer' and (gnu_program or plan.get('stage') in
+                                        ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap'))
     relocation = profile == 'producer' and plan.get('stage') == 'utility-relocation'
     recipe = profile == 'bootstrap'
     if relocation:
@@ -206,6 +209,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         roots += [plan['metadata']['export']['root'], plan['metadata']['utility_bin']]
     if program:
         roots += [plan['program']['source']['root']]
+        if gnu_program:
+            roots += [plan['program']['owner']['root']]
     if relocation:
         roots += list(relocation_read_roots(plan))
     sdk_root = str(Path(__file__).resolve().parents[2])
@@ -221,6 +226,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         shared.update(_references(_json(plan['metadata']['export']['source_proof'])))
     if program:
         shared.update(_references(_json(plan['program']['source']['source_proof'])))
+        if gnu_program:
+            shared.update(_references(_json(plan['program']['owner']['source_proof'])))
     if relocation:
         shared.update(_references(_json(plan['relocation']['originals'])))
     control_python = None
@@ -259,6 +266,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
             prepare_relocation_work(plan)
         if recipe:
             prepare_recipe_work(plan)
+        if gnu_program:
+            prepare_gnu_work(plan, descriptor, selected.commands)
         result = dict(format=('emberbsd-native-gcc16-producer-result' if metadata or program or relocation or recipe else
                               'emberbsd-bootstrap-make-probe-result' if make_probe else
                               'emberbsd-native-gcc16-pilot-result'), version=1,
@@ -284,7 +293,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                 try:
                     if step['phase'] == 'run':
                         _native_image(step['argv'][0], descriptor['host'])
-                    heavy = (recipe and 'link_control' not in plan) or step['phase'] == 'link'
+                    heavy = ((recipe and 'link_control' not in plan) or step['phase'] == 'link' or
+                             gnu_program and step['phase'] in ('gnu-configure', 'gnu-build'))
                     context = [resources['heavy_link_context']] if heavy else []
                     with ContextLocks(context, root):
                         remaining = deadline - time.monotonic()

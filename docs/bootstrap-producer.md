@@ -16,6 +16,8 @@ scope `gcc16-bootstrap`. It has exactly `format`, `version`, `scope`, `stage`,
 The separate [direct-source program profile](bootstrap-program.md) supports
 `stage: grep-bootstrap`, `cmp-bootstrap`, or `hostname-bootstrap` with its own
 finite input fields and commands.
+The [fixed initial GNU profiles](bootstrap-gnu-program.md) add
+`diffutils-bootstrap` and `findutils-bootstrap` through the same producer entry.
 The separate [initial utility relocation profile](bootstrap-relocation.md)
 supports `stage: utility-relocation`. The same `run-producer` entry point
 dispatches its 42 fixed transforms. It keeps original inputs shared and work

@@ -7,6 +7,8 @@ It needs no completed package dependency graph or future build output.
 Origin: EmberBSD (AI-assisted). The OS retains its source licenses and authors.
 
 Use `BOOTSTRAP_PROGRAM_API = 1` from `emberbsd_sdk.bootstrap_program`.
+The [fixed GNU configure/make variants](bootstrap-gnu-program.md) use the same
+entry point and evidence controls with their separate exact source contracts.
 The original source-owner contract is `tools/grep/bootstrap.json` in EmberBSD.
 Its SHA256 is
 `cdb8f56fd1107b1cc9ccdbe4cc352599e8575b7984f3c6b6a074426c71e56d3e`.

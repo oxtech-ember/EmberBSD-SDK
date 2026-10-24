@@ -9,6 +9,7 @@ import shlex
 import socket
 
 from .bootstrap_producer import PRODUCER_FORMAT
+from .bootstrap_gnu_program import GNU_PROGRAM_STAGES
 from .inventory import sha256_file, snapshot_tree
 from .native_toolset import _absolute, _bytes, _envelope, _json, _require, _source
 from .paths import canonical_existing, entry
@@ -74,6 +75,9 @@ def _native_program_contract(manifest, name):
 
 
 def program_manifest(plan):
+    if plan.get('stage') in GNU_PROGRAM_STAGES:
+        from .bootstrap_gnu_program import gnu_manifest
+        return gnu_manifest(plan)
     source, reference = plan['program']['source'], plan['program']['manifest']
     relative, digest, _, _ = _profile(plan)
     _require(reference == dict(path=os.path.join(source['root'], relative), sha256=digest),
@@ -103,12 +107,18 @@ def program_sources(plan):
 
 
 def program_outputs(plan):
+    if plan.get('stage') in GNU_PROGRAM_STAGES:
+        from .bootstrap_gnu_program import gnu_outputs
+        return gnu_outputs(plan)
     manifest = program_manifest(plan)
     return [*manifest['files'], *(Path(name).stem + '.o' for name in manifest['sources']), manifest['name'],
             *(case['name'] + suffix for case in manifest['runtime_cases'] for suffix in ('.stdout', '.stderr'))]
 
 
 def program_steps(plan, descriptor, commands, flags):
+    if plan.get('stage') in GNU_PROGRAM_STAGES:
+        from .bootstrap_gnu_program import gnu_steps
+        return gnu_steps(plan, descriptor, commands, flags)
     manifest, work = program_manifest(plan), _absolute(plan['work_root'])
     source = _absolute(plan['program']['source']['root'])
     directories = sorted({os.path.dirname(words[0]) for words in commands.values()})
@@ -145,6 +155,9 @@ def program_steps(plan, descriptor, commands, flags):
 
 def verify_program_step(step, work, plan):
     """Check separate actual streams only after the owned command drains."""
+    if plan.get('stage') in GNU_PROGRAM_STAGES:
+        from .bootstrap_gnu_program import verify_gnu_step
+        return verify_gnu_step(step, work, plan)
     if step['phase'] == 'link':
         if plan['stage'] != 'grep-bootstrap':
             return {}
@@ -174,6 +187,9 @@ def verify_program_step(step, work, plan):
 
 
 def validate_program_plan(plan, descriptor, commands, flags):
+    if plan.get('stage') in GNU_PROGRAM_STAGES:
+        from .bootstrap_gnu_program import validate_gnu_plan
+        return validate_gnu_plan(plan, descriptor, commands, flags)
     _envelope(plan, PRODUCER_FORMAT, scope='gcc16-bootstrap')
     _require(set(plan) == {'format', 'version', 'scope', 'stage', 'seed_descriptor', 'host', 'sources',
         'work_root', 'required_roles', 'resources', 'program', 'commands'} and plan['stage'] in PROGRAM_STAGES and
