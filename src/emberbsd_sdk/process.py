@@ -446,10 +446,15 @@ def run_logged(argv, log, *, cwd=None, env=None, append=False, empty_snapshot_ti
                 try:
                     group.stop()
                 except ProcessOwnershipError as exc:
-                    # The leader can exit while a failed session scan runs.
-                    # Reap only that child. Keep the original ownership failure.
+                    # Native exit records can precede a waitable child status.
+                    # Briefly retry only this leader. Keep the ownership failure.
                     try:
-                        group.poll()
+                        deadline = time.monotonic() + 1
+                        while group.poll() is None:
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                break
+                            time.sleep(min(0.01, remaining))
                     except BaseException:
                         pass
                     raise ProcessOwnershipError(exc.sid, exc.reason, log=os.fspath(log)) from exc
