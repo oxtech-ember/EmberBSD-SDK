@@ -486,7 +486,9 @@ def describe_bmake_source(ports_asserted_revision, profile_path, sources_path, p
 
 
 def select_host_utilities():
-    """Select and hash only the fixed OS utility roster used by configure and sh."""
+    """Select and hash only the fixed NetBSD amd64 utility roster for configure and sh."""
+    _require(platform.system() == 'NetBSD' and platform.machine() in ('x86_64', 'amd64'),
+             'first-bmake host utilities may only be selected on the native NetBSD amd64 host')
     result = {'sh': dict(path='/bin/sh', sha256=sha256_file('/bin/sh'))}
     for role in _HOST_TOOLS:
         candidates = ('/usr/bin/' + role, '/bin/' + role)

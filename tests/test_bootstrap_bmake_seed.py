@@ -6,6 +6,7 @@ from pathlib import Path
 import hashlib
 import io
 import json
+import platform
 import sys
 import subprocess
 import tarfile
@@ -434,6 +435,17 @@ class BootstrapBmakeSeedTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'fixed host utility roster'):
             _tool_map(host_tools, inspect_inputs=False)
 
+    @unittest.skipIf(platform.system() == 'NetBSD' and platform.machine() in ('x86_64', 'amd64'),
+                     'native NetBSD host should provide the first-bmake utility roster')
+    def test_host_utility_selector_rejects_non_netbsd_hosts(self):
+        from emberbsd_sdk.bootstrap_bmake_seed import select_host_utilities
+        from emberbsd_sdk.errors import SDKError
+
+        with self.assertRaisesRegex(SDKError, 'native NetBSD amd64 host'):
+            select_host_utilities()
+
+    @unittest.skipUnless(platform.system() == 'NetBSD' and platform.machine() in ('x86_64', 'amd64'),
+                         'uses the exact native NetBSD base utility roster')
     def test_configure_utility_path_can_run_ls_without_host_path_fallback(self):
         from emberbsd_sdk.bootstrap_bmake_seed import select_host_utilities
 
