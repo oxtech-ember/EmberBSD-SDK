@@ -28,7 +28,10 @@ PARALLEL_PROFILE_SHA256 = '6adbb69112056a867b463fd825a0842294b1eb7e67331433184c1
 BUILTIN_PROFILE_SHA256 = '73209380dcfeeb36abe13f0637a87bc1fd441817c98458ffb92751605c7b543b'
 LIBTOOL_PROFILE_SHA256 = 'ec0354fe315fb02605be2e08299b7495590fc1086d511f67093f4fbb8f4775e0'
 RANLIB_PROFILE_SHA256 = '5b48cba0ea1bd64b883631028d94db1aca574d87f235299a3fc9e768253907db'
+NATIVE_PROVIDER_PROFILE_SHA256 = '9fe8cf29f9d8a5dfb92f3a7f8bc44d0c9f6bcbb584f37636934bf54b6299c3cb'
 EARLY_TOOLS = tuple('awk basename cat cut date dirname env expr grep head id pwd sed sort tail tr uname uniq wc'.split())
+_DARWIN_CMAKE_TOOLS = (('LIBTOOL', 'libtool_darwin'), ('INSTALL_NAME_TOOL', 'install_name_tool'),
+                       ('TAPI', 'llvm_readtapi'))
 LEGACY_VARIABLES = tuple('PKGNAME PKGPATH PKGVERSION PKGREVISION OPSYS MACHINE_ARCH NATIVE_OPSYS NATIVE_OS_VERSION '
                   'NATIVE_OPSYS_VERSION PKGSRC_COMPILER GCC_REQD _GCC_VERSION CC CXX CPP PKG_CC PKG_CXX '
                   'PKG_CPP CPPFLAGS CFLAGS CXXFLAGS LDFLAGS CWRAPPERS_PREPEND.cc CWRAPPERS_PREPEND.cxx '
@@ -42,7 +45,7 @@ VARIABLES = (*LEGACY_VARIABLES, 'BOOTSTRAP_DEPENDS')
 
 def _parallel_profile(digest):
     return digest in (PARALLEL_PROFILE_SHA256, BUILTIN_PROFILE_SHA256, LIBTOOL_PROFILE_SHA256,
-                      RANLIB_PROFILE_SHA256)
+                      RANLIB_PROFILE_SHA256, NATIVE_PROVIDER_PROFILE_SHA256)
 
 
 def _recognized_profile(digest):
@@ -122,6 +125,15 @@ def metadata_assignments(plan, descriptor, commands, flags):
                       ('AR', 'ar'), ('RANLIB', 'ranlib'), ('NM', 'nm'), ('STRIP', 'strip')]:
         _require(len(commands[role]) == 1, 'metadata utility must have one selected invocation')
         variables['EMBERBSD_GCC16_' + key] = _safe_path(commands[role][0])
+    if data['profile']['sha256'] == NATIVE_PROVIDER_PROFILE_SHA256:
+        for key, role in _DARWIN_CMAKE_TOOLS:
+            if role in plan['required_roles']:
+                _require(len(commands.get(role, ())) == 1 and
+                         descriptor['tools'].get(role, {}).get('kind') == 'native',
+                         'Darwin CMake selection needs one explicit native role: ' + role)
+                variables['EMBERBSD_DARWIN_' + key] = _safe_path(commands[role][0])
+                if role == 'llvm_readtapi':
+                    variables['EMBERBSD_DARWIN_TAPI_KIND'] = 'llvm-readtapi'
     binding = descriptor['driver_binding']
     variables.update(OSX_SDK_PATH=_safe_path(os.path.dirname(binding['sdk_metadata']['path'])),
                      EMBERBSD_GCC16_DARWIN_SDK_VERSION=_word(binding['sdk_version']),
@@ -147,6 +159,11 @@ def metadata_assignments(plan, descriptor, commands, flags):
         if 'link_control' in plan:
             from .bootstrap_recipe import recipe_linker_launcher
             variables['EMBERBSD_GCC16_LINKER_LAUNCHER'] = recipe_linker_launcher(plan)
+        if data['profile']['sha256'] == NATIVE_PROVIDER_PROFILE_SHA256:
+            variables['EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER'] = ''
+            if 'link_control' in plan:
+                from .bootstrap_recipe import recipe_cmake_linker_launcher
+                variables['EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER'] = recipe_cmake_linker_launcher(plan)
     return variables
 
 
@@ -264,6 +281,13 @@ def validate_metadata_inputs(plan, descriptor, commands, flags, *, inspect_input
     _require(set(EARLY_TOOLS) <= set(data['native_tools']) and isinstance(plan['required_roles'], list) and
              len(plan['required_roles']) == len(set(plan['required_roles'])) and
              required <= set(plan['required_roles']) <= set(commands), 'metadata input tool roles are incomplete')
+    if {'lang/llvm', 'devel/lld', 'devel/cmake'} & set(data['recipes']):
+        _require(data['profile']['sha256'] == NATIVE_PROVIDER_PROFILE_SHA256,
+                 'CMake provider recipes need the native-provider source profile')
+        for _, role in _DARWIN_CMAKE_TOOLS:
+            _require(role in plan['required_roles'] and len(commands.get(role, ())) == 1 and
+                     descriptor['tools'].get(role, {}).get('kind') == 'native',
+                     'CMake provider recipes need an explicit native role: ' + role)
     _require(not set(data['native_tools']) & {'cc', 'cxx', 'cpp', 'as', 'ld', 'make', 'gmake', 'sh'},
              'metadata raw utility PATH cannot bypass compiler or make bindings')
     _require(isinstance(data['recipes'], list) and 1 <= len(data['recipes']) <= recipe_limit and

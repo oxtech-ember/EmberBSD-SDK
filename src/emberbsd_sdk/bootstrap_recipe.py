@@ -21,12 +21,21 @@ from .paths import canonical_existing, canonical_new, reject_overlap
 BOOTSTRAP_FORMAT = 'emberbsd-native-gcc16-bootstrap-plan'
 
 
+def _recipe_linker_words(plan):
+    value, resources = plan['link_control'], plan['resources']
+    return [_safe_path(value['python']['path']), _safe_path(value['launcher']['path']),
+            '--lock-root', _safe_path(resources['lock_root']),
+            '--context', _safe_path(resources['heavy_link_context']), '--']
+
+
 def recipe_linker_launcher(plan):
     """Construct only the pinned SDK control-plane resource service prefix."""
-    value, resources = plan['link_control'], plan['resources']
-    return shlex.join([_safe_path(value['python']['path']), _safe_path(value['launcher']['path']),
-                       '--lock-root', _safe_path(resources['lock_root']),
-                       '--context', _safe_path(resources['heavy_link_context']), '--'])
+    return shlex.join(_recipe_linker_words(plan))
+
+
+def recipe_cmake_linker_launcher(plan):
+    """Use the same service as CMake's native command-list representation."""
+    return ';'.join(_recipe_linker_words(plan))
 
 
 def validate_link_control(value, *, inspect_inputs):
@@ -170,6 +179,10 @@ def validate_bound_recipe_plan(plan, descriptor, commands, flags, *, inspect_inp
              all(descriptor['tools'].get(role, {}).get('kind') == 'native'
                  for role in ('pkg_add', 'pkg_create')),
              'bound recipe installation needs explicit native pkg_add and pkg_create roles')
+    from .bootstrap_producer import NATIVE_PROVIDER_PROFILE_SHA256
+    if plan['metadata']['profile']['sha256'] == NATIVE_PROVIDER_PROFILE_SHA256:
+        _require({'lang/llvm', 'devel/lld'} <= set(plan['recipes']),
+                 'native GCC defaults require the common source-built LLVM and LLD recipes')
     from .bootstrap_pilot import _references, _validate_resources
     parallel = 'link_control' in plan
     if parallel:

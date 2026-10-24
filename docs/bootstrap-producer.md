@@ -165,3 +165,18 @@ All inputs are revalidated after child drainage.
 `ordinary_provider_qualified` is always false.
 Inspect actual metadata, failures, selected tool routes and the dependency
 results before accepting the next build stage. No successful output is invented.
+
+## Common native GCC tool providers
+
+The native-provider Darwin profile requires the common `lang/llvm` and `devel/lld`
+recipes in a full GCC plan. Their installed tools supply GCC's configured defaults.
+CMake recipe metadata also requires explicit native `libtool_darwin`,
+`install_name_tool` and `llvm_readtapi` roles in `required_roles`.
+SDK emits their existing Ports selectors and fixes the TAPI kind to `llvm-readtapi`.
+These roles do not replace the raw `libtool` utility or create ordinary providers.
+
+With `link_control`, SDK emits the same resource command as a CMake command list.
+Ports forwards it to C/C++ final links, including nested `try_compile` work.
+The source profile adds static GCC runtime link options separately from ABI flags.
+Historical profile hashes retain their previous MAKECONF contents.
+Native execution, source-built provider receipts and full graduation remain required.
