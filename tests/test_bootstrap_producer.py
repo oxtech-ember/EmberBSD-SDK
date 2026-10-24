@@ -134,10 +134,11 @@ class MetadataTests(unittest.TestCase):
         self.assertNotIn('show-vars', argv)
         self.assertNotIn('show-vars-eval', argv)
 
-    def test_both_parallel_profile_histories_emit_the_same_budget_and_launcher(self):
+    def test_parallel_profile_histories_emit_the_same_budget_and_launcher(self):
         original = copy.deepcopy(self.plan)
         outputs = []
-        for digest in (producer.PARALLEL_PROFILE_SHA256, producer.BUILTIN_PROFILE_SHA256):
+        for digest in (producer.PARALLEL_PROFILE_SHA256, producer.BUILTIN_PROFILE_SHA256,
+                       producer.LIBTOOL_PROFILE_SHA256):
             self.plan['metadata']['profile']['sha256'] = digest
             self.plan['resources']['cpu_jobs'] = 18
             self.plan['link_control'] = dict(
@@ -149,16 +150,16 @@ class MetadataTests(unittest.TestCase):
             self.assertIn('/explicit/control-python', values['EMBERBSD_GCC16_LINKER_LAUNCHER'])
             outputs.append(producer.metadata_makeconf(self.plan, self.descriptor, self.commands,
                                                      self.descriptor['abi_flags']))
-        self.assertEqual(*outputs)
+        self.assertTrue(all(value == outputs[0] for value in outputs))
         self.plan = original
         values = producer.metadata_assignments(self.plan, self.descriptor, self.commands,
                                               self.descriptor['abi_flags'])
         self.assertNotIn('EMBERBSD_DARWIN_CPU_BUDGET', values)
         self.assertNotIn('EMBERBSD_GCC16_LINKER_LAUNCHER', values)
 
-    def test_builtin_profile_retains_full_source_checks_and_metadata_job_gate(self):
+    def _check_parallel_profile_job_gate(self, constant):
         with patch.object(producer, 'PROFILE_SHA256', 'f' * 64), \
-             patch.object(producer, 'BUILTIN_PROFILE_SHA256', self.profile_sha):
+             patch.object(producer, constant, self.profile_sha):
             with self.assertRaisesRegex(SDKError, 'full-plan link control'):
                 self.validate()
             self.plan['resources']['cpu_jobs'] = 1
@@ -174,6 +175,12 @@ class MetadataTests(unittest.TestCase):
             self.plan['metadata']['export']['source_proof'] = self.f.document(self.proof)
             with self.assertRaises(SDKError):
                 self.validate()
+
+    def test_builtin_profile_retains_full_source_checks_and_metadata_job_gate(self):
+        self._check_parallel_profile_job_gate('BUILTIN_PROFILE_SHA256')
+
+    def test_libtool_profile_retains_full_source_checks_and_metadata_job_gate(self):
+        self._check_parallel_profile_job_gate('LIBTOOL_PROFILE_SHA256')
 
     def test_host_facts_recipe_and_resource_changes_are_refused(self):
         for kind in ('host', 'stage', 'recipe', 'jobs', 'timeout'):

@@ -26,6 +26,7 @@ PROFILE_EXPORT = 'EMBERBSD-DARWIN-BOOTSTRAP-MK.CONF'
 PROFILE_SHA256 = '3b663ca1e6183f500dcc143c160d916da6088541f8a01b7376983b090d7c8298'
 PARALLEL_PROFILE_SHA256 = '6adbb69112056a867b463fd825a0842294b1eb7e67331433184c1f31d5de518a'
 BUILTIN_PROFILE_SHA256 = '73209380dcfeeb36abe13f0637a87bc1fd441817c98458ffb92751605c7b543b'
+LIBTOOL_PROFILE_SHA256 = 'ec0354fe315fb02605be2e08299b7495590fc1086d511f67093f4fbb8f4775e0'
 EARLY_TOOLS = tuple('awk basename cat cut date dirname env expr grep head id pwd sed sort tail tr uname uniq wc'.split())
 VARIABLES = tuple('PKGNAME PKGPATH PKGVERSION PKGREVISION OPSYS MACHINE_ARCH NATIVE_OPSYS NATIVE_OS_VERSION '
                   'NATIVE_OPSYS_VERSION PKGSRC_COMPILER GCC_REQD _GCC_VERSION CC CXX CPP PKG_CC PKG_CXX '
@@ -38,7 +39,7 @@ VARIABLES = tuple('PKGNAME PKGPATH PKGVERSION PKGREVISION OPSYS MACHINE_ARCH NAT
 
 
 def _parallel_profile(digest):
-    return digest in (PARALLEL_PROFILE_SHA256, BUILTIN_PROFILE_SHA256)
+    return digest in (PARALLEL_PROFILE_SHA256, BUILTIN_PROFILE_SHA256, LIBTOOL_PROFILE_SHA256)
 
 
 def _recipe_name(value):
@@ -217,7 +218,7 @@ def _export_proof(data, descriptor, inventory, *, inspect_inputs=True):
         if inspect_inputs:
             _bytes(row['file'])
     profile_sha = data['profile']['sha256']
-    _require(profile_sha in (PROFILE_SHA256, PARALLEL_PROFILE_SHA256, BUILTIN_PROFILE_SHA256) and
+    _require(profile_sha in (PROFILE_SHA256, PARALLEL_PROFILE_SHA256, BUILTIN_PROFILE_SHA256, LIBTOOL_PROFILE_SHA256) and
              manifest.get(PROFILE_RELATIVE, {}).get('sha256') == profile_sha and
              inventory.get(PROFILE_EXPORT, {}).get('sha256') == profile_sha,
              'prepared export profile differs from its source-owner bytes')
@@ -264,7 +265,7 @@ def validate_metadata_inputs(plan, descriptor, commands, flags, *, inspect_input
         _require(canonical_existing(root) == root and snapshot_tree(root) == inventory,
                  'prepared canonical export changed')
     _export_proof(data, descriptor, inventory, inspect_inputs=inspect_inputs)
-    _require(data['profile']['sha256'] in (PROFILE_SHA256, PARALLEL_PROFILE_SHA256, BUILTIN_PROFILE_SHA256) and
+    _require(data['profile']['sha256'] in (PROFILE_SHA256, PARALLEL_PROFILE_SHA256, BUILTIN_PROFILE_SHA256, LIBTOOL_PROFILE_SHA256) and
              data['profile'] == dict(path=os.path.join(root, PROFILE_EXPORT), sha256=data['profile']['sha256']),
              'metadata needs the recognized source-owner profile')
     if inspect_inputs:

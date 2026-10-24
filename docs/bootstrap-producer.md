@@ -46,9 +46,10 @@ The recognized SHA256 values are:
 - Original serial configuration: `3b663ca1e6183f500dcc143c160d916da6088541f8a01b7376983b090d7c8298`.
 - Parallel link route: `6adbb69112056a867b463fd825a0842294b1eb7e67331433184c1f31d5de518a`.
 - Parallel link route with selected-shell builtins: `73209380dcfeeb36abe13f0637a87bc1fd441817c98458ffb92751605c7b543b`.
+- Selected-shell route with Darwin libtool linker classification: `ec0354fe315fb02605be2e08299b7495590fc1086d511f67093f4fbb8f4775e0`.
 
 The exported profile and accepted Ports source manifest must match the same revision.
-Both parallel revisions receive the CPU budget and launcher assignments.
+All parallel revisions receive the CPU budget and launcher assignments.
 The original serial revision keeps its configuration bytes.
 All declared sources repeat the seed's exact source pins.
 
