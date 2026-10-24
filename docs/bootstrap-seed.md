@@ -3,6 +3,8 @@
 This interface admits a seed for one first-native-GCC16 plan.
 It does not admit that seed for ordinary builds or issue acceptance.
 The new output still needs [NativeToolset qualification](native-toolset.md).
+The [finite first C/C++ pilot](bootstrap-pilot.md) can run before the full
+recipe closure is available. It needs independent input and route acceptance.
 Use common `lang/gcc16` and its named dependencies in a pinned prepared Ports export.
 Keep recipes and patches in Ports. SDK owns orchestration and evidence checks.
 
@@ -36,7 +38,8 @@ The API constant is 1. `BootstrapSeed` is immutable.
 `command(role)` returns `(selected, "-B" + driver_prefix + "/")` for `cc`, `cxx`, and `cpp`.
 Other roles return `(selected,)`. `abi_flags` has the NativeToolset four-array interface.
 `as_dict()` returns fresh JSON data. Missing roles raise `SDKError`.
-No general driver options, response files, or `-specs` field are accepted.
+No general driver options or response files are accepted.
+The fixed Ports binding below is the only supported specs selector.
 Use the same tuple for metadata queries and compiler commands.
 All seven driver members, including `lto-wrapper`, must be inside the pinned prefix.
 Bare, default-search, and external driver selections fail closed.
@@ -52,7 +55,37 @@ An execution controller must use SDK process and lease interfaces.
 It must execute exact plan `argv`, `cwd`, and complete `env` without ambient additions.
 Keep selected inputs immutable under read leases through command drain.
 Preserve actual child results on failure. Never infer successful child exit from a plan.
-The check command does not provide this execution controller.
+The check command does not execute commands. `run-pilot` provides only the
+separate finite pilot controller, not a full recipe-build executor.
+
+### Fixed Darwin seed binding
+
+An optional `driver_binding` recognizes only
+`ports-gcc16-darwin-llvm-mc-seed-v1` on Darwin arm64.
+It has exactly `kind`, `ports_source`, `template_relative`, `template`,
+`instantiated`, `deployment`, and `reported_programs`.
+`ports_source` must equal `sources.ports`.
+The template-relative path is
+`profiles/development-toolchain/bootstrap/darwin-llvm-mc-seed.specs.in`.
+The exact published template SHA256 is
+`f6cd27cdc2bf3926de2816e6aaf2dc964e744d7cd42da298f2b073b3fb04d929`.
+`template` and `instantiated` are exact file references.
+The in-bundle instantiation replaces only `@DEPLOYMENT@` with `26.0`.
+Its SHA256 is `c8e99fe7a77bd22b1e91af6f1bffa3d6a0dd2636c0ae9173e2ece2fdb9ced663`.
+`deployment` is exactly `26.0`.
+The compiler tuple becomes `(selected, -Bprefix/, -specs=instantiated,
+-mmacosx-version-min=26.0)` before the separate qualified ABI flags.
+All metadata queries must use the complete same tuple.
+The Ports template owns assembler arguments and the fixed linker selector.
+The SDK does not copy or reinterpret a generic specs file.
+
+`tools.ld` must select `driver_prefix/ld64.lld` for Mach-O execution.
+`reported_programs` is exactly `{ld: driver_prefix/ld}`.
+Only the fixed seed binding permits this nominal query spelling.
+It never changes the selected execution role or `LD` binding.
+Do not use canonical inode equality as linker flavor evidence.
+An actual pilot must preserve the observed collect2 and `ld64.lld` route.
+Ordinary NativeToolset driver-query checks remain unchanged.
 
 ## Seed metadata
 
@@ -84,7 +117,8 @@ scope `gcc16-bootstrap`, with nonempty `historical_compiler` and a `build_log` r
 The independent gate checks the origin and completeness of that history.
 
 A `binary-release` history has `release_url`, `release_version`, exact `artifact`
-file reference, original `release_metadata` reference, and `embedded_configuration` reference.
+file reference, original `release_metadata` reference, and `embedded_configuration`
+(a file reference or null).
 It also has `source_commit` (a source pin or null), `historical_build_log`
 (file reference or null), `historical_compiler` (text or null), boolean `patches_complete`,
 and `publisher_signature` (null or `{file, verification}`).
@@ -94,7 +128,8 @@ These records do not select the historical compiler or signature verifier for a 
 
 The `unknowns` array must list every missing historical input, in sorted order:
 `source-archives` for an empty archive list, `source-commit` for a null commit,
-`historical-build-log`, `historical-compiler`, `historical-patches` when completeness is false,
+`embedded-configuration` when absent, `historical-build-log`, `historical-compiler`,
+`historical-patches` when completeness is false,
 and `publisher-signature` when absent.
 An independent gate must explicitly accept this exact named uncertainty list.
 Do not invent unavailable build logs or exact source commits.
@@ -110,7 +145,9 @@ Non-tool nodes need a native shared-library header: thin Mach-O64 type 6 or ELF6
 The loader rejects missing nodes and changed bytes.
 The independent audit must establish graph completeness.
 This module does not infer loader searches from headers.
-Unsupported loader, shared-cache, or DSO formats need an explicit contract extension.
+Explicit Darwin shared-cache rows use the [runtime audit contract](darwin-runtime.md).
+That branch reconstructs the graph from the pinned runtime bytes.
+It does not use a missing-file fallback. Other unsupported formats fail closed.
 
 ## Exact common-recipe plan
 
@@ -170,14 +207,19 @@ It binds `descriptor_sha256`, exact `bootstrap_plan` reference, and
 For source-build origins that list is empty. Omitting this explicit acceptance fails closed.
 Repeat `host`, `compiler`, `sources`, `providers`, `host_abi`, `abi_flags`,
 `history`, `dynamic_dependencies`, and `driver_prefix` exactly.
+Repeat `driver_binding` exactly when the descriptor uses it.
 `checks.identity` and `checks.driver_components` use NativeToolset query record shapes.
 Query `argv` includes the complete seed tuple. No C/C++ compile probe is required for seed admission.
 
-`execution_audit` references `emberbsd-bootstrap-seed-audit`, version 1,
+For a full common-recipe plan, `execution_audit` references
+`emberbsd-bootstrap-seed-audit`, version 1,
 scope `gcc16-bootstrap`, status `PASS`.
 Repeat `descriptor_sha256`, `bootstrap_plan`, `tools`, and `dynamic_dependencies`.
 Require empty `undeclared_tools`, `path_searches`, `undeclared_abi_inputs`, and `undeclared_dsos`.
 Hash checks preserve identity. They do not create independent acceptance.
+The first finite pilot uses explicit
+[input-and-route-only acceptance](bootstrap-pilot.md) instead.
+It does not claim that the compiler chain already executed.
 
 ## Output graduation
 
@@ -210,6 +252,7 @@ Graduation covers only a provider in the exact common recipe closure.
 Its recipe digest matches that recipe's exported `Makefile`.
 The ordinary loader still checks fresh C/C++ compile, link, run, driver, and execution evidence.
 Graduation alone cannot return a NativeToolset.
+A finite pilot plan cannot graduate a provider or replace the recipe plan.
 
 Preserve original descriptors, plan, inventories, acceptances, command logs, and comparison evidence.
 Ordinary use does not reselect or require the historical seed payload.

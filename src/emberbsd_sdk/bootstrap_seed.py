@@ -10,6 +10,7 @@ import shlex
 from types import MappingProxyType
 
 from .errors import SDKError
+from .bootstrap_binding import seed_commands, seed_reported_tools
 from .inventory import sha256_file, snapshot_tree
 from .native_toolset import (_absolute, _bytes, _driver_queries, _envelope, _file,
                              _gcc, _json, _native_image, _payload, _require,
@@ -76,8 +77,11 @@ def _history(histories, providers, *, inspect_inputs=True):
             _text(value['release_version'], 'binary release version')
             file(value['artifact'])
             _bytes(value['release_metadata'])
-            _bytes(value['embedded_configuration'])
             missing = []
+            if value['embedded_configuration'] is None:
+                missing.append('embedded-configuration')
+            else:
+                _bytes(value['embedded_configuration'])
             if value['source_commit'] is None:
                 missing.append('source-commit')
             else:
@@ -116,6 +120,10 @@ def _history(histories, providers, *, inspect_inputs=True):
 def _dynamic_closure(value, descriptor):
     """Check all recorded edges. An independent audit must establish completeness."""
     _require(isinstance(value, dict) and value, 'missing dynamic dependency closure')
+    if any(isinstance(row, dict) and 'cache_image' in row for row in value.values()):
+        from .darwin_runtime import validate_darwin_runtime_closure
+        validate_darwin_runtime_closure(value, descriptor)
+        return
     executable_paths = {canonical_existing(row['path'])
                         for row in descriptor['tools'].values() if row['kind'] == 'native'}
     roots = [descriptor['bundle_root']] + [item['root']
@@ -159,15 +167,16 @@ def _environment(tools, commands, flags):
     return result
 
 
-def _seed_commands(descriptor):
-    prefix = _absolute(descriptor['driver_prefix'])
-    return {role: (_absolute(row['path']), '-B' + prefix + os.sep)
-            if role in ('cc', 'cxx', 'cpp') else (_absolute(row['path']),)
-            for role, row in descriptor['tools'].items()}
+def _seed_commands(descriptor, *, inspect_inputs=True):
+    return seed_commands(descriptor, inspect_inputs=inspect_inputs)
 
 
 def _plan(reference, descriptor, commands=None, flags=None, *, inspect_inputs=True):
     plan = _json(reference)
+    if plan.get('format') == 'emberbsd-native-gcc16-pilot-plan':
+        from .bootstrap_pilot import validate_pilot_plan
+        commands = _seed_commands(descriptor, inspect_inputs=inspect_inputs) if commands is None else commands
+        return validate_pilot_plan(plan, descriptor, commands, descriptor['abi_flags'] if flags is None else flags)
     _envelope(plan, 'emberbsd-native-gcc16-bootstrap-plan', scope=_SCOPE)
     _require(plan.get('purpose') == 'first-native-gcc16' and
              plan.get('host') == descriptor['host'], 'bootstrap plan scope mismatch')
@@ -233,7 +242,7 @@ def _plan(reference, descriptor, commands=None, flags=None, *, inspect_inputs=Tr
     steps = plan['commands']
     _require(isinstance(steps, list) and steps, 'bootstrap build commands are required')
     ids, built, compared = set(), set(), False
-    commands = _seed_commands(descriptor) if commands is None else commands
+    commands = _seed_commands(descriptor, inspect_inputs=inspect_inputs) if commands is None else commands
     flags = descriptor['abi_flags'] if flags is None else flags
     environment = _environment({role: words[0] for role, words in commands.items()}, commands, flags)
     for step in steps:
@@ -379,7 +388,8 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
              'bootstrap plan selects another seed')
     _require(isinstance(required_roles, (tuple, list, set, frozenset)) and required_roles,
              'explicit required bootstrap roles are required')
-    roles = set(required_roles) | set(plan_header['required_roles']) | {'sh'}
+    is_pilot = plan_header.get('format') == 'emberbsd-native-gcc16-pilot-plan'
+    roles = set(required_roles) | set(plan_header['required_roles']) | (set() if is_pilot else {'sh'})
     root, inventory, tools, records, abi_inventories, flags = _payload(descriptor, roles)
     prefix = _absolute(descriptor['driver_prefix'])
     _require(inside(prefix, root) and canonical_existing(prefix) == prefix and os.path.isdir(prefix),
@@ -392,16 +402,25 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
     for key in ('host', 'compiler', 'sources', 'providers', 'host_abi', 'abi_flags',
                 'history', 'dynamic_dependencies', 'driver_prefix'):
         _require(acceptance.get(key) == descriptor[key], f'seed acceptance {key} mismatch')
-    _driver_queries(descriptor, acceptance['checks'], tools, commands)
-    audit = _json(acceptance['execution_audit'])
-    _envelope(audit, 'emberbsd-bootstrap-seed-audit', scope=_SCOPE)
-    _require(audit.get('status') == 'PASS' and
-             audit.get('descriptor_sha256') == descriptor_sha256 and
-             audit.get('bootstrap_plan') == plan_ref and audit.get('tools') == records and
-             audit.get('dynamic_dependencies') == descriptor['dynamic_dependencies'] and
-             all(audit.get(key) == [] for key in ('undeclared_tools', 'path_searches',
-                                                 'undeclared_abi_inputs', 'undeclared_dsos')),
-             'bootstrap seed execution closure was not accepted')
+    _require(acceptance.get('driver_binding') == descriptor.get('driver_binding'),
+             'seed acceptance driver binding mismatch')
+    _driver_queries(descriptor, acceptance['checks'], seed_reported_tools(descriptor, tools), commands)
+    if is_pilot:
+        _require(acceptance.get('evidence_level') == 'input-and-route-only',
+                 'pilot requires explicit input-and-route-only acceptance')
+        audit = _json(acceptance['input_route_audit'])
+        _envelope(audit, 'emberbsd-bootstrap-seed-input-route-audit', scope=_SCOPE)
+        _require(audit.get('status') == 'PASS' and
+                 audit.get('descriptor_sha256') == descriptor_sha256 and
+                 audit.get('bootstrap_plan') == plan_ref and audit.get('tools') == records and
+                 audit.get('dynamic_dependencies') == descriptor['dynamic_dependencies'] and
+                 audit.get('expected_commands') == plan['commands'] and
+                 audit.get('execution_observed') is False and
+                 all(audit.get(key) == [] for key in ('unresolved_tool_routes',
+                                                     'unresolved_abi_inputs', 'unresolved_dsos')),
+                 'pilot input routes were not independently accepted')
+    else:
+        _execution_audit(acceptance, descriptor, descriptor_sha256, plan_ref, records)
     _require(snapshot_tree(root) == inventory, 'bootstrap seed changed during validation')
     for abi_root, rows in abi_inventories:
         _require(snapshot_tree(abi_root) == rows, 'bootstrap ABI changed during validation')
@@ -414,6 +433,18 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
     return BootstrapSeed(descriptor_sha256, _frozen(acceptance_ref), _frozen(plan_ref),
                          _frozen({key: list(value) for key, value in commands.items()}),
                          flags, json.dumps(selection))
+
+
+def _execution_audit(acceptance, descriptor, descriptor_sha256, plan_ref, records):
+    audit = _json(acceptance['execution_audit'])
+    _envelope(audit, 'emberbsd-bootstrap-seed-audit', scope=_SCOPE)
+    _require(audit.get('status') == 'PASS' and
+             audit.get('descriptor_sha256') == descriptor_sha256 and
+             audit.get('bootstrap_plan') == plan_ref and audit.get('tools') == records and
+             audit.get('dynamic_dependencies') == descriptor['dynamic_dependencies'] and
+             all(audit.get(key) == [] for key in ('undeclared_tools', 'path_searches',
+                                                 'undeclared_abi_inputs', 'undeclared_dsos')),
+             'bootstrap seed execution closure was not accepted')
 
 
 def verify_native_gcc16_graduation(reference, *, output_descriptor,
@@ -461,6 +492,8 @@ def _graduation(reference, output, output_sha256, provider):
     _require(accepted.get('accepted_history_unknowns') == unknowns,
              'original seed acceptance does not bind its historical unknowns')
     plan = _plan(receipt['bootstrap_plan'], seed, inspect_inputs=False)
+    _require(plan.get('format') == 'emberbsd-native-gcc16-bootstrap-plan',
+             'a finite pilot cannot graduate an ordinary provider')
     _require(plan['seed_descriptor'] == receipt['seed_descriptor'] and
              plan['host'] == output['host'] and plan['output_compiler'] == output['compiler'] and
              plan['sources'] == output['sources'] and

@@ -91,7 +91,9 @@ a native bundle producer or supply qualified tools.
 Use [OS native-tool routing](docs/native-os-routing.md) to publish the OS-owned
 mapping from an accepted native toolset. The mapping does not admit a build.
 The [first-native GCC16 contract](docs/bootstrap-seed.md) admits an independently
-accepted seed for one common recipe plan. It keeps seed and ordinary qualification separate.
+accepted seed for one common recipe plan. The [first C/C++ pilot](docs/bootstrap-pilot.md)
+can run after input and route acceptance, before that recipe closure is built.
+Both interfaces keep seed and ordinary qualification separate.
 The selected target architecture, ABI and runtime must agree. Build-host tools
 remain host executables. Boards and VMs execute prepared acceptance programs.
 

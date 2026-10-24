@@ -318,6 +318,20 @@ class BootstrapSeedTests(unittest.TestCase):
         Path(artifact['path']).write_bytes(b'changed binary release')
         self.refuse('input changed')
 
+    def test_absent_binary_release_configuration_is_an_explicit_accepted_unknown(self):
+        self.binary_release()
+        history = self.seed.descriptor['history']['ports']
+        history['embedded_configuration'] = None
+        with self.assertRaisesRegex(SDKError, 'name every unknown'):
+            self.seed.seal()
+        history['unknowns'].append('embedded-configuration')
+        history['unknowns'].sort()
+        self.seed.seal()
+        self.seed.load()
+        self.seed.acceptance['accepted_history_unknowns']['ports'].remove('embedded-configuration')
+        self.seed.acceptance_ref = self.seed.native.document(self.seed.acceptance)
+        self.refuse('explicitly accept its historical unknowns')
+
     def test_binary_release_graduation_keeps_historical_unknowns(self):
         self.binary_release()
         output = self.output()
