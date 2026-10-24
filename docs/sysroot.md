@@ -9,7 +9,11 @@ GCC16 developer support. It does not install a system on a board.
 Use a qualified host process adapter with CPython 3.15 and the prerequisites of
 the selected OS/Ports builders. Process adapters are available for Darwin and Linux.
 See [host platforms](host-platforms.md).
+Apply the [SDK tool selection policy](tool-selection.md).
+Use SDK native GCC16 for host programs and SDK cross GCC16 for target code.
 Keep host tools and target inputs separate.
+The current automatic `cc`/`c++` selection is an enforcement gap, not an approved default.
+Inspect that gap before treating a successful plan as permission to build.
 
 Provide:
 

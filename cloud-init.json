@@ -11,7 +11,7 @@
       "workspace": "Target-specific Prebuild SDK, prepared pkgsrc export, verified libedit source, objects, stages and receipts.",
       "cache": "Verified source archives and downloaded native packages.",
       "temporary": "Temporary files and native configuration probes.",
-      "host_tools": "Caller-owned native tool and interpreter prefix."
+      "host_tools": "Selected SDK native tool and interpreter prefix with recorded producer provenance; a path or symlink alone does not establish membership."
     },
     "dependencies": {
       "sdk_control": {
@@ -33,7 +33,7 @@
           "m4",
           "curl"
         ],
-        "base_compilers": "Native C and C++ compilers, linker, development headers and libraries for the selected host. The selected OS/Ports producer determines compatible versions and flags.",
+        "base_compilers": "Use SDK native GCC16 for host programs and SDK cross GCC16 for target code. Select all build tools through the SDK policy in docs/tool-selection.md. Host ABI headers and libraries must be explicit recorded inputs; system compiler fallback is forbidden.",
         "ports_host_compilers": {
           "requirement": "The current GCC16 cross recipe requires host-executable GCC and G++ major version 16; Clang is not a substitute for this recipe.",
           "selectors": [
@@ -44,12 +44,12 @@
             "gcc-16",
             "g++-16"
           ],
-          "provider": "Supply compatible native binaries or a verified native source build. Package names and installation methods belong to the host profile."
+          "provider": "Use the qualified SDK native GCC16 provider and record absolute paths and provenance. Ambient PATH defaults and system package installation are not approved substitutes."
         },
-        "sdk_final_host_compilers": "The sysroot builder selects native cc and c++ from PATH. These are separate from Ports HOST_CC/HOST_CXX and the target GCC16 compiler.",
+        "sdk_final_host_compilers": "Require explicit SDK native GCC16 selection. The current sysroot and release builders search PATH for cc and c++; this is an enforcement gap. Repair the common selector and refusal checks before accepting builds that depend on it.",
         "header_rpc_preprocessor": {
           "when": "Install OS headers before the target compiler is available.",
-          "command": "A compatible native C preprocessor as a single executable path",
+          "command": "The selected SDK native GCC16 preprocessor as one absolute executable path",
           "selection": "Set TOOL_RPCGEN for the includes invocation to RPCGEN_CPP=<native-cpp> <native-nbrpcgen>. Preserve the target CPP setting for later library builds.",
           "evidence": "Record the native preprocessor and its executed components. Check the generated rpcb_prot.h declarations required by libc."
         },
@@ -260,7 +260,7 @@
         "target_execution": "Separate acceptance on EmberBSD."
       },
       "dependencies": {
-        "base_compilers": "Debian 13 GCC14 is the observed base compiler for native bootstrap and CPython source builds.",
+        "base_compilers": "Historical observation only: Debian 13 GCC14 produced native bootstrap and CPython builds. This does not authorize new builds; the current policy requires the qualified SDK native GCC16 provider.",
         "ports_host_compilers": {
           "cc": "gcc-16",
           "cxx": "g++-16",
@@ -269,7 +269,7 @@
           "os_bootstrap_cflags": "-O2 -std=gnu17"
         },
         "header_rpc_preprocessor": "The reference selects native cpp-16 during the includes step and records its wrapper, driver and cc1 hashes.",
-        "sdk_final_host_compilers": "The sysroot builder selects native cc and c++ from PATH. The reference uses the base GCC14 with its GNU C17 default.",
+        "sdk_final_host_compilers": "Historical observation only: this reference used PATH cc and c++ from GCC14. It does not satisfy the current SDK tool policy. Replace this provider through the common SDK selector and verify native GCC16 before a new build.",
         "generated_make": "OS native tools provide nbmake and nbgmake. The reference nbgmake is GNU Make 3.81.",
         "private_debian_package_extraction": {
           "commands": [
