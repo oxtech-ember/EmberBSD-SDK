@@ -94,6 +94,10 @@ Linux and a gated NetBSD 11 amd64 process adapter. NetBSD process control passes
 This qualifies the logged-producer interface, not the complete SDK on NetBSD.
 Exclusive directory publication and sysroot import remain unsupported there;
 the complete native SDK suite does not pass. See [host platforms](docs/host-platforms.md).
+Logged producers can select a finite positive `empty_snapshot_timeout` for
+empty-session proof. The default remains 2 seconds. The
+[host-tool API](docs/host-tools.md#run-a-logged-producer) defines this option
+and its startup and drainage boundaries.
 Other build hosts require their own process backend and checks.
 Host and target platforms are independent inputs.
 Actual platform checks are recorded with the tests;

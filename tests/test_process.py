@@ -68,7 +68,7 @@ while not Path({str(child)!r}).is_file(): time.sleep(.01)
     def test_exited_success_and_failure_drain_descendants(self):
         for status in (0, 7):
             with self.subTest(status=status), self.assertRaisesRegex(SDKError, 'live descendants'):
-                process.run_logged(self.producer(status), self.root / f'producer-{status}.log', cwd=self.root, env=process.sanitized_environment())
+                process.run_logged(self.producer(status), self.root / f'producer-{status}.log', cwd=self.root, env=process.sanitized_environment(), **({'empty_snapshot_timeout': 30} if status == 7 else {}))
             child = int((self.root / 'child.pid').read_text()); self.assert_stopped(child)
             writer = self.root / 'writer'; before = writer.read_bytes(); time.sleep(.15)
             self.assertEqual(writer.read_bytes(), before)

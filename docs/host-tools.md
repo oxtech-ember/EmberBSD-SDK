@@ -95,6 +95,35 @@ filesystem and process behavior separate from command fixtures. Record the
 interpreter and platform for actual results. Type annotations document module
 interfaces; they do not replace input validation or runtime checks.
 
+## Run a logged producer
+
+`process.run_logged(argv, log, *, cwd=None, env=None, append=False,
+empty_snapshot_timeout=2)` uses the existing `OwnedProcessGroup` backend.
+It returns `subprocess.CompletedProcess` on success. A failed command raises
+`CommandError` with the producer's status and log path. The default creates an
+exclusive log. `append=True` requires an existing regular log and retains its
+identity checks.
+
+`empty_snapshot_timeout` accepts a finite positive `int` or `float` in seconds.
+The default remains 2. The value reaches the inspector before its startup
+qualification probes. It bounds each attempt to prove an empty session during
+qualification and drainage. It is separate from the producer's runtime and the
+session-stop grace periods. A larger value allows more inspection retries; it
+does not relax ownership checks or make uncertain rows absent. Invalid values
+fail before backend qualification, log creation, or producer startup.
+
+The caller must retain its context locks until the function returns or raises.
+`ProcessOwnershipError` still rejects reuse of writable work. The optional
+keyword is an additive API1 interface; callers must select an SDK revision that
+provides it. Existing calls retain their previous defaults and exit behavior.
+
+Run `python3 -m unittest discover -s tests -p 'test_inspection_budget.py'` and
+`python3 -m unittest discover -s tests -p 'test_process.py'`. Clocked contracts
+check startup qualification, completed-session inspection, and final drainage
+without waiting 30 wall-clock seconds. Native producer contracts check both the
+default and explicit inspection budgets. These checks do not change compiler
+diagnostics or establish a target runtime result.
+
 ## Inspect an installed tree
 
 `inventory.INSTALLED_TREE_INVENTORY_API = 1` provides

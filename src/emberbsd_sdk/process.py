@@ -411,7 +411,9 @@ def run_logged(argv, log, *, cwd=None, env=None, append=False, empty_snapshot_ti
     Signal handlers are entrypoint policy. A handler can raise KeyboardInterrupt.
     The caller must retain its context locks until this function returns.
     If ProcessOwnershipError occurs, quarantine writable work before reuse.
+    empty_snapshot_timeout bounds each empty-session proof, including startup.
     """
+    empty_snapshot_timeout = _empty_snapshot_timeout(empty_snapshot_timeout)
     require_posix()
     argv = _argv(argv)
     group = OwnedProcessGroup(argv, cwd=cwd, env=env, stdout=None, stderr=None,

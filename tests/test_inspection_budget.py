@@ -5,6 +5,7 @@
 import os
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -72,12 +73,14 @@ class InspectionBudgetTests(unittest.TestCase):
         self.assertEqual((result, elapsed), ({999}, 0))
 
     def test_invalid_budgets_refuse_before_probes_input_or_producer(self):
-        values = (None, False, 0, -1, '30', float('nan'), float('inf'), -float('inf'), 10 ** 1000)
+        values = (None, False, True, 0, -1, '30', float('nan'), float('inf'), -float('inf'), 10 ** 1000)
         for value in values:
             with self.subTest(value=repr(value)), \
                     patch.object(process, 'require_posix') as probe, \
                     patch.object(stream, 'OwnedProcessGroup') as producer, \
-                    patch.object(stream.tempfile, 'TemporaryFile') as temporary:
+                    patch.object(stream.tempfile, 'TemporaryFile') as temporary, \
+                    patch.object(process.OwnedProcessGroup, 'start') as start, \
+                    patch.object(process.os, 'open') as open_log:
                 with self.assertRaisesRegex(SDKError, 'finite and positive'):
                     process.SessionInspector(empty_snapshot_timeout=value)
                 with self.assertRaisesRegex(SDKError, 'finite and positive'):
@@ -86,12 +89,67 @@ class InspectionBudgetTests(unittest.TestCase):
                 for invoke in (lambda: stream.run_streamed(['unused'], lambda reader: None,
                                    input=b'bytes', empty_snapshot_timeout=value),
                                lambda: stream.capture_streamed(['unused'], input=b'bytes',
+                                   empty_snapshot_timeout=value),
+                               lambda: process.run_logged(['unused'], Path('unused.log'),
                                    empty_snapshot_timeout=value)):
                     with self.assertRaisesRegex(SDKError, 'finite and positive'):
                         invoke()
                 probe.assert_not_called()
                 producer.assert_not_called()
                 temporary.assert_not_called()
+                start.assert_not_called()
+                open_log.assert_not_called()
+
+    def test_logged_budget_reaches_startup_qualification_and_drain(self):
+        for options, budget in (({}, 2), ({'empty_snapshot_timeout': 30}, 30)):
+            with self.subTest(budget=budget), tempfile.TemporaryDirectory() as temporary:
+                clock = Clock()
+                inspections = []
+                producer_sid = os.getsid(0) + 1
+                attempt_start = 0
+                real_members = process.SessionInspector.members
+
+                def members(inspector, sid):
+                    nonlocal attempt_start
+                    attempt_start = clock.value
+                    inspections.append((sid, inspector.empty_snapshot_timeout))
+                    return real_members(inspector, sid)
+
+                def scan(inspector, sid):
+                    if sid == os.getsid(0):
+                        return {os.getpid()}, False
+                    return set(), clock.value - attempt_start < 2.2
+
+                def start(group):
+                    group.child = Mock(pid=producer_sid)
+                    group.child.poll.return_value = 0
+                    return group.pid
+
+                log = Path(temporary) / 'producer.log'
+                with patch.object(process.sys, 'platform', 'linux'), \
+                        patch('emberbsd_sdk._linux_process.LinuxSession'), \
+                        patch.object(process.SessionInspector, 'members', members), \
+                        patch.object(process.SessionInspector, '_scan', scan), \
+                        patch.object(process.time, 'monotonic', clock.now), \
+                        patch.object(process.time, 'sleep', clock.sleep), \
+                        patch.object(process.OwnedProcessGroup, 'start', side_effect=start,
+                                     autospec=True) as producer:
+                    if options:
+                        result = process.run_logged(['unused'], log, **options)
+                        self.assertEqual(result.returncode, 0)
+                        producer.assert_called_once()
+                        self.assertEqual([sid for sid, _ in inspections],
+                                         [os.getsid(0), -1, producer_sid, producer_sid])
+                        self.assertGreaterEqual(clock.value, 6.6)
+                        self.assertLess(clock.value, 7)
+                    else:
+                        with self.assertRaisesRegex(SDKError, 'complete empty snapshot'):
+                            process.run_logged(['unused'], log)
+                        producer.assert_not_called()
+                        self.assertFalse(log.exists())
+                        self.assertLess(clock.value, 2.2)
+                self.assertTrue(inspections)
+                self.assertTrue(all(value == budget for _, value in inspections))
 
     def test_group_forwards_budget_only_to_an_inspector_it_creates(self):
         with patch.object(process, 'SessionInspector') as factory:
