@@ -97,7 +97,8 @@ the complete native SDK suite does not pass. See [host platforms](docs/host-plat
 Logged producers can select a finite positive `empty_snapshot_timeout` for
 empty-session proof. The default remains 2 seconds. The
 [host-tool API](docs/host-tools.md#run-a-logged-producer) defines this option
-and its startup and drainage boundaries.
+and its startup and drainage boundaries. Failed drainage also polls its owned
+leader without relaxing the original ownership error or reuse refusal.
 Other build hosts require their own process backend and checks.
 Host and target platforms are independent inputs.
 Actual platform checks are recorded with the tests;

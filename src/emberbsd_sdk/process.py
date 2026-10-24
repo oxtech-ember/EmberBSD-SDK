@@ -449,6 +449,12 @@ def run_logged(argv, log, *, cwd=None, env=None, append=False, empty_snapshot_ti
                 try:
                     group.stop()
                 except ProcessOwnershipError as exc:
+                    # The leader can exit while a failed session scan runs.
+                    # Reap only that child. Keep the original ownership failure.
+                    try:
+                        group.poll()
+                    except BaseException:
+                        pass
                     raise ProcessOwnershipError(exc.sid, exc.reason, log=os.fspath(log)) from exc
                 finally:
                     for number, handler in previous.items():

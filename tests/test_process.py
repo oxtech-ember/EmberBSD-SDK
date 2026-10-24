@@ -9,11 +9,11 @@ import subprocess
 import sys
 import time
 from unittest import skipUnless
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from test_core import TemporaryCase, SDK_SOURCE
 from emberbsd_sdk import process
-from emberbsd_sdk.errors import SDKError
+from emberbsd_sdk.errors import ProcessOwnershipError, SDKError
 
 
 class ProcessTests(TemporaryCase):
@@ -123,6 +123,94 @@ while not Path({str(child)!r}).is_file(): time.sleep(.01)
         with patch.object(process.os, 'name', 'nt'), self.assertRaisesRegex(SDKError, 'POSIX'):
             process.run_logged(['unused'], self.root / 'log')
         self.assertFalse((self.root / 'log').exists())
+
+    @skipUnless(sys.platform == 'darwin', 'requires native Darwin exit records')
+    def test_stop_failure_reaps_leader_that_exits_during_inspection(self):
+        from emberbsd_sdk._darwin_process import DarwinIdentity
+        original_group = process.OwnedProcessGroup
+        original_members = process.SessionInspector.members
+        original_sleep = time.sleep
+        groups = []
+        interrupted = False
+        reason = 'forced incomplete snapshot after owned leader exit'
+        log = self.root / 'stop-race.log'
+
+        class ObservedGroup(original_group):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                groups.append(self)
+
+        def inspect(inspector, sid):
+            if not groups or sid != groups[0].pid:
+                return original_members(inspector, sid)
+            # The stop loop polled before this call. Exit inside the scan,
+            # without waiting for the child or treating any row as absent.
+            os.kill(sid, signal.SIGTERM)
+            identity = DarwinIdentity()
+            deadline = time.monotonic() + 5
+            while True:
+                lifetime = identity.lifetime(sid)
+                if lifetime is not None and lifetime[1]:
+                    break
+                self.assertLess(time.monotonic(), deadline, 'owned leader did not exit')
+                original_sleep(.01)
+            raise SDKError(reason)
+
+        def interrupt(signum, frame):
+            raise KeyboardInterrupt('requested stop')
+
+        def sleep(seconds):
+            nonlocal interrupted
+            if groups and groups[0].pid is not None and not interrupted:
+                interrupted = True
+                signal.raise_signal(signal.SIGTERM)
+            original_sleep(seconds)
+
+        previous = signal.signal(signal.SIGTERM, interrupt)
+        try:
+            with patch.object(process, 'OwnedProcessGroup', ObservedGroup), \
+                    patch.object(process.SessionInspector, 'members', inspect), \
+                    patch.object(process.time, 'sleep', sleep):
+                with self.assertRaises(ProcessOwnershipError) as raised:
+                    process.run_logged([sys.executable, '-B', '-c',
+                                        'import time;time.sleep(60)'], log,
+                                       empty_snapshot_timeout=30)
+            pid = groups[0].pid
+            error = raised.exception
+            self.assertTrue(interrupted)
+            self.assertEqual((error.sid, error.reason, error.log), (pid, reason, str(log)))
+            self.assertIsInstance(error.__cause__, ProcessOwnershipError)
+            self.assertEqual((error.__cause__.sid, error.__cause__.reason), (pid, reason))
+            # On the old code this call reaps the retained zombie and fails
+            # the assertion. The test therefore also cleans up its baseline.
+            with self.assertRaises(ChildProcessError):
+                os.waitpid(pid, os.WNOHANG)
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+            if groups and groups[0].child is not None:
+                child = groups[0].child
+                if child.poll() is None:
+                    child.kill()
+                child.wait(timeout=5)
+
+    def test_stop_failure_reap_error_preserves_original_ownership_error(self):
+        for failure in (SDKError('poll failed'), KeyboardInterrupt('poll interrupted')):
+            with self.subTest(failure=type(failure).__name__):
+                log = self.root / (type(failure).__name__ + '.log')
+                original = ProcessOwnershipError(1234567, 'original ownership reason', log=str(log))
+                group = Mock(pid=original.sid, options={})
+                group.poll.side_effect = [0, failure]
+                group.alive.return_value = False
+                group.stop.side_effect = original
+                with patch.object(process, 'OwnedProcessGroup', return_value=group):
+                    with self.assertRaises(ProcessOwnershipError) as raised:
+                        process.run_logged(['fixture'], log)
+                error = raised.exception
+                self.assertEqual((error.sid, error.reason, error.log),
+                                 (original.sid, original.reason, original.log))
+                self.assertIs(error.__cause__, original)
+                self.assertEqual(group.poll.call_count, 2)
+
 
 class ProducerStatusTests(TemporaryCase):
     def test_capture_and_logged_preserve_status_97(self):

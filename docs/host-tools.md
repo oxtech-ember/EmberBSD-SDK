@@ -117,6 +117,12 @@ The caller must retain its context locks until the function returns or raises.
 keyword is an additive API1 interface; callers must select an SDK revision that
 provides it. Existing calls retain their previous defaults and exit behavior.
 
+If final drainage raises `ProcessOwnershipError`, the SDK makes one best-effort,
+nonblocking poll of its owned leader. On Darwin, this reaps a leader that exited
+during a failed session inspection. It does not wait for unrelated children or
+prove an empty session. The original session ID, reason and producer log remain in the
+ownership error, even if that poll also fails. Work reuse remains forbidden.
+
 Run `python3 -m unittest discover -s tests -p 'test_inspection_budget.py'` and
 `python3 -m unittest discover -s tests -p 'test_process.py'`. Clocked contracts
 check startup qualification, completed-session inspection, and final drainage
