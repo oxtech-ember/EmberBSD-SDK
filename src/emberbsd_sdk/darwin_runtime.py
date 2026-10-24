@@ -7,13 +7,15 @@ from contextlib import ExitStack
 import hashlib
 import errno
 import os
+import re
 import struct
 import sys
 
 from .errors import SDKError
 from .inventory import sha256_file, snapshot_tree
 from .native_toolset import _absolute, _darwin_slice, _json, _require, _sha
-from .paths import canonical_existing, canonical_new, inside, open_regular, verify_stable
+from .paths import (canonical_existing, canonical_new, inside, open_regular,
+                    real_directory, reject_overlap, verify_stable)
 
 DARWIN_RUNTIME_AUDIT_API = 1
 _LOADS = {0xc, 0x80000018, 0x8000001f, 0x20, 0x80000023}
@@ -27,6 +29,10 @@ _MAX_METADATA = 16 * 1024 * 1024
 _MAX_LAZY_SYMBOLS = 4096
 _MAX_LAZY_SYMBOL_BYTES = 1024 * 1024
 _MAX_RPATH_CANDIDATES = 4096
+_MAX_OUTPUTS = 64
+_MAX_OBSERVED_ROOTS = 64
+_MAX_TRACE_LINES = 16384
+_TRACE_IMAGE = re.compile(r'dyld\[([1-9][0-9]*)\]: <([0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12})> (/.+)')
 
 
 def _cstring(data, offset, end=None):
@@ -334,13 +340,14 @@ class _Cache:
             rest = rest[consumed:]
 
 
-def _rpath_target(load, image, path, bundle, missing, candidates_used):
+def _rpath_target(load, image, path, bundle, missing, candidates_used, output_root=None):
     """Resolve a successful own-image rpath before inherited paths are needed."""
     name = load['name']
     leaf = name[7:]
     _require(leaf not in ('', '.', '..') and '/' not in leaf and '\\' not in leaf,
              'only one @rpath runtime leaf is supported')
-    _require(canonical_existing(bundle) == bundle and inside(path, bundle) and
+    _require(canonical_existing(bundle) == bundle and
+             (inside(path, bundle) or output_root is not None and inside(path, output_root)) and
              load['command'] in _LOADS - {0x20},
              '@rpath runtime loads require an in-bundle file image')
     _require(0 < len(image['rpaths']) <= 64,
@@ -359,9 +366,11 @@ def _rpath_target(load, image, path, bundle, missing, candidates_used):
             anchor = os.path.join(os.path.dirname(path), *suffix)
         else:
             anchor = _absolute(rpath)
-        _require(os.path.commonpath((anchor, bundle)) == bundle and
+        output_anchor = (output_root is not None and rpath.startswith('@loader_path') and
+                         os.path.commonpath((anchor, output_root)) == output_root)
+        _require((os.path.commonpath((anchor, bundle)) == bundle or output_anchor) and
                  canonical_new(anchor) == anchor,
-                 'runtime rpath anchor must be a real in-bundle path')
+                 'runtime rpath anchor must be a real in-bundle or explicit output path')
         candidate = os.path.join(anchor, leaf)
         record = dict(rpath=rpath, path=candidate, target=None)
         if _absent(candidate):
@@ -379,18 +388,135 @@ def _rpath_target(load, image, path, bundle, missing, candidates_used):
     return target
 
 
-def capture_darwin_runtime_audit(descriptor, *, cache_main):
+def _reference(value):
+    _require(isinstance(value, dict) and set(value) == {'path', 'sha256'},
+             'expected an explicit runtime path and SHA256 reference')
+    return dict(path=_absolute(value['path']), sha256=_sha(value['sha256']))
+
+
+def _output_inputs(roots, outputs, output_read_root, observed_cache_roots):
+    if outputs is None and output_read_root is None and observed_cache_roots is None:
+        return None
+    _require(outputs is not None and output_read_root is not None and observed_cache_roots is not None,
+             'output runtime audit needs outputs, read root, and observations together')
+    root = _absolute(output_read_root)
+    _require(canonical_existing(root) == root, 'output read root must have its real spelling')
+    real_directory(root)
+    for native_root in roots:
+        reject_overlap(root, native_root)
+    _require(isinstance(outputs, list) and 0 < len(outputs) <= _MAX_OUTPUTS,
+             'output runtime audit supports one to 64 output references')
+    references = [_reference(row) for row in outputs]
+    _require(len({row['path'] for row in references}) == len(references), 'duplicate runtime output')
+    for row in references:
+        path = row['path']
+        _require(canonical_existing(path) == path and inside(path, root),
+                 'runtime output must be a real file inside its explicit read root')
+    reference = _reference(observed_cache_roots)
+    observation = _json(reference)
+    _require(set(observation) == {'format', 'version', 'scope', 'cache_uuid', 'observations'} and
+             observation['format'] == 'emberbsd-darwin-observed-cache-roots' and
+             type(observation['version']) is int and observation['version'] == 1 and
+             observation['scope'] == 'producer-output', 'unsupported output runtime observation')
+    rows = observation['observations']
+    _require(isinstance(rows, list) and len(rows) == len(references),
+             'each output needs one explicit runtime observation')
+    by_path = {row['path']: row for row in references}
+    seen, trace_paths, root_count = set(), set(), 0
+    for row in rows:
+        _require(isinstance(row, dict) and set(row) == {'output', 'trace', 'roots'},
+                 'unsupported output runtime observation fields')
+        output, trace = _reference(row['output']), _reference(row['trace'])
+        _require(output == by_path.get(output['path']) and output['path'] not in seen,
+                 'observation output differs from the caller-pinned output')
+        _require(trace['path'] not in trace_paths, 'each output needs a distinct pinned trace')
+        seen.add(output['path'])
+        trace_paths.add(trace['path'])
+        _require(isinstance(row['roots'], list), 'observed cache roots must be a list')
+        root_count += len(row['roots'])
+        _require(root_count <= _MAX_OBSERVED_ROOTS, 'observed cache roots exceed the audit limit')
+        names = set()
+        for image in row['roots']:
+            _require(isinstance(image, dict) and set(image) == {'path', 'uuid'},
+                     'unsupported observed cache root fields')
+            name = _absolute(image['path'])
+            _require(name not in names and isinstance(image['uuid'], str) and
+                     re.fullmatch('[0-9a-f]{32}', image['uuid']), 'invalid observed cache root identity')
+            names.add(name)
+    return dict(root=root, outputs=sorted(references, key=lambda row: row['path']),
+                reference=reference, observation=observation)
+
+
+def _output_traces(context, cache, stack):
+    _require(context['observation']['cache_uuid'] == cache.uuid, 'observed runtime cache UUID mismatch')
+    traces, roots, total_bytes, total_lines = [], set(), 0, 0
+    for row in context['observation']['observations']:
+        file = _File(row['trace']['path'], stack)
+        total_bytes += file.size
+        _require(total_bytes <= _MAX_METADATA, 'runtime traces exceed the audit byte limit')
+        data = file.read(0, file.size)
+        _require(hashlib.sha256(data).hexdigest() == row['trace']['sha256'], 'runtime trace SHA256 mismatch')
+        lines = data.decode('utf-8', 'strict').splitlines()
+        total_lines += len(lines)
+        _require(total_lines <= _MAX_TRACE_LINES, 'runtime traces exceed the audit line limit')
+        images, pid = {}, None
+        for line in lines:
+            _require(len(line) <= 8192, 'runtime trace line exceeds the supported limit')
+            if not line.lstrip().startswith('dyld'):
+                continue
+            match = _TRACE_IMAGE.fullmatch(line)
+            _require(match is not None, 'unsupported DYLD trace line')
+            process, uuid, name = match.groups()
+            _require(pid is None or pid == process, 'runtime trace contains multiple process IDs')
+            pid = process
+            name, uuid = _absolute(name), uuid.replace('-', '').lower()
+            _require(name not in images, 'duplicate runtime trace image')
+            images[name] = uuid
+        _require(row['output']['path'] in images, 'runtime trace does not name its output')
+        for root in row['roots']:
+            _require(cache.lookup(root['path']) is not None and
+                     images.get(root['path']) == root['uuid'],
+                     'observed cache root is not in its pinned trace and cache')
+            roots.add(root['path'])
+        traces.append((row, images))
+    return traces, roots
+
+
+def _verify_output_traces(context, traces, nodes, cache):
+    _require(canonical_existing(context['root']) == context['root'] and
+             all(canonical_existing(row['path']) == row['path'] for row in context['outputs']),
+             'runtime output read paths changed')
+    cached = {node['index']: node['image']['uuid'] for node in nodes.values()
+              if node['kind'] == 'cache-image'}
+    for row, images in traces:
+        for name, uuid in images.items():
+            node = nodes.get(name)
+            if node is not None and node['kind'] != 'cache-image':
+                actual = node['image']['uuid']
+            else:
+                actual = cached.get(cache.lookup(name))
+            _require(actual == uuid, 'observed DYLD image is absent or differs from the audited graph')
+        for root in row['roots']:
+            _require(nodes[root['path']]['image']['uuid'] == root['uuid'],
+                     'observed cache root UUID differs from its actual image')
+    _require(_json(context['reference']) == context['observation'], 'runtime observation changed')
+
+
+def capture_darwin_runtime_audit(descriptor, *, cache_main, outputs=None,
+                                output_read_root=None, observed_cache_roots=None):
     """Return byte-bound runtime metadata. This does not qualify a toolset."""
     try:
-        return _capture(descriptor, cache_main)
+        return _capture(descriptor, cache_main, outputs, output_read_root, observed_cache_roots)
     except (OSError, KeyError, TypeError, ValueError, AttributeError, OverflowError, struct.error) as exc:
         raise SDKError(f'invalid Darwin runtime inputs: {exc}') from exc
 
 
-def _capture(descriptor, cache_main):
+def _capture(descriptor, cache_main, outputs, output_read_root, observed_cache_roots):
     host = descriptor['host']
     _require(host['os'] == 'Darwin', 'Darwin cache inputs require a Darwin host')
     roots = [descriptor['bundle_root']] + [row['root'] for row in descriptor['host_abi']['libraries']]
+    output_context = _output_inputs(roots, outputs, output_read_root, observed_cache_roots)
+    output_refs = {} if output_context is None else {row['path']: row for row in output_context['outputs']}
     selected_tools = [row['path'] for row in descriptor['tools'].values() if row['kind'] == 'native']
     tools = {canonical_existing(path) for path in selected_tools}
     aliased_images = {canonical_existing(path) for path in selected_tools
@@ -398,7 +524,10 @@ def _capture(descriptor, cache_main):
     _require(tools, 'Darwin runtime graph needs native tool roots')
     with ExitStack() as stack:
         cache = _Cache(cache_main, descriptor, stack)
-        nodes, pending, absent = {}, sorted(tools), set()
+        traces, observed_roots = ([], set()) if output_context is None else _output_traces(
+            output_context, cache, stack)
+        executables = tools | set(output_refs)
+        nodes, pending, absent = {}, sorted(executables | observed_roots), set()
         symbol_bytes = [0]
         missing_rpaths, rpath_candidates = set(), [0]
         while pending:
@@ -406,7 +535,7 @@ def _capture(descriptor, cache_main):
             if path in nodes:
                 continue
             _require(len(nodes) < 8192, 'Darwin runtime graph is too large')
-            index = None if path in tools else cache.lookup(path)
+            index = None if path in executables else cache.lookup(path)
             if index is not None:
                 address, catalog_name = cache.images[index]
                 image = _macho(lambda offset, size: cache.read_vm(address + offset, size), host, cached=True)
@@ -419,17 +548,20 @@ def _capture(descriptor, cache_main):
                     segment['address'] + offset - segment['file_offset'], size), symbol_bytes)
             else:
                 _require(path.startswith('/') and canonical_existing(path) == path and
-                         any(inside(path, root) for root in roots),
+                         (path in output_refs or any(inside(path, root) for root in roots)),
                          'runtime dependency is outside declared native inputs')
                 file = _File(path, stack)
                 slice_offset, slice_size, wrapper = _darwin_slice(
-                    file.read, file.size, host, shared_library=path not in tools)
+                    file.read, file.size, host, shared_library=path not in executables)
                 def read_image(offset, size):
                     _require(0 <= offset <= slice_size and 0 <= size <= slice_size - offset,
                              'Mach-O metadata is outside its selected slice')
                     return file.read(slice_offset + offset, size)
-                image = _macho(read_image, host, executable=path in tools)
-                node = dict(kind='file', sha256=sha256_file(path), image=image)
+                image = _macho(read_image, host, executable=path in executables)
+                node = dict(kind='output-executable' if path in output_refs else 'file',
+                            sha256=sha256_file(path), image=image)
+                if path in output_refs:
+                    _require(node['sha256'] == output_refs[path]['sha256'], 'runtime output SHA256 mismatch')
                 if wrapper is not None:
                     node['macho_slice'] = wrapper
                 for segment in image['segments']:
@@ -443,9 +575,10 @@ def _capture(descriptor, cache_main):
             for load in image['loads'] + image['implicit_loads']:
                 name = load['name']
                 if name.startswith('@rpath/'):
-                    _require(node['kind'] == 'file', '@rpath runtime loads in cached images are not supported')
+                    _require(node['kind'] != 'cache-image', '@rpath runtime loads in cached images are not supported')
                     target = _rpath_target(load, image, path, descriptor['bundle_root'],
-                                           missing_rpaths, rpath_candidates)
+                                           missing_rpaths, rpath_candidates,
+                                           output_context['root'] if path in output_refs else None)
                 elif cache.lookup(name) is not None:
                     target = name
                 elif _absent(name):
@@ -467,7 +600,7 @@ def _capture(descriptor, cache_main):
                     target = canonical_existing(name)
                     if target != name:
                         aliased_images.add(target)
-                _require(target not in tools, 'dylib edge selects a native executable')
+                _require(target not in executables, 'dylib edge selects a native executable')
                 load['target'] = target
                 pending.append(target)
         _require(not any(path in aliased_images and any(load['name'].startswith('@rpath/')
@@ -478,11 +611,18 @@ def _capture(descriptor, cache_main):
         _require(snapshot_tree(cache.root) == cache.inventory, 'Darwin cache inventory changed')
         _require(all(_absent(path) for path in absent), 'missing weak Darwin dependency appeared')
         _require(all(_absent(path) for path in missing_rpaths), 'missing runtime rpath candidate appeared')
-        return dict(format='emberbsd-darwin-runtime-audit', version=1,
+        if output_context is not None:
+            _verify_output_traces(output_context, traces, nodes, cache)
+        result = dict(format='emberbsd-darwin-runtime-audit', version=1,
                     api=DARWIN_RUNTIME_AUDIT_API, host=host,
                     cache=dict(main=cache.main, root=cache.root, inventory=cache.inventory_ref,
                                uuid=cache.uuid, os_version=cache.os_version, files=cache.rows),
                     tools=sorted(tools), nodes=dict(sorted(nodes.items())))
+        if output_context is not None:
+            result.update(format='emberbsd-darwin-output-runtime-audit', scope='producer-output',
+                          output_runtime=dict(read_root=output_context['root'],
+                              outputs=output_context['outputs'], observed_cache_roots=output_context['reference']))
+        return result
 
 
 def darwin_runtime_closure(audit, audit_reference):
@@ -494,24 +634,28 @@ def darwin_runtime_closure(audit, audit_reference):
                                          if load['target'] is not None))
         if node['kind'] == 'cache-image':
             result[path] = dict(cache_image=dict(audit_reference), dependencies=dependencies)
+        elif node['kind'] == 'output-executable':
+            result[path] = dict(output_executable=dict(audit_reference), dependencies=dependencies)
         else:
             result[path] = dict(sha256=node['sha256'], dependencies=dependencies)
     return result
 
 
-def validate_darwin_runtime_closure(value, descriptor):
+def validate_darwin_runtime_closure(value, descriptor, *, outputs=None,
+                                    output_read_root=None, observed_cache_roots=None):
     """Verify one explicit cache audit and all file/cache graph nodes."""
     try:
         _require(isinstance(value, dict) and value, 'missing Darwin runtime closure')
-        references = [row['cache_image'] for row in value.values()
-                      if isinstance(row, dict) and 'cache_image' in row]
+        references = [row[key] for row in value.values() if isinstance(row, dict)
+                      for key in ('cache_image', 'output_executable') if key in row]
         _require(references and all(row == references[0] for row in references),
                  'Darwin runtime closure needs one common cache audit')
         reference = references[0]
         audit = _json(reference)
         _require(audit['cache']['uuid'] == _runtime_cache_uuid(),
                  'declared Darwin cache is not the current process runtime cache')
-        actual = capture_darwin_runtime_audit(descriptor, cache_main=audit['cache']['main'])
+        actual = capture_darwin_runtime_audit(descriptor, cache_main=audit['cache']['main'],
+            outputs=outputs, output_read_root=output_read_root, observed_cache_roots=observed_cache_roots)
         _require(audit == actual, 'Darwin runtime audit differs from current bytes or edges')
         _require(value == darwin_runtime_closure(actual, reference),
                  'Darwin runtime closure differs from the complete audited graph')

@@ -173,6 +173,244 @@ class DarwinRuntimeTests(unittest.TestCase):
         self.assertEqual(span, dict(file=f.sub.name, offset=0x400, size=0x400))
         validate_darwin_runtime_closure(closure, f.descriptor)
 
+    def output_fixture(self):
+        f = Fixture(self)
+        f.output_root = f.root / 'outputs'
+        f.output_root.mkdir()
+        f.output = f.output_root / 'app'
+        f.output.write_bytes(macho(0x100000000, [(0xc, ALIAS)], uuid=5))
+        f.output_ref = dict(path=str(f.output), sha256=hashlib.sha256(f.output.read_bytes()).hexdigest())
+        f.trace = f.root / 'dyld.log'
+        def line(path, uuid):
+            text = uuid.to_bytes(16, 'little').hex()
+            text = '-'.join([text[:8], text[8:12], text[12:16], text[16:20], text[20:]])
+            return f'dyld[42]: <{text.upper()}> {path}\n'
+        f.trace_line = line
+        f.trace.write_text(line(f.output, 5) + line(A, 3) + line(B, 4) + 'application-output\n')
+        f.observation_path = f.root / 'observations.json'
+        f.observation = dict(format='emberbsd-darwin-observed-cache-roots', version=1,
+            scope='producer-output', cache_uuid=(1).to_bytes(16, 'little').hex(), observations=[
+                dict(output=f.output_ref, trace=dict(path=str(f.trace),
+                    sha256=hashlib.sha256(f.trace.read_bytes()).hexdigest()), roots=[
+                        dict(path=B, uuid=(4).to_bytes(16, 'little').hex())])])
+        f.options = dict(outputs=[f.output_ref], output_read_root=str(f.output_root),
+            observed_cache_roots=f.reference(f.observation_path, f.observation))
+        return f
+
+    def output_capture(self, f):
+        return capture_darwin_runtime_audit(f.descriptor, cache_main=str(f.main), **f.options)
+
+    def refresh_observation(self, f):
+        f.observation['observations'][0]['trace']['sha256'] = hashlib.sha256(f.trace.read_bytes()).hexdigest()
+        f.options['observed_cache_roots'] = f.reference(f.observation_path, f.observation)
+
+    def test_explicit_output_audit_is_separate_and_cannot_qualify_tools(self):
+        f = self.output_fixture()
+        before = f.capture()
+        audit = self.output_capture(f)
+        self.assertEqual(audit['format'], 'emberbsd-darwin-output-runtime-audit')
+        self.assertEqual(audit['scope'], 'producer-output')
+        self.assertEqual(audit['tools'], [str(f.tool)])
+        self.assertEqual(audit['output_runtime']['outputs'], [f.output_ref])
+        self.assertEqual(audit['nodes'][str(f.output)]['kind'], 'output-executable')
+        ref = f.reference(f.audit_path, audit)
+        closure = darwin_runtime_closure(audit, ref)
+        self.assertEqual(closure[str(f.output)]['output_executable'], ref)
+        self.assertNotIn('sha256', closure[str(f.output)])
+        validate_darwin_runtime_closure(closure, f.descriptor, **f.options)
+        with self.assertRaisesRegex(SDKError, 'differs from current bytes'):
+            validate_darwin_runtime_closure(closure, f.descriptor)
+        from emberbsd_sdk.bootstrap_seed import _dynamic_closure
+        with self.assertRaisesRegex(SDKError, 'differs from current bytes'):
+            _dynamic_closure(closure, f.descriptor)
+        self.assertEqual(f.capture(), before)
+        self.assertNotIn('scope', before)
+        self.assertNotIn('output_runtime', before)
+
+    def test_observed_cache_root_is_not_a_fabricated_dependency_edge(self):
+        f = self.output_fixture()
+        data = bytearray(f.sub.read_bytes())
+        data[0x400:0x800] = macho(BASE + 4096 + 0x400, [(0xc, A)],
+            install_name=A, cached=True, uuid=3)
+        f.sub.write_bytes(data)
+        f.refresh_inventory()
+        self.assertNotIn(B, f.capture()['nodes'])
+        audit = self.output_capture(f)
+        self.assertIn(B, audit['nodes'])
+        self.assertEqual([row['target'] for row in audit['nodes'][ALIAS]['image']['loads']], [A])
+        self.assertEqual([row['target'] for row in audit['nodes'][str(f.output)]['image']['loads']], [ALIAS])
+        f.observation['observations'][0]['roots'] = []
+        self.refresh_observation(f)
+        with self.assertRaisesRegex(SDKError, 'absent or differs from the audited graph'):
+            self.output_capture(f)
+
+    def test_each_output_has_its_own_pinned_trace_and_identity(self):
+        f = self.output_fixture()
+        second = f.output_root / 'second'
+        second.write_bytes(macho(0x100000000, [(0xc, B)], uuid=6))
+        second_ref = dict(path=str(second), sha256=hashlib.sha256(second.read_bytes()).hexdigest())
+        trace = f.root / 'second.log'
+        trace.write_text(f.trace_line(second, 6) + f.trace_line(B, 4))
+        f.options['outputs'].append(second_ref)
+        f.observation['observations'].append(dict(output=second_ref,
+            trace=dict(path=str(trace), sha256=hashlib.sha256(trace.read_bytes()).hexdigest()), roots=[]))
+        self.refresh_observation(f)
+        audit = self.output_capture(f)
+        self.assertEqual(audit['nodes'][str(second)]['kind'], 'output-executable')
+        f.observation['observations'][1]['trace'] = f.observation['observations'][0]['trace']
+        self.refresh_observation(f)
+        with self.assertRaisesRegex(SDKError, 'distinct pinned trace'):
+            self.output_capture(f)
+
+    def test_output_refs_root_and_observations_must_be_explicit_together(self):
+        f = self.output_fixture()
+        for key in f.options:
+            with self.subTest(missing=key):
+                options = dict(f.options)
+                del options[key]
+                with self.assertRaisesRegex(SDKError, 'together'):
+                    capture_darwin_runtime_audit(f.descriptor, cache_main=str(f.main), **options)
+        f.options['output_read_root'] = str(f.root)
+        with self.assertRaisesRegex(SDKError, 'overlapping'):
+            self.output_capture(f)
+
+    def test_output_changed_hash_alias_and_read_root_escape_are_refused(self):
+        for case in ('changed', 'alias', 'outside', 'duplicate'):
+            with self.subTest(case=case):
+                f = self.output_fixture()
+                if case == 'changed':
+                    f.output.write_bytes(f.output.read_bytes() + b'changed')
+                elif case == 'alias':
+                    alias = f.output_root / 'alias'
+                    alias.symlink_to(f.output.name)
+                    f.output_ref['path'] = str(alias)
+                elif case == 'outside':
+                    f.output_ref['path'] = str(f.tool)
+                else:
+                    f.options['outputs'].append(dict(f.output_ref))
+                with self.assertRaises(SDKError):
+                    self.output_capture(f)
+
+    def test_output_rpath_can_check_absent_local_candidate_but_only_load_bundle_dso(self):
+        f = self.output_fixture()
+        library = f.bundle / 'library.dylib'
+        library.write_bytes(macho(0x100000000, [(0xc, ALIAS)], install_name='@rpath/library.dylib', uuid=6))
+        f.output.write_bytes(macho(0x100000000, [(0xc, '@rpath/library.dylib')], uuid=5,
+            rpaths=('@loader_path', str(f.bundle))))
+        f.output_ref['sha256'] = hashlib.sha256(f.output.read_bytes()).hexdigest()
+        self.refresh_observation(f)
+        audit = self.output_capture(f)
+        edge = audit['nodes'][str(f.output)]['image']['loads'][0]
+        self.assertEqual(edge['target'], str(library))
+        self.assertIsNone(edge['rpath_resolution']['candidates'][0]['target'])
+        (f.output_root / library.name).write_bytes(library.read_bytes())
+        with self.assertRaisesRegex(SDKError, 'target must be a real in-bundle path'):
+            self.output_capture(f)
+
+    def test_output_root_is_not_a_general_dso_provider(self):
+        f = self.output_fixture()
+        library = f.output_root / 'library.dylib'
+        library.write_bytes(macho(0x100000000, [(0xc, ALIAS)], install_name=str(library)))
+        f.output.write_bytes(macho(0x100000000, [(0xc, str(library))], uuid=5))
+        f.output_ref['sha256'] = hashlib.sha256(f.output.read_bytes()).hexdigest()
+        self.refresh_observation(f)
+        with self.assertRaisesRegex(SDKError, 'outside declared native inputs'):
+            self.output_capture(f)
+
+    def test_output_must_be_a_native_executable(self):
+        for kind in (1, 6):
+            with self.subTest(filetype=kind):
+                f = self.output_fixture()
+                data = bytearray(f.output.read_bytes())
+                struct.pack_into('<I', data, 12, kind)
+                f.output.write_bytes(data)
+                f.output_ref['sha256'] = hashlib.sha256(data).hexdigest()
+                self.refresh_observation(f)
+                with self.assertRaisesRegex(SDKError, 'native Darwin Mach-O image'):
+                    self.output_capture(f)
+
+    def test_trace_sha_cache_uuid_root_and_output_binding_are_checked(self):
+        for case in ('trace-hash', 'cache-uuid', 'root-uuid', 'root-absent', 'output-ref', 'output-uuid'):
+            with self.subTest(case=case):
+                f = self.output_fixture()
+                row = f.observation['observations'][0]
+                if case == 'trace-hash':
+                    row['trace']['sha256'] = '0' * 64
+                elif case == 'cache-uuid':
+                    f.observation['cache_uuid'] = '0' * 32
+                elif case == 'root-uuid':
+                    row['roots'][0]['uuid'] = '0' * 32
+                elif case == 'root-absent':
+                    row['roots'][0]['path'] = '/usr/lib/not-in-cache.dylib'
+                elif case == 'output-ref':
+                    row['output'] = dict(f.output_ref, sha256='0' * 64)
+                else:
+                    f.trace.write_text(f.trace_line(f.output, 6) + f.trace_line(B, 4))
+                    row['trace']['sha256'] = hashlib.sha256(f.trace.read_bytes()).hexdigest()
+                f.options['observed_cache_roots'] = f.reference(f.observation_path, f.observation)
+                with self.assertRaises(SDKError):
+                    self.output_capture(f)
+
+    def test_every_dyld_trace_line_must_be_supported_and_graph_bound(self):
+        for suffix in ('dyld[42]: unsupported metadata\n',
+                       'dyld: unsupported metadata\n',
+                       ' dyld[42]: <03000000-0000-0000-0000-000000000000> ' + A + '\n',
+                       'dyld[43]: <03000000-0000-0000-0000-000000000000> ' + A + '\n',
+                       'dyld[42]: <03000000-0000-0000-0000-000000000000> /unselected/image\n',
+                       'dyld[42]: <00000000-0000-0000-0000-000000000000> ' + A + '\n'):
+            with self.subTest(suffix=suffix):
+                f = self.output_fixture()
+                f.trace.write_text(f.trace.read_text() + suffix)
+                self.refresh_observation(f)
+                with self.assertRaises(SDKError):
+                    self.output_capture(f)
+
+    def test_output_trace_and_root_resource_limits_are_explicit(self):
+        f = self.output_fixture()
+        f.options['outputs'] *= 65
+        with self.assertRaisesRegex(SDKError, 'one to 64'):
+            self.output_capture(f)
+        f = self.output_fixture()
+        f.observation['observations'][0]['roots'] *= 65
+        self.refresh_observation(f)
+        with self.assertRaisesRegex(SDKError, 'roots exceed'):
+            self.output_capture(f)
+        f = self.output_fixture()
+        f.trace.write_text(f.trace.read_text() + '\n' * 16384)
+        self.refresh_observation(f)
+        with self.assertRaisesRegex(SDKError, 'line limit'):
+            self.output_capture(f)
+        f = self.output_fixture()
+        with patch('emberbsd_sdk.darwin_runtime._MAX_METADATA', 8192):
+            f.trace.write_text('x' * 8193)
+            self.refresh_observation(f)
+            with self.assertRaisesRegex(SDKError, 'byte limit'):
+                self.output_capture(f)
+
+    def test_output_rpath_absence_trace_and_observation_races_are_refused(self):
+        for case in ('rpath', 'trace', 'observation'):
+            with self.subTest(case=case):
+                f = self.output_fixture()
+                library = f.bundle / 'library.dylib'
+                library.write_bytes(macho(0x100000000, [(0xc, ALIAS)], install_name='@rpath/library.dylib'))
+                f.output.write_bytes(macho(0x100000000, [(0xc, '@rpath/library.dylib')], uuid=5,
+                    rpaths=('@loader_path', str(f.bundle))))
+                f.output_ref['sha256'] = hashlib.sha256(f.output.read_bytes()).hexdigest()
+                self.refresh_observation(f)
+                original = snapshot_tree
+                def changed(root):
+                    rows = original(root)
+                    if case == 'rpath':
+                        (f.output_root / library.name).write_bytes(library.read_bytes())
+                    elif case == 'trace':
+                        f.trace.write_text(f.trace.read_text() + 'changed\n')
+                    else:
+                        f.observation_path.write_text('{}')
+                    return rows
+                with patch('emberbsd_sdk.darwin_runtime.snapshot_tree', changed):
+                    with self.assertRaises(SDKError):
+                        self.output_capture(f)
+
     def test_live_cache_uuid_must_match(self):
         f = Fixture(self)
         audit, closure = f.accepted()

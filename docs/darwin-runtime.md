@@ -137,7 +137,6 @@ A missing own-image match fails, including a weak request.
 The reader does not convert it to a null weak edge or try an inherited path.
 Cached-image and lazy-blob `@rpath` requests remain unsupported.
 Use this subset for an in-bundle `@rpath` library chain.
-They do not create an output-artifact admission interface.
 Native tool roots and bootstrap acceptance remain unchanged.
 
 The reader preserves strong, weak, re-export, upward, delayed, and lazy edges.
@@ -162,6 +161,90 @@ The audit preserves dylib current and compatibility versions.
 It does not invent a version inequality that current dyld does not enforce.
 It preserves the full lazy-load flags field and interprets its published weak bit.
 The fixed native execution checks and the producer's DSO audit remain mandatory.
+
+## Explicit producer-output audit
+
+The same capture and validation functions accept three optional keyword arguments.
+Pass all three together. Omit all three for the original tool-root audit and format.
+
+- `outputs`: A list of exact `{path, sha256}` references to existing executables.
+- `output_read_root`: One real absolute directory that contains these outputs.
+- `observed_cache_roots`: An exact `{path, sha256}` reference to the observation object below.
+
+The output read root must not overlap the bundle or any declared ABI library root.
+Each output must have its real path inside this directory. Symlinks, duplicate
+paths, changed hashes, wrong CPUs, and non-executable image types fail.
+The reader does not copy an output into a provider or add it to `descriptor.tools`.
+It does not infer qualification from an output name or an accepted tool descriptor.
+
+The caller must independently accept the named observation roots and pin the
+observation file and original trace bytes. The format binds that decision to
+specific bytes. It does not authenticate who produced a trace.
+The observation object has exactly these fields:
+
+```json
+{
+  "format": "emberbsd-darwin-observed-cache-roots",
+  "version": 1,
+  "scope": "producer-output",
+  "cache_uuid": "32_LOWERCASE_HEX_DIGITS",
+  "observations": [
+    {
+      "output": {"path": "/absolute/outputs/app", "sha256": "OUTPUT_SHA256"},
+      "trace": {"path": "/absolute/evidence/dyld.log", "sha256": "TRACE_SHA256"},
+      "roots": [{"path": "/absolute/cache/install-name", "uuid": "32_LOWERCASE_HEX_DIGITS"}]
+    }
+  ]
+}
+```
+
+Include exactly one observation for each caller-supplied output reference.
+Use a distinct pinned trace file for each output. Its supported image records are
+`dyld[PID]: <XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX> /absolute/path`.
+Hexadecimal UUID digits can use either case in the raw trace.
+All image records in one trace must use one positive process ID.
+The trace must name its exact output path and actual Mach-O UUID.
+Every named root must occur in that trace with its declared UUID and exist in
+the pinned cache. It is an explicit additional graph root, not an `LC_LOAD` edge.
+The reader follows its real load commands. It does not invent a dependency edge
+or maintain a global platform-library allowlist.
+
+Every traced image must match an audited file or cache-image UUID.
+Cache aliases are compared through the checked trie image index.
+An unmodeled traced image fails; the reader does not add it automatically.
+Duplicate image records, multiple process IDs, and unsupported lines that start
+with `dyld`, including leading whitespace, fail. Other application output lines
+remain in the pinned trace bytes. They do not add dependency roots.
+
+An output can own the same restricted image-local `@rpath` form.
+Its `@loader_path` anchor can refer to its explicit output read root.
+Candidates there must be absent. A present DSO in that root fails.
+Only a real in-bundle DSO can satisfy the lookup. Absolute external anchors,
+inherited paths, aliases, ambiguous candidates, and appearing candidates still fail.
+The output read root never becomes a general runtime-library input.
+
+The output audit format is `emberbsd-darwin-output-runtime-audit`, version 1,
+API 1, with scope `producer-output`. It keeps native `tools` separate.
+Its `output_runtime` field preserves the read root, sorted output references,
+and the exact observation reference. Output nodes have kind `output-executable`.
+`darwin_runtime_closure` emits an `output_executable` audit reference and explicit
+dependencies for each output node, instead of an ordinary file row.
+Pass the same three caller-pinned arguments to `validate_darwin_runtime_closure`.
+Validation reconstructs the complete graph and checks exact equality.
+Ordinary validation without those arguments refuses this different audit.
+The bootstrap consumer and ordinary native-toolset schema do not change.
+
+This interface supports at most 64 outputs and 64 named roots across observations.
+All traces together can contain at most 16 MiB and 16384 lines.
+Each line can contain at most 8192 Unicode characters.
+Trace readers remain open through final cache, output, and observation checks.
+Their file identities must remain stable when the readers close.
+Keep the output directory and every referenced input immutable during the audit.
+
+These checks establish byte and metadata consistency for explicit producer outputs.
+They do not execute outputs, prove exact child compiler or linker paths, implement
+symbol binding, or qualify an ordinary SDK provider. Native execution evidence,
+producer provenance, and independent acceptance remain separate requirements.
 
 ## Source basis and checks
 
