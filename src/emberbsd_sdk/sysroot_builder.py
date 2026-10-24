@@ -13,7 +13,7 @@ import signal
 import stat
 import sysconfig
 import time
-from . import API_VERSION, inventory, jsonio, libedit, paths, process, provenance, workspace
+from . import API_VERSION, host_compiler, inventory, jsonio, libedit, paths, process, provenance, workspace
 from .errors import SDKError, ProcessOwnershipError
 from .targets import TARGETS, target_definition
 
@@ -231,6 +231,9 @@ class SysrootBuilder:
             raise SDKError('jobs must be a positive integer')
         layout = workspace.inspect_layout(self.options['sdk'])
         workspace.require_target(layout, self.options['target'])
+        for option in ('host-cc', 'host-cxx'):
+            if not self.options.get(option):
+                raise SDKError(f'--{option} is required: select the SDK native GCC 16 driver; there is no PATH, cc or Clang fallback')
         self.git_command, self.shell = self.find_command('git'), self.find_command('sh')
         # Darwin PID churn can delay a complete empty snapshot after a producer exits.
         self.process_inspector = process.SessionInspector(env=self.environment, empty_snapshot_timeout=120)
@@ -277,10 +280,7 @@ class SysrootBuilder:
         self.runtime_command = [self.paths['python'], '-B', os.path.join(self.paths['ports'], self.VERIFIER), 'check', self.paths['runtime-work'], self.paths['gcc-archive'], self.paths['pkgsrc'], '--sdk-source', self.paths['sdk-source']]
         self.compiler_record = self.compiler()
         self.runtime_record = self.verify_runtime()
-        self.host_tools = {}
-        for name in ('cc', 'c++'):
-            path = self.find_command(name)
-            self.host_tools[name] = dict(path=path, sha256=inventory.sha256_file(path), version=''.join(self.capture(path, '--version')).strip())
+        self.host_tools = host_compiler.select_pair(self.options, lambda argv: self.capture(*argv))
         self.flags = self.FLAGS + [f'EXTERNAL_TOOLCHAIN={self.paths["compiler"]}', f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}', f'EMBER_EXTERNAL_GCC_RUNTIME={prefix}', f'HOST_CC={self.host_tools["cc"]["path"]}', f'HOST_CXX={self.host_tools["c++"]["path"]}']
         self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
         self.configure_signature()

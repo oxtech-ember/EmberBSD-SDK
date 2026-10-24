@@ -11,7 +11,7 @@ import re
 import shutil
 
 from .errors import SDKError
-from . import inventory, jsonio, libedit
+from . import host_compiler, inventory, jsonio, libedit
 from .sysroot_builder import SysrootBuilder
 from .targets import target_definition
 from .os_release import check, full_hash, tag, images, product_version, source_version, KERNEL, SYSROOT_SETS
@@ -104,6 +104,7 @@ def validate_profile(profile, sha, target):
     for key in ('os', 'ports', 'sdk-source', 'compiler', 'runtime-prefix', 'objects', 'tools', 'destination', 'libedit-source'):
         check(isinstance(paths[key], str) and paths[key].startswith('/') and not re.search(r'\s', paths[key]), 'Invalid producer path')
     check(signature['target'] == target_definition(target), 'Mixed target signature')
+    host_compiler.check_record(signature['host_tools'])
     flags, commands = producer_commands(target, paths, signature['host_tools'], sha, profile['source_timestamp'], profile['jobs'], profile['shell'])
     check(signature['flags'] == flags and profile['commands'] == commands, 'Build command does not select the exact required profile')
     executed = [r for r in receipt['commands'] if r.get('scope') != 'runtime-check']

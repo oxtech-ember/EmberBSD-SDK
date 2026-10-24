@@ -63,15 +63,27 @@ Record diagnostic inputs and keep those outputs outside packages, sysroots, and 
 Replay fuzz corpora with GCC16 as that procedure requires.
 These exceptions do not authorize a Clang-built production generator.
 
-## Current enforcement gap
+## Native host compiler selection
 
-The current `sysroot_builder.SysrootBuilder` searches `PATH` for `cc` and `c++`.
-It records those tools and supplies them as `HOST_CC` and `HOST_CXX` to OS build rules.
-The release builder inherits this selection.
-The code does not yet verify that these are SDK native GCC16 tools.
-Its existing successful plan therefore does not establish compliance with this policy.
+`sysroot_builder.SysrootBuilder` and the release builder require
+`--host-cc` and `--host-cxx`. Each value is the absolute path of a native
+GCC16 driver. The builder does not search `PATH` and has no `cc` or Clang
+fallback.
 
-Repair the common selector and its consumers before accepting a build that depends on this fallback.
-Require explicit native-tool inputs, provider validation, and refusal tests.
-Check nested producers as well as the top-level plan.
-The documentation change does not claim that this executable enforcement is implemented.
+The common selector `host_compiler` refuses a missing or relative selection.
+It also refuses a driver that resolves into `/usr/bin`, `/usr/local`,
+`/opt/homebrew`, `/opt/local`, Xcode, or Command Line Tools.
+It queries the predefined macros and refuses `__clang__` or a `__GNUC__` other than 16.
+It refuses a `--version` text that names Clang, LLVM, or Apple.
+Both drivers must report the same GCC version and machine.
+The receipt records the resolved path, hash, version text, machine, and the
+assembler and linker that each driver selects.
+The release builder refuses a recorded host tool set that the selector does not accept.
+`tests/test_host_compiler.py` contains the refusal regressions.
+
+## Remaining enforcement gaps
+
+On Darwin, the native GCC16 driver uses the assembler and linker of the host
+SDK. The receipt records them; the selector does not yet replace them.
+Nested producers in Ports and OS build rules must also use the selected
+drivers. Check them as well as the top-level plan.
