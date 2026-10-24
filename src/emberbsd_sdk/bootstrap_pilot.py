@@ -184,7 +184,7 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     plan = _json(bootstrap_plan)
     make_probe = profile == 'make'
     metadata = profile == 'producer' and plan.get('stage') == 'metadata'
-    program = profile == 'producer' and plan.get('stage') == 'grep-bootstrap'
+    program = profile == 'producer' and plan.get('stage') in ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap')
     relocation = profile == 'producer' and plan.get('stage') == 'utility-relocation'
     recipe = profile == 'bootstrap'
     if relocation:

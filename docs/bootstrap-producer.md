@@ -14,7 +14,8 @@ scope `gcc16-bootstrap`. It has exactly `format`, `version`, `scope`, `stage`,
 `seed_descriptor`, `host`, `sources`, `work_root`, `required_roles`, `resources`,
 `metadata`, and `commands`. This page describes `stage: metadata`.
 The separate [direct-source program profile](bootstrap-program.md) supports
-`stage: grep-bootstrap` with its own finite input fields and commands.
+`stage: grep-bootstrap`, `cmp-bootstrap`, or `hostname-bootstrap` with its own
+finite input fields and commands.
 The separate [initial utility relocation profile](bootstrap-relocation.md)
 supports `stage: utility-relocation`. The same `run-producer` entry point
 dispatches its 42 fixed transforms. It keeps original inputs shared and work

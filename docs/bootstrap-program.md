@@ -1,13 +1,13 @@
-# Direct-source bootstrap grep
+# Fixed direct-source bootstrap programs
 
-This finite profile builds one initial grep from its OS-owned source contract.
+These finite profiles build initial grep, cmp, or hostname from OS-owned contracts.
 It admits only an independently accepted seed and exact plan.
 It does not qualify a provider or bypass ordinary NativeToolset admission.
 It needs no completed package dependency graph or future build output.
 Origin: EmberBSD (AI-assisted). The OS retains its source licenses and authors.
 
 Use `BOOTSTRAP_PROGRAM_API = 1` from `emberbsd_sdk.bootstrap_program`.
-The sole source-owner contract is `tools/grep/bootstrap.json` in EmberBSD.
+The original source-owner contract is `tools/grep/bootstrap.json` in EmberBSD.
 Its SHA256 is
 `cdb8f56fd1107b1cc9ccdbe4cc352599e8575b7984f3c6b6a074426c71e56d3e`.
 The SDK constructs commands from that data. It does not copy a recipe.
@@ -15,7 +15,8 @@ The SDK constructs commands from that data. It does not copy a recipe.
 ## Accepted inputs
 
 The plan format is `emberbsd-native-gcc16-producer-plan`, version 1,
-scope `gcc16-bootstrap`, stage `grep-bootstrap`.
+scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`, and
+`hostname-bootstrap`. Each stage selects one exact source-owner manifest.
 It has exactly `format`, `version`, `scope`, `stage`, `seed_descriptor`, `host`,
 `sources`, `work_root`, `required_roles`, `resources`, `program`, and `commands`.
 The host and all source pins repeat the seed descriptor.
@@ -27,7 +28,7 @@ The native seed loader still checks all tools, native ABI inputs, and dependenci
 `manifest` is an exact `{path, sha256}` reference under the source root.
 `source` has exactly `root`, `source`, `inventory`, and `source_proof`.
 Its `source` repeats the descriptor's `sources.os` pin.
-The real source root contains exactly these 11 regular source files and their
+For grep, the real source root contains exactly these 11 regular source files and their
 parent directories. Links and additional source members are refused:
 
 - `tools/grep/bootstrap.json` and `tools/grep/README.md`.
@@ -81,7 +82,55 @@ The 14 semantic cases have no DYLD diagnostic environment.
 No library search override is accepted. Runtime text is observed evidence;
 this profile does not claim complete runtime dependency admission or kernel tracing.
 
-All 21 commands use the existing finite controller, `run_logged`, input/source
+## Fixed cmp and hostname profiles
+
+The cmp manifest is `tools/cmp/bootstrap.json`. Its SHA256 is
+`a3267d3387b08780fb1e372f5a742dccd9faa84568292506d3389f35e869ad56`.
+Its complete source roster has 11 regular files:
+
+- `tools/cmp/Makefile`, `README.md`, and `bootstrap.json`.
+- `tools/Makefile.host` and `tools/compat/bootstrap_cdefs.h`.
+- `usr.bin/cmp/Makefile`, `extern.h`, `cmp.c`, `misc.c`, `regular.c`, and `special.c`.
+
+The four C files compile in that order. Only the declared `usr.bin/cmp` include
+directory is added. The forced include is the absolute source-rooted
+`tools/compat/bootstrap_cdefs.h` path. Native ABI and compiler arguments remain
+unchanged. The header retains source identifiers and the real noreturn attribute
+where the host headers do not provide them. It adds no function stub.
+The next command links the four objects under the shared heavy-link lease.
+The 18 source-owner semantic cases cover equality, differences, silent and list
+modes, stdin, skips, short files, missing files, and invalid arguments.
+They require their exact 0, 1, or 2 exits and distinct output streams.
+Error cases marked `stderr_nonempty` require actual nonempty stderr.
+Literal fixture strings can be empty. The controller writes their exact bytes.
+The final observation is `cmp -s same.txt same.txt` with DYLD library diagnostics.
+This profile has 24 commands.
+
+The hostname manifest is `tools/hostname/bootstrap.json`. Its SHA256 is
+`32450fa3c2d68e63c13f1d32795f4d3e14cab8b5beac909ee27242cef279750d`.
+Its complete source roster has seven regular files:
+
+- `tools/hostname/Makefile`, `README.md`, and `bootstrap.json`.
+- `tools/Makefile.host` and `tools/compat/bootstrap_cdefs.h`.
+- `bin/hostname/Makefile` and `hostname.c`.
+
+It compiles one C file with the same source-rooted forced include, then links it.
+The only semantic argument tails are `[]`, `[-s]`, and `[-z]`.
+The first two require exit 0. Their fixed `stdout_nonempty` manifest sentinel
+selects an exact Python `socket.gethostname()` oracle with a final newline.
+The short case uses the part before the first dot. Arbitrary nonempty text fails.
+The invalid-option case requires exit 1, empty stdout, and nonempty stderr.
+No hostname operand or setter is accepted. The final DYLD observation invokes
+the owned hostname with no argument. This profile has six commands.
+
+Both profiles use the same source inventory and Git blob proof checks as grep.
+They add no aliases, C++ compiler requirement, compatibility library, custom flags,
+or provider qualification. Their initial use requires the declared host libc
+interfaces. These fixed contracts do not establish support on another host OS.
+
+## Common execution and evidence
+
+All fixed commands use the existing finite controller, `run_logged`, input/source
 shared leases, exclusive work lease, deadline observation, and failed-drain HOLD.
 `TMPDIR` is the owned work path. Only selected tool directories enter PATH.
 Startup, validation, inspection, and drainage can add wall time to the command
