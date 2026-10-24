@@ -359,7 +359,14 @@ def _plan(reference, descriptor, commands=None, flags=None, *, inspect_inputs=Tr
         available = {path for path, item in recipe_inventory.items()
                      if path.startswith('patches/patch-') and item.get('kind') == 'file'}
         _require(set(row['patches']) == available, 'bootstrap plan omits common recipe patches')
-        _require(isinstance(row['distfiles'], list) and row['distfiles'], 'recipe distfiles are required')
+        _require(isinstance(row['distfiles'], list), 'recipe distfiles are required')
+        if row['distfiles']:
+            _require('distfile_metadata' not in row,
+                     'distfile observations only belong to an empty local-source recipe')
+        else:
+            _require(bound, 'recipe distfiles are required')
+            from .bootstrap_recipe import _local_source_distfiles
+            _local_source_distfiles(name, row, recipe_inventory)
         for distfile in row['distfiles']:
             _text(distfile['url'], 'distfile URL')
             if inspect_inputs:

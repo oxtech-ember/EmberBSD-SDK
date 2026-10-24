@@ -215,6 +215,7 @@ The envelope is `emberbsd-native-gcc16-bootstrap-plan`, version 1, scope `gcc16-
 Each recipe key is its source-relative directory.
 Each row has `directory` equal to that key, a complete subtree `inventory` reference,
 ordered `patches`, nonempty `distfiles`, and `dependencies`.
+The bound-make local-source case below has one explicit exception.
 The subtree must equal the corresponding complete export subtree.
 List every regular `patches/patch-*` file once.
 Each distfile has `url` and a common `file` reference.
@@ -285,6 +286,28 @@ destination below `work_root/distfiles`, including any `DIST_SUBDIR` component.
 Repeated destinations must have the same SHA256. Traversal and overlapping file
 and directory destinations are refused. The controller copies only these pinned
 files. It does not download missing inputs. Work cannot overlap a declared input.
+
+Four local-source recipes can use `distfiles: []`: `pkgtools/cwrappers`,
+`pkgtools/digest`, `pkgtools/libnbcompat`, and `pkgtools/mktools`.
+Only this empty bound-make case accepts a `distfile_metadata` file reference
+in its recipe row. It pins the raw named-variable log from an accepted metadata
+command. The existing `metadata_values()` parser requires the complete fixed
+roster. `PKGPATH` must equal this recipe. `DISTFILES` and `PATCHFILES` must be empty.
+A positional, incomplete, changed, or diagnostic-bearing log is refused.
+The complete recipe inventory must still equal its export subtree.
+The SDK requires the local Makefile and the recognized regular source files.
+The two configure recipes also need `files/configure` and `files/Makefile.in`.
+The C-wrapper and mktools recipes keep their BSD Makefiles and C sources.
+No archive is invented or copied for these recipes. All common patches remain required.
+Other empty recipes, legacy unbound plans, and this extra field on nonempty rows are refused.
+
+Before execution, the independent caller must match each log reference to the
+successful variables command in the actual metadata result. Check that result's
+plan, source export, current input revalidation and drainage evidence.
+Record this link in the existing independent input-route audit and accept the
+exact full-plan hash. The SDK does not treat a caller-created log as acceptance.
+The recursive input reference check keeps this log shared and outside new work.
+Retain it with the small graduation inputs. Ordinary graduation remains unchanged.
 
 Add `object_directory` to the `lang/gcc16` recipe row. Pin its actual value from
 the evaluated `WRKDIR`, `WRKSRC` and `OBJDIR` metadata. It must be below

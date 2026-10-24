@@ -12,10 +12,10 @@ import sys
 
 from .bootstrap_binding import DARWIN_LLVM_MC_LLD_SEED
 from .bootstrap_make import _safe_path
-from .bootstrap_producer import (RECIPE_LIMIT, _recipe_name, metadata_environment, metadata_paths,
-                                 validate_metadata_inputs)
+from .bootstrap_producer import (RECIPE_LIMIT, _recipe_name, metadata_environment,
+                                 metadata_paths, metadata_values, validate_metadata_inputs)
 from .inventory import sha256_file
-from .native_toolset import _file, _require, _sha
+from .native_toolset import _file, _json, _require, _sha
 from .paths import canonical_existing, canonical_new, reject_overlap
 
 BOOTSTRAP_FORMAT = 'emberbsd-native-gcc16-bootstrap-plan'
@@ -102,12 +102,41 @@ def recipe_steps(plan, descriptor, commands, flags):
     return result
 
 
+_LOCAL_SOURCE_FILES = {
+    'pkgtools/cwrappers': ('Makefile', 'files/bin/Makefile', 'files/bin/cc-wrapper.c'),
+    'pkgtools/digest': ('Makefile', 'files/configure', 'files/Makefile.in', 'files/digest.c'),
+    'pkgtools/libnbcompat': ('Makefile', 'files/configure', 'files/Makefile.in', 'files/asprintf.c'),
+    'pkgtools/mktools': ('Makefile', 'files/Makefile', 'files/mk-buildlink-symlinks.c', 'files/mkpath.c'),
+}
+
+
+def _local_source_distfiles(recipe, row, inventory=None):
+    """Check the fixed local layouts. The caller also binds the complete subtree."""
+    _require(recipe in _LOCAL_SOURCE_FILES and row['distfiles'] == [] and
+             'distfile_metadata' in row, 'empty distfiles need recognized local-source observations')
+    inventory = _json(row['inventory']) if inventory is None else inventory
+    _require(isinstance(inventory, dict) and
+             all(inventory.get(name, {}).get('kind') == 'file' for name in _LOCAL_SOURCE_FILES[recipe]),
+             'local-source recipe omits a required regular source file')
+    for name in _LOCAL_SOURCE_FILES[recipe]:
+        _sha(inventory[name].get('sha256'))
+    values = metadata_values(row['distfile_metadata'])
+    _require(values['PKGPATH'] == recipe and values['DISTFILES'] == '' and values['PATCHFILES'] == '',
+             'local-source metadata must name this recipe and no distfiles or patchfiles')
+
+
 def recipe_distfiles(plan):
     """Map explicit DIST_SUBDIR-relative destinations to pinned original files."""
     files = {}
     for recipe in recipe_order(plan):
-        rows = plan['recipes'][recipe]['distfiles']
-        _require(isinstance(rows, list) and 1 <= len(rows) <= 128, 'invalid bound recipe distfiles')
+        recipe_row = plan['recipes'][recipe]
+        rows = recipe_row['distfiles']
+        _require(isinstance(rows, list) and len(rows) <= 128, 'invalid bound recipe distfiles')
+        if not rows:
+            _local_source_distfiles(recipe, recipe_row)
+            continue
+        _require('distfile_metadata' not in recipe_row,
+                 'distfile observations only belong to an empty local-source recipe')
         for row in rows:
             _require(isinstance(row, dict) and set(row) == {'url', 'file', 'relative'},
                      'bound distfiles need explicit export-relative destinations')
