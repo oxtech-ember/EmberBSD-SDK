@@ -111,6 +111,10 @@ routes, dependency inputs, tools, and consumed makefiles. It also includes
 `MACHINE_GNU_PLATFORM` and `GCC_TARGET_MACHINE` pin the output compiler triplet.
 These exact fields support the later object-directory and distfile plan.
 The caller cannot add an arbitrary `VARNAME` query.
+The recognized parallel Ports profile also needs `EMBERBSD_DARWIN_CPU_BUDGET`.
+SDK sets it to the accepted job count. Metadata with that profile uses one job
+and an empty linker prefix. A parallel recipe build needs the separate full-plan
+`link_control` service. The original profile's MAKECONF bytes stay unchanged.
 Each command starts with the complete selected bmake tuple.
 `EMBERBSD_DARWIN_BOOTSTRAP=yes` precedes `-C`. The job count is explicit.
 No custom target, argument, or environment suffix is supported.

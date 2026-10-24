@@ -7,16 +7,44 @@ import os
 from pathlib import Path
 import re
 import shutil
+import shlex
+import sys
 
 from .bootstrap_binding import DARWIN_LLVM_MC_LLD_SEED
 from .bootstrap_make import _safe_path
 from .bootstrap_producer import (metadata_environment, metadata_paths,
                                  validate_metadata_inputs)
 from .inventory import sha256_file
-from .native_toolset import _require
+from .native_toolset import _file, _require, _sha
 from .paths import canonical_new, reject_overlap
 
 BOOTSTRAP_FORMAT = 'emberbsd-native-gcc16-bootstrap-plan'
+
+
+def recipe_linker_launcher(plan):
+    """Construct only the pinned SDK control-plane resource service prefix."""
+    value, resources = plan['link_control'], plan['resources']
+    return shlex.join([_safe_path(value['python']['path']), _safe_path(value['launcher']['path']),
+                       '--lock-root', _safe_path(resources['lock_root']),
+                       '--context', _safe_path(resources['heavy_link_context']), '--'])
+
+
+def validate_link_control(value, *, inspect_inputs):
+    _require(isinstance(value, dict) and set(value) == {'python', 'launcher'},
+             'link control needs only its exact Python and SDK launcher references')
+    for reference in value.values():
+        _require(isinstance(reference, dict) and set(reference) == {'path', 'sha256'},
+                 'link control requires exact file references')
+        _safe_path(reference['path'])
+        _sha(reference['sha256'])
+    _require(value['launcher']['path'].endswith('/scripts/link-launcher.py'),
+             'link control must use the SDK resource launcher')
+    if inspect_inputs:
+        expected = str(Path(__file__).resolve().parents[2] / 'scripts/link-launcher.py')
+        _require(value['python']['path'] == sys.executable and value['launcher']['path'] == expected,
+                 'link control must use this same SDK control-plane Python and source')
+        for reference in value.values():
+            _file(reference)
 
 
 def recipe_order(plan):
@@ -50,16 +78,17 @@ def recipe_steps(plan, descriptor, commands, flags):
     work = _safe_path(plan['work_root'])
     export = _safe_path(plan['ports_export']['root'])
     env = metadata_environment(plan, commands)
+    jobs = '-j' + str(plan['resources']['cpu_jobs'])
     result = []
     for number, recipe in enumerate(recipe_order(plan)):
         for phase in ('build', 'install'):
             if recipe == 'lang/gcc16' and phase == 'install':
                 result.append(dict(id='gcc16-compare', recipe=recipe, phase='compare', role='gmake',
-                    cwd=work, env=dict(env), argv=[*commands['gmake'], '--no-print-directory', '-j1',
+                    cwd=work, env=dict(env), argv=[*commands['gmake'], '--no-print-directory', jobs,
                         '-C', _safe_path(plan['recipes'][recipe]['object_directory']), 'compare']))
             result.append(dict(id=f'r{number:03d}-' + phase, recipe=recipe, phase=phase, role='make',
                 cwd=work, env=dict(env), argv=[*commands['make'], 'EMBERBSD_DARWIN_BOOTSTRAP=yes',
-                    '-j1', '-C', os.path.join(export, recipe), phase]))
+                    jobs, '-C', os.path.join(export, recipe), phase]))
     return result
 
 
@@ -92,13 +121,17 @@ def validate_bound_recipe_plan(plan, descriptor, commands, flags, *, inspect_inp
     """Extend the existing full plan. This function issues no qualification."""
     _require(set(plan) == {'format', 'version', 'scope', 'purpose', 'seed_descriptor', 'host', 'sources',
         'output_compiler', 'ports_export', 'recipes', 'work_root', 'output_bundle_root', 'required_roles',
-        'commands', 'comparison_command', 'resources', 'metadata'}, 'unsupported bound full-plan fields')
+        'commands', 'comparison_command', 'resources', 'metadata'} |
+        ({'link_control'} if 'link_control' in plan else set()), 'unsupported bound full-plan fields')
     _require(descriptor['host']['os'] == 'Darwin' and descriptor['host']['cpu'] in ('arm64', 'aarch64') and
              descriptor['make_binding']['kind'] == 'ports-bootstrap-make-v1' and
              descriptor.get('driver_binding', {}).get('kind') == DARWIN_LLVM_MC_LLD_SEED,
              'bound full plans need the recognized Darwin make and v2 driver bindings')
     from .bootstrap_pilot import _references, _validate_resources
-    _validate_resources(plan['resources'], recipe=True)
+    parallel = 'link_control' in plan
+    if parallel:
+        validate_link_control(plan['link_control'], inspect_inputs=inspect_inputs)
+    _validate_resources(plan['resources'], recipe=True, parallel=parallel, inspect_inputs=inspect_inputs)
     validate_metadata_inputs(plan, descriptor, commands, flags,
                              inspect_inputs=inspect_inputs, recipe_limit=256)
     _require(plan['metadata']['recipes'] == sorted(plan['recipes']) and

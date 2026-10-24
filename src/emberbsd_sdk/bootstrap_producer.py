@@ -22,6 +22,7 @@ PRODUCER_FORMAT = 'emberbsd-native-gcc16-producer-plan'
 PROFILE_RELATIVE = 'profiles/development-toolchain/darwin-bootstrap.mk.conf'
 PROFILE_EXPORT = 'EMBERBSD-DARWIN-BOOTSTRAP-MK.CONF'
 PROFILE_SHA256 = '3b663ca1e6183f500dcc143c160d916da6088541f8a01b7376983b090d7c8298'
+PARALLEL_PROFILE_SHA256 = '6adbb69112056a867b463fd825a0842294b1eb7e67331433184c1f31d5de518a'
 EARLY_TOOLS = tuple('awk basename cat cut date dirname env expr grep head id pwd sed sort tail tr uname uniq wc'.split())
 VARIABLES = tuple('PKGNAME PKGPATH PKGVERSION PKGREVISION OPSYS MACHINE_ARCH NATIVE_OPSYS NATIVE_OS_VERSION '
                   'NATIVE_OPSYS_VERSION PKGSRC_COMPILER GCC_REQD _GCC_VERSION CC CXX CPP PKG_CC PKG_CXX '
@@ -94,6 +95,12 @@ def metadata_assignments(plan, descriptor, commands, flags):
     for role in data['native_tools']:
         _require(len(commands[role]) == 1, 'raw metadata tools cannot omit a selected command tail')
         variables['EMBERBSD_DARWIN_TOOL.' + role] = _safe_path(commands[role][0])
+    if data['profile']['sha256'] == PARALLEL_PROFILE_SHA256:
+        variables['EMBERBSD_DARWIN_CPU_BUDGET'] = str(plan['resources']['cpu_jobs'])
+        variables['EMBERBSD_GCC16_LINKER_LAUNCHER'] = ''
+        if 'link_control' in plan:
+            from .bootstrap_recipe import recipe_linker_launcher
+            variables['EMBERBSD_GCC16_LINKER_LAUNCHER'] = recipe_linker_launcher(plan)
     return variables
 
 
@@ -109,9 +116,14 @@ def metadata_makeconf(plan, descriptor, commands, flags):
 def metadata_environment(plan, commands):
     """Use the same exact environment for metadata and bound recipe commands."""
     data, work = plan['metadata'], _safe_path(plan['work_root'])
-    return dict(PATH=_safe_path(data['utility_bin']), LC_ALL='C', TZ='UTC', TMPDIR=work,
+    result = dict(PATH=_safe_path(data['utility_bin']), LC_ALL='C', TZ='UTC', TMPDIR=work,
                MAKECONF=_safe_path(data['makeconf']['path']), SHELL=_safe_path(commands['sh'][0]),
                CONFIG_SHELL=_safe_path(commands['sh'][0]))
+    if 'link_control' in plan:
+        from .bootstrap_recipe import recipe_linker_launcher
+        # The direct GNU compare command does not pass through pkgsrc MAKE_ENV.
+        result['GCC_HOST_LINKER_LAUNCHER'] = recipe_linker_launcher(plan)
+    return result
 
 
 def producer_steps(plan, descriptor, commands, flags):
@@ -171,8 +183,10 @@ def _export_proof(data, descriptor, inventory, *, inspect_inputs=True):
                  'prepared export omits its canonical producer source')
         if inspect_inputs:
             _bytes(row['file'])
-    _require(manifest.get(PROFILE_RELATIVE, {}).get('sha256') == PROFILE_SHA256 and
-             inventory.get(PROFILE_EXPORT, {}).get('sha256') == PROFILE_SHA256,
+    profile_sha = data['profile']['sha256']
+    _require(profile_sha in (PROFILE_SHA256, PARALLEL_PROFILE_SHA256) and
+             manifest.get(PROFILE_RELATIVE, {}).get('sha256') == profile_sha and
+             inventory.get(PROFILE_EXPORT, {}).get('sha256') == profile_sha,
              'prepared export profile differs from its source-owner bytes')
 
 
@@ -181,6 +195,13 @@ def validate_metadata_inputs(plan, descriptor, commands, flags, *, inspect_input
     data = plan['metadata']
     _require(set(data) == {'export', 'profile', 'makeconf', 'host_facts', 'utility_bin',
                           'native_tools', 'source_tools', 'recipes'}, 'unsupported metadata input fields')
+    parallel = 'link_control' in plan
+    _require(not parallel or plan.get('format') == 'emberbsd-native-gcc16-bootstrap-plan' and
+             data['profile']['sha256'] == PARALLEL_PROFILE_SHA256,
+             'link control needs the recognized parallel full-plan profile')
+    _require(data['profile']['sha256'] != PARALLEL_PROFILE_SHA256 or parallel or
+             plan['resources']['cpu_jobs'] == 1,
+             'parallel profile jobs require the full-plan link control service')
     _require((not inspect_inputs or data['host_facts'] == _current_host_facts()) and
              data['host_facts']['os'] == 'Darwin' and
              data['host_facts']['cpu'] == 'aarch64', 'metadata facts differ from the current native host')
@@ -210,7 +231,8 @@ def validate_metadata_inputs(plan, descriptor, commands, flags, *, inspect_input
         _require(canonical_existing(root) == root and snapshot_tree(root) == inventory,
                  'prepared canonical export changed')
     _export_proof(data, descriptor, inventory, inspect_inputs=inspect_inputs)
-    _require(data['profile'] == dict(path=os.path.join(root, PROFILE_EXPORT), sha256=PROFILE_SHA256),
+    _require(data['profile']['sha256'] in (PROFILE_SHA256, PARALLEL_PROFILE_SHA256) and
+             data['profile'] == dict(path=os.path.join(root, PROFILE_EXPORT), sha256=data['profile']['sha256']),
              'metadata needs the recognized source-owner profile')
     if inspect_inputs:
         _bytes(data['profile'])

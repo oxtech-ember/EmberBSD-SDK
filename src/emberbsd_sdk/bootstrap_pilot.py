@@ -75,11 +75,18 @@ def validate_pilot_plan(plan, descriptor, commands, flags):
     return plan
 
 
-def _validate_resources(resources, *, metadata=False, recipe=False):
+def _validate_resources(resources, *, metadata=False, recipe=False, parallel=False, inspect_inputs=True):
     _require(isinstance(resources, dict) and set(resources) ==
              {'cpu_jobs', 'link_jobs', 'runtime_seconds', 'lock_root', 'heavy_link_context'},
              'pilot resource agreement is incomplete')
-    _require(type(resources['cpu_jobs']) is int and 1 <= resources['cpu_jobs'] <= (4 if metadata else 1) and
+    _require(not parallel or recipe, 'parallel resource control requires the full recipe route')
+    limit = 4 if metadata else 1
+    if parallel:
+        limit = os.cpu_count() if inspect_inputs else None
+    _require(not (parallel and inspect_inputs) or type(limit) is int and limit > 0,
+             'the current host CPU budget is unavailable')
+    _require(type(resources['cpu_jobs']) is int and resources['cpu_jobs'] > 0 and
+             (limit is None or resources['cpu_jobs'] <= limit) and
              type(resources['link_jobs']) is int and resources['link_jobs'] == 1 and
              type(resources['runtime_seconds']) is int and
              0 < resources['runtime_seconds'] <= (86400 if recipe else 1200 if metadata else 120),
@@ -258,7 +265,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                 try:
                     if step['phase'] == 'run':
                         _native_image(step['argv'][0], descriptor['host'])
-                    context = ([resources['heavy_link_context']] if recipe or step['phase'] == 'link' else [])
+                    heavy = (recipe and 'link_control' not in plan) or step['phase'] == 'link'
+                    context = [resources['heavy_link_context']] if heavy else []
                     with ContextLocks(context, root):
                         remaining = deadline - time.monotonic()
                         _require(remaining > 0, 'pilot observation budget expired before next command')

@@ -320,6 +320,55 @@ revalidation and an installed `output_inventory` reference. Completion remains
 `COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW`. It never issues qualification,
 stage inventories, a stage comparison acceptance or an execution audit.
 
+### Parallel heavy-link control
+
+The same full-plan format accepts one optional `link_control` object.
+It has exactly `python` and `launcher`, each an exact `{path, sha256}` reference.
+`python.path` must equal the running SDK process's `sys.executable` spelling.
+`launcher.path` must equal `scripts/link-launcher.py` in this same SDK source.
+Both current files are hashed under their read leases before a command runs.
+These are SDK control-plane services. They are not seed tools or a new Python
+provider. A copied interpreter, alternate alias, foreign script or extra
+launcher arguments fail before execution.
+
+This route requires the fixed Ports parallel profile SHA256
+`6adbb69112056a867b463fd825a0842294b1eb7e67331433184c1f31d5de518a`.
+It keeps the original profile available for serial and historical plans.
+`cpu_jobs` is a positive integer no greater than the current `os.cpu_count()`.
+An unavailable host CPU count fails closed. The deadline and `link_jobs: 1`
+requirements remain. Source-owned `-jN` replaces `-j1` in the same fixed tuples.
+MAKECONF gets `EMBERBSD_DARWIN_CPU_BUDGET` and `EMBERBSD_DARWIN_JOBS` from that
+same accepted job count. It gets `EMBERBSD_GCC16_LINKER_LAUNCHER` from exactly:
+
+```text
+python.path launcher.path --lock-root resources.lock_root --context resources.heavy_link_context --
+```
+
+The SDK quotes the exact paths. It accepts no caller-supplied prefix string.
+The Ports recipe passes this prefix as `GCC_HOST_LINKER_LAUNCHER`.
+The complete step environment binds that same variable too. This covers the
+direct GNU `compare` invocation, which does not pass through pkgsrc `MAKE_ENV`.
+The three GCC `LINKER` and `LINKER_FOR_BUILD` assignments cover heavy language
+frontends, LTO, native generators and `libgdiagnostics`. Compiler tuples and
+qualified ABI flags do not change. Smaller target runtime links, including
+`libgcc` and `libstdc++`, may run concurrently within the CPU budget. This is
+one heavy-link slot. It is not serialization of every final link.
+
+With `link_control`, the outer controller keeps its input, SDK source, control
+file and writable-work leases. It does not take the heavy-link lock around
+make. Each nested launcher takes that lock for its owned link group.
+Taking the same lock in both layers would deadlock. The existing launcher
+retains the build session and checks link-group drainage. The outer SDK
+controller still drains the complete command session and retains its leases
+in HOLD when drainage is unproven. The caller must use its host memory pressure
+guard to stop the build when the agreed pressure limit is reached.
+
+Historical graduation checks the retained control file references and exact
+prefix. It does not reopen a retired Python or SDK source tree, or query a
+different host's CPU count. Live admission always checks the current identities.
+The independent comparison, execution audit and ordinary qualification gates
+remain unchanged.
+
 ## Accepted seed receipt
 
 The envelope is `emberbsd-bootstrap-seed-acceptance`, version 1,
