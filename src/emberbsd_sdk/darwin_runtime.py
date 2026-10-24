@@ -12,8 +12,8 @@ import sys
 
 from .errors import SDKError
 from .inventory import sha256_file, snapshot_tree
-from .native_toolset import _absolute, _json, _require, _sha
-from .paths import canonical_existing, inside, open_regular, verify_stable
+from .native_toolset import _absolute, _darwin_slice, _json, _require, _sha
+from .paths import canonical_existing, canonical_new, inside, open_regular, verify_stable
 
 DARWIN_RUNTIME_AUDIT_API = 1
 _LOADS = {0xc, 0x80000018, 0x8000001f, 0x20, 0x80000023}
@@ -26,6 +26,7 @@ _OTHER_COMMANDS = {2, 4, 5, 0xb, 0xe, 0x10, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
 _MAX_METADATA = 16 * 1024 * 1024
 _MAX_LAZY_SYMBOLS = 4096
 _MAX_LAZY_SYMBOL_BYTES = 1024 * 1024
+_MAX_RPATH_CANDIDATES = 4096
 
 
 def _cstring(data, offset, end=None):
@@ -104,7 +105,8 @@ def _macho(read, host, *, cached=False, executable=False):
             _require(offset >= minimum, 'Mach-O string overlaps its command fields')
             name, _ = _cstring(data, offset)
             if command in _LOADS:
-                _require(name.startswith('/'), 'relative and @rpath runtime loads are not supported')
+                _require(name.startswith(('/', '@rpath/')),
+                         'relative runtime loads are not supported')
                 current, compatibility = struct.unpack_from('<II', data, 16)
                 attributes = {0x80000018: 1, 0x8000001f: 2, 0x80000023: 4, 0x20: 8}.get(command, 0)
                 encoding = 'dylib-command'
@@ -332,6 +334,51 @@ class _Cache:
             rest = rest[consumed:]
 
 
+def _rpath_target(load, image, path, bundle, missing, candidates_used):
+    """Resolve a successful own-image rpath before inherited paths are needed."""
+    name = load['name']
+    leaf = name[7:]
+    _require(leaf not in ('', '.', '..') and '/' not in leaf and '\\' not in leaf,
+             'only one @rpath runtime leaf is supported')
+    _require(canonical_existing(bundle) == bundle and inside(path, bundle) and
+             load['command'] in _LOADS - {0x20},
+             '@rpath runtime loads require an in-bundle file image')
+    _require(0 < len(image['rpaths']) <= 64,
+             'inherited or missing @rpath runtime loads are not supported')
+    candidates, targets = [], set()
+    for rpath in image['rpaths']:
+        candidates_used[0] += 1
+        _require(candidates_used[0] <= _MAX_RPATH_CANDIDATES,
+                 'runtime rpath candidates exceed the audit budget')
+        if rpath == '@loader_path':
+            anchor = os.path.dirname(path)
+        elif rpath.startswith('@loader_path/'):
+            suffix = rpath[13:].split('/')
+            _require(all(part not in ('', '.', '..') for part in suffix),
+                     'unsupported loader-relative rpath traversal')
+            anchor = os.path.join(os.path.dirname(path), *suffix)
+        else:
+            anchor = _absolute(rpath)
+        _require(os.path.commonpath((anchor, bundle)) == bundle and
+                 canonical_new(anchor) == anchor,
+                 'runtime rpath anchor must be a real in-bundle path')
+        candidate = os.path.join(anchor, leaf)
+        record = dict(rpath=rpath, path=candidate, target=None)
+        if _absent(candidate):
+            missing.add(candidate)
+        else:
+            target = canonical_existing(candidate)
+            _require(target == candidate and inside(target, bundle),
+                     'runtime rpath target must be a real in-bundle path')
+            record['target'] = target
+            targets.add(target)
+        candidates.append(record)
+    _require(len(targets) == 1, 'missing or ambiguous image-local @rpath runtime target')
+    target = targets.pop()
+    load['rpath_resolution'] = dict(owner=path, candidates=candidates)
+    return target
+
+
 def capture_darwin_runtime_audit(descriptor, *, cache_main):
     """Return byte-bound runtime metadata. This does not qualify a toolset."""
     try:
@@ -344,13 +391,16 @@ def _capture(descriptor, cache_main):
     host = descriptor['host']
     _require(host['os'] == 'Darwin', 'Darwin cache inputs require a Darwin host')
     roots = [descriptor['bundle_root']] + [row['root'] for row in descriptor['host_abi']['libraries']]
-    tools = {canonical_existing(row['path']) for row in descriptor['tools'].values()
-             if row['kind'] == 'native'}
+    selected_tools = [row['path'] for row in descriptor['tools'].values() if row['kind'] == 'native']
+    tools = {canonical_existing(path) for path in selected_tools}
+    aliased_images = {canonical_existing(path) for path in selected_tools
+                      if canonical_existing(path) != path}
     _require(tools, 'Darwin runtime graph needs native tool roots')
     with ExitStack() as stack:
         cache = _Cache(cache_main, descriptor, stack)
         nodes, pending, absent = {}, sorted(tools), set()
         symbol_bytes = [0]
+        missing_rpaths, rpath_candidates = set(), [0]
         while pending:
             path = pending.pop()
             if path in nodes:
@@ -372,19 +422,31 @@ def _capture(descriptor, cache_main):
                          any(inside(path, root) for root in roots),
                          'runtime dependency is outside declared native inputs')
                 file = _File(path, stack)
-                image = _macho(file.read, host, executable=path in tools)
+                slice_offset, slice_size, wrapper = _darwin_slice(
+                    file.read, file.size, host, shared_library=path not in tools)
+                def read_image(offset, size):
+                    _require(0 <= offset <= slice_size and 0 <= size <= slice_size - offset,
+                             'Mach-O metadata is outside its selected slice')
+                    return file.read(slice_offset + offset, size)
+                image = _macho(read_image, host, executable=path in tools)
                 node = dict(kind='file', sha256=sha256_file(path), image=image)
+                if wrapper is not None:
+                    node['macho_slice'] = wrapper
                 for segment in image['segments']:
-                    _require(segment['file_offset'] <= file.size and
-                             segment['file_size'] <= file.size - segment['file_offset'],
+                    _require(segment['file_offset'] <= slice_size and
+                             segment['file_size'] <= slice_size - segment['file_offset'],
                              'Mach-O segment exceeds its file')
-                _lazy_loads(image, lambda segment, offset, size: file.read(offset, size), symbol_bytes)
+                _lazy_loads(image, lambda segment, offset, size: read_image(offset, size), symbol_bytes)
             nodes[path] = node
             _require(all(row['minimum'] <= cache.os_version for row in image['build_versions']
                          if row['platform'] == 1), 'image needs a newer macOS runtime')
             for load in image['loads'] + image['implicit_loads']:
                 name = load['name']
-                if cache.lookup(name) is not None:
+                if name.startswith('@rpath/'):
+                    _require(node['kind'] == 'file', '@rpath runtime loads in cached images are not supported')
+                    target = _rpath_target(load, image, path, descriptor['bundle_root'],
+                                           missing_rpaths, rpath_candidates)
+                elif cache.lookup(name) is not None:
                     target = name
                 elif _absent(name):
                     _require(load['attributes'] & 1 and not load['attributes'] & 2,
@@ -403,13 +465,19 @@ def _capture(descriptor, cache_main):
                              load['attributes'] & 1 and not load['attributes'] & 2),
                              'cached weak dependency exists outside the cache')
                     target = canonical_existing(name)
+                    if target != name:
+                        aliased_images.add(target)
                 _require(target not in tools, 'dylib edge selects a native executable')
                 load['target'] = target
                 pending.append(target)
+        _require(not any(path in aliased_images and any(load['name'].startswith('@rpath/')
+                     for load in node['image']['loads']) for path, node in nodes.items()),
+                 '@rpath owner cannot have an aliased load path')
         # Readers stay open from metadata parsing through this final content
         # check. Their stable identities are checked when ExitStack drains.
         _require(snapshot_tree(cache.root) == cache.inventory, 'Darwin cache inventory changed')
         _require(all(_absent(path) for path in absent), 'missing weak Darwin dependency appeared')
+        _require(all(_absent(path) for path in missing_rpaths), 'missing runtime rpath candidate appeared')
         return dict(format='emberbsd-darwin-runtime-audit', version=1,
                     api=DARWIN_RUNTIME_AUDIT_API, host=host,
                     cache=dict(main=cache.main, root=cache.root, inventory=cache.inventory_ref,

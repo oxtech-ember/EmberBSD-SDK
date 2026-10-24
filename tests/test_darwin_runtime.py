@@ -37,7 +37,7 @@ def command(kind, name, *, current=0x10000, compatibility=0x10000, flags=None):
     return struct.pack('<6I', kind, size, 24, 0, current, compatibility) + text.ljust(size - 24, b'\0')
 
 
-def macho(address, loads=(), *, install_name=None, cached=False, uuid=1, lazy=None):
+def macho(address, loads=(), *, install_name=None, cached=False, uuid=1, lazy=None, rpaths=()):
     commands = [struct.pack('<II16s', 0x1b, 24, uuid.to_bytes(16, 'little'))]
     commands.append(struct.pack('<II16s4Q4I', 0x19, 72, b'__TEXT',
         address, 0x400, 0, 0x400, 5, 5, 0, 0))
@@ -45,6 +45,10 @@ def macho(address, loads=(), *, install_name=None, cached=False, uuid=1, lazy=No
     if install_name:
         commands.append(command(0xd, install_name))
     commands.extend(load if isinstance(load, bytes) else command(*load) for load in loads)
+    for rpath in rpaths:
+        text = rpath.encode() + b'\0'
+        size = (12 + len(text) + 7) // 8 * 8
+        commands.append(struct.pack('<3I', 0x8000001c, size, 12) + text.ljust(size - 12, b'\0'))
     blob = b''
     if lazy:
         if isinstance(lazy, bytes):
@@ -68,6 +72,11 @@ def repeated_lazy_symbols(count, symbol_size):
     symbol_offset = path_offset + len(name)
     return (struct.pack('<IIHHIII', path_offset, 0, 0, 1, 0, count, 24) +
             struct.pack('<I', symbol_offset) * count + name + b's' * symbol_size + b'\0')
+
+
+def fat_macho(data):
+    return struct.pack('>7I', 0xcafebabe, 1, 0x100000c, 0, 4096, len(data), 12).ljust(
+        4096, b'\0') + data
 
 
 def trie(entries):
@@ -199,6 +208,162 @@ class DarwinRuntimeTests(unittest.TestCase):
         audit, closure = f.accepted()
         self.assertEqual(closure[str(library)]['sha256'], hashlib.sha256(library.read_bytes()).hexdigest())
         validate_darwin_runtime_closure(closure, f.descriptor)
+
+    def test_one_arm64_fat_dylib_keeps_the_whole_file_hash_and_slice(self):
+        f = Fixture(self)
+        library = f.bundle / 'library.dylib'
+        library.write_bytes(fat_macho(macho(0x100000000, [(0xc, ALIAS)],
+                                            install_name=str(library))))
+        f.tool.write_bytes(macho(0x100000000, [(0xc, str(library))]))
+        audit, closure = f.accepted()
+        node = audit['nodes'][str(library)]
+        self.assertEqual(node['macho_slice']['offset'], 4096)
+        self.assertEqual(node['macho_slice']['size'], 1024)
+        self.assertEqual(node['sha256'], hashlib.sha256(library.read_bytes()).hexdigest())
+        self.assertEqual(closure[str(library)]['dependencies'], [ALIAS])
+        validate_darwin_runtime_closure(closure, f.descriptor)
+        changed = bytearray(library.read_bytes())
+        changed[100] = 1
+        library.write_bytes(changed)
+        with self.assertRaisesRegex(SDKError, 'differs from current bytes'):
+            validate_darwin_runtime_closure(closure, f.descriptor)
+
+    def test_fat_dylib_load_commands_cannot_leave_the_selected_slice(self):
+        f = Fixture(self)
+        library = f.bundle / 'library.dylib'
+        data = bytearray(fat_macho(macho(0x100000000, [(0xc, ALIAS)],
+                                            install_name=str(library))))
+        struct.pack_into('>I', data, 20, 32)
+        library.write_bytes(data)
+        f.tool.write_bytes(macho(0x100000000, [(0xc, str(library))]))
+        with self.assertRaisesRegex(SDKError, 'outside its selected slice'):
+            f.capture()
+
+    def test_own_rpaths_reach_pinned_files_and_anchor_to_each_owner(self):
+        f = Fixture(self)
+        libraries = f.bundle / 'lib'
+        libraries.mkdir()
+        std = libraries / 'libstdc++.6.dylib'
+        gcc = libraries / 'libgcc_s.1.1.dylib'
+        gcc.write_bytes(fat_macho(macho(0x100000000, [(0xc, ALIAS)],
+                                           install_name='@rpath/libgcc_s.1.1.dylib')))
+        std.write_bytes(macho(0x100000000, [(0xc, '@rpath/libgcc_s.1.1.dylib')],
+            install_name='@rpath/libstdc++.6.dylib', rpaths=('@loader_path',)))
+        f.tool.write_bytes(macho(0x100000000, [(0xc, '@rpath/libstdc++.6.dylib')],
+                                 rpaths=('@loader_path/absent', str(libraries))))
+        audit, closure = f.accepted()
+        self.assertEqual(closure[str(f.tool)]['dependencies'], [str(std)])
+        self.assertEqual(closure[str(std)]['dependencies'], [str(gcc)])
+        self.assertEqual(audit['nodes'][str(std)]['image']['loads'][0]['name'],
+                         '@rpath/libgcc_s.1.1.dylib')
+        resolution = audit['nodes'][str(std)]['image']['loads'][0]['rpath_resolution']
+        self.assertEqual(resolution['owner'], str(std))
+        self.assertEqual(resolution['candidates'], [dict(rpath='@loader_path',
+            path=str(gcc), target=str(gcc))])
+        validate_darwin_runtime_closure(closure, f.descriptor)
+
+    def test_rpath_distinct_existing_targets_are_ambiguous(self):
+        f = Fixture(self)
+        directories = [f.bundle / name for name in ('first', 'second')]
+        for directory in directories:
+            directory.mkdir()
+            (directory / 'library.dylib').write_bytes(macho(0x100000000, [(0xc, ALIAS)],
+                install_name='@rpath/library.dylib'))
+        f.tool.write_bytes(macho(0x100000000, [(0xc, '@rpath/library.dylib')],
+                                 rpaths=tuple(str(path) for path in directories)))
+        with self.assertRaisesRegex(SDKError, 'ambiguous image-local'):
+            f.capture()
+
+    def test_rpath_external_alias_and_unsupported_anchors_are_refused(self):
+        for kind in ('external', 'alias', 'parent', 'executable'):
+            with self.subTest(kind=kind):
+                f = Fixture(self)
+                library = f.bundle / 'library.dylib'
+                library.write_bytes(macho(0x100000000, [(0xc, ALIAS)],
+                                         install_name='@rpath/library.dylib'))
+                if kind == 'external':
+                    anchor = str(f.root)
+                elif kind == 'alias':
+                    alias = f.bundle / 'alias'
+                    alias.symlink_to('.')
+                    anchor = str(alias)
+                elif kind == 'parent':
+                    anchor = '@loader_path/..'
+                else:
+                    anchor = '@executable_path'
+                f.tool.write_bytes(macho(0x100000000, [(0xc, '@rpath/library.dylib')],
+                                         rpaths=(anchor,)))
+                with self.assertRaises(SDKError):
+                    f.capture()
+
+    def test_rpath_does_not_inherit_from_the_requesting_parent(self):
+        f = Fixture(self)
+        std = f.bundle / 'libstdc++.6.dylib'
+        gcc = f.bundle / 'libgcc_s.1.1.dylib'
+        gcc.write_bytes(macho(0x100000000, [(0xc, ALIAS)], install_name='@rpath/libgcc_s.1.1.dylib'))
+        std.write_bytes(macho(0x100000000, [(0xc, '@rpath/libgcc_s.1.1.dylib')],
+                               install_name='@rpath/libstdc++.6.dylib'))
+        f.tool.write_bytes(macho(0x100000000, [(0xc, str(std))], rpaths=('@loader_path',)))
+        with self.assertRaisesRegex(SDKError, 'inherited or missing @rpath'):
+            f.capture()
+
+    def test_rpath_owner_cannot_hide_an_alias_anchor(self):
+        f = Fixture(self)
+        library = f.bundle / 'library.dylib'
+        library.write_bytes(macho(0x100000000, [(0xc, ALIAS)], install_name='@rpath/library.dylib'))
+        actual = f.bundle / 'actual-executable'
+        actual.write_bytes(macho(0x100000000, [(0xc, '@rpath/library.dylib')],
+                                 rpaths=('@loader_path',)))
+        f.tool.unlink()
+        f.tool.symlink_to(actual.name)
+        with self.assertRaisesRegex(SDKError, 'owner cannot have an aliased load path'):
+            f.capture()
+
+    def test_rpath_missing_candidate_cannot_appear_during_the_audit(self):
+        f = Fixture(self)
+        library = f.bundle / 'library.dylib'
+        content = macho(0x100000000, [(0xc, ALIAS)], install_name='@rpath/library.dylib')
+        library.write_bytes(content)
+        f.tool.write_bytes(macho(0x100000000, [(0xc, '@rpath/library.dylib')],
+                                 rpaths=('@loader_path/absent', '@loader_path')))
+        original = snapshot_tree
+        def appeared(root):
+            rows = original(root)
+            other = f.bundle / 'absent'
+            other.mkdir()
+            (other / library.name).write_bytes(content)
+            return rows
+        with patch('emberbsd_sdk.darwin_runtime.snapshot_tree', appeared):
+            with self.assertRaisesRegex(SDKError, 'rpath candidate appeared'):
+                f.capture()
+
+    def test_rpath_count_and_whole_audit_candidate_budget_are_bounded(self):
+        f = Fixture(self)
+        library = f.bundle / 'library.dylib'
+        library.write_bytes(macho(0x100000000, [(0xc, ALIAS)], install_name='@rpath/library.dylib'))
+        f.tool.write_bytes(macho(0x100000000, [(0xc, '@rpath/library.dylib')],
+                                 rpaths=('@loader_path',) * 65))
+        with self.assertRaisesRegex(SDKError, 'inherited or missing @rpath'):
+            f.capture()
+        content = macho(0x100000000, [(0xc, '@rpath/library.dylib')],
+                        rpaths=('@loader_path',) * 64)
+        f.tool.write_bytes(content)
+        for index in range(64):
+            path = f.bundle / ('native-' + str(index))
+            path.write_bytes(content)
+            f.descriptor['tools']['native-' + str(index)] = dict(path=str(path), kind='native')
+        with self.assertRaisesRegex(SDKError, 'candidates exceed the audit budget'):
+            f.capture()
+
+    def test_cached_image_rpath_does_not_enable_an_external_search(self):
+        f = Fixture(self)
+        data = bytearray(f.sub.read_bytes())
+        data[0x400:0x800] = macho(BASE + 4096 + 0x400, [(0xc, '@rpath/library.dylib')],
+            install_name=A, cached=True, uuid=3, rpaths=('@loader_path',))
+        f.sub.write_bytes(data)
+        f.refresh_inventory()
+        with self.assertRaisesRegex(SDKError, '@rpath runtime loads in cached images'):
+            f.capture()
 
     def test_cached_weak_edge_cannot_select_an_existing_off_cache_file(self):
         f = Fixture(self)

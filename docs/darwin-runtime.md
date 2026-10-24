@@ -79,6 +79,10 @@ It contains the host, cache inventory and UUIDs, canonical tool roots, and nodes
 Each node records its Mach-O UUID, CPU, build platform, minimum OS, raw versions,
 load-command hash, segment metadata, and ordered dependency edges.
 Lazy-load blobs retain their flags, symbol names, offsets, and content hashes.
+A fat file node adds `macho_slice` with its format, CPU, subtype, offset, size,
+and alignment. Its file SHA256 still covers the complete wrapper and padding.
+A resolved `@rpath` edge adds `rpath_resolution` with its owner and candidates.
+The original load name remains unchanged. `target` is the canonical selected file.
 
 `validate_darwin_runtime_closure(value, descriptor)` reads the pinned audit.
 It reconstructs the entire audit from current inputs.
@@ -90,17 +94,51 @@ The bootstrap consumer must select this API only for an explicit `cache_image` r
 ## Supported metadata and refusals
 
 The reader supports thin little-endian 64-bit Mach-O images.
+An on-disk shared library can also have one big-endian fat32 wrapper.
+That wrapper must contain exactly one generic arm64 slice with subtype 0.
+Its table and thin MH_DYLIB identity must agree.
+Offsets, alignment, and metadata reads must stay inside that slice.
+Multi-slice files, other fat encodings, and fat executables or objects fail explicitly.
 It checks the declared host CPU and requires a macOS build platform.
 The minimum macOS version cannot exceed the cache OS version.
 It supports the modern cache suffix table and the published header prefix.
-Older cache layouts, fat files, embedded dyld environment commands, and unknown
+Older cache layouts, embedded dyld environment commands, and unknown
 load-command encodings fail explicitly.
 
-Dependency install names must be absolute.
-Relative, `@rpath`, and other `@` dependency searches are not implemented.
+Dependency install names can be absolute or use the restricted `@rpath` form below.
+Other relative names and direct `@loader_path` or `@executable_path` loads fail.
 Recorded `LC_RPATH` strings do not cause a search for an absolute dependency.
 An ordinary file target must stay inside a declared bundle or ABI library root.
 There is no system-library name allowlist or missing-file fallback.
+
+### Image-local rpaths
+
+The supported form is `@rpath/leaf`, with one filename component.
+Only an on-disk image inside `bundle_root` can request it.
+The reader uses that image's own `LC_RPATH` entries in their recorded order.
+An entry can be an absolute in-bundle directory or `@loader_path` with an
+optional relative suffix. `@loader_path` refers to the directory of the image
+that owns this `LC_RPATH`, not the executable or another requesting image.
+Empty, `.` and `..` suffix components fail.
+Each anchor and existing target must have its real in-bundle spelling.
+An image with an aliased selected or dependent load path cannot own these edges.
+This avoids guessing a symlink-dependent loader anchor.
+
+Exactly one distinct existing target must match these local candidates.
+Multiple different files fail, even when their bytes match.
+The reader retains all candidate paths and checks missing candidates again.
+An appearing candidate invalidates the audit.
+Each image supports at most 64 `LC_RPATH` entries for this resolution.
+The complete audit supports at most 4096 rpath candidates, including repeats.
+
+No environment, working-directory, default-library, or external search is used.
+Inherited rpaths and `@executable_path` expansion are not implemented.
+A missing own-image match fails, including a weak request.
+The reader does not convert it to a null weak edge or try an inherited path.
+Cached-image and lazy-blob `@rpath` requests remain unsupported.
+Use this subset for an in-bundle `@rpath` library chain.
+They do not create an output-artifact admission interface.
+Native tool roots and bootstrap acceptance remain unchanged.
 
 The reader preserves strong, weak, re-export, upward, delayed, and lazy edges.
 It supports the published `dylib_use_command` attribute encoding.
@@ -134,6 +172,8 @@ The source files retain their Apple Public Source License at their owner.
 - [Cache structures](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/include/mach-o/dyld_cache_format.h)
   and [cache lookup](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/common/DyldSharedCache.cpp).
 - [Mach-O structures](https://github.com/apple-oss-distributions/cctools/blob/e0d56624eca2a76c2ace4c21850df9e666de4ca5/include/mach-o/loader.h).
+- [Fat wrapper structures](https://github.com/apple-oss-distributions/cctools/blob/e0d56624eca2a76c2ace4c21850df9e666de4ca5/include/mach-o/fat.h).
+- [Loader path anchors and rpath order](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/dyld/Loader.cpp).
 - [Linked dylib attributes and implicit edges](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/mach_o/UnsafeHeader.cpp).
 - [Lazy-load format](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/mach_o/LazyLoadDylib.h)
   and [reader](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/mach_o/LazyLoadDylib.cpp).

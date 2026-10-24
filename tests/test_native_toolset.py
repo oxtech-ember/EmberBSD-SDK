@@ -22,12 +22,50 @@ from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.inventory import snapshot_tree
 from emberbsd_sdk.jsonio import MAX_JSON, json_bytes
 from emberbsd_sdk.native_toolset import (NATIVE_TOOLSET_API, NATIVE_TOOL_ROLES,
-                                        NATIVE_C_PROBE, NATIVE_CXX_PROBE, _gcc, load_native_toolset,
+                                        NATIVE_C_PROBE, NATIVE_CXX_PROBE, _gcc, _native_image, load_native_toolset,
                                         provider_root, validate_selection)
 
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class DarwinSharedHeaderTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.path = Path(temporary.name) / 'library.dylib'
+        self.host = dict(os='Darwin', cpu='arm64')
+        image = struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 6, 1, 24, 0, 0)
+        self.data = bytearray(struct.pack('>7I', 0xcafebabe, 1, 0x100000c, 0,
+                                         4096, len(image), 12).ljust(4096, b'\0') + image)
+
+    def test_one_matching_slice_is_only_a_shared_library(self):
+        self.path.write_bytes(self.data)
+        _native_image(str(self.path), self.host, shared_library=True)
+        for options in ({}, dict(object_file=True)):
+            with self.subTest(options=options):
+                with self.assertRaisesRegex(SDKError, 'unsupported native Mach-O fat image'):
+                    _native_image(str(self.path), self.host, **options)
+
+    def test_multiple_wrong_arch_or_unbounded_fat_members_are_refused(self):
+        for offset, value in ((4, 2), (8, 0x1000007), (12, 2), (16, 16),
+                              (16, 4097), (20, 0xffffffff), (24, 32)):
+            with self.subTest(offset=offset, value=value):
+                data = bytearray(self.data)
+                struct.pack_into('>I', data, offset, value)
+                self.path.write_bytes(data)
+                with self.assertRaisesRegex(SDKError, 'native Mach-O fat slice'):
+                    _native_image(str(self.path), self.host, shared_library=True)
+
+    def test_fat_member_identity_cannot_disagree_with_its_table(self):
+        for offset, value in ((0, 0xfeedface), (4, 0x1000007), (8, 2), (12, 2)):
+            with self.subTest(offset=offset, value=value):
+                data = bytearray(self.data)
+                struct.pack_into('<I', data, 4096 + offset, value)
+                self.path.write_bytes(data)
+                with self.assertRaisesRegex(SDKError, 'fat slice identity mismatch'):
+                    _native_image(str(self.path), self.host, shared_library=True)
 
 
 class Fixture:

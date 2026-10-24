@@ -125,6 +125,9 @@ A native member must have a host executable header.
 API 1 supports little-endian ELF64 and thin little-endian Mach-O64 executables
 for qualified x86_64/amd64 and aarch64/arm64 hosts on Linux, NetBSD, or Darwin.
 Unsupported binary formats fail closed. Header checks do not qualify executable behavior.
+The separate [Darwin runtime audit](darwin-runtime.md) can inspect a shared library
+with one fat32 generic arm64 slice. This does not permit fat tool executables,
+change ordinary tool selection, or qualify a runtime dependency by its header.
 
 A script also declares an `interpreter` role for a native member in the same bundle.
 Its first line must be exactly `#!<absolute selected interpreter>`, followed by LF.

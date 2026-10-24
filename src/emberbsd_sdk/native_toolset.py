@@ -149,11 +149,41 @@ def _gcc(value, host):
              'compiler triplet does not describe the actual native host')
 
 
+def _darwin_slice(read, size, host, *, shared_library=False):
+    """Select only a thin image or one observed arm64 shared-library slice."""
+    header = read(0, min(size, 32))
+    fat = header[:4] in (b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca',
+                         b'\xca\xfe\xba\xbf', b'\xbf\xba\xfe\xca')
+    if not fat:
+        return 0, size, None
+    _require(shared_library and host['os'] == 'Darwin' and
+             host['cpu'] in ('arm64', 'aarch64') and len(header) >= 28 and
+             header[:4] == b'\xca\xfe\xba\xbe', 'unsupported native Mach-O fat image')
+    magic, count, cpu, subtype, offset, extent, alignment = struct.unpack('>7I', header[:28])
+    _require(count == 1 and cpu == 0x100000c and subtype == 0 and
+             alignment <= 31 and offset >= 28 and offset % (1 << alignment) == 0 and
+             offset <= size and 32 <= extent <= size - offset,
+             'unsupported or invalid native Mach-O fat slice')
+    image = read(offset, 32)
+    _require(len(image) == 32 and struct.unpack_from('<4I', image) ==
+             (0xfeedfacf, cpu, subtype, 6), 'Mach-O fat slice identity mismatch')
+    return offset, extent, dict(format='fat32-big-endian', cpu=cpu, subtype=subtype,
+                                offset=offset, size=extent, alignment=alignment)
+
+
 def _native_image(path, host, *, object_file=False, shared_library=False):
     """Reject scripts, target images and renamed wrappers before selection."""
     handle, before = open_regular(path)
     with handle:
-        header = handle.read(64)
+        def read(offset, size):
+            handle.seek(offset)
+            return handle.read(size)
+        if host['os'] == 'Darwin':
+            offset, extent, wrapper = _darwin_slice(read, before.st_size, host,
+                                                  shared_library=shared_library and not object_file)
+            header = read(offset, min(extent, 64))
+        else:
+            header = handle.read(64)
     verify_stable(path, before)
     cpu = {'arm64': 'aarch64', 'amd64': 'x86_64'}.get(host['cpu'], host['cpu'])
     if host['os'] == 'Darwin':
