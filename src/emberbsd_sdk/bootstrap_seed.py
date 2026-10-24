@@ -267,7 +267,14 @@ def _plan(reference, descriptor, commands=None, flags=None, *, inspect_inputs=Tr
         from .bootstrap_pilot import validate_pilot_plan
         commands = _seed_commands(descriptor, inspect_inputs=inspect_inputs) if commands is None else commands
         return validate_pilot_plan(plan, descriptor, commands, descriptor['abi_flags'] if flags is None else flags)
+    if plan.get('format') == 'emberbsd-bootstrap-make-probe-plan':
+        from .bootstrap_make import validate_make_probe_plan
+        commands = _seed_commands(descriptor, inspect_inputs=inspect_inputs) if commands is None else commands
+        return validate_make_probe_plan(plan, descriptor, commands,
+                                        descriptor['abi_flags'] if flags is None else flags)
     _envelope(plan, 'emberbsd-native-gcc16-bootstrap-plan', scope=_SCOPE)
+    _require(descriptor.get('make_binding') is None,
+             'full recipe admission for the fixed make binding is not implemented')
     _require(plan.get('purpose') == 'first-native-gcc16' and
              plan.get('host') == descriptor['host'], 'bootstrap plan scope mismatch')
     _gcc(plan['output_compiler'], plan['host'])
@@ -479,7 +486,8 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
              'bootstrap plan selects another seed')
     _require(isinstance(required_roles, (tuple, list, set, frozenset)) and required_roles,
              'explicit required bootstrap roles are required')
-    is_pilot = plan_header.get('format') == 'emberbsd-native-gcc16-pilot-plan'
+    is_pilot = plan_header.get('format') in ('emberbsd-native-gcc16-pilot-plan',
+                                            'emberbsd-bootstrap-make-probe-plan')
     roles = set(required_roles) | set(plan_header['required_roles']) | (set() if is_pilot else {'sh'})
     root, inventory, tools, records, abi_inventories, flags = _payload(descriptor, roles)
     prefix = _absolute(descriptor['driver_prefix'])
@@ -498,6 +506,8 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
         _require(acceptance.get(key) == descriptor[key], f'seed acceptance {key} mismatch')
     _require(acceptance.get('driver_binding') == descriptor.get('driver_binding'),
              'seed acceptance driver binding mismatch')
+    _require(acceptance.get('make_binding') == descriptor.get('make_binding'),
+             'seed acceptance make binding mismatch')
     _driver_queries(descriptor, acceptance['checks'], seed_reported_tools(descriptor, tools), commands)
     if is_pilot:
         _require(acceptance.get('evidence_level') == 'input-and-route-only',

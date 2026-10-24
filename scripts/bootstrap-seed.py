@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-"""Check seed inputs or run one independently accepted C/C++ pilot."""
+"""Check seed inputs or run one independently accepted finite probe."""
 
 import argparse
 from pathlib import Path
@@ -21,7 +21,8 @@ def main(argv=None):
     commands = parser.add_subparsers(dest='command', required=True)
     check = commands.add_parser('check', help='check current inputs; do not execute the plan')
     pilot = commands.add_parser('run-pilot', help='run the finite accepted C/C++ pilot once')
-    for command in (check, pilot):
+    make_probe = commands.add_parser('run-make-probe', help='run the finite accepted make/shell probe once')
+    for command in (check, pilot, make_probe):
         for name in ('descriptor', 'accepted-seed-receipt', 'bootstrap-plan'):
             command.add_argument('--' + name, required=True)
             command.add_argument('--' + name + '-sha256', required=True)
@@ -33,14 +34,15 @@ def main(argv=None):
                                        sha256=args.accepted_seed_receipt_sha256),
             bootstrap_plan=dict(path=args.bootstrap_plan, sha256=args.bootstrap_plan_sha256),
             required_roles=args.required_role)
-        if args.command == 'run-pilot':
-            from emberbsd_sdk.bootstrap_pilot import run_pilot
+        if args.command in ('run-pilot', 'run-make-probe'):
+            from emberbsd_sdk.bootstrap_pilot import run_pilot, run_make_probe
+            runner = run_pilot if args.command == 'run-pilot' else run_make_probe
             def interrupt(number, frame):
                 raise KeyboardInterrupt(signal.Signals(number).name)
             previous = {number: signal.signal(number, interrupt)
                         for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
             try:
-                result = run_pilot(args.descriptor, **options)
+                result = runner(args.descriptor, **options)
             finally:
                 for number, handler in previous.items():
                     signal.signal(number, handler)

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-"""One source-owned C/C++ pilot for an independently accepted bootstrap input."""
+"""Finite source-owned pilots for independently accepted bootstrap inputs."""
 
 import os
 from pathlib import Path
@@ -69,7 +69,13 @@ def validate_pilot_plan(plan, descriptor, commands, flags):
              len(plan['required_roles']) == len(set(plan['required_roles'])) and
              {'cc', 'cxx', 'cpp', *descriptor['driver_components'].values()} <=
              set(plan['required_roles']) <= set(commands), 'pilot native roles are incomplete')
-    resources = plan['resources']
+    _validate_resources(plan['resources'])
+    _require(plan['commands'] == pilot_steps(descriptor, commands, flags, work),
+             'pilot commands differ from the source-owned finite route')
+    return plan
+
+
+def _validate_resources(resources):
     _require(isinstance(resources, dict) and set(resources) ==
              {'cpu_jobs', 'link_jobs', 'runtime_seconds', 'lock_root', 'heavy_link_context'},
              'pilot resource agreement is incomplete')
@@ -79,9 +85,6 @@ def validate_pilot_plan(plan, descriptor, commands, flags):
              'pilot must be serial with an observation budget of at most 120 seconds')
     _absolute(resources['lock_root'])
     _absolute(resources['heavy_link_context'])
-    _require(plan['commands'] == pilot_steps(descriptor, commands, flags, work),
-             'pilot commands differ from the source-owned finite route')
-    return plan
 
 
 def _references(value):
@@ -114,6 +117,22 @@ def run_pilot(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     The CLI supplies signal policy. Failed ownership drainage holds the leases.
     Startup, input validation and drainage can exceed the observation budget.
     """
+    return _run(descriptor_path, descriptor_sha256=descriptor_sha256,
+                accepted_seed_receipt=accepted_seed_receipt, bootstrap_plan=bootstrap_plan,
+                required_roles=required_roles, make_probe=False)
+
+
+def run_make_probe(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
+                   bootstrap_plan, required_roles):
+    """Run only the fixed make/shell probe with the existing pilot fences."""
+    return _run(descriptor_path, descriptor_sha256=descriptor_sha256,
+                accepted_seed_receipt=accepted_seed_receipt, bootstrap_plan=bootstrap_plan,
+                required_roles=required_roles, make_probe=True)
+
+
+def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
+         bootstrap_plan, required_roles, make_probe):
+    from .bootstrap_make import MAKE_PROBE_FORMAT, make_probe_sources, verify_make_step
     from .bootstrap_seed import load_bootstrap_seed
     from .native_toolset import _json
     _require(threading.current_thread() is threading.main_thread(),
@@ -124,7 +143,8 @@ def run_pilot(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     descriptor_ref = dict(path=os.fspath(descriptor_path), sha256=descriptor_sha256)
     descriptor = _json(descriptor_ref)
     plan = _json(bootstrap_plan)
-    _require(plan.get('format') == PILOT_FORMAT, 'run-pilot requires a pilot plan')
+    _require(plan.get('format') == (MAKE_PROBE_FORMAT if make_probe else PILOT_FORMAT),
+             'the runner requires its exact finite plan format')
     resources = plan['resources']
     root = canonical_existing(resources['lock_root'])
     work = _absolute(plan['work_root'])
@@ -146,7 +166,12 @@ def run_pilot(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         _require(selected_plan == plan, 'pilot plan changed before dispatch')
         _require(entry(work) is None, 'pilot work must be a fresh, unused directory')
         os.mkdir(work)
-        result = dict(format='emberbsd-native-gcc16-pilot-result', version=1,
+        sources = (make_probe_sources(descriptor, selected.commands) if make_probe else
+                   dict(_SOURCE.values()))
+        outputs = (*sources, 'fixture.result') if make_probe else (
+            'native.c', 'native.cc', 'c.o', 'cxx.o', 'c-probe', 'cxx-probe')
+        result = dict(format=('emberbsd-bootstrap-make-probe-result' if make_probe else
+                              'emberbsd-native-gcc16-pilot-result'), version=1,
                       scope=_SCOPE, api=BOOTSTRAP_PILOT_API, status='RUNNING',
                       seed_descriptor=descriptor_ref, accepted_seed_receipt=accepted_seed_receipt,
                       bootstrap_plan=bootstrap_plan, commands=[], all_commands_drained=False,
@@ -154,7 +179,7 @@ def run_pilot(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                       ordinary_provider_qualified=False)
         result_path = os.path.join(work, 'result.json')
         write_json(result_path, result)
-        for name, source in _SOURCE.values():
+        for name, source in sources.items():
             with open(os.path.join(work, name), 'xb') as output:
                 output.write(source)
         deadline = time.monotonic() + resources['runtime_seconds']
@@ -182,7 +207,16 @@ def run_pilot(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                                       file=sys.stderr, flush=True)
                             finally:
                                 _hold()
-                        actual['actual_exit'] = returned.returncode
+                        except CommandError as exc:
+                            actual['actual_exit'] = exc.returncode
+                            if not make_probe or exc.returncode != step['expected_exit']:
+                                raise
+                        else:
+                            actual['actual_exit'] = returned.returncode
+                        _require(actual['actual_exit'] == (step['expected_exit'] if make_probe else 0),
+                                 'finite command exit differs from its expected observation')
+                        if make_probe:
+                            verify_make_step(step, log, work, descriptor)
                         if step['phase'] in ('compile', 'link'):
                             artifact = step['argv'][-1]
                             _native_image(artifact, descriptor['host'], object_file=step['phase'] == 'compile')
@@ -200,7 +234,7 @@ def run_pilot(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                             actual['log'] = dict(path=log, sha256=sha256_file(log))
                         result['commands'].append(actual)
                         write_json(result_path, result, exclusive=False)
-            for name, source in _SOURCE.values():
+            for name, source in sources.items():
                 _require(Path(work, name).read_bytes() == source, 'pilot source changed during execution')
             result['status'] = 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW'
         except BaseException as exc:
@@ -213,7 +247,7 @@ def run_pilot(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         except SDKError as exc:
             result.update(status='FAILED', error=str(exc), inputs_revalidated_after_drain=False)
         result['outputs'] = {}
-        for name in ('native.c', 'native.cc', 'c.o', 'cxx.o', 'c-probe', 'cxx-probe'):
+        for name in outputs:
             try:
                 path = os.path.join(work, name)
                 if entry(path) is not None:

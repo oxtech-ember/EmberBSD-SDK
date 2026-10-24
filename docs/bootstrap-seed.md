@@ -5,6 +5,8 @@ It does not admit that seed for ordinary builds or issue acceptance.
 The new output still needs [NativeToolset qualification](native-toolset.md).
 The [finite first C/C++ pilot](bootstrap-pilot.md) can run before the full
 recipe closure is available. It needs independent input and route acceptance.
+The separate [finite make and shell probe](bootstrap-make.md) checks the accepted
+make binding before package metadata or recipe execution.
 Use common `lang/gcc16` and its named dependencies in a pinned prepared Ports export.
 Keep recipes and patches in Ports. SDK owns orchestration and evidence checks.
 
@@ -55,8 +57,8 @@ An execution controller must use SDK process and lease interfaces.
 It must execute exact plan `argv`, `cwd`, and complete `env` without ambient additions.
 Keep selected inputs immutable under read leases through command drain.
 Preserve actual child results on failure. Never infer successful child exit from a plan.
-The check command does not execute commands. `run-pilot` provides only the
-separate finite pilot controller, not a full recipe-build executor.
+The check command does not execute commands. `run-pilot` and `run-make-probe`
+provide only their finite controllers, not a full recipe-build executor.
 
 ### Fixed Darwin seed bindings
 

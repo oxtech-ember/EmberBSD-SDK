@@ -107,14 +107,16 @@ def _binding(descriptor, *, inspect_inputs):
 
 
 def seed_commands(descriptor, *, inspect_inputs=True):
-    """Return only the default -B tuple or the recognized fixed-source tuple."""
+    """Return only default -B or recognized fixed source-owned tuples."""
     value = _binding(descriptor, inspect_inputs=inspect_inputs)
     prefix = _absolute(descriptor['driver_prefix'])
     extra = () if value is None else ('-specs=' + value['instantiated']['path'],
                                       '-mmacosx-version-min=' + value['deployment'])
-    return {role: (_absolute(row['path']), '-B' + prefix + os.sep, *extra)
+    commands = {role: (_absolute(row['path']), '-B' + prefix + os.sep, *extra)
             if role in ('cc', 'cxx', 'cpp') else (_absolute(row['path']),)
             for role, row in descriptor['tools'].items()}
+    from .bootstrap_make import bind_make_commands
+    return bind_make_commands(descriptor, commands, inspect_inputs=inspect_inputs)
 
 
 def seed_reported_tools(descriptor, tools):
