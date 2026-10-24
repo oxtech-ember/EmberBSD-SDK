@@ -95,8 +95,9 @@ The metadata stage has fresh work children `obj`, `distfiles`, `packages`,
 database to those paths. It does not use a historical installation prefix.
 The resource agreement has the pilot's exact five fields, with integer CPU jobs
 from 1 through 4, one linker slot, and runtime observation budget from 1 through
-1200 seconds. Metadata runs no links. Future nested builds need their separate
-shared heavy-link agreement.
+1200 seconds. Metadata runs no links. The separate
+[complete bound-make plan](bootstrap-seed.md#complete-plan-with-the-fixed-make-binding)
+adds recipe execution and its shared heavy-link agreement.
 
 ## Execution and evidence
 
@@ -104,7 +105,12 @@ shared heavy-link agreement.
 `show-vars`, `show-tools`, then `show-depends` for each of `TOOL_DEPENDS`,
 `BUILD_DEPENDS`, `DEPENDS`, and `TEST_DEPENDS`.
 `VARIABLES` is the fixed variable roster for host, compiler/wrapper/configure
-routes, dependency inputs, tools, and consumed makefiles.
+routes, dependency inputs, tools, and consumed makefiles. It also includes
+`WRKDIR`, `WRKSRC`, `OBJDIR`, `CONFIGURE_DIRS`, `BUILD_DIRS`, `MAKE_DIRS`,
+`DISTFILES`, `EXTRACT_ONLY`, `MASTER_SITES`, `DIST_SUBDIR`, `PATCHFILES`, and `PATCH_SITES`.
+`MACHINE_GNU_PLATFORM` and `GCC_TARGET_MACHINE` pin the output compiler triplet.
+These exact fields support the later object-directory and distfile plan.
+The caller cannot add an arbitrary `VARNAME` query.
 Each command starts with the complete selected bmake tuple.
 `EMBERBSD_DARWIN_BOOTSTRAP=yes` precedes `-C`. The job count is explicit.
 No custom target, argument, or environment suffix is supported.

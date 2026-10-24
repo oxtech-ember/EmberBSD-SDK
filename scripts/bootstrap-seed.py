@@ -23,7 +23,8 @@ def main(argv=None):
     pilot = commands.add_parser('run-pilot', help='run the finite accepted C/C++ pilot once')
     make_probe = commands.add_parser('run-make-probe', help='run the finite accepted make/shell probe once')
     producer = commands.add_parser('run-producer', help='run one recognized accepted bootstrap producer stage')
-    for command in (check, pilot, make_probe, producer):
+    bootstrap = commands.add_parser('run-bootstrap', help='run the complete accepted fixed bound-make recipe plan')
+    for command in (check, pilot, make_probe, producer, bootstrap):
         for name in ('descriptor', 'accepted-seed-receipt', 'bootstrap-plan'):
             command.add_argument('--' + name, required=True)
             command.add_argument('--' + name + '-sha256', required=True)
@@ -35,10 +36,10 @@ def main(argv=None):
                                        sha256=args.accepted_seed_receipt_sha256),
             bootstrap_plan=dict(path=args.bootstrap_plan, sha256=args.bootstrap_plan_sha256),
             required_roles=args.required_role)
-        if args.command in ('run-pilot', 'run-make-probe', 'run-producer'):
-            from emberbsd_sdk.bootstrap_pilot import run_pilot, run_make_probe, run_producer
+        if args.command in ('run-pilot', 'run-make-probe', 'run-producer', 'run-bootstrap'):
+            from emberbsd_sdk.bootstrap_pilot import run_pilot, run_make_probe, run_producer, run_bootstrap
             runner = {'run-pilot': run_pilot, 'run-make-probe': run_make_probe,
-                      'run-producer': run_producer}[args.command]
+                      'run-producer': run_producer, 'run-bootstrap': run_bootstrap}[args.command]
             def interrupt(number, frame):
                 raise KeyboardInterrupt(signal.Signals(number).name)
             previous = {number: signal.signal(number, interrupt)

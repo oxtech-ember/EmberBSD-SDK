@@ -62,7 +62,8 @@ It must execute exact plan `argv`, `cwd`, and complete `env` without ambient add
 Keep selected inputs immutable under read leases through command drain.
 Preserve actual child results on failure. Never infer successful child exit from a plan.
 The check command does not execute commands. `run-pilot` and `run-make-probe`
-provide only their finite controllers, not a full recipe-build executor.
+provide their finite controllers. `run-bootstrap` executes only the complete
+fixed bound-make plan described below. It cannot execute the legacy unbound route.
 
 ### Fixed Darwin seed bindings
 
@@ -267,6 +268,58 @@ the same values. Conditional, append, immediate and shell assignments are
 refused for these selectors. ABI flags remain in their separate arrays.
 Unbound and Linux plans keep their existing environment contract.
 
+### Complete plan with the fixed make binding
+
+The Darwin v2 driver binding can use `ports-bootstrap-make-v1` for the full plan.
+Keep the same full-plan format, recipe inventories, distfiles and comparison.
+Add only `metadata` and `resources` to the full-plan fields above.
+The `metadata` object uses the [metadata producer inputs](bootstrap-producer.md).
+Its `recipes` list must be the sorted complete recipe closure, with at most 256
+recipes. `ports_export` must name the exact same export and source proof.
+The source-owned profile, current host facts, complete export inventory,
+utility-only PATH and exact generated MAKECONF are checked before execution.
+
+Set `output_bundle_root` to `work_root/prefix`. All writable package paths come
+from `metadata_paths(work_root)`. Each distfile also needs `relative`, its explicit
+destination below `work_root/distfiles`, including any `DIST_SUBDIR` component.
+Repeated destinations must have the same SHA256. Traversal and overlapping file
+and directory destinations are refused. The controller copies only these pinned
+files. It does not download missing inputs. Work cannot overlap a declared input.
+
+Add `object_directory` to the `lang/gcc16` recipe row. Pin its actual value from
+the evaluated `WRKDIR`, `WRKSRC` and `OBJDIR` metadata. It must be below
+`work_root/obj`. The SDK does not guess a pkgsrc object path.
+`recipe_steps(plan, descriptor, commands, flags)` constructs all commands:
+
+1. Visit dependencies in sorted order, then visit each consumer.
+2. Run the complete selected `make` tuple, `EMBERBSD_DARWIN_BOOTSTRAP=yes`,
+   `-j1`, `-C`, the common recipe directory, and `build`.
+3. Install each dependency with the same tuple and the `install` target.
+4. After the GCC build, run the complete selected `gmake` tuple,
+   `--no-print-directory -j1 -C object_directory compare`.
+5. Install GCC. `comparison_command` is exactly `gcc16-compare`.
+
+The complete `argv`, `cwd`, `env`, role, ID and order must equal this construction.
+Extra targets, assignments, environment entries and replaced tuple tails fail.
+Metadata and recipe commands use `metadata_environment()` and the same MAKECONF.
+Qualified ABI flags remain unchanged. This serial route does not cap the linker's
+internal worker threads. It does not admit parallel nested recipe links.
+
+`resources` has the five existing producer fields. This route accepts
+`cpu_jobs: 1`, `link_jobs: 1`, and an integer `runtime_seconds` from 1 to 86400.
+`lock_root` and `heavy_link_context` are explicit absolute paths.
+The controller retains source and input read leases and an exclusive fresh-work
+lease. It holds the shared heavy-link fence over each complete recipe command.
+The deadline applies to command execution. Input validation and drainage can
+take additional time. Unproven drainage enters the existing nonreturning HOLD.
+
+Run `scripts/bootstrap-seed.py run-bootstrap` with the same six pinned selector
+options and repeated `--required-role` as `check`. The returned producer result
+has `stage: full-recipe-bootstrap`. It records actual combined logs, exits, input
+revalidation and an installed `output_inventory` reference. Completion remains
+`COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW`. It never issues qualification,
+stage inventories, a stage comparison acceptance or an execution audit.
+
 ## Accepted seed receipt
 
 The envelope is `emberbsd-bootstrap-seed-acceptance`, version 1,
@@ -281,7 +334,7 @@ Repeat `driver_binding` exactly when the descriptor uses it.
 `checks.identity` and `checks.driver_components` use NativeToolset query record shapes.
 Query `argv` includes the complete seed tuple. No C/C++ compile probe is required for seed admission.
 
-For a full common-recipe plan, `execution_audit` references
+For the legacy unbound common-recipe plan, `execution_audit` references
 `emberbsd-bootstrap-seed-audit`, version 1,
 scope `gcc16-bootstrap`, status `PASS`.
 Repeat `descriptor_sha256`, `bootstrap_plan`, `tools`, and `dynamic_dependencies`.
@@ -290,6 +343,11 @@ Hash checks preserve identity. They do not create independent acceptance.
 The first finite pilot uses explicit
 [input-and-route-only acceptance](bootstrap-pilot.md) instead.
 It does not claim that the compiler chain already executed.
+The fixed bound-make full plan uses that same input-and-route-only acceptance
+for its first execution. Its audit must bind every exact full-plan command.
+This removes no output gate: graduation still needs the actual stage2/stage3
+comparison and production execution audit below. Ordinary NativeToolset
+selection remains unchanged.
 
 ## Output graduation
 

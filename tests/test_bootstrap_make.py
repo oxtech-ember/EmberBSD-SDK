@@ -316,7 +316,7 @@ class MakeTests(unittest.TestCase):
 
     def test_full_recipe_cannot_drop_the_recognized_make_tuple(self):
         from emberbsd_sdk.bootstrap_seed import _plan
-        with self.assertRaisesRegex(SDKError, 'full recipe admission.*not implemented'):
+        with self.assertRaisesRegex(SDKError, 'unsupported bound full-plan fields'):
             _plan(self.seed.native.document(self.recipe_plan), self.seed.descriptor)
 
 

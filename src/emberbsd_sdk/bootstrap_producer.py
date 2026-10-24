@@ -2,6 +2,7 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Read-only Ports metadata for one accepted first-native GCC16 input."""
 
+import hashlib
 import os
 import platform
 import plistlib
@@ -27,6 +28,8 @@ VARIABLES = tuple('PKGNAME PKGPATH PKGVERSION PKGREVISION OPSYS MACHINE_ARCH NAT
                   'PKG_CPP CPPFLAGS CFLAGS CXXFLAGS LDFLAGS CWRAPPERS_PREPEND.cc CWRAPPERS_PREPEND.cxx '
                   'CWRAPPERS_PREPEND.cpp _WRAP_EXTRA_ARGS.CC _WRAP_EXTRA_ARGS.CXX _WRAP_EXTRA_ARGS.CPP '
                   'CONFIGURE_ENV CONFIGURE_ARGS USE_TOOLS TOOL_DEPENDS BUILD_DEPENDS DEPENDS TEST_DEPENDS '
+                  'WRKDIR WRKSRC OBJDIR CONFIGURE_DIRS BUILD_DIRS MAKE_DIRS DISTFILES EXTRACT_ONLY '
+                  'MASTER_SITES DIST_SUBDIR PATCHFILES PATCH_SITES MACHINE_GNU_PLATFORM GCC_TARGET_MACHINE '
                   'MAKE SHELL MAKECONF NATIVE_PKG_INFO_CMD NATIVE_PKG_ADMIN_CMD .MAKE.MAKEFILES'.split())
 
 
@@ -103,12 +106,18 @@ def metadata_makeconf(plan, descriptor, commands, flags):
     return ('\n'.join(lines) + '\n').encode('ascii')
 
 
+def metadata_environment(plan, commands):
+    """Use the same exact environment for metadata and bound recipe commands."""
+    data, work = plan['metadata'], _safe_path(plan['work_root'])
+    return dict(PATH=_safe_path(data['utility_bin']), LC_ALL='C', TZ='UTC', TMPDIR=work,
+               MAKECONF=_safe_path(data['makeconf']['path']), SHELL=_safe_path(commands['sh'][0]),
+               CONFIG_SHELL=_safe_path(commands['sh'][0]))
+
+
 def producer_steps(plan, descriptor, commands, flags):
     """Construct only fixed read-only queries. Never accept an argv extension."""
     data, work = plan['metadata'], _safe_path(plan['work_root'])
-    env = dict(PATH=_safe_path(data['utility_bin']), LC_ALL='C', TZ='UTC', TMPDIR=work,
-               MAKECONF=_safe_path(data['makeconf']['path']), SHELL=_safe_path(commands['sh'][0]),
-               CONFIG_SHELL=_safe_path(commands['sh'][0]))
+    env = metadata_environment(plan, commands)
     queries = [('vars', ['show-vars', 'VARNAMES=' + ' '.join(VARIABLES)]), ('tools', ['show-tools'])]
     queries += [('depends-' + name.lower(), ['show-depends', 'VARNAME=' + name])
                 for name in ('TOOL_DEPENDS', 'BUILD_DEPENDS', 'DEPENDS', 'TEST_DEPENDS')]
@@ -139,7 +148,7 @@ def _utility_directory(data, descriptor, commands):
                      'metadata utility invocation differs from its selected member')
 
 
-def _export_proof(data, descriptor, inventory):
+def _export_proof(data, descriptor, inventory, *, inspect_inputs=True):
     proof = _json(data['export']['source_proof'])
     _require(proof.get('format') == 'emberbsd-ports-export-source-proof' and
              type(proof.get('version')) is int and proof['version'] == 1,
@@ -160,10 +169,62 @@ def _export_proof(data, descriptor, inventory):
                  relative in allowed and
                  manifest.get(relative, {}).get('sha256') == row['file']['sha256'],
                  'prepared export omits its canonical producer source')
-        _bytes(row['file'])
+        if inspect_inputs:
+            _bytes(row['file'])
     _require(manifest.get(PROFILE_RELATIVE, {}).get('sha256') == PROFILE_SHA256 and
              inventory.get(PROFILE_EXPORT, {}).get('sha256') == PROFILE_SHA256,
              'prepared export profile differs from its source-owner bytes')
+
+
+def validate_metadata_inputs(plan, descriptor, commands, flags, *, inspect_inputs=True, recipe_limit=16):
+    """Validate shared source-owner inputs. Offline graduation retains their pins."""
+    data = plan['metadata']
+    _require(set(data) == {'export', 'profile', 'makeconf', 'host_facts', 'utility_bin',
+                          'native_tools', 'source_tools', 'recipes'}, 'unsupported metadata input fields')
+    _require((not inspect_inputs or data['host_facts'] == _current_host_facts()) and
+             data['host_facts']['os'] == 'Darwin' and
+             data['host_facts']['cpu'] == 'aarch64', 'metadata facts differ from the current native host')
+    for name in ('native_tools', 'source_tools'):
+        values = data[name]
+        _require(isinstance(values, list) and values == sorted(set(values)) and len(values) <= 64 and
+                 all(isinstance(role, str) and re.fullmatch('[a-z][a-z0-9_-]*', role) for role in values),
+                 'metadata tool names must be finite, unique and sorted')
+    _require(not set(data['native_tools']) & set(data['source_tools']),
+             'metadata source and native utility selections overlap')
+    required = set(EARLY_TOOLS) | {'make', 'gmake', 'sh', 'pkg_info', 'pkg_admin', 'cc', 'cxx', 'cpp',
+                                  'as', 'ld', 'dsymutil', 'ar', 'ranlib', 'nm', 'strip'} | set(data['native_tools'])
+    _require(set(EARLY_TOOLS) <= set(data['native_tools']) and isinstance(plan['required_roles'], list) and
+             len(plan['required_roles']) == len(set(plan['required_roles'])) and
+             required <= set(plan['required_roles']) <= set(commands), 'metadata input tool roles are incomplete')
+    _require(not set(data['native_tools']) & {'cc', 'cxx', 'cpp', 'as', 'ld', 'make', 'gmake', 'sh'},
+             'metadata raw utility PATH cannot bypass compiler or make bindings')
+    _require(isinstance(data['recipes'], list) and 1 <= len(data['recipes']) <= recipe_limit and
+             len(data['recipes']) == len(set(data['recipes'])) and 'lang/gcc16' in data['recipes'] and
+             all(isinstance(name, str) and re.fullmatch('[a-z0-9_+-]+/[a-z0-9_+.-]+', name)
+                 for name in data['recipes']), 'metadata needs a finite explicit recipe list')
+    export = data['export']
+    _require(set(export) == {'root', 'inventory', 'source_proof'}, 'unsupported prepared export fields')
+    root = _safe_path(export['root'])
+    inventory = _inventory(export['inventory'])
+    if inspect_inputs:
+        _require(canonical_existing(root) == root and snapshot_tree(root) == inventory,
+                 'prepared canonical export changed')
+    _export_proof(data, descriptor, inventory, inspect_inputs=inspect_inputs)
+    _require(data['profile'] == dict(path=os.path.join(root, PROFILE_EXPORT), sha256=PROFILE_SHA256),
+             'metadata needs the recognized source-owner profile')
+    if inspect_inputs:
+        _bytes(data['profile'])
+    _require(all(inventory.get(name + '/Makefile', {}).get('kind') == 'file' for name in data['recipes']),
+             'metadata recipe is absent from the complete prepared export')
+    _require(descriptor.get('make_binding') is not None and
+             data['makeconf'] == descriptor['make_binding']['makeconf'] and
+             data['makeconf']['sha256'] == hashlib.sha256(
+                 metadata_makeconf(plan, descriptor, commands, flags)).hexdigest(),
+             'metadata MAKECONF differs from its accepted native selection')
+    if inspect_inputs:
+        _bytes(data['makeconf'])
+        _utility_directory(data, descriptor, commands)
+    return data
 
 
 def validate_producer_plan(plan, descriptor, commands, flags):
@@ -183,46 +244,7 @@ def validate_producer_plan(plan, descriptor, commands, flags):
         _source(source)
     from .bootstrap_pilot import _validate_resources
     _validate_resources(plan['resources'], metadata=True)
-    data = plan['metadata']
-    _require(set(data) == {'export', 'profile', 'makeconf', 'host_facts', 'utility_bin',
-                          'native_tools', 'source_tools', 'recipes'}, 'unsupported metadata input fields')
-    _require(data['host_facts'] == _current_host_facts() and data['host_facts']['os'] == 'Darwin' and
-             data['host_facts']['cpu'] == 'aarch64', 'metadata facts differ from the current native host')
-    for name in ('native_tools', 'source_tools'):
-        values = data[name]
-        _require(isinstance(values, list) and values == sorted(set(values)) and len(values) <= 64 and
-                 all(isinstance(role, str) and re.fullmatch('[a-z][a-z0-9_-]*', role) for role in values),
-                 'metadata tool names must be finite, unique and sorted')
-    _require(not set(data['native_tools']) & set(data['source_tools']),
-             'metadata source and native utility selections overlap')
-    required = set(EARLY_TOOLS) | {'make', 'gmake', 'sh', 'pkg_info', 'pkg_admin', 'cc', 'cxx', 'cpp',
-                                  'as', 'ld', 'dsymutil', 'ar', 'ranlib', 'nm', 'strip'} | set(data['native_tools'])
-    _require(set(EARLY_TOOLS) <= set(data['native_tools']) and isinstance(plan['required_roles'], list) and
-             len(plan['required_roles']) == len(set(plan['required_roles'])) and
-             required <= set(plan['required_roles']) <= set(commands), 'metadata input tool roles are incomplete')
-    _require(not set(data['native_tools']) & {'cc', 'cxx', 'cpp', 'as', 'ld', 'make', 'gmake', 'sh'},
-             'metadata raw utility PATH cannot bypass compiler or make bindings')
-    _require(isinstance(data['recipes'], list) and 1 <= len(data['recipes']) <= 16 and
-             len(data['recipes']) == len(set(data['recipes'])) and 'lang/gcc16' in data['recipes'] and
-             all(isinstance(name, str) and re.fullmatch('[a-z0-9_+-]+/[a-z0-9_+.-]+', name)
-                 for name in data['recipes']), 'metadata needs a finite explicit recipe list')
-    export = data['export']
-    _require(set(export) == {'root', 'inventory', 'source_proof'}, 'unsupported prepared export fields')
-    root = _safe_path(export['root'])
-    inventory = _inventory(export['inventory'])
-    _require(canonical_existing(root) == root and snapshot_tree(root) == inventory,
-             'prepared canonical export changed')
-    _export_proof(data, descriptor, inventory)
-    _require(data['profile'] == dict(path=os.path.join(root, PROFILE_EXPORT), sha256=PROFILE_SHA256),
-             'metadata needs the recognized source-owner profile')
-    _bytes(data['profile'])
-    _require(all(inventory.get(name + '/Makefile', {}).get('kind') == 'file' for name in data['recipes']),
-             'metadata recipe is absent from the complete prepared export')
-    _require(descriptor.get('make_binding') is not None and
-             data['makeconf'] == descriptor['make_binding']['makeconf'] and
-             _bytes(data['makeconf']) == metadata_makeconf(plan, descriptor, commands, flags),
-             'metadata MAKECONF differs from its accepted native selection')
-    _utility_directory(data, descriptor, commands)
+    validate_metadata_inputs(plan, descriptor, commands, flags)
     _require(plan['commands'] == producer_steps(plan, descriptor, commands, flags),
              'metadata command differs from the fixed source-owned query')
     return plan

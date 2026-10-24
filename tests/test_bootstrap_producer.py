@@ -124,6 +124,12 @@ class MetadataTests(unittest.TestCase):
             self.assertLess(row['argv'].index('EMBERBSD_DARWIN_BOOTSTRAP=yes'), row['argv'].index('-C'))
             self.assertEqual(row['env']['PATH'], str(self.utility_bin))
             self.assertEqual(row['env']['TMPDIR'], str(self.work))
+        variables = set(producer.VARIABLES)
+        self.assertTrue(set('WRKDIR WRKSRC OBJDIR CONFIGURE_DIRS BUILD_DIRS MAKE_DIRS DISTFILES '
+                            'EXTRACT_ONLY MASTER_SITES DIST_SUBDIR PATCHFILES PATCH_SITES '
+                            'MACHINE_GNU_PLATFORM GCC_TARGET_MACHINE'.split()) <= variables)
+        query = self.plan['commands'][0]['argv'][-1]
+        self.assertEqual(query, 'VARNAMES=' + ' '.join(producer.VARIABLES))
 
     def test_host_facts_recipe_and_resource_changes_are_refused(self):
         for kind in ('host', 'stage', 'recipe', 'jobs', 'timeout'):

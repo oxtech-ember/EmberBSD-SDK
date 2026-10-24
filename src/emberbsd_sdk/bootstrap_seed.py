@@ -307,8 +307,7 @@ def _plan(reference, descriptor, commands=None, flags=None, *, inspect_inputs=Tr
         return validate_producer_plan(plan, descriptor, commands,
                                       descriptor['abi_flags'] if flags is None else flags)
     _envelope(plan, 'emberbsd-native-gcc16-bootstrap-plan', scope=_SCOPE)
-    _require(descriptor.get('make_binding') is None,
-             'full recipe admission for the fixed make binding is not implemented')
+    bound = descriptor.get('make_binding') is not None
     _require(plan.get('purpose') == 'first-native-gcc16' and
              plan.get('host') == descriptor['host'], 'bootstrap plan scope mismatch')
     _gcc(plan['output_compiler'], plan['host'])
@@ -318,9 +317,15 @@ def _plan(reference, descriptor, commands=None, flags=None, *, inspect_inputs=Tr
     export = plan['ports_export']
     export_root = _absolute(export['root'])
     _require(export['source'] == plan['sources']['ports'], 'Ports export source mismatch')
-    export_inventory = _json(export['inventory'])
+    if bound:
+        from .bootstrap_producer import _inventory
+        from .bootstrap_recipe import recipe_order
+        recipe_order(plan)
+        export_inventory = _inventory(export['inventory'])
+    else:
+        export_inventory = _json(export['inventory'])
     _bytes(export['source_proof'])
-    if inspect_inputs:
+    if inspect_inputs and not bound:
         _require(snapshot_tree(export_root) == export_inventory, 'Ports export inventory changed')
     recipes = plan['recipes']
     _require(isinstance(recipes, dict) and recipes and 'lang/gcc16' in recipes,
@@ -375,6 +380,9 @@ def _plan(reference, descriptor, commands=None, flags=None, *, inspect_inputs=Tr
     ids, built, compared = set(), set(), False
     commands = _seed_commands(descriptor, inspect_inputs=inspect_inputs) if commands is None else commands
     flags = descriptor['abi_flags'] if flags is None else flags
+    if bound:
+        from .bootstrap_recipe import validate_bound_recipe_plan
+        return validate_bound_recipe_plan(plan, descriptor, commands, flags, inspect_inputs=inspect_inputs)
     environment = _environment({role: words[0] for role, words in commands.items()},
                                commands, flags, descriptor)
     for step in steps:
@@ -553,9 +561,9 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
     _require(acceptance.get('make_binding') == descriptor.get('make_binding'),
              'seed acceptance make binding mismatch')
     _driver_queries(descriptor, acceptance['checks'], seed_reported_tools(descriptor, tools), commands)
-    if is_pilot:
+    if is_pilot or descriptor.get('make_binding') is not None:
         _require(acceptance.get('evidence_level') == 'input-and-route-only',
-                 'pilot requires explicit input-and-route-only acceptance')
+                 'bootstrap route requires explicit input-and-route-only acceptance')
         audit = _json(acceptance['input_route_audit'])
         _envelope(audit, 'emberbsd-bootstrap-seed-input-route-audit', scope=_SCOPE)
         _require(audit.get('status') == 'PASS' and
@@ -566,7 +574,7 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
                  audit.get('execution_observed') is False and
                  all(audit.get(key) == [] for key in ('unresolved_tool_routes',
                                                      'unresolved_abi_inputs', 'unresolved_dsos')),
-                 'pilot input routes were not independently accepted')
+                 'bootstrap input routes were not independently accepted')
     else:
         _execution_audit(acceptance, descriptor, descriptor_sha256, plan_ref, records)
     _require(snapshot_tree(root) == inventory, 'bootstrap seed changed during validation')

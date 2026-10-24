@@ -10,7 +10,7 @@ import threading
 import time
 
 from .errors import CommandError, ProcessOwnershipError, SDKError
-from .inventory import sha256_file
+from .inventory import sha256_file, snapshot_tree
 from .jsonio import write_json
 from .native_toolset import (NATIVE_C_PROBE, NATIVE_CXX_PROBE, _absolute,
                              _envelope, _native_image, _require, _source)
@@ -75,14 +75,14 @@ def validate_pilot_plan(plan, descriptor, commands, flags):
     return plan
 
 
-def _validate_resources(resources, *, metadata=False):
+def _validate_resources(resources, *, metadata=False, recipe=False):
     _require(isinstance(resources, dict) and set(resources) ==
              {'cpu_jobs', 'link_jobs', 'runtime_seconds', 'lock_root', 'heavy_link_context'},
              'pilot resource agreement is incomplete')
     _require(type(resources['cpu_jobs']) is int and 1 <= resources['cpu_jobs'] <= (4 if metadata else 1) and
              type(resources['link_jobs']) is int and resources['link_jobs'] == 1 and
              type(resources['runtime_seconds']) is int and
-             0 < resources['runtime_seconds'] <= (1200 if metadata else 120),
+             0 < resources['runtime_seconds'] <= (86400 if recipe else 1200 if metadata else 120),
              'finite producer concurrency or observation budget is unsupported')
     _absolute(resources['lock_root'])
     _absolute(resources['heavy_link_context'])
@@ -139,11 +139,20 @@ def run_producer(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                 required_roles=required_roles, profile='producer')
 
 
+def run_bootstrap(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
+                  bootstrap_plan, required_roles):
+    """Run the complete fixed bound-make plan. Leave graduation independent."""
+    return _run(descriptor_path, descriptor_sha256=descriptor_sha256,
+                accepted_seed_receipt=accepted_seed_receipt, bootstrap_plan=bootstrap_plan,
+                required_roles=required_roles, profile='bootstrap')
+
+
 def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
          bootstrap_plan, required_roles, profile):
     from .bootstrap_make import MAKE_PROBE_FORMAT, make_probe_sources, verify_make_step
     from .bootstrap_producer import PRODUCER_FORMAT, metadata_paths
     from .bootstrap_program import program_outputs, program_sources, verify_program_step
+    from .bootstrap_recipe import BOOTSTRAP_FORMAT, prepare_recipe_work
     from .bootstrap_seed import load_bootstrap_seed
     from .native_toolset import _json
     _require(threading.current_thread() is threading.main_thread(),
@@ -158,19 +167,23 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     metadata = profile == 'producer' and plan.get('stage') == 'metadata'
     program = profile == 'producer' and plan.get('stage') == 'grep-bootstrap'
     relocation = profile == 'producer' and plan.get('stage') == 'utility-relocation'
+    recipe = profile == 'bootstrap'
     if relocation:
         from .bootstrap_relocation import (prepare_relocation_work, relocation_read_roots,
             relocation_work_outputs, verify_relocation_outputs, verify_relocation_step)
     _require(plan.get('format') == {'make': MAKE_PROBE_FORMAT, 'native': PILOT_FORMAT,
-                                    'producer': PRODUCER_FORMAT}[profile],
+                                    'producer': PRODUCER_FORMAT, 'bootstrap': BOOTSTRAP_FORMAT}[profile],
              'the runner requires its exact finite plan format')
+    if recipe:
+        _require(descriptor.get('make_binding') is not None,
+                 'the full recipe controller requires the fixed make binding')
     resources = plan['resources']
     root = canonical_existing(resources['lock_root'])
     work = _absolute(plan['work_root'])
     _require(canonical_new(work) == work, 'pilot work has aliased ancestors')
     roots = [descriptor['bundle_root']] + [row['root']
               for kind in ('headers', 'libraries') for row in descriptor['host_abi'][kind]]
-    if metadata:
+    if metadata or recipe:
         roots += [plan['metadata']['export']['root'], plan['metadata']['utility_bin']]
     if program:
         roots += [plan['program']['source']['root']]
@@ -185,12 +198,15 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                          *list(_references(descriptor)), *list(_references(accepted_seed_receipt)),
                          *list(_references(acceptance)), *list(_references(bootstrap_plan)),
                          *list(_references(plan))])
-    if metadata:
+    if metadata or recipe:
         shared.update(_references(_json(plan['metadata']['export']['source_proof'])))
     if program:
         shared.update(_references(_json(plan['program']['source']['source_proof'])))
     if relocation:
         shared.update(_references(_json(plan['relocation']['originals'])))
+    if recipe:
+        for path in shared:
+            reject_overlap(work, path)
     # Re-read all acceptance and plan bytes under their shared fences.
     with ContextLocks(sorted(shared), root, shared=True), ContextLocks([work], root):
         selected = load_bootstrap_seed(descriptor_path, **options)
@@ -198,7 +214,7 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         _require(selected_plan == plan, 'pilot plan changed before dispatch')
         _require(entry(work) is None, 'pilot work must be a fresh, unused directory')
         os.mkdir(work)
-        if metadata:
+        if metadata or recipe:
             sources, outputs = {}, ()
         elif relocation:
             sources, outputs = {}, relocation_work_outputs(plan)
@@ -215,7 +231,9 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                 os.mkdir(path)
         if relocation:
             prepare_relocation_work(plan)
-        result = dict(format=('emberbsd-native-gcc16-producer-result' if metadata or program or relocation else
+        if recipe:
+            prepare_recipe_work(plan)
+        result = dict(format=('emberbsd-native-gcc16-producer-result' if metadata or program or relocation or recipe else
                               'emberbsd-bootstrap-make-probe-result' if make_probe else
                               'emberbsd-native-gcc16-pilot-result'), version=1,
                       scope=_SCOPE, api=BOOTSTRAP_PILOT_API, status='RUNNING',
@@ -225,6 +243,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                       ordinary_provider_qualified=False)
         if relocation:
             result['stage'] = 'utility-relocation'
+        if recipe:
+            result['stage'] = 'full-recipe-bootstrap'
         result_path = os.path.join(work, 'result.json')
         write_json(result_path, result)
         for name, source in sources.items():
@@ -238,7 +258,7 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                 try:
                     if step['phase'] == 'run':
                         _native_image(step['argv'][0], descriptor['host'])
-                    context = ([resources['heavy_link_context']] if step['phase'] == 'link' else [])
+                    context = ([resources['heavy_link_context']] if recipe or step['phase'] == 'link' else [])
                     with ContextLocks(context, root):
                         remaining = deadline - time.monotonic()
                         _require(remaining > 0, 'pilot observation budget expired before next command')
@@ -290,6 +310,12 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                 _require(Path(work, name).read_bytes() == source, 'pilot source changed during execution')
             if relocation:
                 result['relocation'] = verify_relocation_outputs(plan, descriptor, selected.commands)
+            if recipe:
+                inventory = snapshot_tree(plan['output_bundle_root'])
+                _require(bool(inventory), 'the complete recipe plan produced no installed output')
+                path = os.path.join(work, 'output-inventory.json')
+                write_json(path, inventory)
+                result['output_inventory'] = dict(path=path, sha256=sha256_file(path))
             result['status'] = 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW'
         except BaseException as exc:
             result.update(status='FAILED', error=str(exc))
