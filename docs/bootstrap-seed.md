@@ -298,7 +298,7 @@ Repeated destinations must have the same SHA256. Traversal and overlapping file
 and directory destinations are refused. The controller copies only these pinned
 files. It does not download missing inputs. Work cannot overlap a declared input.
 
-Ten local-source recipes can use `distfiles: []`: `archivers/bzip2`,
+Eleven local-source recipes can use `distfiles: []`: `archivers/bzip2`, `archivers/libarchive`,
 `archivers/pax`, `devel/nbpatch`, `net/fetch`, `net/libfetch`,
 `pkgtools/cwrappers`, `pkgtools/digest`,
 `pkgtools/libnbcompat`, `pkgtools/mktools`, and `shells/mksh`.
@@ -309,8 +309,10 @@ roster. `PKGPATH` must equal this recipe. `DISTFILES` and `PATCHFILES` must be e
 A positional, incomplete, changed, or diagnostic-bearing log is refused.
 The complete recipe inventory must still equal its export subtree.
 The SDK requires the local Makefile and the recognized regular source files.
-The digest, libnbcompat, pax, and fetch recipes also need `files/configure` and
-`files/Makefile.in`. The bzip2 and nbpatch recipes need their local Makefiles
+The digest, libnbcompat, libarchive, pax, and fetch recipes also need
+`files/configure` and `files/Makefile.in`. The libarchive recipe also requires
+`Makefile.common`, `files/libarchive/archive_read.c`, and `files/libarchive/archive.h`.
+The bzip2 and nbpatch recipes need their local Makefiles
 and named C sources. The mksh recipe needs `files/Build.sh`, `files/main.c`,
 and `files/sh.h`. The libfetch recipe needs `files/Makefile`, `files/common.c`,
 `files/fetch.c`, and `files/fetch.h`. The C-wrapper and mktools recipes keep

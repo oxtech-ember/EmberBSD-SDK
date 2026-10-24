@@ -4,6 +4,7 @@
 
 import copy
 import json
+import os
 from pathlib import Path
 import shutil
 import unittest
@@ -17,6 +18,8 @@ from emberbsd_sdk.inventory import snapshot_tree
 
 BUILD_LAYOUTS = {
     'archivers/bzip2': ('Makefile', 'files/Makefile', 'files/bzip2.c', 'files/bzlib.c'),
+    'archivers/libarchive': ('Makefile', 'Makefile.common', 'files/configure', 'files/Makefile.in',
+                           'files/libarchive/archive_read.c', 'files/libarchive/archive.h'),
     'archivers/pax': ('Makefile', 'files/configure', 'files/Makefile.in', 'files/pax.c'),
     'devel/nbpatch': ('Makefile', 'files/Makefile', 'files/patch.c', 'files/pch.c'),
     'net/fetch': ('Makefile', 'files/configure', 'files/Makefile.in', 'files/fetch.c'),
@@ -51,7 +54,7 @@ class LocalBuildRecipeTests(unittest.TestCase):
             'patches/patch-expr.c', 'patches/patch-lalloc.c']
         self.local.refresh_export()
 
-    def test_ten_fixed_local_roots_preserve_real_archive_mapping(self):
+    def test_eleven_fixed_local_roots_preserve_real_archive_mapping(self):
         with patch('subprocess.Popen', side_effect=AssertionError('no native process')):
             self.assertEqual(self.case.validate(), self.plan)
             self.assertEqual(self.case.validate(inspect_inputs=False), self.plan)
@@ -63,7 +66,7 @@ class LocalBuildRecipeTests(unittest.TestCase):
         copied = sorted(str(p.relative_to(self.case.work / 'distfiles'))
                         for p in (self.case.work / 'distfiles').rglob('*') if p.is_file())
         self.assertEqual(copied, sorted(expected))
-        self.assertEqual(len(fixtures.LOCAL_LAYOUTS), 10)
+        self.assertEqual(len(fixtures.LOCAL_LAYOUTS), 11)
 
     def test_each_additional_root_requires_bound_exact_empty_observations(self):
         for name in BUILD_LAYOUTS:
@@ -106,7 +109,8 @@ class LocalBuildRecipeTests(unittest.TestCase):
                 with self.subTest(recipe=name, symlink=symlink):
                     path.unlink()
                     if symlink:
-                        path.symlink_to(Path(BUILD_LAYOUTS[name][-1]).name)
+                        target = self.export / name / BUILD_LAYOUTS[name][-1]
+                        path.symlink_to(os.path.relpath(target, path.parent))
                     self.local.refresh_export()
                     with self.assertRaisesRegex(SDKError, 'required regular source file'):
                         self.case.validate()
