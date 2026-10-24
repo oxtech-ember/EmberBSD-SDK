@@ -21,10 +21,19 @@ BOOTSTRAP_PILOT_API = 1
 PILOT_FORMAT = 'emberbsd-native-gcc16-pilot-plan'
 _SCOPE = 'gcc16-bootstrap'
 _SOURCE = {'c': ('native.c', NATIVE_C_PROBE), 'cxx': ('native.cc', NATIVE_CXX_PROBE)}
+STATIC_RUNTIME_CXX_PROBE = (b'#include <iostream>\n'
+    b'int main() { try { throw 16; } catch (int value) { if (value != 16) return 1; '
+    b'std::cout << "emberbsd-native-cxx-v1" << std::endl; return !std::cout; } return 1; }\n')
+_STATIC_RUNTIME_PURPOSE = 'native-c-and-cxx-static-runtime-pilot'
 
 
-def pilot_steps(descriptor, commands, flags, work_root):
+def _pilot_sources(static_runtime):
+    return {**_SOURCE, 'cxx': ('native.cc', STATIC_RUNTIME_CXX_PROBE)} if static_runtime else _SOURCE
+
+
+def pilot_steps(descriptor, commands, flags, work_root, *, static_runtime=False):
     """Construct the complete supported argv and environment. Do not run it."""
+    _require(type(static_runtime) is bool, 'pilot static-runtime selector must be a boolean')
     work = _absolute(work_root)
     directories = sorted({os.path.dirname(words[0]) for words in commands.values()})
     _require(all(os.pathsep not in path for path in directories),
@@ -32,7 +41,7 @@ def pilot_steps(descriptor, commands, flags, work_root):
     environment = {'PATH': os.pathsep.join(directories), 'LC_ALL': 'C', 'TZ': 'UTC',
                    'TMPDIR': work}
     steps = []
-    for language, (name, source) in _SOURCE.items():
+    for language, (name, source) in _pilot_sources(static_runtime).items():
         driver = commands['cc' if language == 'c' else 'cxx']
         language_flags = flags['cflags' if language == 'c' else 'cxxflags']
         src = os.path.join(work, name)
@@ -42,6 +51,8 @@ def pilot_steps(descriptor, commands, flags, work_root):
         steps.append(dict(id=language + '-compile', phase='compile', cwd=work,
                           argv=[*base, '-c', src, '-o', obj], env=dict(environment)))
         link_flags = ['-Wl,--threads=1'] if descriptor['host']['os'] == 'Darwin' else []
+        if static_runtime:
+            link_flags += ['-static-libstdc++', '-static-libgcc']
         steps.append(dict(id=language + '-link', phase='link', cwd=work,
                           argv=[*base, obj, *flags['ldflags'], *link_flags, '-o', artifact],
                           env=dict(environment)))
@@ -59,7 +70,7 @@ def validate_pilot_plan(plan, descriptor, commands, flags):
     _require(set(plan) == {'format', 'version', 'scope', 'purpose', 'seed_descriptor',
                           'host', 'sources', 'work_root', 'required_roles', 'resources', 'commands'},
              'unsupported pilot plan fields')
-    _require(plan['purpose'] == 'native-c-and-cxx-pilot' and
+    _require(plan['purpose'] in ('native-c-and-cxx-pilot', _STATIC_RUNTIME_PURPOSE) and
              plan['host'] == descriptor['host'] and plan['sources'] == descriptor['sources'],
              'pilot source or host pins mismatch')
     for source in plan['sources'].values():
@@ -70,7 +81,8 @@ def validate_pilot_plan(plan, descriptor, commands, flags):
              {'cc', 'cxx', 'cpp', *descriptor['driver_components'].values()} <=
              set(plan['required_roles']) <= set(commands), 'pilot native roles are incomplete')
     _validate_resources(plan['resources'])
-    _require(plan['commands'] == pilot_steps(descriptor, commands, flags, work),
+    _require(plan['commands'] == pilot_steps(descriptor, commands, flags, work,
+             static_runtime=plan['purpose'] == _STATIC_RUNTIME_PURPOSE),
              'pilot commands differ from the source-owned finite route')
     return plan
 
@@ -238,7 +250,7 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
             sources = make_probe_sources(descriptor, selected.commands)
             outputs = (*sources, 'fixture.result')
         else:
-            sources = dict(_SOURCE.values())
+            sources = dict(_pilot_sources(plan['purpose'] == _STATIC_RUNTIME_PURPOSE).values())
             outputs = ('native.c', 'native.cc', 'c.o', 'cxx.o', 'c-probe', 'cxx-probe')
         if metadata:
             for path in metadata_paths(work).values():

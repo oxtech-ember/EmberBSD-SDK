@@ -19,7 +19,7 @@ scope `gcc16-bootstrap`. It has exactly these fields:
 
 | Field | Value |
 | --- | --- |
-| `purpose` | `native-c-and-cxx-pilot` |
+| `purpose` | `native-c-and-cxx-pilot` or `native-c-and-cxx-static-runtime-pilot` |
 | `seed_descriptor` | Exact `{path, sha256}` reference |
 | `host`, `sources` | Exact descriptor values |
 | `work_root` | Fresh absolute output directory with real ancestors |
@@ -48,6 +48,19 @@ Every environment is complete and contains only selected tool directories,
 flag when applicable. Compiler temporary files stay in the declared work tree.
 Shells, make tools, recipe exports, and dependency queries are not pilot inputs.
 Declared tools still pass the common current-byte checks.
+
+The optional keyword `static_runtime=True` on `pilot_steps` constructs the
+second purpose's fixed route. Use it only with
+`purpose: native-c-and-cxx-static-runtime-pilot`.
+It adds exactly `-static-libstdc++` and `-static-libgcc` to both link commands.
+Compile and run commands retain their ordinary pilot arguments and environment.
+The controller selects the source-owned `STATIC_RUNTIME_CXX_PROBE` for this
+purpose. That source exercises `throw`, `catch`, and iostream output.
+Its successful output remains `emberbsd-native-cxx-v1` followed by a newline.
+The C source and its expected output remain unchanged.
+The old purpose, command construction, and `NATIVE_CXX_PROBE` remain unchanged.
+No plan field accepts a replacement source or arbitrary link arguments.
+Neither static selector enters the ordinary ABI flag grammar.
 
 The accepted seed receipt must add `evidence_level: input-and-route-only` and
 `input_route_audit`, an exact reference to independently accepted metadata.
@@ -115,5 +128,10 @@ Inspect actual assembler, collect2, linker, artifact, and runtime library eviden
 The fixed Darwin seed must show the Mach-O `ld64.lld` route.
 Do not infer that route from the nominal `-print-prog-name=ld` query.
 Resolve any new output runtime routes before ordinary-provider acceptance.
+The static-runtime purpose is only a finite probe of the selected seed's
+static GCC libraries. It does not statically link the platform C library or
+prove a complete LLVM build. Review actual C++ exception execution, stdout,
+link commands, output dependencies, and loader observations independently.
+Synthetic source and command tests do not establish that native execution.
 Then execute the pinned common GCC16 recipe plan, preserve stage comparison,
 and obtain the separate ordinary-output qualification.
