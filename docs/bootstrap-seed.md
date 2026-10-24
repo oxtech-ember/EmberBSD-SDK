@@ -126,7 +126,7 @@ Add the following fields:
 | Field | Required value |
 | --- | --- |
 | `driver_prefix` | Absolute real in-bundle directory containing every selected GCC driver member. |
-| `providers` | Named seed origins. Each has explicit `origin: source-build` or `origin: binary-release`. |
+| `providers` | Named seed origins. Each has explicit `origin: source-build`, `origin: binary-release`, or scoped `origin: installed-package`. |
 | `history` | One provenance record for every provider, with the same keys. |
 | `dynamic_dependencies` | Complete recorded executable and DSO graph. |
 
@@ -160,6 +160,11 @@ Do not invent unavailable build logs or exact source commits.
 This variant pins a binary input release. It does not claim its historical build was qualified-native.
 Unknown current tool, driver, native ABI, or DSO inputs are not permitted by this variant.
 The new GCC16 producer still requires complete common recipe, source, and patch pins.
+
+Existing installed make and shell payloads use the separate
+[installed-package history](bootstrap-installed-inputs.md) variant.
+It binds original package metadata and provisioned member SHA256 values.
+It does not invent a release archive or historical build log.
 
 `dynamic_dependencies` maps canonical absolute executable or DSO paths to
 `{sha256, dependencies: [absolute paths]}`.

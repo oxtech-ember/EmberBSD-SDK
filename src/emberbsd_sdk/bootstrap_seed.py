@@ -37,7 +37,95 @@ def _relative(value):
     return value
 
 
-def _history(histories, providers, *, inspect_inputs=True):
+def _installed_history(value, name, descriptor, file, *, inspect_inputs):
+    """Pin an installed make/shell input without inventing its build history."""
+    _require(isinstance(descriptor, dict), 'installed history needs its seed descriptor')
+    _require(set(value) == {'kind', 'package_name', 'package_path', 'installation_prefix',
+                           'package_metadata', 'installed_member_inventory', 'provisioned_members',
+                           'source_correlation', 'source_archives', 'patches', 'package_archive',
+                           'source_commit', 'historical_build_log', 'historical_compiler',
+                           'historical_toolchain_closure', 'patches_complete', 'unknowns'},
+             'unsupported installed-package history fields')
+    packages = {'devel/bmake': ('bmake', {'make'}),
+                'devel/gmake': ('gmake', {'gmake'}),
+                'shells/mksh': ('mksh', {'sh'}),
+                'pkgtools/bootstrap-mk-files': ('bootstrap-mk-files', set())}
+    path = value['package_path']
+    _require(path in packages, 'installed history is limited to bootstrap make and shell inputs')
+    package, roles = packages[path]
+    package_name = _text(value['package_name'], 'installed package name')
+    _require(package_name.startswith(package + '-') and len(package_name) > len(package) + 1,
+             'installed package name does not match its package path')
+    _absolute(value['installation_prefix'])  # Provenance only. Never open this tree.
+    metadata = value['package_metadata']
+    _require(isinstance(metadata, dict) and set(metadata) == {'build_info', 'contents'},
+             'original installed package metadata is required')
+    info, contents = _bytes(metadata['build_info']), _bytes(metadata['contents'])
+    _require([line for line in info.decode('utf-8', 'strict').splitlines()
+              if line.startswith('PKGPATH=')] == ['PKGPATH=' + path] and
+             [line for line in contents.decode('utf-8', 'strict').splitlines()
+              if line.startswith('@name ')] == ['@name ' + package_name],
+             'installed package metadata identity mismatch')
+    # Source correlation is evidence of its stated scope, not a binary build log.
+    _bytes(value['source_correlation'])
+    inventory = _json(value['installed_member_inventory'])
+    members = value['provisioned_members']
+    _require(isinstance(members, list) and members, 'provisioned installed members are required')
+    root, mapped = _absolute(descriptor['bundle_root']), {}
+    for member in members:
+        _require(isinstance(member, dict) and set(member) ==
+                 {'installed_relative', 'selected_path', 'sha256'}, 'invalid installed member mapping')
+        relative = _relative(member['installed_relative'])
+        selected, sha = _absolute(member['selected_path']), _sha(member['sha256'])
+        _require(selected != root and os.path.commonpath((selected, root)) == root and selected not in mapped,
+                 'installed member mapping escapes or repeats its provisioned bundle')
+        original = inventory.get(relative, {})
+        _require(original.get('kind') == 'file' and original.get('sha256') == sha,
+                 'installed member differs from its preserved SHA256 roster')
+        if inspect_inputs:
+            resolved = canonical_existing(selected)
+            _require(inside(resolved, root) and sha256_file(resolved) == sha,
+                     'provisioned installed member changed or escaped its bundle')
+        mapped[selected] = sha
+    selected_roles = {role: row for role, row in descriptor['tools'].items() if row['provider'] == name}
+    _require(set(selected_roles) <= roles and (selected_roles or not roles),
+             'installed package cannot provide these bootstrap roles')
+    _require(all(mapped.get(row['path']) == row['sha256'] for row in selected_roles.values()),
+             'installed history omits a selected provider member')
+    missing = []
+    protected = {metadata[key]['sha256'] for key in metadata}
+    for field, label in (('package_archive', 'package-archive'),
+                         ('historical_build_log', 'historical-build-log'),
+                         ('historical_toolchain_closure', 'historical-toolchain-closure')):
+        if value[field] is None:
+            missing.append(label)
+        else:
+            file(value[field])
+            _require(value[field]['sha256'] not in protected,
+                     'package metadata cannot be relabeled as an archive or build evidence')
+    if value['source_commit'] is None:
+        missing.append('source-commit')
+    else:
+        _source(value['source_commit'])
+    reported = [line for line in info.decode('utf-8', 'strict').splitlines()
+                if line.startswith('CC_VERSION=')]
+    if value['historical_compiler'] is None:
+        _require(not reported, 'installed history omits reported compiler metadata')
+        missing.append('historical-compiler')
+    else:
+        compiler = _text(value['historical_compiler'], 'historical compiler')
+        _require(reported == ['CC_VERSION=' + compiler],
+                 'historical compiler differs from original package metadata')
+    _require(type(value['patches_complete']) is bool, 'declare historical patch completeness')
+    if not value['patches_complete']:
+        missing.append('historical-patches')
+    if not value['source_archives']:
+        missing.append('source-archives')
+    _require(value['unknowns'] == sorted(missing), 'installed history must name every unknown input')
+    return sorted(missing)
+
+
+def _history(histories, providers, *, descriptor=None, inspect_inputs=True):
     _require(isinstance(histories, dict) and set(histories) == set(providers),
              'every seed provider needs explicit historical provenance')
     unknowns = {}
@@ -64,7 +152,9 @@ def _history(histories, providers, *, inspect_inputs=True):
         _require(value['kind'] == provider['origin'], 'seed provider history kind mismatch')
         origins(value['source_archives'])
         origins(value['patches'])
-        if value['kind'] == 'source-build':
+        if value['kind'] == 'installed-package':
+            unknowns[name] = _installed_history(value, name, descriptor, file, inspect_inputs=inspect_inputs)
+        elif value['kind'] == 'source-build':
             _require(value['source_archives'], 'seed source archives are required')
             record = _json(value['build_record'])
             _envelope(record, 'emberbsd-bootstrap-seed-history', scope=_SCOPE)
@@ -375,12 +465,13 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
     _require(isinstance(descriptor['providers'], dict) and descriptor['providers'],
              'seed member provenance is required')
     for row in descriptor['providers'].values():
-        _require(row['origin'] in ('source-build', 'binary-release'), 'invalid seed provider origin')
+        _require(row['origin'] in ('source-build', 'binary-release', 'installed-package'),
+                 'invalid seed provider origin')
         if row['origin'] == 'source-build':
             _require(row['source'] in descriptor['sources'], 'unknown seed provider source')
             _relative(row['recipe'])
             _sha(row['recipe_sha256'])
-    unknowns = _history(descriptor['history'], descriptor['providers'])
+    unknowns = _history(descriptor['history'], descriptor['providers'], descriptor=descriptor)
     _require(acceptance.get('accepted_history_unknowns') == unknowns,
              'seed acceptance must explicitly accept its historical unknowns')
     plan_header = _json(plan_ref)
@@ -491,7 +582,7 @@ def _graduation(reference, output, output_sha256, provider):
              accepted.get('descriptor_sha256') == receipt['seed_descriptor']['sha256'] and
              accepted.get('bootstrap_plan') == receipt['bootstrap_plan'],
              'graduation requires the original scoped seed acceptance')
-    unknowns = _history(seed['history'], seed['providers'], inspect_inputs=False)
+    unknowns = _history(seed['history'], seed['providers'], descriptor=seed, inspect_inputs=False)
     _require(accepted.get('accepted_history_unknowns') == unknowns,
              'original seed acceptance does not bind its historical unknowns')
     plan = _plan(receipt['bootstrap_plan'], seed, inspect_inputs=False)

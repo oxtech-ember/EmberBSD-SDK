@@ -101,7 +101,8 @@ class SeedFixture:
         self.plan_ref = f.document(self.plan)
         self.acceptance.update(descriptor_sha256=self.descriptor_ref['sha256'], bootstrap_plan=self.plan_ref,
                                accepted_history_unknowns=_history(self.descriptor['history'],
-                                                                   self.descriptor['providers']))
+                                                                   self.descriptor['providers'],
+                                                                   descriptor=self.descriptor))
         for key in ('host', 'compiler', 'sources', 'providers', 'host_abi', 'abi_flags',
                     'history', 'dynamic_dependencies', 'driver_prefix'):
             self.acceptance[key] = copy.deepcopy(self.descriptor[key])
