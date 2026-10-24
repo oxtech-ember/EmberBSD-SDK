@@ -98,6 +98,15 @@ def _bytes(reference, limit=MAX_JSON):
     return data
 
 
+def _file(reference):
+    """Check stable referenced bytes without buffering or a metadata size cap."""
+    _require(isinstance(reference, dict) and set(reference) == {'path', 'sha256'},
+             'expected an explicit input path and SHA256')
+    path = _absolute(reference['path'])
+    _require(sha256_file(path) == _sha(reference['sha256']), 'referenced input changed')
+    return path
+
+
 def _json(reference):
     result = loads_json(_bytes(reference))
     _require(isinstance(result, dict), 'expected a metadata object')
@@ -439,7 +448,7 @@ def _load(path, descriptor_sha256, accepted_producer_receipt, required_roles):
                      'bootstrap seed is not an ordinary native provider')
             _require('bootstrap_graduation' not in build,
                      'bootstrap input scope cannot be relabeled as qualified-native')
-        _bytes(build['build_log'])
+        _file(build['build_log'])
     root, inventory, tools, records, abi_inventories, flags = _payload(descriptor, required_roles)
     abi = descriptor['host_abi']
     _require(receipt.get('host_abi') == abi and receipt.get('abi_flags') == descriptor['abi_flags'],

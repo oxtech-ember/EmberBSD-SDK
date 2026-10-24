@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.inventory import snapshot_tree
-from emberbsd_sdk.jsonio import json_bytes
+from emberbsd_sdk.jsonio import MAX_JSON, json_bytes
 from emberbsd_sdk.native_toolset import (NATIVE_TOOLSET_API, NATIVE_TOOL_ROLES,
                                         NATIVE_C_PROBE, NATIVE_CXX_PROBE, _gcc, load_native_toolset,
                                         provider_root, validate_selection)
@@ -164,6 +164,26 @@ class NativeToolsetTests(unittest.TestCase):
 
     def refuse(self):
         with self.assertRaises(SDKError):
+            self.fixture.load()
+
+    def test_provider_log_larger_than_metadata_limit_is_streamed_and_hash_bound(self):
+        from emberbsd_sdk.native_toolset import _bytes
+        log = self.fixture.evidence / 'full-provider-build.log'
+        block = b'complete compiler output\n' * 1024
+        with log.open('wb') as stream:
+            for _ in range(MAX_JSON // len(block) + 1):
+                stream.write(block)
+        self.assertGreater(log.stat().st_size, MAX_JSON)
+        self.fixture.build['build_log'] = dict(path=str(log), sha256=digest(log))
+        self.fixture.seal()
+        # Replay the previous bounded-byte checker at the actual provider route.
+        with patch('emberbsd_sdk.native_toolset._file', side_effect=_bytes):
+            with self.assertRaisesRegex(SDKError, 'evidence exceeds size limit'):
+                self.fixture.load()
+        self.fixture.load()
+        with log.open('ab') as stream:
+            stream.write(b'changed log')
+        with self.assertRaisesRegex(SDKError, 'referenced input changed'):
             self.fixture.load()
 
     def test_finite_selection_is_immutable_and_json_is_fresh(self):

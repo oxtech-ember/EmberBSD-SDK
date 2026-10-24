@@ -11,7 +11,7 @@ from types import MappingProxyType
 
 from .errors import SDKError
 from .inventory import sha256_file, snapshot_tree
-from .native_toolset import (_absolute, _bytes, _driver_queries, _envelope,
+from .native_toolset import (_absolute, _bytes, _driver_queries, _envelope, _file,
                              _gcc, _json, _native_image, _payload, _require,
                              _sha, _source, _text)
 from .paths import canonical_existing, inside
@@ -34,15 +34,6 @@ def _relative(value):
                                              for part in value.split('/')),
              'expected a source-relative path without traversal')
     return value
-
-
-def _file(reference):
-    # Distfiles can exceed the JSON evidence limit. Hash them without buffering.
-    _require(isinstance(reference, dict) and set(reference) == {'path', 'sha256'},
-             'expected an explicit input path and SHA256')
-    path = _absolute(reference['path'])
-    _require(sha256_file(path) == _sha(reference['sha256']), 'bootstrap input changed')
-    return path
 
 
 def _history(histories, providers, *, inspect_inputs=True):

@@ -227,7 +227,7 @@ class BootstrapSeedTests(unittest.TestCase):
         self.seed.seal()
         self.seed.load()
         Path(history['patches'][0]['file']['path']).write_bytes(b'changed patch')
-        self.refuse('bootstrap input changed')
+        self.refuse('input changed')
 
     def test_external_historical_compiler_is_data_not_selected_tool(self):
         f = self.seed.native
@@ -316,7 +316,7 @@ class BootstrapSeedTests(unittest.TestCase):
         self.seed.seal()
         artifact = self.seed.descriptor['history']['ports']['artifact']
         Path(artifact['path']).write_bytes(b'changed binary release')
-        self.refuse('bootstrap input changed')
+        self.refuse('input changed')
 
     def test_binary_release_graduation_keeps_historical_unknowns(self):
         self.binary_release()

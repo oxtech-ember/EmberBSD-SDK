@@ -206,6 +206,8 @@ A provider-build receipt has format `emberbsd-native-provider-build`, version `1
 scope `native-build`, status `PASS`, and these fields:
 `host`, the full `source` pin, `recipe`, `recipe_sha256`, `compiler`,
 `accepted_input_scope: "qualified-native"`, and a `build_log` file reference.
+The loader hashes the full build log as a stream. The JSON metadata size limit
+does not truncate or reject a large compiler log. Changed log bytes are refused.
 The compiler must be native GCC16. The source and recipe must match the provider.
 The acceptance gate must qualify that build and its compiler inputs.
 A historical Clang build or unqualified bootstrap seed is not an ordinary provider.
