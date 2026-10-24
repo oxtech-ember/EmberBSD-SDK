@@ -16,6 +16,8 @@ from .paths import canonical_existing, canonical_new, inside, reject_overlap
 BOOTSTRAP_RELOCATION_API = 1
 PROFILE_RELATIVE = 'profiles/common-build-tools/bootstrap/darwin-installed-utilities-v1.json'
 PROFILE_SHA256 = 'bae4b2d60e37de12b86d23ef4e5333f03f5479c1766fc471704361876c8f211b'
+PRINTF_PROFILE_RELATIVE = 'profiles/common-build-tools/bootstrap/darwin-installed-printf-v1.json'
+PRINTF_PROFILE_SHA256 = '48927c02453841feaafaaba0c617e3c702821a39cd572d0a1a84822fdca281b7'
 _LIMIT = 16 * 1024 * 1024
 _RUNS = ('run-a', 'run-b')
 # LLVM can relayout segments and LINKEDIT offsets. Preserve all other raw
@@ -27,7 +29,8 @@ _EDITED_COMMANDS = {0x19, 0x1d, 0xc, 0x80000018, 0x8000001f, 0x20,
 
 def _profile(reference):
     reference = _reference(reference)
-    _require(reference['sha256'] == PROFILE_SHA256, 'unsupported utility relocation profile')
+    _require(reference['sha256'] in (PROFILE_SHA256, PRINTF_PROFILE_SHA256),
+             'unsupported utility relocation profile')
     return _json(reference)
 
 
@@ -51,7 +54,7 @@ def _inputs(plan, *, inspect_inputs=False):
     originals = _json(data['originals'])
     members = _members(profile)
     _require(set(originals) == {row['original_member'] for row in members},
-             'relocation needs the exact 21 original members')
+             f'relocation needs the exact {len(members)} original members')
     for row in members:
         reference = _reference(originals[row['original_member']])
         _require(reference['path'] == os.path.join(original, row['original_member']),

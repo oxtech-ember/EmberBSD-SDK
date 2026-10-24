@@ -16,6 +16,15 @@ External package metadata and original SHA256 rosters remain required.
 The profile does not reconstruct their missing historical build inputs.
 This interface does not admit an ordinary NativeToolset.
 
+The separate fixed
+[`darwin-installed-printf-v1.json`](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/common-build-tools/bootstrap/darwin-installed-printf-v1.json)
+profile has SHA256
+`48927c02453841feaafaaba0c617e3c702821a39cd572d0a1a84822fdca281b7`.
+It names only `coreutils-9.11` member `bin/gprintf` and the same libintl DSO.
+The original invocation is `gnu/bin/printf`. The final regular member remains
+`bin/gprintf`. The selected invocation is the relative alias `bin/printf`.
+This profile adds no member to the original 21-member profile or its results.
+
 ## Fixed plan
 
 Use the existing `emberbsd-native-gcc16-producer-plan`, version 1,
@@ -34,7 +43,7 @@ Resource lock roots use the existing finite producer contract.
 | `profile` | Exact reference to the fixed Ports profile |
 | `original_prefix` | Canonical absolute original read root |
 | `final_prefix` | Canonical final absolute prefix, ending in `native-utilities-v1` |
-| `originals` | Reference to the 21 original regular-member references |
+| `originals` | Reference to the exact original regular members in the selected profile |
 
 `originals` is a JSON object keyed by each profile `original_member`.
 Each value has exactly `path` and `sha256`.
@@ -42,7 +51,8 @@ Its path is the original prefix plus that fixed relative member.
 Original, work, and final roots must not overlap or have aliased ancestors.
 Original absolute symlink chains must match the profile.
 
-`relocation_steps` constructs exactly 42 serial steps.
+`relocation_steps` constructs exactly 42 serial steps for the original profile.
+The printf profile constructs four steps: `gprintf` and libintl in each run.
 Each step has `phase: transform` and `expected_exit: 0`.
 The selected tool must have the exact profile payload hash and a single
 `llvm-install-name-tool` invocation spelling.
@@ -52,7 +62,8 @@ No command suffix, arbitrary operation, or executable setup callback is accepted
 
 Each command writes a fresh output in `run-a` or `run-b` under the work root.
 The command removes all RPATH entries.
-For exactly 17 executables, it changes the old absolute libintl load to
+For exactly 17 executables in the original profile, or `gprintf` in the printf
+profile, it changes the old absolute libintl load to
 `final_prefix/lib/libintl.8.dylib`.
 For the DSO, it sets the install ID to that same absolute path.
 The module does not add `@loader_path` or ambient search rules.
@@ -65,7 +76,7 @@ A successful LLVM `-change` exit alone does not prove that a load was present.
 `prepare_relocation_work` creates only the fixed empty output directories.
 Call it after the common controller owns the fresh work root exclusively.
 `relocation_read_roots` and `relocation_work_outputs` declare the finite roots
-and 42 outputs for that controller.
+and all profile-selected outputs for that controller.
 
 ## Output checks and result
 
@@ -94,7 +105,7 @@ object with exactly `profile` and `members`.
 Each original-member key maps to `original_sha256`, transformed `sha256`,
 two exact `outputs` references, and the fixed `checks` list.
 The common status remains `COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW`.
-All 42 exact commands need successful exits and retained log references.
+All exact commands need successful exits and retained log references.
 Inputs must be revalidated after drainage.
 `ordinary_provider_qualified` remains false.
 Independent review and pure copy provisioning are separate steps.
@@ -125,6 +136,15 @@ An ordinary `installed-package` mapping still requires unchanged original bytes.
 Current seed inventory, native-header, independent acceptance, and runtime
 closure checks remain required.
 
+Keep a printf derivation separate from an earlier complete utility derivation.
+Retain the original coreutils package metadata and its historical unknowns.
+The earlier result cannot provide the new `printf` role.
+If both profiles use one final prefix, compare the new checked libintl output
+with the already accepted library. Do not replace that library or revise its
+earlier history. Provision only the newly accepted `gprintf` and relative alias.
+The `printf` role requires its completed fixed derivation. The ordinary raw
+installed-package role list does not gain this role.
+
 ## Source and checks
 
 The finite format checks follow LLVM
@@ -138,5 +158,7 @@ and [`MachO.h`](https://github.com/llvm/llvm-project/blob/0d261d1ca552c95a8f007e
 This SDK implementation is original AI-assisted Python code under BSD-2-Clause.
 
 Run `python3 -m unittest discover -s tests -p test_bootstrap_relocation.py`.
+Run `python3 -m unittest discover -s tests -p test_bootstrap_relocation_printf.py`
+for the separate printf profile controls.
 These tests use synthetic Mach-O bytes and real fixture symlinks.
 They run no native tool and do not qualify the LLVM binary or a native SDK.
