@@ -22,7 +22,7 @@ def main(argv=None):
     check = commands.add_parser('check', help='check current inputs; do not execute the plan')
     pilot = commands.add_parser('run-pilot', help='run the finite accepted C/C++ pilot once')
     make_probe = commands.add_parser('run-make-probe', help='run the finite accepted make/shell probe once')
-    producer = commands.add_parser('run-producer', help='run the accepted read-only Ports metadata stage')
+    producer = commands.add_parser('run-producer', help='run one recognized accepted bootstrap producer stage')
     for command in (check, pilot, make_probe, producer):
         for name in ('descriptor', 'accepted-seed-receipt', 'bootstrap-plan'):
             command.add_argument('--' + name, required=True)

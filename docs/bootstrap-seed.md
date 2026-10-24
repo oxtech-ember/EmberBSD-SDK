@@ -9,6 +9,8 @@ The separate [finite make and shell probe](bootstrap-make.md) checks the accepte
 make binding before package metadata or recipe execution.
 The [stage-aware metadata producer](bootstrap-producer.md) can then query a
 prepared canonical export. It needs no future build output or accepted DAG.
+The [direct-source grep profile](bootstrap-program.md) can provide the missing
+initial utility from pinned OS sources. It does not need a package build graph.
 Use common `lang/gcc16` and its named dependencies in a pinned prepared Ports export.
 Keep recipes and patches in Ports. SDK owns orchestration and evidence checks.
 

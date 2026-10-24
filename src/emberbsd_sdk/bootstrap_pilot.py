@@ -133,16 +133,17 @@ def run_make_probe(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
 
 def run_producer(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                  bootstrap_plan, required_roles):
-    """Run only the accepted Ports metadata stage. Never build or qualify."""
+    """Run only a recognized accepted producer stage. Never qualify it."""
     return _run(descriptor_path, descriptor_sha256=descriptor_sha256,
                 accepted_seed_receipt=accepted_seed_receipt, bootstrap_plan=bootstrap_plan,
-                required_roles=required_roles, profile='metadata')
+                required_roles=required_roles, profile='producer')
 
 
 def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
          bootstrap_plan, required_roles, profile):
     from .bootstrap_make import MAKE_PROBE_FORMAT, make_probe_sources, verify_make_step
     from .bootstrap_producer import PRODUCER_FORMAT, metadata_paths
+    from .bootstrap_program import program_outputs, program_sources, verify_program_step
     from .bootstrap_seed import load_bootstrap_seed
     from .native_toolset import _json
     _require(threading.current_thread() is threading.main_thread(),
@@ -153,9 +154,11 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     descriptor_ref = dict(path=os.fspath(descriptor_path), sha256=descriptor_sha256)
     descriptor = _json(descriptor_ref)
     plan = _json(bootstrap_plan)
-    make_probe, metadata = profile == 'make', profile == 'metadata'
+    make_probe = profile == 'make'
+    metadata = profile == 'producer' and plan.get('stage') == 'metadata'
+    program = profile == 'producer' and plan.get('stage') == 'grep-bootstrap'
     _require(plan.get('format') == {'make': MAKE_PROBE_FORMAT, 'native': PILOT_FORMAT,
-                                    'metadata': PRODUCER_FORMAT}[profile],
+                                    'producer': PRODUCER_FORMAT}[profile],
              'the runner requires its exact finite plan format')
     resources = plan['resources']
     root = canonical_existing(resources['lock_root'])
@@ -165,6 +168,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
               for kind in ('headers', 'libraries') for row in descriptor['host_abi'][kind]]
     if metadata:
         roots += [plan['metadata']['export']['root'], plan['metadata']['utility_bin']]
+    if program:
+        roots += [plan['program']['source']['root']]
     sdk_root = str(Path(__file__).resolve().parents[2])
     _require(work != root and not inside(root, work), 'pilot work contains its lock root')
     for path in [*roots, sdk_root, resources['heavy_link_context']]:
@@ -176,6 +181,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                          *list(_references(plan))])
     if metadata:
         shared.update(_references(_json(plan['metadata']['export']['source_proof'])))
+    if program:
+        shared.update(_references(_json(plan['program']['source']['source_proof'])))
     # Re-read all acceptance and plan bytes under their shared fences.
     with ContextLocks(sorted(shared), root, shared=True), ContextLocks([work], root):
         selected = load_bootstrap_seed(descriptor_path, **options)
@@ -183,14 +190,20 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         _require(selected_plan == plan, 'pilot plan changed before dispatch')
         _require(entry(work) is None, 'pilot work must be a fresh, unused directory')
         os.mkdir(work)
-        sources = ({} if metadata else make_probe_sources(descriptor, selected.commands) if make_probe else
-                   dict(_SOURCE.values()))
-        outputs = () if metadata else (*sources, 'fixture.result') if make_probe else (
-            'native.c', 'native.cc', 'c.o', 'cxx.o', 'c-probe', 'cxx-probe')
+        if metadata:
+            sources, outputs = {}, ()
+        elif program:
+            sources, outputs = program_sources(plan), program_outputs(plan)
+        elif make_probe:
+            sources = make_probe_sources(descriptor, selected.commands)
+            outputs = (*sources, 'fixture.result')
+        else:
+            sources = dict(_SOURCE.values())
+            outputs = ('native.c', 'native.cc', 'c.o', 'cxx.o', 'c-probe', 'cxx-probe')
         if metadata:
             for path in metadata_paths(work).values():
                 os.mkdir(path)
-        result = dict(format=('emberbsd-native-gcc16-producer-result' if metadata else
+        result = dict(format=('emberbsd-native-gcc16-producer-result' if metadata or program else
                               'emberbsd-bootstrap-make-probe-result' if make_probe else
                               'emberbsd-native-gcc16-pilot-result'), version=1,
                       scope=_SCOPE, api=BOOTSTRAP_PILOT_API, status='RUNNING',
@@ -230,11 +243,11 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                                 _hold()
                         except CommandError as exc:
                             actual['actual_exit'] = exc.returncode
-                            if not make_probe or exc.returncode != step['expected_exit']:
+                            if not (make_probe or program) or exc.returncode != step['expected_exit']:
                                 raise
                         else:
                             actual['actual_exit'] = returned.returncode
-                        _require(actual['actual_exit'] == (step['expected_exit'] if make_probe else 0),
+                        _require(actual['actual_exit'] == (step['expected_exit'] if make_probe or program else 0),
                                  'finite command exit differs from its expected observation')
                         if make_probe:
                             verify_make_step(step, log, work, descriptor)
@@ -242,6 +255,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                             artifact = step['argv'][-1]
                             _native_image(artifact, descriptor['host'], object_file=step['phase'] == 'compile')
                             actual['output'] = dict(path=artifact, sha256=sha256_file(artifact))
+                        if program:
+                            actual.update(verify_program_step(step, work, plan))
                 except BaseException as exc:
                     if isinstance(exc, CommandError):
                         actual['actual_exit'] = exc.returncode

@@ -12,7 +12,9 @@ Use `BOOTSTRAP_PRODUCER_API = 1` from `emberbsd_sdk.bootstrap_producer`.
 The plan format is `emberbsd-native-gcc16-producer-plan`, version 1,
 scope `gcc16-bootstrap`. It has exactly `format`, `version`, `scope`, `stage`,
 `seed_descriptor`, `host`, `sources`, `work_root`, `required_roles`, `resources`,
-`metadata`, and `commands`. Only `stage: metadata` is supported.
+`metadata`, and `commands`. This page describes `stage: metadata`.
+The separate [direct-source program profile](bootstrap-program.md) supports
+`stage: grep-bootstrap` with its own finite input fields and commands.
 This interface does not execute an export or recipe build.
 Provider graduation remains a separate check.
 The source owner retains the canonical exporter and all recipes in Ports.
