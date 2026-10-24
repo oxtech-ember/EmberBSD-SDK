@@ -184,6 +184,37 @@ class NativeConsumerTests(TemporaryCase):
             self.assertEqual(builder.run(), builder.receipt)
         preflight.assert_called_once_with()
 
+    def test_revalidation_reuses_pins_and_refuses_mutation_before_dispatch(self):
+        for changed_input in ('descriptor', 'receipt', 'tool', 'abi'):
+            builder = self.select()
+            f = self.fixture
+            path = Path({'descriptor': f.descriptor_ref['path'], 'receipt': f.receipt_ref['path'],
+                         'tool': f.records['cc']['path'],
+                         'abi': str(Path(f.descriptor['host_abi']['headers'][0]['root']) / 'fixture-input')}[changed_input])
+            original = path.read_bytes(); path.write_bytes(original + b'changed')
+            loader = native_toolset.load_native_toolset
+            with self.subTest(input=changed_input), \
+                    patch.object(native_toolset, 'load_native_toolset', wraps=loader) as called, \
+                    patch('emberbsd_sdk.process.OwnedProcessGroup', side_effect=AssertionError('producer started')):
+                with self.assertRaises(SDKError): builder.dispatch(['never-run'])
+                self.assertEqual(called.call_args.args, (self.options()['native-toolset'],))
+                self.assertEqual(called.call_args.kwargs['descriptor_sha256'], self.options()['native-toolset-sha256'])
+                self.assertEqual(called.call_args.kwargs['accepted_producer_receipt'], f.receipt_ref)
+            path.write_bytes(original)
+
+    def test_detected_drift_quarantines_contexts_even_after_restoring_bytes(self):
+        builder = self.select()
+        builder.paths = {name: str(self.root / name) for name in ('objects', 'tools')}
+        for path in builder.paths.values(): Path(path).mkdir()
+        builder.contexts_prepared = True
+        tool = Path(self.fixture.records['cc']['path']); original = tool.read_bytes()
+        tool.write_bytes(original + b'changed')
+        with self.assertRaises(SDKError): builder.verify_native_toolset()
+        tool.write_bytes(original)
+        for path in builder.paths.values():
+            self.assertTrue(Path(path, builder.QUARANTINE).is_file())
+            with self.assertRaisesRegex(SDKError, 'quarantined'): SysrootBuilder({}).inspect_context(path)
+
     def test_native_path_separator_refused_before_queries(self):
         directory = self.root / 'colon-fixture'; directory.mkdir()
         self.fixture = Fixture(directory, bundle_name='native:tools')

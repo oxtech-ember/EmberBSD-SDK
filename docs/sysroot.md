@@ -104,6 +104,11 @@ The planned environment contains only directories of declared native tools in
 This consumer refuses a native tool directory that contains the host `PATH`
 separator. Such a directory cannot be represented as one `PATH` entry.
 
+The builder repeats the same accepted toolset check before outputs, before dispatch, and after producers.
+Drift after context preparation quarantines both object trees. Restoring the original bytes does not permit reuse.
+New sysroot receipts use version 2 and bind the native selection, input pins, paths, flags, and environment.
+Transfer verification retains historical version 1 checks without adding native qualification.
+
 ## Recorded producer sequence
 
 Execution of this sequence remains blocked. At OS commit
@@ -145,7 +150,7 @@ libraries and loader, target ELF architecture, and contained relative links.
 An error retains an explicit incomplete state and its evidence; a previous
 artifact does not become the result of that failed build.
 
-The sysroot builder waits up to 30 seconds for a complete empty producer
+The sysroot builder waits up to 120 seconds for a complete empty producer
 session snapshot on Darwin. Unrelated host process churn can make a shorter
 snapshot inconclusive. The builder still quarantines the object contexts if
 it cannot prove drainage; it never treats an uncertain snapshot as empty.

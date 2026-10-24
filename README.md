@@ -79,7 +79,7 @@ maintain another compiler recipe or another libc.
 
 ## Build and validation boundaries
 
-Follow the [SDK tool selection policy](docs/tool-selection.md), including its current enforcement gap.
+Follow the [SDK tool selection policy](docs/tool-selection.md), including its remaining enforcement gaps.
 Sysroot and OS release execution currently fails before preflight until the OS
 nested native-tool contract is qualified. Accepted native-toolset evidence
 permits read-only plans; there is no execution override.

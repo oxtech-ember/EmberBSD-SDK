@@ -24,31 +24,21 @@ from emberbsd_sdk.native_toolset import NativeToolset
 from emberbsd_sdk.workspace import create
 from emberbsd_sdk.libedit import prepare_source
 from libedit_fixture import recipe_fixture, installation_source
-from host_compiler_fixture import gcc16_pair
 
 
 def fixture_native_selection(builder):
-    """Inject synthetic selection for existing dispatch tests, never acceptance."""
-    tools = {'cc': builder.options['host-cc'], 'cxx': builder.options['host-cxx'],
-             'python': os.path.realpath(builder.options['python']),
-             'sh': os.path.realpath(shutil.which('sh')), 'as': '/fixture/as', 'ld': '/fixture/ld'}
-    builder.native = NativeToolset('1' * 64, MappingProxyType({'path': '/fixture/qualification', 'sha256': '2' * 64}),
-        str(Path(tools['cc']).parent), MappingProxyType({'os': 'Darwin', 'cpu': 'arm64'}),
+    """Synthetic dispatch input only. This bypass never qualifies native tools."""
+    prefix = Path(builder.options['host-cc']).parent
+    tools = {name: str(prefix / name) for name in ('cc', 'cxx', 'cpp', 'as', 'ld', 'python', 'sh')}
+    return NativeToolset('1' * 64, MappingProxyType({'path': '/fixture/qualification', 'sha256': '2' * 64}),
+        str(prefix), MappingProxyType({'os': 'Darwin', 'cpu': 'arm64'}),
         MappingProxyType({'family': 'gcc', 'version': '16.2.0', 'triplet': 'aarch64-apple-darwin27'}),
         MappingProxyType(tools), MappingProxyType({name: () for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}))
-    builder.native_selection = builder.native.as_dict()
-    builder.shell = tools['sh']
-    builder.host_tools = {name: dict(path=os.path.realpath(tools[role]), selected=tools[role],
-        alias=builder.options[option], sha256=inventory.sha256_file(tools[role]),
-        origin='accepted-native-toolset', descriptor_sha256='1' * 64,
-        version='16.2.0', gcc_version='16.2.0', machine='aarch64-apple-darwin27',
-        programs={'as': '/fixture/as', 'ld': '/fixture/ld'})
-        for name, role, option in (('cc', 'cc', 'host-cc'), ('c++', 'cxx', 'host-cxx'))}
 
 
 class B(ProductionBuilder):
     """Exercise dispatch mechanisms with explicit synthetic producer admission."""
-    select_native_toolset = fixture_native_selection
+    load_native_toolset = fixture_native_selection
 
     def require_native_producer_routing(self):
         pass
@@ -206,7 +196,12 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
         git(path, 'init', '-q'); commit(path)
     prepare_source(ports, root / 'libedit.tar.gz', root / 'libedit-source')
     write(root / 'gcc.tar.xz', 'Fixture archive; no extraction')
-    return {key: str(value) for key, value in ({'sdk': sdk, 'os': os_source, 'ports': ports, 'compiler': compiler, 'runtime-work': work, 'gcc-archive': root / 'gcc.tar.xz', 'pkgsrc': root / 'pkgsrc', 'target': target, 'jobs': '2', 'python': sys.executable, 'sdk-source': root / 'sdk-source', 'libedit-source': root / 'libedit-source', 'native-toolset': root / 'synthetic-native-selection', 'native-toolset-sha256': '1' * 64, 'native-producer-receipt': '/fixture/qualification', 'native-producer-receipt-sha256': '2' * 64} | gcc16_pair(root / 'host-gcc16')).items()}
+    native = root / 'host-gcc16'; native.mkdir()
+    for name in ('cc', 'cxx', 'cpp', 'as', 'ld'):
+        write(native / name, '#!/bin/sh\nexit 0\n', 0o755)
+    (native / 'python').symlink_to(os.path.realpath(sys.executable))
+    (native / 'sh').symlink_to(os.path.realpath(shutil.which('sh')))
+    return {key: str(value) for key, value in ({'sdk': sdk, 'os': os_source, 'ports': ports, 'compiler': compiler, 'runtime-work': work, 'gcc-archive': root / 'gcc.tar.xz', 'pkgsrc': root / 'pkgsrc', 'target': target, 'jobs': '2', 'python': sys.executable, 'sdk-source': root / 'sdk-source', 'libedit-source': root / 'libedit-source', 'native-toolset': root / 'synthetic-native-selection', 'native-toolset-sha256': '1' * 64, 'native-producer-receipt': '/fixture/qualification', 'native-producer-receipt-sha256': '2' * 64} | {'host-cc': native / 'cc', 'host-cxx': native / 'cxx'}).items()}
 
 
 class BuilderTests(TemporaryCase):
@@ -219,6 +214,32 @@ class BuilderTests(TemporaryCase):
 
     def run_builder(self, **changes):
         return B(self.options | changes).run()
+
+    def test_native_drift_before_output_keeps_contexts_untouched(self):
+        builder = B(self.options)
+        preflight = builder.preflight
+        def changed_after_plan():
+            preflight()
+            compiler = Path(self.options['host-cc'])
+            compiler.write_bytes(compiler.read_bytes() + b'changed')
+        with patch.object(builder, 'preflight', changed_after_plan), self.assertRaisesRegex(SDKError, 'native toolset inputs changed'):
+            builder.run()
+        self.assertFalse(Path(builder.paths['destination'], builder.MARKER).exists())
+        for name in ('objects', 'tools'): self.assertFalse(Path(builder.paths[name]).exists())
+
+    def test_native_drift_after_producer_quarantines_restored_context(self):
+        builder = B(self.options)
+        compiler = Path(self.options['host-cc']); original = compiler.read_bytes()
+        def drift():
+            write(Path(builder.paths['objects']) / 'partial-object', 'possible changed tool output')
+            compiler.write_bytes(original + b'changed')
+        with patch.object(builder, 'build_payload', drift), self.assertRaisesRegex(SDKError, 'native toolset inputs changed'):
+            builder.run()
+        compiler.write_bytes(original)
+        for name in ('objects', 'tools'):
+            self.assertTrue(Path(builder.paths[name], builder.QUARANTINE).is_file())
+        with self.assertRaisesRegex(SDKError, 'quarantined'):
+            B(self.options | dict(plan=True, destination=self.options['sdk'] + '/stages/retry')).run()
 
     def refusal_unchanged(self, match=None, **changes):
         before = snapshot(self.root)
@@ -237,7 +258,7 @@ class BuilderTests(TemporaryCase):
                  f'sys.path.insert(0,{str(SDK_SOURCE / "tests")!r}); '
                  'from test_builder import fixture_native_selection; '
                  'from emberbsd_sdk.sysroot_builder import SysrootBuilder; '
-                 'SysrootBuilder.select_native_toolset=fixture_native_selection; '
+                 'SysrootBuilder.load_native_toolset=fixture_native_selection; '
                  'SysrootBuilder.require_native_producer_routing=lambda self: None; '
                  'sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name="__main__")')
         return [sys.executable, '-B', '-c', setup, str(SDK_SOURCE / 'scripts/build-sysroot.py'), *args]

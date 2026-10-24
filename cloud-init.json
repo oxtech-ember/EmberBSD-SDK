@@ -46,7 +46,7 @@
           ],
           "provider": "Use the qualified SDK native GCC16 provider and record absolute paths and provenance. Ambient PATH defaults and system package installation are not approved substitutes."
         },
-        "sdk_final_host_compilers": "Require explicit SDK native GCC16 selection. The current sysroot and release builders search PATH for cc and c++; this is an enforcement gap. Repair the common selector and refusal checks before accepting builds that depend on it.",
+        "sdk_final_host_compilers": "Require the SDK NativeToolset descriptor and independently accepted producer receipt, both pinned by SHA256. Sysroot and release plans use checked native GCC16 and Python aliases. Actual builds remain blocked until OS nested native-tool routing is qualified.",
         "header_rpc_preprocessor": {
           "when": "Install OS headers before the target compiler is available.",
           "command": "The selected SDK native GCC16 preprocessor as one absolute executable path",

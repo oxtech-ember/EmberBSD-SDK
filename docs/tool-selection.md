@@ -74,7 +74,8 @@ These exceptions do not authorize a Clang-built production generator.
 selectors `--native-toolset`, `--native-toolset-sha256`,
 `--native-producer-receipt`, and `--native-producer-receipt-sha256`.
 The [NativeToolset API](native-toolset.md) verifies the accepted evidence and
-current files once for the configuration, before compiler or runtime queries.
+current files before compiler or runtime queries. The builders repeat the same
+loader before output creation, dispatch, and completion.
 No descriptor, bootstrap seed, or self-supplied receipt hash is implicit.
 
 `--host-cc`, `--host-cxx`, and `--python` remain explicit checked aliases.
@@ -84,21 +85,14 @@ marks `origin=accepted-native-toolset` and binds the descriptor hash.
 Its version metadata comes from accepted evidence, not a new `--version` run.
 The builder does not repeat compiler probes through canonical aliases.
 
-The standalone legacy selector `host_compiler` refuses a missing or relative selection.
-It also refuses a driver that resolves into `/usr/bin`, `/usr/local`,
-`/opt/homebrew`, `/opt/local`, Xcode, or Command Line Tools.
-It queries the predefined macros and refuses `__clang__` or a `__GNUC__` other than 16.
-It refuses a `--version` text that names Clang, LLVM, or Apple.
-Both drivers must report the same GCC version and machine.
-The receipt records the resolved path, hash, version text, machine, and the
-assembler and linker that each driver selects.
-Its path and query checks alone do not replace NativeToolset qualification.
-Offline release validation checks recorded native command paths and ABI flags,
-plus exact GCC family, full version, and native triplet consistency.
-Accepted version suffixes remain intact. This path does not apply the standalone
-selector's narrower version syntax. It does not consult mutable local tool
-paths or establish live qualification from a saved selection.
-`tests/test_host_compiler.py` contains the refusal regressions.
+System tool trees cannot become SDK providers through a receipt declaration.
+The common loader rejects system roots and checks contained members and pinned driver components,
+including `lto-wrapper`. Dedicated SDK directories remain permitted.
+Offline verification of new receipts checks the saved native selection, input pins,
+checked aliases, native flags, and declared-tool `PATH`. It reads no mutable local tool paths.
+It establishes consistency, not live qualification. Accepted GCC16 version suffixes remain intact.
+Historical receipts retain their original checks without gaining native qualification.
+The contracts are in `tests/test_native_toolset.py` and `tests/test_native_consumers.py`.
 
 ## Remaining enforcement gaps
 

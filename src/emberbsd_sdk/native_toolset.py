@@ -12,6 +12,7 @@ import struct
 from types import MappingProxyType
 
 from .errors import SDKError
+from . import paths
 from .inventory import sha256_file, snapshot_tree
 from .jsonio import MAX_JSON, loads_json
 from .paths import canonical_existing, inside, open_regular, verify_stable
@@ -25,7 +26,7 @@ NATIVE_CXX_PROBE = (b'#include <iostream>\n'
 NATIVE_TOOL_ROLES = ('cc', 'cxx', 'cpp', 'as', 'ld', 'ar', 'ranlib', 'nm',
                      'strip', 'make', 'cmake', 'meson', 'ninja', 'pkg-config',
                      'python', 'sh')
-_DRIVERS = ('cc1', 'cc1plus', 'collect2', 'lto1', 'as', 'ld')
+_DRIVERS = ('cc1', 'cc1plus', 'collect2', 'lto1', 'lto-wrapper', 'as', 'ld')
 _ABI_FLAGS = ('cppflags', 'cflags', 'cxxflags', 'ldflags')
 _SHA = re.compile(r'[0-9a-f]{64}\Z')
 _ROLE = re.compile(r'[a-z][a-z0-9_-]*\Z')
@@ -57,6 +58,31 @@ def _absolute(value):
     _require(os.path.isabs(value) and os.path.normpath(value) == value,
              f'path must be absolute and normalized: {value}')
     return value
+
+
+SYSTEM_PREFIXES = ('/', '/usr', '/usr/local', '/opt', '/Library', '/Applications')
+SYSTEM_TOOL_ROOTS = ('/usr/bin', '/usr/sbin', '/usr/lib', '/usr/libexec', '/usr/pkg',
+                     '/usr/local/bin', '/usr/local/sbin', '/usr/local/lib', '/usr/local/libexec',
+                     '/usr/local/Cellar', '/usr/local/Homebrew', '/usr/local/opt',
+                     '/bin', '/sbin', '/opt/homebrew', '/opt/local', '/home/linuxbrew',
+                     '/Library/Developer', '/System/Library', '/Applications/Xcode.app')
+
+
+def provider_root(root, *, live=False):
+    _absolute(root)
+    folded = root.casefold()
+    _require(folded not in {path.casefold() for path in SYSTEM_PREFIXES} and os.path.normpath(root) == root,
+            'invalid SDK provider root')
+    _require(not any(os.path.commonpath((folded, path.casefold())) == path.casefold() for path in SYSTEM_TOOL_ROOTS),
+            'system tool directories cannot be SDK compiler providers')
+    _require(not folded.startswith('/applications/xcode'), 'Xcode cannot be an SDK compiler provider')
+    if live:
+        for path in SYSTEM_PREFIXES:
+            if paths.entry(path) is not None:
+                _require(not os.path.samefile(root, path), 'system root cannot be an SDK compiler provider')
+        for path in SYSTEM_TOOL_ROOTS:
+            if paths.entry(path) is not None:
+                _require(paths.relative_inside(root, path) is None, 'system tool tree cannot be an SDK compiler provider')
 
 
 def _bytes(reference, limit=MAX_JSON):
@@ -159,7 +185,7 @@ def _command(value, executable):
     return stdout
 
 
-def _flags(value, allowed_roots):
+def _flags(value, allowed_roots=None):
     _require(isinstance(value, dict) and set(value) == set(_ABI_FLAGS),
              'expected separate native ABI flag arrays')
     result = {}
@@ -187,7 +213,7 @@ def _flags(value, allowed_roots):
                 path = _absolute(word.split('=', 1)[1])
             else:
                 _require(plain.fullmatch(word), f'unsupported native ABI flag: {word}')
-            if path is not None:
+            if path is not None and allowed_roots is not None:
                 resolved = canonical_existing(path)
                 _require(any(resolved == root or inside(resolved, root) for root in allowed_roots),
                          f'native ABI search escapes declared inputs: {path}')
@@ -222,6 +248,38 @@ class NativeToolset:
                     abi_flags={key: list(value) for key, value in self.abi_flags.items()})
 
 
+def validate_selection(value, *, required_roles):
+    """Check saved selection consistency without reading files or qualifying it."""
+    try:
+        _require(isinstance(value, dict) and set(value) ==
+                 {'format', 'version', 'api', 'descriptor_sha256', 'producer_receipt',
+                  'bundle_root', 'host', 'compiler', 'tools', 'abi_flags'}, 'invalid saved native selection')
+        _require(value['format'] == 'emberbsd-native-toolset-selection' and type(value['version']) is int and
+                 value['version'] == 1 and type(value['api']) is int and value['api'] == NATIVE_TOOLSET_API,
+                 'unsupported saved native selection')
+        _sha(value['descriptor_sha256'])
+        receipt = value['producer_receipt']
+        _require(isinstance(receipt, dict) and set(receipt) == {'path', 'sha256'}, 'invalid producer receipt reference')
+        _absolute(receipt['path']); _sha(receipt['sha256'])
+        root = _absolute(value['bundle_root']); provider_root(root)
+        host = value['host']
+        _require(isinstance(host, dict) and set(host) == {'os', 'cpu'} and
+                 host['os'] in ('Darwin', 'Linux', 'NetBSD'), 'invalid recorded native host')
+        _text(host['cpu'], 'native CPU'); _gcc(value['compiler'], host)
+        tools = value['tools']
+        _require(isinstance(tools, dict) and set(required_roles) | {'cc', 'cxx', 'cpp', 'as', 'ld'} <= set(tools),
+                 'missing recorded native roles')
+        for role, path in tools.items():
+            _require(isinstance(role, str) and _ROLE.fullmatch(role), 'invalid recorded native role')
+            _absolute(path)
+            _require(os.path.commonpath((root, path)) == root and path != root, 'recorded tool escapes native bundle')
+        # Reuse the live flag grammar. Portable verification cannot repeat
+        # filesystem containment checks against the original ABI directories.
+        _flags(value['abi_flags'])
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise SDKError('invalid saved native selection') from exc
+
+
 def load_native_toolset(path, *, descriptor_sha256, accepted_producer_receipt, required_roles):
     """Check explicit bytes and accepted producer evidence. Never run a tool.
 
@@ -246,6 +304,7 @@ def _load(path, descriptor_sha256, accepted_producer_receipt, required_roles):
     root = _absolute(descriptor['bundle_root'])
     _require(canonical_existing(root) == root and os.path.isdir(root),
              'bundle root must be a real directory with real ancestors')
+    provider_root(root, live=True)
     host = descriptor['host']
     _require(host == {'os': platform.system(), 'cpu': platform.machine()},
              'native toolset host does not match the actual OS and CPU')

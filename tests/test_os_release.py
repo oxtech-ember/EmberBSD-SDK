@@ -19,14 +19,14 @@ from test_core import TemporaryCase, header, SDK_SOURCE
 from test_builder import fixture, write, commit, snapshot, fixture_native_selection
 from libedit_fixture import installation_source
 from emberbsd_sdk import os_release as kit, jsonio
-from emberbsd_sdk.os_release_builder import OSReleaseBuilder as ProductionReleaseBuilder, validate_profile
+from emberbsd_sdk.os_release_builder import OSReleaseBuilder as ProductionReleaseBuilder, validate_profile, producer_commands
 from emberbsd_sdk.os_release_github import GitHub
 from emberbsd_sdk.errors import SDKError
 
 
 class OSReleaseBuilder(ProductionReleaseBuilder):
     """Keep original fake release dispatch tests separate from admission."""
-    select_native_toolset = fixture_native_selection
+    load_native_toolset = fixture_native_selection
 
     def require_native_producer_routing(self):
         pass
@@ -300,6 +300,46 @@ else: raise SystemExit('unexpected operation')
 
 
 class BuilderReleaseTests(TemporaryCase):
+    def test_native_schema3_identity_and_historical_schema2(self):
+        options = release_fixture(self.root, 'aarch64')
+        receipt = OSReleaseBuilder(options).run()
+        output = Path(options['destination'])
+        profile = jsonio.read_json(output / 'build-profile.json')
+        sha = receipt['sources']['os']['commit']
+        self.assertEqual(profile['schema'], 3)
+        for mutation in ('identity', 'inputs', 'pin', 'host-cc', 'host-cxx', 'python',
+                         'native-toolset', 'native-producer-receipt', 'flags', 'environment'):
+            changed = copy.deepcopy(profile)
+            signature = changed['sdk_receipt']['signature']
+            if mutation == 'identity': del signature['native_toolset']
+            elif mutation == 'inputs': del signature['native_inputs']
+            elif mutation == 'pin': signature['native_inputs']['native-toolset-sha256'] = 'f' * 64
+            elif mutation == 'flags': signature['flags'].append('HOST_CC=/usr/bin/cc')
+            elif mutation == 'environment': signature['environment']['PATH'] = '/usr/bin:/bin'
+            else: changed['sdk_receipt']['paths'][mutation] = '/different/provider'
+            with self.subTest(mutation=mutation), self.assertRaises(SDKError): validate_profile(changed, sha, 'aarch64')
+        historical = copy.deepcopy(profile)
+        historical['schema'] = historical['sdk_receipt']['version'] = 2
+        signature = historical['sdk_receipt']['signature']
+        del signature['native_toolset']; del signature['native_inputs']
+        for key in ('host-cc', 'host-cxx', 'native-toolset', 'native-producer-receipt'):
+            del historical['sdk_receipt']['paths'][key]
+        signature['host_tools'] = {name: dict(path='/usr/bin/' + name, sha256='0' * 64,
+                                             version='historical system compiler') for name in ('cc', 'c++')}
+        signature['flags'], historical['commands'] = producer_commands(
+            'aarch64', historical['sdk_receipt']['paths'], signature['host_tools'], sha,
+            historical['source_timestamp'], historical['jobs'], historical['shell'])
+        historical['sdk_receipt']['commands'] = [dict(argv=argv, status='passed', exit_status=0)
+                                                 for argv in historical['commands']]
+        with patch('emberbsd_sdk.native_toolset.canonical_existing', side_effect=AssertionError('offline filesystem read')):
+            validate_profile(profile, sha, 'aarch64')
+            validate_profile(historical, sha, 'aarch64')
+        jsonio.write_json(output / 'build-profile.json', historical, exclusive=False)
+        kit.prepare(output, self.root / 'historical-kit', 'aarch64-sysroot')
+        result = kit.verify(self.root / 'historical-kit', 'aarch64-sysroot')
+        self.assertEqual(result['build_profile']['schema'], 2)
+        self.assertNotIn('native_toolset', result['build_profile']['sdk_receipt']['signature'])
+
     def test_saved_profile_preserves_accepted_native_version_suffix(self):
         options = release_fixture(self.root, 'aarch64')
         receipt = OSReleaseBuilder(options).run()
@@ -315,7 +355,7 @@ class BuilderReleaseTests(TemporaryCase):
         old_signature['native_toolset']['compiler']['version'] = '15.2.0'
         for record in old_signature['host_tools'].values():
             record['version'] = record['gcc_version'] = '15.2.0'
-        with self.assertRaisesRegex(SDKError, 'Missing native GCC16 compiler identity'):
+        with self.assertRaisesRegex(SDKError, 'native build tools require GCC16'):
             validate_profile(previous_major, receipt['sources']['os']['commit'], 'aarch64')
         signature['host_tools']['c++']['gcc_version'] = '16.2.0'
         with self.assertRaisesRegex(SDKError, 'Mixed native compiler identity'):
@@ -364,7 +404,7 @@ class BuilderReleaseTests(TemporaryCase):
         validate_profile(p, receipt['sources']['os']['commit'], 'aarch64')
         observed = [json.loads(line) for line in (output / 'observed-argv.jsonl').read_text().splitlines()]
         self.assertEqual(observed, [a[2:] for a in p['commands']])
-        self.assertEqual(p['schema'], 2)
+        self.assertEqual(p['schema'], 3)
         self.assertEqual(p['product_version'], '2.7+fixture')
         self.assertFalse(any(a.startswith('EMBER_VERSION=') for c in p['commands'] for a in c))
         self.assertFalse(any('HAVE_GCC=' in a for c in p['commands'] for a in c))

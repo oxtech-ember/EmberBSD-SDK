@@ -94,6 +94,11 @@ The common SDK log and incomplete receipt remain on failure. `build-success`
 appears only after all producer operations and receipt checks succeed.
 A build result is not a VM, hardware or publication qualification.
 
+New release profiles and SDK release receipts use schema 3. Their portable verification binds the native selection,
+input pins, tool paths, ABI flags, and environment. It does not read the original compiler files.
+Historical schema 2 profiles retain their original command contract and acquire no native-toolset qualification.
+The kit wrapper remains version 2 for both profile schemas.
+
 ## Prepare a kit
 
 ```sh
@@ -113,7 +118,7 @@ checker independently from the build source. The checker must match its tracked
 HEAD bytes. New manifests record its commit and SHA256 separately; they never
 replace the producer's source identity. This permits a current Python checker
 to inspect a preserved historical build. The tool defaults to the recorded OS
-checkout for a schema 2 build. Historical exported trees need `--os-source`.
+checkout for a schema 2 or 3 build. Historical exported trees need `--os-source`.
 
 The amd64 kit takes sets from the actual ISO and verifies its embedded SHA512.
 It compares the boot and installed kernel bytes and checks USB gzip integrity.
@@ -174,8 +179,11 @@ needs its own accepted HTTPS frontend; a DNS alias alone is insufficient.
 Existing schema 1 amd64 and `emberbsd.aarch64.sysroot.v1` manifests remain
 verifiable without rewriting their receipts. Their bootstrap GCC12 provenance
 stays explicit. It is not evidence for today's common GCC16 build profile.
-New builds use schema 2 receipts with the common SDK source/compiler/runtime
-identity and executed commands. Existing immutable tags must not be repurposed.
+Historical schema 2 receipts retain their source, compiler, runtime and command
+checks. They do not establish native toolset qualification. New plans use
+schema 3 and bind the accepted native selection. Actual builds remain blocked
+until nested producer routing is qualified. Existing immutable tags must not
+be repurposed.
 
 Run `python3 -B -m unittest discover -s tests -p 'test_*.py'`.
 The release tests exercise archive composition, qualification binding, actual

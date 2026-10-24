@@ -211,6 +211,44 @@ while not Path({str(child)!r}).is_file(): time.sleep(.01)
                 self.assertIs(error.__cause__, original)
                 self.assertEqual(group.poll.call_count, 2)
 
+    def test_stop_failure_retries_only_pending_leader_and_preserves_error(self):
+        log = self.root / 'pending-leader.log'
+        original = ProcessOwnershipError(1234567, 'original ownership reason', log=str(log))
+        group = Mock(pid=original.sid, options={})
+        group.poll.side_effect = [0, None, None, -signal.SIGTERM]
+        group.alive.return_value = False
+        group.stop.side_effect = original
+        with patch.object(process, 'OwnedProcessGroup', return_value=group), \
+                patch.object(process.time, 'sleep'):
+            with self.assertRaises(ProcessOwnershipError) as raised:
+                process.run_logged(['fixture'], log)
+        error = raised.exception
+        self.assertEqual((error.sid, error.reason, error.log), (original.sid, original.reason, original.log))
+        self.assertIs(error.__cause__, original)
+        self.assertEqual(group.poll.call_count, 4)
+        group.stop.assert_called_once_with()
+        group._signal.assert_not_called()
+
+    def test_stop_failure_pending_leader_cleanup_stops_at_deadline(self):
+        log = self.root / 'pending-deadline.log'
+        original = ProcessOwnershipError(1234567, 'original ownership reason', log=str(log))
+        group = Mock(pid=original.sid, options={})
+        group.poll.side_effect = [0, None, None, None]
+        group.alive.return_value = False
+        group.stop.side_effect = original
+        with patch.object(process, 'OwnedProcessGroup', return_value=group), \
+                patch.object(process.time, 'monotonic', side_effect=[10.0, 10.0, 10.5, 11.0]), \
+                patch.object(process.time, 'sleep') as sleep:
+            with self.assertRaises(ProcessOwnershipError) as raised:
+                process.run_logged(['fixture'], log)
+        error = raised.exception
+        self.assertEqual((error.sid, error.reason, error.log), (original.sid, original.reason, original.log))
+        self.assertIs(error.__cause__, original)
+        self.assertEqual(group.poll.call_count, 4)
+        self.assertEqual(sleep.call_count, 2)
+        group.stop.assert_called_once_with()
+        group._signal.assert_not_called()
+
 
 class ProducerStatusTests(TemporaryCase):
     def test_capture_and_logged_preserve_status_97(self):
