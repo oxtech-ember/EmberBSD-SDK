@@ -167,6 +167,9 @@ def _export_proof(data, descriptor, inventory):
 
 
 def validate_producer_plan(plan, descriptor, commands, flags):
+    if plan.get('stage') == 'utility-relocation':
+        from .bootstrap_relocation import validate_relocation_plan
+        return validate_relocation_plan(plan, descriptor, commands, flags)
     if plan.get('stage') == 'grep-bootstrap':
         from .bootstrap_program import validate_program_plan
         return validate_program_plan(plan, descriptor, commands, flags)

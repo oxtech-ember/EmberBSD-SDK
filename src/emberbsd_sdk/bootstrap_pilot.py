@@ -157,6 +157,10 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     make_probe = profile == 'make'
     metadata = profile == 'producer' and plan.get('stage') == 'metadata'
     program = profile == 'producer' and plan.get('stage') == 'grep-bootstrap'
+    relocation = profile == 'producer' and plan.get('stage') == 'utility-relocation'
+    if relocation:
+        from .bootstrap_relocation import (prepare_relocation_work, relocation_read_roots,
+            relocation_work_outputs, verify_relocation_outputs, verify_relocation_step)
     _require(plan.get('format') == {'make': MAKE_PROBE_FORMAT, 'native': PILOT_FORMAT,
                                     'producer': PRODUCER_FORMAT}[profile],
              'the runner requires its exact finite plan format')
@@ -170,6 +174,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         roots += [plan['metadata']['export']['root'], plan['metadata']['utility_bin']]
     if program:
         roots += [plan['program']['source']['root']]
+    if relocation:
+        roots += list(relocation_read_roots(plan))
     sdk_root = str(Path(__file__).resolve().parents[2])
     _require(work != root and not inside(root, work), 'pilot work contains its lock root')
     for path in [*roots, sdk_root, resources['heavy_link_context']]:
@@ -183,6 +189,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         shared.update(_references(_json(plan['metadata']['export']['source_proof'])))
     if program:
         shared.update(_references(_json(plan['program']['source']['source_proof'])))
+    if relocation:
+        shared.update(_references(_json(plan['relocation']['originals'])))
     # Re-read all acceptance and plan bytes under their shared fences.
     with ContextLocks(sorted(shared), root, shared=True), ContextLocks([work], root):
         selected = load_bootstrap_seed(descriptor_path, **options)
@@ -192,6 +200,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         os.mkdir(work)
         if metadata:
             sources, outputs = {}, ()
+        elif relocation:
+            sources, outputs = {}, relocation_work_outputs(plan)
         elif program:
             sources, outputs = program_sources(plan), program_outputs(plan)
         elif make_probe:
@@ -203,7 +213,9 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         if metadata:
             for path in metadata_paths(work).values():
                 os.mkdir(path)
-        result = dict(format=('emberbsd-native-gcc16-producer-result' if metadata or program else
+        if relocation:
+            prepare_relocation_work(plan)
+        result = dict(format=('emberbsd-native-gcc16-producer-result' if metadata or program or relocation else
                               'emberbsd-bootstrap-make-probe-result' if make_probe else
                               'emberbsd-native-gcc16-pilot-result'), version=1,
                       scope=_SCOPE, api=BOOTSTRAP_PILOT_API, status='RUNNING',
@@ -211,6 +223,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                       bootstrap_plan=bootstrap_plan, commands=[], all_commands_drained=False,
                       evidence_level='command-reported-routes-and-actual-exits',
                       ordinary_provider_qualified=False)
+        if relocation:
+            result['stage'] = 'utility-relocation'
         result_path = os.path.join(work, 'result.json')
         write_json(result_path, result)
         for name, source in sources.items():
@@ -257,6 +271,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                             actual['output'] = dict(path=artifact, sha256=sha256_file(artifact))
                         if program:
                             actual.update(verify_program_step(step, work, plan))
+                        if relocation:
+                            actual['output'] = verify_relocation_step(plan, descriptor, selected.commands, step)
                 except BaseException as exc:
                     if isinstance(exc, CommandError):
                         actual['actual_exit'] = exc.returncode
@@ -272,6 +288,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                         write_json(result_path, result, exclusive=False)
             for name, source in sources.items():
                 _require(Path(work, name).read_bytes() == source, 'pilot source changed during execution')
+            if relocation:
+                result['relocation'] = verify_relocation_outputs(plan, descriptor, selected.commands)
             result['status'] = 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW'
         except BaseException as exc:
             result.update(status='FAILED', error=str(exc))
