@@ -263,6 +263,29 @@ class BootstrapSeedTests(unittest.TestCase):
         self.seed.seal()
         self.refuse('incomplete GCC driver closure')
 
+    def test_prefix_driver_can_link_to_another_in_bundle_directory(self):
+        selected = Path(self.seed.descriptor['tools']['cc1']['path'])
+        actual = self.seed.native.bundle / 'actual-drivers' / 'cc1'
+        actual.parent.mkdir()
+        selected.rename(actual)
+        selected.symlink_to(os.path.relpath(actual, selected.parent))
+        self.assertNotEqual(selected.parent, actual.parent)
+        self.assertEqual(selected.resolve(), actual)
+        self.seed.descriptor['dynamic_dependencies'] = self.seed.dynamic(self.seed.descriptor)
+        self.seed.seal()
+        with patch('subprocess.Popen', side_effect=AssertionError('no compiler process')):
+            selected_seed = self.seed.load()
+        self.assertEqual(selected_seed.command('cc'), self.seed.commands['cc'])
+
+    def test_outside_prefix_spelling_cannot_alias_a_prefix_driver(self):
+        selected = Path(self.seed.descriptor['tools']['cc1']['path'])
+        alias = self.seed.native.bundle / 'outside-prefix-cc1'
+        alias.symlink_to(os.path.relpath(selected, alias.parent))
+        self.seed.descriptor['tools']['cc1']['path'] = str(alias)
+        self.seed.descriptor['dynamic_dependencies'] = self.seed.dynamic(self.seed.descriptor)
+        self.seed.seal()
+        self.refuse('driver components must use the explicit prefix')
+
     def test_dynamic_closure_cannot_omit_or_change_members(self):
         graph = self.seed.descriptor['dynamic_dependencies']
         graph.pop(self.seed.descriptor['tools']['cc']['path'])

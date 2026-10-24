@@ -394,7 +394,10 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
     prefix = _absolute(descriptor['driver_prefix'])
     _require(inside(prefix, root) and canonical_existing(prefix) == prefix and os.path.isdir(prefix),
              'GCC driver prefix must be a real in-bundle directory')
-    _require(all(inside(tools[role], prefix) for role in descriptor['driver_components'].values()),
+    # The selected spelling must use -B. Its symlink target may be elsewhere in
+    # the bundle. _payload already checks both spellings against that bundle.
+    _require(all(tools[role] != prefix and os.path.commonpath((tools[role], prefix)) == prefix
+                 for role in descriptor['driver_components'].values()),
              'GCC driver components must use the explicit prefix')
     commands = _seed_commands(descriptor)
     plan = _plan(plan_ref, descriptor, commands, flags)
