@@ -34,15 +34,22 @@ The source owner retains the canonical exporter and all recipes in Ports.
 | `utility_bin` | Real in-bundle directory with only accepted utility invocations |
 | `native_tools` | Sorted, distinct native utility role names |
 | `source_tools` | Sorted, distinct stock Ports source-provider tool names |
-| `recipes` | One through 16 distinct `category/package` names, including `lang/gcc16` |
+| `recipes` | One through 256 distinct, case-preserved `category/package` names, including `lang/gcc16` |
 
 The complete prepared export inventory must match current bytes.
-It must contain each requested recipe Makefile.
+It must contain each requested recipe Makefile with the exact same case.
+Traversal components, duplicate names and names that differ only by case are refused.
 The recognized profile source is
 `profiles/development-toolchain/darwin-bootstrap.mk.conf`.
-Its SHA256 is
-`3b663ca1e6183f500dcc143c160d916da6088541f8a01b7376983b090d7c8298`.
-The exported profile and the accepted Ports source manifest must have those bytes.
+The recognized SHA256 values are:
+
+- Original serial configuration: `3b663ca1e6183f500dcc143c160d916da6088541f8a01b7376983b090d7c8298`.
+- Parallel link route: `6adbb69112056a867b463fd825a0842294b1eb7e67331433184c1f31d5de518a`.
+- Parallel link route with selected-shell builtins: `73209380dcfeeb36abe13f0637a87bc1fd441817c98458ffb92751605c7b543b`.
+
+The exported profile and accepted Ports source manifest must match the same revision.
+Both parallel revisions receive the CPU budget and launcher assignments.
+The original serial revision keeps its configuration bytes.
 All declared sources repeat the seed's exact source pins.
 
 `source_proof` references a data-only JSON object with exactly `format`, `version`,
@@ -102,7 +109,8 @@ adds recipe execution and its shared heavy-link agreement.
 ## Execution and evidence
 
 `producer_steps` constructs six fixed queries for each explicit recipe:
-`show-vars`, `show-tools`, then `show-depends` for each of `TOOL_DEPENDS`,
+repeated `-V NAME=${NAME}` expressions for the fixed variable roster,
+`show-tools`, then `show-depends` for each of `TOOL_DEPENDS`,
 `BUILD_DEPENDS`, `DEPENDS`, and `TEST_DEPENDS`.
 `VARIABLES` is the fixed variable roster for host, compiler/wrapper/configure
 routes, dependency inputs, tools, and consumed makefiles. It also includes
@@ -110,8 +118,17 @@ routes, dependency inputs, tools, and consumed makefiles. It also includes
 `DISTFILES`, `EXTRACT_ONLY`, `MASTER_SITES`, `DIST_SUBDIR`, `PATCHFILES`, and `PATCH_SITES`.
 `MACHINE_GNU_PLATFORM` and `GCC_TARGET_MACHINE` pin the output compiler triplet.
 These exact fields support the later object-directory and distfile plan.
-The caller cannot add an arbitrary `VARNAME` query.
-The recognized parallel Ports profile also needs `EMBERBSD_DARWIN_CPU_BUDGET`.
+The caller cannot add an arbitrary variable query.
+The variables command has no target. bmake expands each expression directly.
+It does not use recipe echo commands or job-output blank-line filtering.
+Use `metadata_values(log_reference)` to read a pinned variables log.
+The helper requires all fixed names once, in their declared order.
+It partitions each line at the first `=` and preserves the remaining value.
+It does not execute shell code or remove quoting and backslashes.
+Diagnostics, missing fields, extra lines, embedded newlines, CR and NUL are refused.
+An empty value does not distinguish an undefined make variable from a defined empty variable.
+The helper reads observations. It does not issue qualification or accept a dependency graph.
+Each recognized parallel Ports profile also needs `EMBERBSD_DARWIN_CPU_BUDGET`.
 SDK sets it to the accepted job count. Metadata with that profile uses one job
 and an empty linker prefix. A parallel recipe build needs the separate full-plan
 `link_control` service. The original profile's MAKECONF bytes stay unchanged.

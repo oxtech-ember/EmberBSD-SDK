@@ -11,6 +11,7 @@ import shlex
 import stat
 
 from .bootstrap_make import _safe_path
+from .errors import SDKError
 from .inventory import snapshot_tree
 from .jsonio import loads_json
 from .native_toolset import _absolute, _bytes, _envelope, _json, _require, _source
@@ -18,11 +19,13 @@ from .paths import canonical_existing
 from .ports_plan import PORTS_JSON_LIMIT
 
 BOOTSTRAP_PRODUCER_API = 1
+RECIPE_LIMIT = 256
 PRODUCER_FORMAT = 'emberbsd-native-gcc16-producer-plan'
 PROFILE_RELATIVE = 'profiles/development-toolchain/darwin-bootstrap.mk.conf'
 PROFILE_EXPORT = 'EMBERBSD-DARWIN-BOOTSTRAP-MK.CONF'
 PROFILE_SHA256 = '3b663ca1e6183f500dcc143c160d916da6088541f8a01b7376983b090d7c8298'
 PARALLEL_PROFILE_SHA256 = '6adbb69112056a867b463fd825a0842294b1eb7e67331433184c1f31d5de518a'
+BUILTIN_PROFILE_SHA256 = '73209380dcfeeb36abe13f0637a87bc1fd441817c98458ffb92751605c7b543b'
 EARLY_TOOLS = tuple('awk basename cat cut date dirname env expr grep head id pwd sed sort tail tr uname uniq wc'.split())
 VARIABLES = tuple('PKGNAME PKGPATH PKGVERSION PKGREVISION OPSYS MACHINE_ARCH NATIVE_OPSYS NATIVE_OS_VERSION '
                   'NATIVE_OPSYS_VERSION PKGSRC_COMPILER GCC_REQD _GCC_VERSION CC CXX CPP PKG_CC PKG_CXX '
@@ -32,6 +35,35 @@ VARIABLES = tuple('PKGNAME PKGPATH PKGVERSION PKGREVISION OPSYS MACHINE_ARCH NAT
                   'WRKDIR WRKSRC OBJDIR CONFIGURE_DIRS BUILD_DIRS MAKE_DIRS DISTFILES EXTRACT_ONLY '
                   'MASTER_SITES DIST_SUBDIR PATCHFILES PATCH_SITES MACHINE_GNU_PLATFORM GCC_TARGET_MACHINE '
                   'MAKE SHELL MAKECONF NATIVE_PKG_INFO_CMD NATIVE_PKG_ADMIN_CMD .MAKE.MAKEFILES'.split())
+
+
+def _parallel_profile(digest):
+    return digest in (PARALLEL_PROFILE_SHA256, BUILTIN_PROFILE_SHA256)
+
+
+def _recipe_name(value):
+    return (isinstance(value, str) and
+            re.fullmatch(r'[A-Za-z0-9_+-]+/[A-Za-z0-9_+.-]+', value) is not None and
+            value.split('/')[1] not in ('.', '..'))
+
+
+def metadata_values(reference):
+    """Read fixed named observations as data. Never execute shell expressions."""
+    try:
+        text = _bytes(reference).decode('utf-8')
+    except UnicodeDecodeError as exc:
+        raise SDKError('metadata observations must be UTF-8') from exc
+    _require(text.endswith('\n') and '\r' not in text and '\x00' not in text,
+             'unsupported metadata observation framing')
+    lines = text.split('\n')[:-1]
+    _require(len(lines) == len(VARIABLES), 'metadata observations must contain the complete fixed roster')
+    result = {}
+    for expected, line in zip(VARIABLES, lines):
+        name, separator, value = line.partition('=')
+        _require(separator and name == expected,
+                 'metadata observation names or order differ from the fixed roster')
+        result[name] = value
+    return result
 
 
 def _inventory(reference):
@@ -95,7 +127,7 @@ def metadata_assignments(plan, descriptor, commands, flags):
     for role in data['native_tools']:
         _require(len(commands[role]) == 1, 'raw metadata tools cannot omit a selected command tail')
         variables['EMBERBSD_DARWIN_TOOL.' + role] = _safe_path(commands[role][0])
-    if data['profile']['sha256'] == PARALLEL_PROFILE_SHA256:
+    if _parallel_profile(data['profile']['sha256']):
         variables['EMBERBSD_DARWIN_CPU_BUDGET'] = str(plan['resources']['cpu_jobs'])
         variables['EMBERBSD_GCC16_LINKER_LAUNCHER'] = ''
         if 'link_control' in plan:
@@ -130,7 +162,8 @@ def producer_steps(plan, descriptor, commands, flags):
     """Construct only fixed read-only queries. Never accept an argv extension."""
     data, work = plan['metadata'], _safe_path(plan['work_root'])
     env = metadata_environment(plan, commands)
-    queries = [('vars', ['show-vars', 'VARNAMES=' + ' '.join(VARIABLES)]), ('tools', ['show-tools'])]
+    queries = [('vars', [word for name in VARIABLES for word in ('-V', name + '=${' + name + '}')]),
+               ('tools', ['show-tools'])]
     queries += [('depends-' + name.lower(), ['show-depends', 'VARNAME=' + name])
                 for name in ('TOOL_DEPENDS', 'BUILD_DEPENDS', 'DEPENDS', 'TEST_DEPENDS')]
     result = []
@@ -184,22 +217,22 @@ def _export_proof(data, descriptor, inventory, *, inspect_inputs=True):
         if inspect_inputs:
             _bytes(row['file'])
     profile_sha = data['profile']['sha256']
-    _require(profile_sha in (PROFILE_SHA256, PARALLEL_PROFILE_SHA256) and
+    _require(profile_sha in (PROFILE_SHA256, PARALLEL_PROFILE_SHA256, BUILTIN_PROFILE_SHA256) and
              manifest.get(PROFILE_RELATIVE, {}).get('sha256') == profile_sha and
              inventory.get(PROFILE_EXPORT, {}).get('sha256') == profile_sha,
              'prepared export profile differs from its source-owner bytes')
 
 
-def validate_metadata_inputs(plan, descriptor, commands, flags, *, inspect_inputs=True, recipe_limit=16):
+def validate_metadata_inputs(plan, descriptor, commands, flags, *, inspect_inputs=True, recipe_limit=RECIPE_LIMIT):
     """Validate shared source-owner inputs. Offline graduation retains their pins."""
     data = plan['metadata']
     _require(set(data) == {'export', 'profile', 'makeconf', 'host_facts', 'utility_bin',
                           'native_tools', 'source_tools', 'recipes'}, 'unsupported metadata input fields')
     parallel = 'link_control' in plan
     _require(not parallel or plan.get('format') == 'emberbsd-native-gcc16-bootstrap-plan' and
-             data['profile']['sha256'] == PARALLEL_PROFILE_SHA256,
+             _parallel_profile(data['profile']['sha256']),
              'link control needs the recognized parallel full-plan profile')
-    _require(data['profile']['sha256'] != PARALLEL_PROFILE_SHA256 or parallel or
+    _require(not _parallel_profile(data['profile']['sha256']) or parallel or
              plan['resources']['cpu_jobs'] == 1,
              'parallel profile jobs require the full-plan link control service')
     _require((not inspect_inputs or data['host_facts'] == _current_host_facts()) and
@@ -220,9 +253,9 @@ def validate_metadata_inputs(plan, descriptor, commands, flags, *, inspect_input
     _require(not set(data['native_tools']) & {'cc', 'cxx', 'cpp', 'as', 'ld', 'make', 'gmake', 'sh'},
              'metadata raw utility PATH cannot bypass compiler or make bindings')
     _require(isinstance(data['recipes'], list) and 1 <= len(data['recipes']) <= recipe_limit and
-             len(data['recipes']) == len(set(data['recipes'])) and 'lang/gcc16' in data['recipes'] and
-             all(isinstance(name, str) and re.fullmatch('[a-z0-9_+-]+/[a-z0-9_+.-]+', name)
-                 for name in data['recipes']), 'metadata needs a finite explicit recipe list')
+             all(_recipe_name(name) for name in data['recipes']) and
+             len(data['recipes']) == len({name.casefold() for name in data['recipes']}) and
+             'lang/gcc16' in data['recipes'], 'metadata needs a finite explicit recipe list')
     export = data['export']
     _require(set(export) == {'root', 'inventory', 'source_proof'}, 'unsupported prepared export fields')
     root = _safe_path(export['root'])
@@ -231,7 +264,7 @@ def validate_metadata_inputs(plan, descriptor, commands, flags, *, inspect_input
         _require(canonical_existing(root) == root and snapshot_tree(root) == inventory,
                  'prepared canonical export changed')
     _export_proof(data, descriptor, inventory, inspect_inputs=inspect_inputs)
-    _require(data['profile']['sha256'] in (PROFILE_SHA256, PARALLEL_PROFILE_SHA256) and
+    _require(data['profile']['sha256'] in (PROFILE_SHA256, PARALLEL_PROFILE_SHA256, BUILTIN_PROFILE_SHA256) and
              data['profile'] == dict(path=os.path.join(root, PROFILE_EXPORT), sha256=data['profile']['sha256']),
              'metadata needs the recognized source-owner profile')
     if inspect_inputs:

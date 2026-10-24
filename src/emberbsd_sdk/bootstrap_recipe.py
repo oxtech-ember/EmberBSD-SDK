@@ -12,7 +12,7 @@ import sys
 
 from .bootstrap_binding import DARWIN_LLVM_MC_LLD_SEED
 from .bootstrap_make import _safe_path
-from .bootstrap_producer import (metadata_environment, metadata_paths,
+from .bootstrap_producer import (RECIPE_LIMIT, _recipe_name, metadata_environment, metadata_paths,
                                  validate_metadata_inputs)
 from .inventory import sha256_file
 from .native_toolset import _file, _require, _sha
@@ -59,13 +59,14 @@ def validate_link_control(value, *, inspect_inputs):
 def recipe_order(plan):
     """Return a deterministic dependency-first order. Do not resolve recipes."""
     recipes = plan['recipes']
-    _require(isinstance(recipes, dict) and 1 <= len(recipes) <= 256 and
+    _require(isinstance(recipes, dict) and 1 <= len(recipes) <= RECIPE_LIMIT and
+             all(_recipe_name(name) for name in recipes) and
+             len(recipes) == len({name.casefold() for name in recipes}) and
              'lang/gcc16' in recipes, 'full bootstrap needs a finite GCC16 closure')
     result, visited = [], set()
 
     def visit(name, active):
-        _require(name in recipes and name not in active and
-                 isinstance(name, str) and re.fullmatch('[a-z0-9_+-]+/[a-z0-9_+.-]+', name),
+        _require(name in recipes and name not in active and _recipe_name(name),
                  'invalid bound recipe dependency graph')
         if name in visited:
             return
@@ -142,7 +143,7 @@ def validate_bound_recipe_plan(plan, descriptor, commands, flags, *, inspect_inp
         validate_link_control(plan['link_control'], inspect_inputs=inspect_inputs)
     _validate_resources(plan['resources'], recipe=True, parallel=parallel, inspect_inputs=inspect_inputs)
     validate_metadata_inputs(plan, descriptor, commands, flags,
-                             inspect_inputs=inspect_inputs, recipe_limit=256)
+                             inspect_inputs=inspect_inputs, recipe_limit=RECIPE_LIMIT)
     _require(plan['metadata']['recipes'] == sorted(plan['recipes']) and
              plan['ports_export'] == dict(source=descriptor['sources']['ports'], **plan['metadata']['export']),
              'bound recipe metadata and export must describe the complete same closure')

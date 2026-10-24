@@ -128,8 +128,52 @@ class MetadataTests(unittest.TestCase):
         self.assertTrue(set('WRKDIR WRKSRC OBJDIR CONFIGURE_DIRS BUILD_DIRS MAKE_DIRS DISTFILES '
                             'EXTRACT_ONLY MASTER_SITES DIST_SUBDIR PATCHFILES PATCH_SITES '
                             'MACHINE_GNU_PLATFORM GCC_TARGET_MACHINE'.split()) <= variables)
-        query = self.plan['commands'][0]['argv'][-1]
-        self.assertEqual(query, 'VARNAMES=' + ' '.join(producer.VARIABLES))
+        argv = self.plan['commands'][0]['argv']
+        self.assertEqual(argv[argv.index('-C') + 2:],
+                         [word for name in producer.VARIABLES for word in ('-V', name + '=${' + name + '}')])
+        self.assertNotIn('show-vars', argv)
+        self.assertNotIn('show-vars-eval', argv)
+
+    def test_both_parallel_profile_histories_emit_the_same_budget_and_launcher(self):
+        original = copy.deepcopy(self.plan)
+        outputs = []
+        for digest in (producer.PARALLEL_PROFILE_SHA256, producer.BUILTIN_PROFILE_SHA256):
+            self.plan['metadata']['profile']['sha256'] = digest
+            self.plan['resources']['cpu_jobs'] = 18
+            self.plan['link_control'] = dict(
+                python=dict(path='/explicit/control-python', sha256='1' * 64),
+                launcher=dict(path='/explicit/sdk/scripts/link-launcher.py', sha256='2' * 64))
+            values = producer.metadata_assignments(self.plan, self.descriptor, self.commands,
+                                                  self.descriptor['abi_flags'])
+            self.assertEqual(values['EMBERBSD_DARWIN_CPU_BUDGET'], '18')
+            self.assertIn('/explicit/control-python', values['EMBERBSD_GCC16_LINKER_LAUNCHER'])
+            outputs.append(producer.metadata_makeconf(self.plan, self.descriptor, self.commands,
+                                                     self.descriptor['abi_flags']))
+        self.assertEqual(*outputs)
+        self.plan = original
+        values = producer.metadata_assignments(self.plan, self.descriptor, self.commands,
+                                              self.descriptor['abi_flags'])
+        self.assertNotIn('EMBERBSD_DARWIN_CPU_BUDGET', values)
+        self.assertNotIn('EMBERBSD_GCC16_LINKER_LAUNCHER', values)
+
+    def test_builtin_profile_retains_full_source_checks_and_metadata_job_gate(self):
+        with patch.object(producer, 'PROFILE_SHA256', 'f' * 64), \
+             patch.object(producer, 'BUILTIN_PROFILE_SHA256', self.profile_sha):
+            with self.assertRaisesRegex(SDKError, 'full-plan link control'):
+                self.validate()
+            self.plan['resources']['cpu_jobs'] = 1
+            conf = self.plan['metadata']['makeconf']
+            raw = producer.metadata_makeconf(self.plan, self.descriptor, self.commands,
+                                             self.descriptor['abi_flags'])
+            Path(conf['path']).write_bytes(raw)
+            conf['sha256'] = hashlib.sha256(raw).hexdigest()
+            self.plan['commands'] = producer.producer_steps(self.plan, self.descriptor, self.commands,
+                                                           self.descriptor['abi_flags'])
+            self.assertIs(self.validate(), self.plan)
+            self.proof['ports_manifest'] = self.f.document({})
+            self.plan['metadata']['export']['source_proof'] = self.f.document(self.proof)
+            with self.assertRaises(SDKError):
+                self.validate()
 
     def test_host_facts_recipe_and_resource_changes_are_refused(self):
         for kind in ('host', 'stage', 'recipe', 'jobs', 'timeout'):
