@@ -118,6 +118,37 @@ class InstalledHistoryTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'cannot provide these bootstrap roles'):
             self.seed.seal()
 
+    def test_source_owned_utility_packages_only_provide_their_named_roles(self):
+        for package, path, roles in (
+                ('nawk', 'lang/nawk', ['awk']), ('grep', 'textproc/grep', ['grep']),
+                ('gsed', 'textproc/gsed', ['sed']), ('coreutils', 'sysutils/coreutils',
+                    ['basename', 'cat', 'cut', 'date', 'dirname', 'env', 'expr', 'head', 'id',
+                     'pwd', 'sort', 'tail', 'tr', 'uname', 'uniq', 'wc']),
+                ('pkg_install', 'pkgtools/pkg_install', ['pkg_info', 'pkg_admin'])):
+            with self.subTest(package=package):
+                descriptor = copy.deepcopy(self.seed.descriptor)
+                history = descriptor['history'][self.name]
+                descriptor['tools']['make']['provider'] = 'ports'
+                for role in roles:
+                    descriptor['tools'][role] = copy.deepcopy(self.member)
+                history.update(package_name=package + '-fixture1', package_path=path,
+                    package_metadata=dict(build_info=self.seed.native.raw(
+                        ('PKGPATH=' + path + '\nCC_VERSION=clang-21.0.0\n').encode()),
+                        contents=self.seed.native.raw(('@name ' + package + '-fixture1\n').encode())))
+                unknowns = _history(descriptor['history'], descriptor['providers'], descriptor=descriptor)
+                self.assertEqual(unknowns[self.name], self.history['unknowns'])
+                # These providers cannot turn their bytes into a compiler or another utility.
+                for forbidden in ('cc', 'cpp', 'cxx', 'as', 'ld', 'python', 'make'):
+                    descriptor['tools'][forbidden] = copy.deepcopy(self.member)
+                    with self.assertRaisesRegex(SDKError, 'cannot provide these bootstrap roles'):
+                        _history(descriptor['history'], descriptor['providers'], descriptor=descriptor)
+                    descriptor['tools'].pop(forbidden)
+
+    def test_unmapped_installed_utility_package_is_refused(self):
+        self.history['package_path'] = 'lang/gawk'
+        with self.assertRaisesRegex(SDKError, 'named bootstrap input packages'):
+            self.seed.seal()
+
     def test_changed_provisioned_bytes_refuse_and_retired_bytes_are_not_required_for_history(self):
         path = Path(self.member['path'])
         path.write_bytes(b'changed provisioned bytes')

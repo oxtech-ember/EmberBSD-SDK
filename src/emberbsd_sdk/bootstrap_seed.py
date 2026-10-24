@@ -38,7 +38,7 @@ def _relative(value):
 
 
 def _installed_history(value, name, descriptor, file, *, inspect_inputs):
-    """Pin an installed make/shell input without inventing its build history."""
+    """Pin a finite installed bootstrap input without inventing its history."""
     _require(isinstance(descriptor, dict), 'installed history needs its seed descriptor')
     _require(set(value) == {'kind', 'package_name', 'package_path', 'installation_prefix',
                            'package_metadata', 'installed_member_inventory', 'provisioned_members',
@@ -49,9 +49,15 @@ def _installed_history(value, name, descriptor, file, *, inspect_inputs):
     packages = {'devel/bmake': ('bmake', {'make'}),
                 'devel/gmake': ('gmake', {'gmake'}),
                 'shells/mksh': ('mksh', {'sh'}),
-                'pkgtools/bootstrap-mk-files': ('bootstrap-mk-files', set())}
+                'pkgtools/bootstrap-mk-files': ('bootstrap-mk-files', set()),
+                'lang/nawk': ('nawk', {'awk'}),
+                'textproc/grep': ('grep', {'grep'}),
+                'textproc/gsed': ('gsed', {'sed'}),
+                'sysutils/coreutils': ('coreutils', {'basename', 'cat', 'cut', 'date', 'dirname',
+                    'env', 'expr', 'head', 'id', 'pwd', 'sort', 'tail', 'tr', 'uname', 'uniq', 'wc'}),
+                'pkgtools/pkg_install': ('pkg_install', {'pkg_info', 'pkg_admin'})}
     path = value['package_path']
-    _require(path in packages, 'installed history is limited to bootstrap make and shell inputs')
+    _require(path in packages, 'installed history is limited to named bootstrap input packages')
     package, roles = packages[path]
     package_name = _text(value['package_name'], 'installed package name')
     _require(package_name.startswith(package + '-') and len(package_name) > len(package) + 1,
@@ -272,6 +278,11 @@ def _plan(reference, descriptor, commands=None, flags=None, *, inspect_inputs=Tr
         commands = _seed_commands(descriptor, inspect_inputs=inspect_inputs) if commands is None else commands
         return validate_make_probe_plan(plan, descriptor, commands,
                                         descriptor['abi_flags'] if flags is None else flags)
+    if plan.get('format') == 'emberbsd-native-gcc16-producer-plan':
+        from .bootstrap_producer import validate_producer_plan
+        commands = _seed_commands(descriptor, inspect_inputs=inspect_inputs) if commands is None else commands
+        return validate_producer_plan(plan, descriptor, commands,
+                                      descriptor['abi_flags'] if flags is None else flags)
     _envelope(plan, 'emberbsd-native-gcc16-bootstrap-plan', scope=_SCOPE)
     _require(descriptor.get('make_binding') is None,
              'full recipe admission for the fixed make binding is not implemented')
@@ -487,7 +498,8 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
     _require(isinstance(required_roles, (tuple, list, set, frozenset)) and required_roles,
              'explicit required bootstrap roles are required')
     is_pilot = plan_header.get('format') in ('emberbsd-native-gcc16-pilot-plan',
-                                            'emberbsd-bootstrap-make-probe-plan')
+                                            'emberbsd-bootstrap-make-probe-plan',
+                                            'emberbsd-native-gcc16-producer-plan')
     roles = set(required_roles) | set(plan_header['required_roles']) | (set() if is_pilot else {'sh'})
     root, inventory, tools, records, abi_inventories, flags = _payload(descriptor, roles)
     prefix = _absolute(descriptor['driver_prefix'])

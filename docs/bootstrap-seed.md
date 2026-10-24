@@ -7,6 +7,8 @@ The [finite first C/C++ pilot](bootstrap-pilot.md) can run before the full
 recipe closure is available. It needs independent input and route acceptance.
 The separate [finite make and shell probe](bootstrap-make.md) checks the accepted
 make binding before package metadata or recipe execution.
+The [stage-aware metadata producer](bootstrap-producer.md) can then query a
+prepared canonical export. It needs no future build output or accepted DAG.
 Use common `lang/gcc16` and its named dependencies in a pinned prepared Ports export.
 Keep recipes and patches in Ports. SDK owns orchestration and evidence checks.
 

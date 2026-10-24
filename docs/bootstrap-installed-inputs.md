@@ -49,9 +49,20 @@ This finite variant supports only these package paths and tool roles:
 | `devel/gmake` | `gmake` |
 | `shells/mksh` | `sh` |
 | `pkgtools/bootstrap-mk-files` | Data members only |
+| `lang/nawk` | `awk` |
+| `textproc/grep` | `grep` |
+| `textproc/gsed` | `sed` |
+| `sysutils/coreutils` | `basename`, `cat`, `cut`, `date`, `dirname`, `env`, `expr`, `head`, `id`, `pwd`, `sort`, `tail`, `tr`, `uname`, `uniq`, `wc` |
+| `pkgtools/pkg_install` | `pkg_info`, `pkg_admin` |
 
 The package name starts with the corresponding package name and a version.
-Installed make and shell packages cannot provide compiler or other tool roles.
+Each package can provide only its mapped roles. No installed input can provide
+compiler, assembler, linker, or interpreter roles through this extension.
+An original regular member can supply a selected copy. Preserve original GNU
+invocation symlinks in the roster. Do not present symlink text as file bytes.
+The [metadata adapter](bootstrap-producer.md) binds accepted invocation aliases separately.
+Runtime DSO closure still requires its actual pinned bytes and routes.
+This table does not permit DSO relocation or a changed installed-member hash.
 The ordinary provider contract remains unchanged.
 
 ## Preserve and correlate members

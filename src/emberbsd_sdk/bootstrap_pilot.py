@@ -75,14 +75,15 @@ def validate_pilot_plan(plan, descriptor, commands, flags):
     return plan
 
 
-def _validate_resources(resources):
+def _validate_resources(resources, *, metadata=False):
     _require(isinstance(resources, dict) and set(resources) ==
              {'cpu_jobs', 'link_jobs', 'runtime_seconds', 'lock_root', 'heavy_link_context'},
              'pilot resource agreement is incomplete')
-    _require(type(resources['cpu_jobs']) is int and resources['cpu_jobs'] == 1 and
+    _require(type(resources['cpu_jobs']) is int and 1 <= resources['cpu_jobs'] <= (4 if metadata else 1) and
              type(resources['link_jobs']) is int and resources['link_jobs'] == 1 and
-             type(resources['runtime_seconds']) is int and 0 < resources['runtime_seconds'] <= 120,
-             'pilot must be serial with an observation budget of at most 120 seconds')
+             type(resources['runtime_seconds']) is int and
+             0 < resources['runtime_seconds'] <= (1200 if metadata else 120),
+             'finite producer concurrency or observation budget is unsupported')
     _absolute(resources['lock_root'])
     _absolute(resources['heavy_link_context'])
 
@@ -119,7 +120,7 @@ def run_pilot(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     """
     return _run(descriptor_path, descriptor_sha256=descriptor_sha256,
                 accepted_seed_receipt=accepted_seed_receipt, bootstrap_plan=bootstrap_plan,
-                required_roles=required_roles, make_probe=False)
+                required_roles=required_roles, profile='native')
 
 
 def run_make_probe(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
@@ -127,12 +128,21 @@ def run_make_probe(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     """Run only the fixed make/shell probe with the existing pilot fences."""
     return _run(descriptor_path, descriptor_sha256=descriptor_sha256,
                 accepted_seed_receipt=accepted_seed_receipt, bootstrap_plan=bootstrap_plan,
-                required_roles=required_roles, make_probe=True)
+                required_roles=required_roles, profile='make')
+
+
+def run_producer(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
+                 bootstrap_plan, required_roles):
+    """Run only the accepted Ports metadata stage. Never build or qualify."""
+    return _run(descriptor_path, descriptor_sha256=descriptor_sha256,
+                accepted_seed_receipt=accepted_seed_receipt, bootstrap_plan=bootstrap_plan,
+                required_roles=required_roles, profile='metadata')
 
 
 def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
-         bootstrap_plan, required_roles, make_probe):
+         bootstrap_plan, required_roles, profile):
     from .bootstrap_make import MAKE_PROBE_FORMAT, make_probe_sources, verify_make_step
+    from .bootstrap_producer import PRODUCER_FORMAT, metadata_paths
     from .bootstrap_seed import load_bootstrap_seed
     from .native_toolset import _json
     _require(threading.current_thread() is threading.main_thread(),
@@ -143,7 +153,9 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     descriptor_ref = dict(path=os.fspath(descriptor_path), sha256=descriptor_sha256)
     descriptor = _json(descriptor_ref)
     plan = _json(bootstrap_plan)
-    _require(plan.get('format') == (MAKE_PROBE_FORMAT if make_probe else PILOT_FORMAT),
+    make_probe, metadata = profile == 'make', profile == 'metadata'
+    _require(plan.get('format') == {'make': MAKE_PROBE_FORMAT, 'native': PILOT_FORMAT,
+                                    'metadata': PRODUCER_FORMAT}[profile],
              'the runner requires its exact finite plan format')
     resources = plan['resources']
     root = canonical_existing(resources['lock_root'])
@@ -151,6 +163,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     _require(canonical_new(work) == work, 'pilot work has aliased ancestors')
     roots = [descriptor['bundle_root']] + [row['root']
               for kind in ('headers', 'libraries') for row in descriptor['host_abi'][kind]]
+    if metadata:
+        roots += [plan['metadata']['export']['root'], plan['metadata']['utility_bin']]
     sdk_root = str(Path(__file__).resolve().parents[2])
     _require(work != root and not inside(root, work), 'pilot work contains its lock root')
     for path in [*roots, sdk_root, resources['heavy_link_context']]:
@@ -158,7 +172,10 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     acceptance = _json(accepted_seed_receipt)
     shared = set(roots + [sdk_root, os.fspath(descriptor_path),
                          *list(_references(descriptor)), *list(_references(accepted_seed_receipt)),
-                         *list(_references(acceptance)), *list(_references(bootstrap_plan))])
+                         *list(_references(acceptance)), *list(_references(bootstrap_plan)),
+                         *list(_references(plan))])
+    if metadata:
+        shared.update(_references(_json(plan['metadata']['export']['source_proof'])))
     # Re-read all acceptance and plan bytes under their shared fences.
     with ContextLocks(sorted(shared), root, shared=True), ContextLocks([work], root):
         selected = load_bootstrap_seed(descriptor_path, **options)
@@ -166,11 +183,15 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         _require(selected_plan == plan, 'pilot plan changed before dispatch')
         _require(entry(work) is None, 'pilot work must be a fresh, unused directory')
         os.mkdir(work)
-        sources = (make_probe_sources(descriptor, selected.commands) if make_probe else
+        sources = ({} if metadata else make_probe_sources(descriptor, selected.commands) if make_probe else
                    dict(_SOURCE.values()))
-        outputs = (*sources, 'fixture.result') if make_probe else (
+        outputs = () if metadata else (*sources, 'fixture.result') if make_probe else (
             'native.c', 'native.cc', 'c.o', 'cxx.o', 'c-probe', 'cxx-probe')
-        result = dict(format=('emberbsd-bootstrap-make-probe-result' if make_probe else
+        if metadata:
+            for path in metadata_paths(work).values():
+                os.mkdir(path)
+        result = dict(format=('emberbsd-native-gcc16-producer-result' if metadata else
+                              'emberbsd-bootstrap-make-probe-result' if make_probe else
                               'emberbsd-native-gcc16-pilot-result'), version=1,
                       scope=_SCOPE, api=BOOTSTRAP_PILOT_API, status='RUNNING',
                       seed_descriptor=descriptor_ref, accepted_seed_receipt=accepted_seed_receipt,
