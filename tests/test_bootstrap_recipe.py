@@ -29,6 +29,14 @@ class RecipeTests(unittest.TestCase):
         self.seed, self.f = self.fixture.seed, self.fixture.f
         self.base, self.descriptor = self.fixture.base, self.fixture.descriptor
         self.commands = self.fixture.commands
+        for role in ('pkg_add', 'pkg_create'):
+            path = self.f.bundle / role
+            path.write_bytes(self.f.image)
+            path.chmod(0o755)
+            self.descriptor['tools'][role] = dict(path=str(path), sha256=hashlib.sha256(self.f.image).hexdigest(),
+                                                 kind='native', provider='ports', version='synthetic')
+            self.commands[role] = (str(path),)
+            (self.fixture.utility_bin / role).symlink_to('../' + role)
         self.descriptor['driver_binding']['kind'] = bootstrap_binding.DARWIN_LLVM_MC_LLD_SEED
         self.descriptor['compiler'] = dict(family='gcc', version='16.2.0', triplet='aarch64-apple-darwin25')
         self.plan = copy.deepcopy(self.fixture.fixture.recipe_plan)
@@ -39,6 +47,8 @@ class RecipeTests(unittest.TestCase):
             resources=dict(self.fixture.plan['resources'], cpu_jobs=1, runtime_seconds=43200),
             required_roles=sorted(self.commands), seed_descriptor={})
         self.plan['metadata']['recipes'] = sorted(self.plan['recipes'])
+        self.plan['metadata']['native_tools'] = sorted([*self.plan['metadata']['native_tools'],
+                                                       'pkg_add', 'pkg_create'])
         self.plan['ports_export'] = dict(source=self.descriptor['sources']['ports'],
                                          **self.plan['metadata']['export'])
         self.plan['recipes']['lang/gcc16']['object_directory'] = str(self.work / 'obj/gcc16/build')

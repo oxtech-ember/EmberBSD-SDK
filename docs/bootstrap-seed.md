@@ -279,6 +279,13 @@ Its `recipes` list must be the sorted complete recipe closure, with at most 256
 recipes. `ports_export` must name the exact same export and source proof.
 The source-owned profile, current host facts, complete export inventory,
 utility-only PATH and exact generated MAKECONF are checked before execution.
+The full plan also requires native `pkg_add` and `pkg_create` roles in
+`metadata.native_tools` and `required_roles`. Each selected command must have
+one invocation path. MAKECONF sets `NATIVE_PKG_ADD_CMD` and
+`NATIVE_PKG_CREATE_CMD` to those exact paths before the first staged install.
+The common Ports package rules consume these selectors. They must not use
+the future output prefix as a fallback. Metadata-only plans keep their
+existing role roster and MAKECONF fields. This check does not qualify a tool.
 
 Set `output_bundle_root` to `work_root/prefix`. All writable package paths come
 from `metadata_paths(work_root)`. Each distfile also needs `relative`, its explicit

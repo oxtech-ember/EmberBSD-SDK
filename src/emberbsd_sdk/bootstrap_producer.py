@@ -125,6 +125,11 @@ def metadata_assignments(plan, descriptor, commands, flags):
                      NATIVE_PKG_INFO_CMD=_safe_path(commands['pkg_info'][0]),
                      NATIVE_PKG_ADMIN_CMD=_safe_path(commands['pkg_admin'][0]),
                      LDFLAGS=shlex.join([_word(word) for word in flags['ldflags']]))
+    if plan.get('format') == 'emberbsd-native-gcc16-bootstrap-plan':
+        for role, name in [('pkg_add', 'ADD'), ('pkg_create', 'CREATE')]:
+            _require(role in commands and len(commands[role]) == 1,
+                     'bound recipe installation needs one selected native package command')
+            variables['NATIVE_PKG_' + name + '_CMD'] = _safe_path(commands[role][0])
     for role in data['native_tools']:
         _require(len(commands[role]) == 1, 'raw metadata tools cannot omit a selected command tail')
         variables['EMBERBSD_DARWIN_TOOL.' + role] = _safe_path(commands[role][0])

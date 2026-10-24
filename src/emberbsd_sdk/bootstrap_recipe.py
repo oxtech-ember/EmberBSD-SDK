@@ -166,6 +166,10 @@ def validate_bound_recipe_plan(plan, descriptor, commands, flags, *, inspect_inp
              descriptor['make_binding']['kind'] == 'ports-bootstrap-make-v1' and
              descriptor.get('driver_binding', {}).get('kind') == DARWIN_LLVM_MC_LLD_SEED,
              'bound full plans need the recognized Darwin make and v2 driver bindings')
+    _require({'pkg_add', 'pkg_create'} <= set(plan['metadata']['native_tools']) and
+             all(descriptor['tools'].get(role, {}).get('kind') == 'native'
+                 for role in ('pkg_add', 'pkg_create')),
+             'bound recipe installation needs explicit native pkg_add and pkg_create roles')
     from .bootstrap_pilot import _references, _validate_resources
     parallel = 'link_control' in plan
     if parallel:
