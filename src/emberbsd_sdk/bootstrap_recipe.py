@@ -112,10 +112,14 @@ def recipe_steps(plan, descriptor, commands, flags):
 
 
 _LOCAL_SOURCE_FILES = {
+    'archivers/bzip2': ('Makefile', 'files/Makefile', 'files/bzip2.c', 'files/bzlib.c'),
+    'archivers/pax': ('Makefile', 'files/configure', 'files/Makefile.in', 'files/pax.c'),
+    'devel/nbpatch': ('Makefile', 'files/Makefile', 'files/patch.c', 'files/pch.c'),
     'pkgtools/cwrappers': ('Makefile', 'files/bin/Makefile', 'files/bin/cc-wrapper.c'),
     'pkgtools/digest': ('Makefile', 'files/configure', 'files/Makefile.in', 'files/digest.c'),
     'pkgtools/libnbcompat': ('Makefile', 'files/configure', 'files/Makefile.in', 'files/asprintf.c'),
     'pkgtools/mktools': ('Makefile', 'files/Makefile', 'files/mk-buildlink-symlinks.c', 'files/mkpath.c'),
+    'shells/mksh': ('Makefile', 'files/Build.sh', 'files/main.c', 'files/sh.h'),
 }
 
 

@@ -1,0 +1,153 @@
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 EmberBSD contributors.
+# Developed with AI assistance. Synthetic source trees are never compiled.
+
+import copy
+import json
+from pathlib import Path
+import shutil
+import unittest
+from unittest.mock import patch
+
+import test_bootstrap_local_recipes as fixtures
+from emberbsd_sdk import bootstrap_producer as producer, bootstrap_recipe as recipe
+from emberbsd_sdk.errors import SDKError
+from emberbsd_sdk.inventory import snapshot_tree
+
+
+BUILD_LAYOUTS = {
+    'archivers/bzip2': ('Makefile', 'files/Makefile', 'files/bzip2.c', 'files/bzlib.c'),
+    'archivers/pax': ('Makefile', 'files/configure', 'files/Makefile.in', 'files/pax.c'),
+    'devel/nbpatch': ('Makefile', 'files/Makefile', 'files/patch.c', 'files/pch.c'),
+    'shells/mksh': ('Makefile', 'files/Build.sh', 'files/main.c', 'files/sh.h'),
+}
+
+
+class LocalBuildRecipeTests(unittest.TestCase):
+    def setUp(self):
+        self.local = fixtures.LocalRecipeTests()
+        self.local.setUp()
+        self.addCleanup(self.local.doCleanups)
+        self.case, self.plan, self.f, self.export = (
+            self.local.case, self.local.plan, self.local.f, self.local.export)
+        guard = patch.dict(fixtures.LOCAL_LAYOUTS, BUILD_LAYOUTS)
+        guard.start()
+        self.addCleanup(guard.stop)
+        for name, files in BUILD_LAYOUTS.items():
+            for relative in (*files, 'files/extra-source.c'):
+                path = self.export / name / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('/* Synthetic pinned source; never compiled. */\n')
+            self.plan['recipes'][name] = dict(directory=name, patches=[], distfiles=[],
+                distfile_metadata=self.local.observations(name), dependencies=[])
+        self.plan['recipes']['lang/gcc16']['dependencies'] += list(BUILD_LAYOUTS)
+        for name in ('patch-expr.c', 'patch-lalloc.c'):
+            path = self.export / 'shells/mksh/patches' / name
+            path.parent.mkdir(exist_ok=True)
+            path.write_text('Synthetic common patch, not applied by these controls.\n')
+        self.plan['recipes']['shells/mksh']['patches'] = [
+            'patches/patch-expr.c', 'patches/patch-lalloc.c']
+        self.local.refresh_export()
+
+    def test_eight_fixed_local_roots_preserve_real_archive_mapping(self):
+        with patch('subprocess.Popen', side_effect=AssertionError('no native process')):
+            self.assertEqual(self.case.validate(), self.plan)
+            self.assertEqual(self.case.validate(inspect_inputs=False), self.plan)
+            expected = {row['relative']: row['file'] for name in ('lang/gcc16', 'devel/gmp')
+                        for row in self.plan['recipes'][name]['distfiles']}
+            self.assertEqual(recipe.recipe_distfiles(self.plan), expected)
+            self.case.work.mkdir()
+            recipe.prepare_recipe_work(self.plan)
+        copied = sorted(str(p.relative_to(self.case.work / 'distfiles'))
+                        for p in (self.case.work / 'distfiles').rglob('*') if p.is_file())
+        self.assertEqual(copied, sorted(expected))
+        self.assertEqual(len(fixtures.LOCAL_LAYOUTS), 8)
+
+    def test_each_additional_root_requires_bound_exact_empty_observations(self):
+        for name in BUILD_LAYOUTS:
+            row = self.plan['recipes'][name]
+            original = row['distfile_metadata']
+            for case in ('missing', 'wrong-recipe', 'distfile', 'patchfile', 'hash'):
+                with self.subTest(recipe=name, case=case):
+                    if case == 'missing':
+                        row.pop('distfile_metadata')
+                    elif case == 'hash':
+                        row['distfile_metadata'] = dict(original, sha256='0' * 64)
+                    else:
+                        changes = {'wrong-recipe': dict(PKGPATH='devel/gmp'),
+                                   'distfile': dict(DISTFILES='archive.tar.xz'),
+                                   'patchfile': dict(PATCHFILES='extra.diff')}[case]
+                        values = {key: '' for key in producer.VARIABLES}
+                        values.update(PKGPATH=name)
+                        values.update(changes)
+                        row['distfile_metadata'] = self.f.raw(''.join(
+                            key + '=' + values[key] + '\n' for key in producer.VARIABLES).encode())
+                    with self.assertRaises(SDKError):
+                        self.case.validate()
+                    row['distfile_metadata'] = original
+
+    def test_additional_roots_keep_legacy_55_variable_observations(self):
+        for name in BUILD_LAYOUTS:
+            values = {key: '' for key in producer.LEGACY_VARIABLES}
+            values['PKGPATH'] = name
+            reference = self.f.raw(''.join(key + '=' + values[key] + '\n'
+                for key in producer.LEGACY_VARIABLES).encode())
+            self.plan['recipes'][name]['distfile_metadata'] = reference
+            self.assertNotIn('BOOTSTRAP_DEPENDS', producer.metadata_values(reference))
+        self.assertEqual(self.case.validate(), self.plan)
+
+    def test_missing_or_symlinked_required_source_is_not_a_regular_local_layout(self):
+        for name, relative in ((name, files[1]) for name, files in BUILD_LAYOUTS.items()):
+            path = self.export / name / relative
+            original = path.read_bytes()
+            for symlink in (False, True):
+                with self.subTest(recipe=name, symlink=symlink):
+                    path.unlink()
+                    if symlink:
+                        path.symlink_to(Path(BUILD_LAYOUTS[name][-1]).name)
+                    self.local.refresh_export()
+                    with self.assertRaisesRegex(SDKError, 'required regular source file'):
+                        self.case.validate()
+                    if symlink:
+                        path.unlink()
+                    path.write_bytes(original)
+                    self.local.refresh_export()
+
+    def test_complete_new_subtree_cannot_omit_unlisted_source_bytes(self):
+        for name in BUILD_LAYOUTS:
+            with self.subTest(recipe=name):
+                row = self.plan['recipes'][name]
+                original = row['inventory']
+                inventory = json.loads(Path(original['path']).read_text())
+                del inventory['files/extra-source.c']
+                row['inventory'] = self.f.document(inventory)
+                with self.assertRaisesRegex(SDKError, 'differs from the pinned export'):
+                    self.case.validate()
+                row['inventory'] = original
+
+    def test_mksh_requires_both_carried_common_patches(self):
+        row = self.plan['recipes']['shells/mksh']
+        original = list(row['patches'])
+        for missing in original:
+            with self.subTest(missing=missing):
+                row['patches'] = [name for name in original if name != missing]
+                with self.assertRaisesRegex(SDKError, 'omits common recipe patches'):
+                    self.case.validate()
+        row['patches'] = original
+        self.assertEqual(self.case.validate(), self.plan)
+
+    def test_similar_name_with_the_same_layout_remains_unrecognized(self):
+        name = 'devel/nbpatch-extra'
+        shutil.copytree(self.export / 'devel/nbpatch', self.export / name)
+        row = copy.deepcopy(self.plan['recipes']['devel/nbpatch'])
+        row.update(directory=name, inventory=self.f.document(snapshot_tree(str(self.export / name))),
+                   distfile_metadata=self.local.observations(name))
+        self.plan['recipes'][name] = row
+        self.plan['recipes']['lang/gcc16']['dependencies'].append(name)
+        self.local.refresh_export()
+        with self.assertRaisesRegex(SDKError, 'recognized local-source'):
+            self.case.validate()
+
+
+if __name__ == '__main__':
+    unittest.main()
