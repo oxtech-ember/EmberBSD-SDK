@@ -5,7 +5,6 @@
 import hashlib
 import os
 import signal
-import shutil
 import stat
 import subprocess
 import sys
@@ -92,10 +91,8 @@ class SessionInspector:
             self.members(-1)
             return
         self.environment = sanitized_environment(env)
-        selected = shutil.which('ps', path=self.environment.get('PATH', os.defpath))
-        if selected is None:
-            raise SDKError('the producer backend requires base-system POSIX ps')
-        self.executable = canonical_existing(selected)
+        # Process inspection is an OS service, independent of the build PATH.
+        self.executable = canonical_existing('/bin/ps')
         regular_file(self.executable)
         if not os.access(self.executable, os.X_OK):
             raise SDKError(f'POSIX ps is not executable: {self.executable}')

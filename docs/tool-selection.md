@@ -77,6 +77,10 @@ source-to-binary correspondence or authenticate the producer. No accepted native
 development-host GCC16 installation is established by this change.
 Full provider provisioning and qualification remain open.
 
+The [native toolset API](native-toolset.md) checks a complete declared bundle against a separately accepted producer receipt.
+It does not provision or qualify that producer. The sysroot and release builders do not yet call this API.
+Their compiler input declaration is not a substitute for accepted qualification evidence.
+
 The selector does not enforce this policy for every build executable, dynamic
 dependency, header search, or nested producer. Other tool selection gaps remain.
 A successful plan or fixture test does not establish complete SDK compliance.

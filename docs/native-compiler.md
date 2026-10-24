@@ -29,6 +29,11 @@ that the binaries were built from that source. File hashes bind selected bytes.
 They are not signatures, reproducible-build evidence, or complete SDK acceptance.
 Referenced build receipts retain their own evidence and qualification limits.
 
+The [native toolset API](native-toolset.md) checks a complete bundle against a separately accepted producer receipt.
+This input declaration is not that qualification format. A referenced receipt hash alone does not validate its qualification semantics.
+The builders do not yet call that API or accept its descriptor as this manifest.
+Future integration must bind the accepted toolset to the same compiler files and configuration.
+
 This selector change does not provision or qualify a native development-host
 provider. Cross-compiler receipts and target-native GCC package checks do not
 qualify one. No actual native SDK GCC16 installation or full build is established
