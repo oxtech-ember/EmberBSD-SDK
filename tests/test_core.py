@@ -29,6 +29,12 @@ def header(machine=183, kind=3):
     return bytes(data)
 
 
+def elf32_header(machine=40, kind=1):
+    data = bytearray(b'\x7fELF\x01\x01\x01' + b'\0' * 9)
+    data.extend(struct.pack('<HHIIIIIHHHHHH', kind, machine, 1, 0, 0, 0, 0, 52, 32, 0, 40, 0, 0))
+    return bytes(data)
+
+
 def archive(data, name='fixture.o/'):
     record = f'{name:<16}{0:<12}{0:<6}{0:<6}{"100644":<8}{len(data):<10}`\n'.encode()
     return b'!<arch>\n' + record + data + (b'\n' if len(data) % 2 else b'')
@@ -176,11 +182,17 @@ class CoreTests(TemporaryCase):
     def test_elf_header_scope_and_refusals(self):
         file = self.write('elf', header(kind=1))
         self.assertEqual(elf.read_elf_header(file, 183, 1)['machine'], 183)
+        self.assertEqual(elf.parse_elf_header(elf32_header(), machine=40, required_type=1),
+                         {'class': 32, 'endian': 'little', 'machine': 40, 'type': 1})
         self.assertIsNone(elf.parse_elf_header(b'text'))
-        for data, machine, kind in ((b'\x7fELF', 183, 1), (header(62), 183, None), (header(kind=3), 183, 1)):
+        for data, machine, kind in ((b'\x7fELF', 183, 1), (header(62), 183, None),
+                                    (header(kind=3), 183, 1), (elf32_header()[:40], 40, 1)):
             with self.subTest(data=data[:8]), self.assertRaises(SDKError):
                 elf.parse_elf_header(data, machine=machine, required_type=kind)
         self.assertEqual(elf.read_elf_dynamic(file)['needed'], [])
+        arm_file = self.write('arm-elf', elf32_header(kind=1))
+        with self.assertRaisesRegex(SDKError, 'ELF64 little-endian'):
+            elf.read_elf_dynamic(arm_file, machine=40)
 
     def test_dynamic_fields_and_bounds(self):
         file = self.write('elf', dynamic_elf())
@@ -197,6 +209,8 @@ class CoreTests(TemporaryCase):
     def test_archive_gnu_bsd_and_malformed(self):
         file = self.write('file.a', archive(header(kind=1)))
         self.assertEqual(elf.read_archive(file, 183), {'elf_members': 1, 'machine': 183})
+        file.write_bytes(archive(elf32_header(kind=1), 'arm.o/'))
+        self.assertEqual(elf.read_archive(file, 40), {'elf_members': 1, 'machine': 40})
         file.write_bytes(archive(b'index', '/') + archive(b'long-name.o/\n', '//')[8:] + archive(header(kind=1), '/0')[8:])
         self.assertEqual(elf.read_archive(file, 183)['elf_members'], 1)
         name = b'long-object-name.o\0'; index = b'__.SYMDEF SORTED\0'

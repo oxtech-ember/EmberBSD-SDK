@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-"""Bounded ELF64 little-endian and normal GNU/BSD ar readers.
+"""Bounded little-endian ELF32/ELF64 headers and normal GNU/BSD ar readers.
 
-Header-only inspection does not qualify dynamic linkage. Package policy belongs
-in the caller. This module never invokes objdump, readelf, or an extractor.
+Dynamic ELF inspection remains ELF64-only. Header-only inspection does not
+qualify dynamic linkage. Package policy belongs in the caller. This module
+never invokes objdump, readelf, or an extractor.
 """
 
 import os
@@ -20,16 +21,28 @@ MAX_STRTAB = 16 * 1024 * 1024
 def parse_elf_header(data, *, label='<bytes>', machine=None, required_type=None):
     if not data.startswith(b'\x7fELF'):
         return None
-    if (len(data) != 64 or data[4:7] != b'\x02\x01\x01' or
+
+    if len(data) < 16:
+        raise SDKError(f'expected ELF64 little-endian or ELF32 little-endian target header: {label}')
+    elf_class = data[4]
+    if elf_class == 1:
+        expected_size, size_offset = 52, 40
+        description = 'ELF32 little-endian'
+    elif elf_class == 2:
+        expected_size, size_offset = 64, 52
+        description = 'ELF64 little-endian'
+    else:
+        raise SDKError(f'expected ELF64 little-endian or ELF32 little-endian target header: {label}')
+    if (len(data) < expected_size or data[5:7] != b'\x01\x01' or
             struct.unpack_from('<I', data, 20)[0] != 1 or
-            struct.unpack_from('<H', data, 52)[0] != 64):
-        raise SDKError(f'expected ELF64 little-endian target header: {label}')
+            struct.unpack_from('<H', data, size_offset)[0] != expected_size):
+        raise SDKError(f'expected {description} target header: {label}')
     kind, actual = struct.unpack_from('<HH', data, 16)
     if machine is not None and actual != machine:
-        raise SDKError(f'expected ELF64 little-endian target header: {label}')
+        raise SDKError(f'expected {description} target header: {label}')
     if required_type is not None and kind != required_type:
         raise SDKError(f'wrong ELF type: {label}')
-    return dict({'class': 64}, endian='little', machine=actual, type=kind)
+    return dict({'class': 32 if elf_class == 1 else 64}, endian='little', machine=actual, type=kind)
 
 
 def read_elf_header(path, machine=None, required_type=None):
@@ -56,7 +69,7 @@ def read_elf_dynamic(path, *, machine=None):
 
         header = read_at(0, min(64, size))
         result = parse_elf_header(header, label=str(path), machine=machine)
-        if result is None:
+        if result is None or result['class'] != 64:
             raise SDKError(f'expected ELF64 little-endian target header: {path}')
         phoff = struct.unpack_from('<Q', header, 32)[0]
         phentsize, phnum = struct.unpack_from('<HH', header, 54)
