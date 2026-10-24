@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from unittest import skipUnless
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from test_core import TemporaryCase, SDK_SOURCE
 from emberbsd_sdk import process
 from emberbsd_sdk.errors import SDKError
@@ -110,17 +110,36 @@ except SDKError as exc:
     @skipUnless(sys.platform == 'darwin', 'Darwin base-system ps prerequisite')
     def test_missing_ps_refuses_before_log_or_launch(self):
         marker = self.root / 'started'
-        with self.assertRaisesRegex(SDKError, 'ps'):
-            process.run_logged([sys.executable, '-c', f'open({str(marker)!r},"w").close()'], self.root / 'log', env={'PATH': str(self.root / 'missing')})
+        with patch.object(process, 'canonical_existing',
+                          side_effect=SDKError('missing base-system ps')) as resolve:
+            with self.assertRaisesRegex(SDKError, 'ps'):
+                process.run_logged([sys.executable, '-c', f'open({str(marker)!r},"w").close()'], self.root / 'log', env={'PATH': str(self.root / 'missing')})
+        resolve.assert_called_once_with('/bin/ps')
         self.assertFalse(marker.exists())
         self.assertFalse((self.root / 'log').exists())
 
     @skipUnless(sys.platform == 'darwin', 'Darwin base-system ps prerequisite')
     def test_unsupported_ps_output_refuses_before_start(self):
-        directory = self.root / 'bin'; directory.mkdir()
-        ps = directory / 'ps'; ps.write_text('#!/bin/sh\nprintf "unsupported\\n"\n'); ps.chmod(0o755)
-        with self.assertRaisesRegex(SDKError, 'enumerat|PID'):
-            process.OwnedProcessGroup(['unused'], cwd=self.root, env={'PATH': str(directory)}, stdout=None, stderr=None)
+        probe = Mock(pid=2147483646, returncode=0)
+        probe.communicate.return_value = (b'unsupported\n', b'')
+        with patch.object(process.subprocess, 'Popen', return_value=probe) as launch:
+            with self.assertRaisesRegex(SDKError, 'enumerat|PID'):
+                process.OwnedProcessGroup(['unused'], cwd=self.root, env={'PATH': '/sdk-only'}, stdout=None, stderr=None)
+        self.assertEqual(launch.call_args.args[0][0], '/bin/ps')
+
+    @skipUnless(sys.platform == 'darwin', 'requires native Darwin process service')
+    def test_darwin_process_service_does_not_depend_on_build_path(self):
+        tools = self.root / 'sdk-tools'
+        tools.mkdir()
+        environment = dict(PATH=str(tools))
+        log = self.root / 'sdk-path.log'
+        argv = [sys.executable, '-B', '-I', '-S', '-c',
+                'import os;print(os.environ["PATH"])']
+        result = process.run_logged(argv, log, cwd=self.root, env=environment,
+                                    empty_snapshot_timeout=30)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(log.read_text(), str(tools) + '\n')
+        self.assertEqual(environment, dict(PATH=str(tools)))
 
     def test_inspection_failure_is_typed_after_start(self):
         from emberbsd_sdk.errors import ProcessOwnershipError
