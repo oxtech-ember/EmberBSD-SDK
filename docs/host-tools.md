@@ -174,6 +174,10 @@ qualification.
 
 ## Publish an owned directory
 
+Use the optional [shared linker resource](link-launcher.md) to serialize heavy
+links across independent Darwin build sessions without hiding their processes
+from the outer build controller.
+
 `emberbsd_sdk.publication` provides `DIRECTORY_PUBLICATION_API = 1`.
 `require_directory_publication()` checks the host and native symbol without
 filesystem writes. Call it before starting a producer. An old API1 source can
