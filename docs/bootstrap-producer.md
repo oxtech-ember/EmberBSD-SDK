@@ -181,4 +181,11 @@ The source profile adds static GCC runtime link options separately from ABI flag
 Its default-runpath variant also adds the supported GCC `-nodefaultrpaths` option.
 This suppresses seed compiler-library runpaths without changing explicit package paths.
 Historical profile hashes retain their previous MAKECONF contents.
+The unprivileged native-provider profile is
+`34648560a0c6fd66f74b134d6a832ff28a7a1bc74ba06cf554a18bbf6203a8a8`.
+It adds the standard pkgsrc `UNPRIVILEGED=yes` policy for the owned output prefix
+and package database. The common rules use the selected shell and current user
+for installation. SDK command construction and native-provider guards stay the
+same. The earlier native-provider and default-runpath profile hashes remain valid
+for their pinned historical inputs.
 Native execution, source-built provider receipts and full graduation remain required.
