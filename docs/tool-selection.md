@@ -24,6 +24,16 @@ Keep native OS tool build rules in the OS repository.
 SDK selects and records these producers; it must not copy their recipes.
 Use the [first-native GCC16 bootstrap contract](bootstrap-seed.md) when no qualified
 native GCC16 exists. That scoped seed cannot be used as an ordinary provider.
+When an accepted native GCC16 compiler exists but the first `bmake` is missing,
+use only the [first bmake bootstrap producer](bootstrap-bmake-seed.md). That
+producer requires a separately issued narrow compiler-seed acceptance receipt,
+revalidates the full prefix inventory, binds explicit assembler and linker
+routes, runs the current common Ports recipe with a private hashed OS utility
+path, and refuses system compiler or make substitution. Its pending result
+also requires a separate producer-evidence receipt after independent review of
+the source-bound command logs and output; the behavior audit cannot confer that
+provenance by itself. Its output remains a bmake-only bootstrap seed; it does
+not qualify an ordinary provider.
 
 Select the entire build tool set explicitly.
 This includes preprocessors, assemblers, linkers, archivers, metadata tools,
