@@ -536,6 +536,7 @@ class BootstrapBmakeSeedTests(unittest.TestCase):
         }
         steps = audit_steps(plan)
         self.assertEqual([row['id'] for row in steps], ['version', 'positive', 'expected-failure'])
+        self.assertEqual(steps[2]['expected_exit'], 1)
         self.assertEqual(steps[0]['argv'], [plan['output_binary'], '-r', '-m', work + '/mk',
                                             '-V', '.MAKE.VERSION'])
         self.assertTrue(all(row['argv'][0] == plan['output_binary'] for row in steps))

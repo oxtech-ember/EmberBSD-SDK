@@ -42,7 +42,7 @@ def audit_steps(plan):
         dict(id='positive', phase='behavior', cwd=work,
              argv=[*common, 'all'], env=dict(environment), expected_exit=0),
         dict(id='expected-failure', phase='failure', cwd=work,
-             argv=[*common, 'fail'], env=dict(environment), expected_exit=2),
+             argv=[*common, 'fail'], env=dict(environment), expected_exit=1),
     ]
 
 
