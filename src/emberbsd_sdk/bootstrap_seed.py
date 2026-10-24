@@ -6,11 +6,13 @@ from dataclasses import dataclass
 import json
 import os
 import platform
+import re
 import shlex
 from types import MappingProxyType
 
 from .errors import SDKError
-from .bootstrap_binding import seed_commands, seed_reported_tools
+from .bootstrap_binding import (DARWIN_LLVM_MC_LLD_SEED, seed_commands,
+                                seed_reported_tools)
 from .inventory import sha256_file, snapshot_tree
 from .native_toolset import (_absolute, _bytes, _driver_queries, _envelope, _file,
                              _gcc, _json, _native_image, _payload, _require,
@@ -241,7 +243,7 @@ def _dynamic_closure(value, descriptor):
             _native_image(path, descriptor['host'], shared_library=True)
 
 
-def _environment(tools, commands, flags):
+def _environment(tools, commands, flags, descriptor=None):
     directories = sorted({os.path.dirname(path) for path in tools.values()})
     _require(all(os.pathsep not in path for path in directories),
              'bootstrap tool directory cannot be encoded in PATH')
@@ -260,6 +262,22 @@ def _environment(tools, commands, flags):
                       ('HOST_CPPFLAGS', 'cppflags'), ('HOST_CFLAGS', 'cflags'),
                       ('HOST_CXXFLAGS', 'cxxflags'), ('HOST_LDFLAGS', 'ldflags')):
         result[name] = shlex.join(flags[key])
+    if descriptor is not None and descriptor['host']['os'] == 'Darwin' and \
+            descriptor.get('driver_binding') is not None:
+        binding = descriptor['driver_binding']
+        _require(binding['kind'] == DARWIN_LLVM_MC_LLD_SEED,
+                 'Darwin recipe plans require the fixed v2 SDK metadata binding')
+        for name, role in (('SEED_CC', 'cc'), ('SEED_CXX', 'cxx'), ('SEED_CPP', 'cpp'),
+                           ('LLVM_MC', 'as'), ('LD64_LLD', 'ld'), ('DSYMUTIL', 'dsymutil'),
+                           ('AR', 'ar'), ('RANLIB', 'ranlib'), ('NM', 'nm'), ('STRIP', 'strip')):
+            _require(role in commands and role in tools,
+                     f'missing fixed Darwin recipe tool role: {role}')
+            result['EMBERBSD_GCC16_' + name] = (shlex.join(commands[role])
+                if role in ('cc', 'cxx', 'cpp') else tools[role])
+        # The fixed binding already checks this exact SDKSettings.json against
+        # the declared header-root inventory. Do not infer an SDK from PATH.
+        result['OSX_SDK_PATH'] = os.path.dirname(_absolute(binding['sdk_metadata']['path']))
+        result['EMBERBSD_GCC16_DARWIN_SDK_VERSION'] = binding['sdk_version']
     return result
 
 
@@ -352,7 +370,8 @@ def _plan(reference, descriptor, commands=None, flags=None, *, inspect_inputs=Tr
     ids, built, compared = set(), set(), False
     commands = _seed_commands(descriptor, inspect_inputs=inspect_inputs) if commands is None else commands
     flags = descriptor['abi_flags'] if flags is None else flags
-    environment = _environment({role: words[0] for role, words in commands.items()}, commands, flags)
+    environment = _environment({role: words[0] for role, words in commands.items()},
+                               commands, flags, descriptor)
     for step in steps:
         name = _text(step['id'], 'bootstrap command ID')
         _require(name not in ids, 'duplicate bootstrap command ID')
@@ -386,8 +405,10 @@ def _plan(reference, descriptor, commands=None, flags=None, *, inspect_inputs=Tr
         _require(step['env'].get('PKGSRC_COMPILER', 'gcc') == 'gcc',
                  'bootstrap recipes must select GCC')
         for word in argv[3:]:
-            if '=' in word:
+            if '=' in word and not word.startswith('--'):
                 key, value = word.split('=', 1)
+                _require(re.fullmatch(r'[A-Za-z0-9_.-]+[+:?!]?', key) is not None,
+                         'make assignment name must be literal ASCII without whitespace')
                 base_key = key.rstrip('+:?!')
                 search_keys = {'MAKEFLAGS', 'MFLAGS', 'GCC_EXEC_PREFIX', 'COMPILER_PATH',
                                'LIBRARY_PATH', 'CPATH', 'C_INCLUDE_PATH', 'CPLUS_INCLUDE_PATH',
@@ -401,8 +422,14 @@ def _plan(reference, descriptor, commands=None, flags=None, *, inspect_inputs=Tr
                 _require(base_key != 'MAKE', 'recursive make selection cannot be overridden')
                 _require(base_key != 'PKGSRC_COMPILER' or value == 'gcc',
                          'bootstrap recipes must select GCC')
-            _require(word not in ('-C', '-f', '--file', '--makefile') and
-                     not word.startswith(('-C', '-f', '--file=', '--makefile=')),
+            option = word.split('=', 1)[0]
+            # GNU make accepts unambiguous long-option abbreviations too.
+            file_option = option.startswith('--') and len(option) > 2 and any(
+                name.startswith(option) for name in ('--eval', '--file', '--makefile', '--directory'))
+            short_options = re.match(r'-([A-Za-z]+)', word)
+            short_override = short_options is not None and any(
+                letter in short_options[1] for letter in 'fCE')
+            _require(not file_option and not short_override,
                      'make argument replaces its declared recipe')
         if step['phase'] in ('build', 'install'):
             _require(argv[1:3] == ['-C', os.path.join(export_root, step['recipe'])],

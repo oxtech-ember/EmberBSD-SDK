@@ -224,7 +224,9 @@ The SDK does not duplicate recipe dependency resolution.
 Each command has unique `id`, `recipe`, `phase`, `role`, `argv`, `cwd`, and `env`.
 `phase` is `build`, `compare`, or `install`. `role` is selected `make` or `gmake`.
 Build and install commands start with selected make and `-C <export/recipe>`.
-Additional `-C` and makefile replacement options are refused.
+Additional `-C`, directory changes, and makefile replacement options are refused.
+GNU make eval options and their long-option abbreviations are refused.
+Short-option clusters that contain `f`, `C`, or `E` are refused too.
 Each recipe builds after its dependencies.
 GCC comparison follows all builds. GCC installation follows comparison.
 The comparison command belongs to `lang/gcc16` and includes the `compare` target.
@@ -236,11 +238,34 @@ It binds `AR`, `RANLIB`, `NM`, `STRIP`, and `PYTHON` when declared.
 It binds native recipe flags and `HOST_*` flags to the qualified ABI arrays.
 These are native recipes. Do not introduce target flags or target sysroot inputs.
 PATH directories with the platform separator are refused.
-Make arguments cannot replace these bindings.
+Make arguments cannot replace these bindings. Assignment names must use literal
+ASCII letters, digits, underscores, dots or hyphens. Whitespace and variable
+expansion in assignment names are refused. Long options such as `--jobs=2`
+are not variable assignments.
 Optional environment keys are `DISTDIR`, `WRKOBJDIR`, `PACKAGES`, `PKG_DBDIR`,
 `LOCALBASE`, `PREFIX`, `PKGSRC_COMPILER`, `GCC_REQD`, `OSX_SDK_PATH`,
 `TZ`, `LC_ALL`, `LANG`, and `TMPDIR`. `PKGSRC_COMPILER` must be `gcc`.
 Actual execution audits must establish that nested recipe commands obey these routes.
+
+For a Darwin common-recipe plan with a fixed driver binding, use v2.
+Its pinned `SDKSettings.json` selects the exact `OSX_SDK_PATH` header root.
+The original v1 binding remains available to the finite pilot. It cannot
+infer an SDK root for a full recipe plan.
+The plan must also bind these exact Ports recipe environment values:
+
+| Variable | Selected value |
+| --- | --- |
+| `EMBERBSD_GCC16_SEED_CC`, `EMBERBSD_GCC16_SEED_CXX`, `EMBERBSD_GCC16_SEED_CPP` | Shell-quoted complete seed command for `cc`, `cxx`, or `cpp` |
+| `EMBERBSD_GCC16_LLVM_MC`, `EMBERBSD_GCC16_LD64_LLD` | Selected `as` and `ld` executable paths |
+| `EMBERBSD_GCC16_DSYMUTIL` | Selected `dsymutil` executable path |
+| `EMBERBSD_GCC16_DARWIN_SDK_VERSION` | The fixed binding `sdk_version` |
+| `EMBERBSD_GCC16_AR`, `EMBERBSD_GCC16_RANLIB`, `EMBERBSD_GCC16_NM`, `EMBERBSD_GCC16_STRIP` | Corresponding selected executable paths |
+
+All these roles must exist in the descriptor. Missing or conflicting
+selectors fail before a recipe can run. Direct make assignments must match
+the same values. Conditional, append, immediate and shell assignments are
+refused for these selectors. ABI flags remain in their separate arrays.
+Unbound and Linux plans keep their existing environment contract.
 
 ## Accepted seed receipt
 
