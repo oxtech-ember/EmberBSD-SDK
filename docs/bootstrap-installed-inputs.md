@@ -63,6 +63,8 @@ invocation symlinks in the roster. Do not present symlink text as file bytes.
 The [metadata adapter](bootstrap-producer.md) binds accepted invocation aliases separately.
 Runtime DSO closure still requires its actual pinned bytes and routes.
 This table does not permit DSO relocation or a changed installed-member hash.
+The separate [finite relocation contract](bootstrap-relocation.md) retains
+original provenance in the bootstrap-only `installed-package-derived` kind.
 The ordinary provider contract remains unchanged.
 
 ## Preserve and correlate members

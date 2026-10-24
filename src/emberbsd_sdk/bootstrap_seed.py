@@ -39,7 +39,7 @@ def _relative(value):
     return value
 
 
-def _installed_history(value, name, descriptor, file, *, inspect_inputs):
+def _installed_history(value, name, descriptor, file, *, inspect_inputs, packages=None):
     """Pin a finite installed bootstrap input without inventing its history."""
     _require(isinstance(descriptor, dict), 'installed history needs its seed descriptor')
     _require(set(value) == {'kind', 'package_name', 'package_path', 'installation_prefix',
@@ -48,7 +48,7 @@ def _installed_history(value, name, descriptor, file, *, inspect_inputs):
                            'source_commit', 'historical_build_log', 'historical_compiler',
                            'historical_toolchain_closure', 'patches_complete', 'unknowns'},
              'unsupported installed-package history fields')
-    packages = {'devel/bmake': ('bmake', {'make'}),
+    packages = packages if packages is not None else {'devel/bmake': ('bmake', {'make'}),
                 'devel/gmake': ('gmake', {'gmake'}),
                 'shells/mksh': ('mksh', {'sh'}),
                 'pkgtools/bootstrap-mk-files': ('bootstrap-mk-files', set()),
@@ -158,6 +158,11 @@ def _history(histories, providers, *, descriptor=None, inspect_inputs=True):
     for name, provider in providers.items():
         value = histories[name]
         _require(value['kind'] == provider['origin'], 'seed provider history kind mismatch')
+        if value['kind'] == 'installed-package-derived':
+            from .bootstrap_relocation import validate_derived_installed_history
+            unknowns[name] = validate_derived_installed_history(value, name, descriptor, file,
+                inspect_inputs=inspect_inputs, origins=origins)
+            continue
         origins(value['source_archives'])
         origins(value['patches'])
         if value['kind'] == 'installed-package':
@@ -510,7 +515,7 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
     _require(isinstance(descriptor['providers'], dict) and descriptor['providers'],
              'seed member provenance is required')
     for row in descriptor['providers'].values():
-        _require(row['origin'] in ('source-build', 'binary-release', 'installed-package'),
+        _require(row['origin'] in ('source-build', 'binary-release', 'installed-package', 'installed-package-derived'),
                  'invalid seed provider origin')
         if row['origin'] == 'source-build':
             _require(row['source'] in descriptor['sources'], 'unknown seed provider source')
