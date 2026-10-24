@@ -2,7 +2,11 @@
 
 This interface admits a seed for one first-native-GCC16 plan.
 It does not admit that seed for ordinary builds or issue acceptance.
-The new output still needs [NativeToolset qualification](native-toolset.md).
+The resulting GCC16 still needs [NativeToolset qualification](native-toolset.md).
+For a host that already has accepted GCC16 but no initial make tool, use the
+separate [first bmake bootstrap contract](bootstrap-bmake-seed.md).
+That route requires its own full-prefix audit and independently issued
+compiler-seed receipt; the original record's self-hash alone is insufficient.
 The [finite first C/C++ pilot](bootstrap-pilot.md) can run before the full
 recipe closure is available. It needs independent input and route acceptance.
 The separate [finite make and shell probe](bootstrap-make.md) checks the accepted
