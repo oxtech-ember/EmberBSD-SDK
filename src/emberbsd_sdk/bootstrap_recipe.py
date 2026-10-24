@@ -115,6 +115,8 @@ _LOCAL_SOURCE_FILES = {
     'archivers/bzip2': ('Makefile', 'files/Makefile', 'files/bzip2.c', 'files/bzlib.c'),
     'archivers/pax': ('Makefile', 'files/configure', 'files/Makefile.in', 'files/pax.c'),
     'devel/nbpatch': ('Makefile', 'files/Makefile', 'files/patch.c', 'files/pch.c'),
+    'net/fetch': ('Makefile', 'files/configure', 'files/Makefile.in', 'files/fetch.c'),
+    'net/libfetch': ('Makefile', 'files/Makefile', 'files/common.c', 'files/fetch.c', 'files/fetch.h'),
     'pkgtools/cwrappers': ('Makefile', 'files/bin/Makefile', 'files/bin/cc-wrapper.c'),
     'pkgtools/digest': ('Makefile', 'files/configure', 'files/Makefile.in', 'files/digest.c'),
     'pkgtools/libnbcompat': ('Makefile', 'files/configure', 'files/Makefile.in', 'files/asprintf.c'),

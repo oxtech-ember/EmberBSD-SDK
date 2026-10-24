@@ -298,8 +298,9 @@ Repeated destinations must have the same SHA256. Traversal and overlapping file
 and directory destinations are refused. The controller copies only these pinned
 files. It does not download missing inputs. Work cannot overlap a declared input.
 
-Eight local-source recipes can use `distfiles: []`: `archivers/bzip2`,
-`archivers/pax`, `devel/nbpatch`, `pkgtools/cwrappers`, `pkgtools/digest`,
+Ten local-source recipes can use `distfiles: []`: `archivers/bzip2`,
+`archivers/pax`, `devel/nbpatch`, `net/fetch`, `net/libfetch`,
+`pkgtools/cwrappers`, `pkgtools/digest`,
 `pkgtools/libnbcompat`, `pkgtools/mktools`, and `shells/mksh`.
 Only this empty bound-make case accepts a `distfile_metadata` file reference
 in its recipe row. It pins the raw named-variable log from an accepted metadata
@@ -308,11 +309,13 @@ roster. `PKGPATH` must equal this recipe. `DISTFILES` and `PATCHFILES` must be e
 A positional, incomplete, changed, or diagnostic-bearing log is refused.
 The complete recipe inventory must still equal its export subtree.
 The SDK requires the local Makefile and the recognized regular source files.
-The digest, libnbcompat, and pax recipes also need `files/configure` and
+The digest, libnbcompat, pax, and fetch recipes also need `files/configure` and
 `files/Makefile.in`. The bzip2 and nbpatch recipes need their local Makefiles
 and named C sources. The mksh recipe needs `files/Build.sh`, `files/main.c`,
-and `files/sh.h`. The C-wrapper and mktools recipes keep their BSD Makefiles
-and C sources. Each complete subtree and every carried patch remain bound;
+and `files/sh.h`. The libfetch recipe needs `files/Makefile`, `files/common.c`,
+`files/fetch.c`, and `files/fetch.h`. The C-wrapper and mktools recipes keep
+their BSD Makefiles and C sources. Each complete subtree and every carried
+patch remain bound;
 the required file list does not replace that complete inventory.
 No archive is invented or copied for these recipes. All common patches remain required.
 Other empty recipes, legacy unbound plans, and this extra field on nonempty rows are refused.
