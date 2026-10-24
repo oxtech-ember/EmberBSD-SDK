@@ -20,7 +20,7 @@ from test_core import SDK_SOURCE, TemporaryCase
 from test_builder import fixture, write
 from emberbsd_sdk import inventory, publication, sysroot_transfer as transfer
 from emberbsd_sdk.errors import SDKError
-from emberbsd_sdk.sysroot_builder import SysrootBuilder as Builder
+from test_builder import B as Builder
 from emberbsd_sdk.targets import TARGETS
 
 

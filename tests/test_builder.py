@@ -12,17 +12,46 @@ import signal
 import subprocess
 import sys
 import time
+from types import MappingProxyType
 from unittest.mock import patch
 from unittest import skipUnless
 
 from test_core import TemporaryCase, SDK_SOURCE, header, archive
 from emberbsd_sdk import inventory, jsonio, process
 from emberbsd_sdk.errors import SDKError
-from emberbsd_sdk.sysroot_builder import SysrootBuilder as B
+from emberbsd_sdk.sysroot_builder import SysrootBuilder as ProductionBuilder
+from emberbsd_sdk.native_toolset import NativeToolset
 from emberbsd_sdk.workspace import create
 from emberbsd_sdk.libedit import prepare_source
 from libedit_fixture import recipe_fixture, installation_source
 from host_compiler_fixture import gcc16_pair
+
+
+def fixture_native_selection(builder):
+    """Inject synthetic selection for existing dispatch tests, never acceptance."""
+    tools = {'cc': builder.options['host-cc'], 'cxx': builder.options['host-cxx'],
+             'python': os.path.realpath(builder.options['python']),
+             'sh': os.path.realpath(shutil.which('sh')), 'as': '/fixture/as', 'ld': '/fixture/ld'}
+    builder.native = NativeToolset('1' * 64, MappingProxyType({'path': '/fixture/qualification', 'sha256': '2' * 64}),
+        str(Path(tools['cc']).parent), MappingProxyType({'os': 'Darwin', 'cpu': 'arm64'}),
+        MappingProxyType({'family': 'gcc', 'version': '16.2.0', 'triplet': 'aarch64-apple-darwin27'}),
+        MappingProxyType(tools), MappingProxyType({name: () for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}))
+    builder.native_selection = builder.native.as_dict()
+    builder.shell = tools['sh']
+    builder.host_tools = {name: dict(path=os.path.realpath(tools[role]), selected=tools[role],
+        alias=builder.options[option], sha256=inventory.sha256_file(tools[role]),
+        origin='accepted-native-toolset', descriptor_sha256='1' * 64,
+        version='16.2.0', gcc_version='16.2.0', machine='aarch64-apple-darwin27',
+        programs={'as': '/fixture/as', 'ld': '/fixture/ld'})
+        for name, role, option in (('cc', 'cc', 'host-cc'), ('c++', 'cxx', 'host-cxx'))}
+
+
+class B(ProductionBuilder):
+    """Exercise dispatch mechanisms with explicit synthetic producer admission."""
+    select_native_toolset = fixture_native_selection
+
+    def require_native_producer_routing(self):
+        pass
 
 
 def write(path, data, mode=0o644):
@@ -177,7 +206,7 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
         git(path, 'init', '-q'); commit(path)
     prepare_source(ports, root / 'libedit.tar.gz', root / 'libedit-source')
     write(root / 'gcc.tar.xz', 'Fixture archive; no extraction')
-    return {key: str(value) for key, value in ({'sdk': sdk, 'os': os_source, 'ports': ports, 'compiler': compiler, 'runtime-work': work, 'gcc-archive': root / 'gcc.tar.xz', 'pkgsrc': root / 'pkgsrc', 'target': target, 'jobs': '2', 'python': sys.executable, 'sdk-source': root / 'sdk-source', 'libedit-source': root / 'libedit-source'} | gcc16_pair(root / 'host-gcc16')).items()}
+    return {key: str(value) for key, value in ({'sdk': sdk, 'os': os_source, 'ports': ports, 'compiler': compiler, 'runtime-work': work, 'gcc-archive': root / 'gcc.tar.xz', 'pkgsrc': root / 'pkgsrc', 'target': target, 'jobs': '2', 'python': sys.executable, 'sdk-source': root / 'sdk-source', 'libedit-source': root / 'libedit-source', 'native-toolset': root / 'synthetic-native-selection', 'native-toolset-sha256': '1' * 64, 'native-producer-receipt': '/fixture/qualification', 'native-producer-receipt-sha256': '2' * 64} | gcc16_pair(root / 'host-gcc16')).items()}
 
 
 class BuilderTests(TemporaryCase):
@@ -201,7 +230,17 @@ class BuilderTests(TemporaryCase):
         args = []
         for key, value in (self.options | changes).items():
             args.extend(['--' + key, value])
-        return [sys.executable, '-B', str(SDK_SOURCE / 'scripts/build-sysroot.py'), *args]
+        # The real CLI is covered by native-consumer refusal contracts. This
+        # harness preserves existing signal/dispatch tests for the fake producer.
+        setup = ('import sys,runpy; '
+                 f'sys.path.insert(0,{str(Path(self.options["sdk-source"]) / "src")!r}); '
+                 f'sys.path.insert(0,{str(SDK_SOURCE / "tests")!r}); '
+                 'from test_builder import fixture_native_selection; '
+                 'from emberbsd_sdk.sysroot_builder import SysrootBuilder; '
+                 'SysrootBuilder.select_native_toolset=fixture_native_selection; '
+                 'SysrootBuilder.require_native_producer_routing=lambda self: None; '
+                 'sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name="__main__")')
+        return [sys.executable, '-B', '-c', setup, str(SDK_SOURCE / 'scripts/build-sysroot.py'), *args]
 
     def test_builder_allows_darwin_session_churn_without_weakening_proof(self):
         builder = B(self.options | dict(plan=True))

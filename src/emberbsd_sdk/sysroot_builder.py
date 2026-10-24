@@ -8,12 +8,13 @@ import os
 from pathlib import Path
 import platform
 import re
+import shlex
 import shutil
 import signal
 import stat
 import sysconfig
 import time
-from . import API_VERSION, host_compiler, inventory, jsonio, libedit, paths, process, provenance, workspace
+from . import API_VERSION, inventory, jsonio, libedit, native_toolset, paths, process, provenance, workspace
 from .errors import SDKError, ProcessOwnershipError
 from .targets import TARGETS, target_definition
 
@@ -22,7 +23,17 @@ class BuildInterrupted(KeyboardInterrupt):
     pass
 
 
+def native_host_flags(selection):
+    """Map the selected host ABI arguments only to OS native variables."""
+    flags = selection['abi_flags']
+    return ['HOST_' + name.upper() + '=' + shlex.join(flags[name])
+            for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')] + [
+                'HOST_SH=' + selection['tools']['sh']]
+
+
 class SysrootBuilder:
+    NATIVE_ROUTING_GAP = ('OS nested native-tool routing is not qualified: build.sh still searches '
+                          'PATH for make and invokes undeclared native utilities; no build was started')
     TARGETS = TARGETS
     FLAGS = ('TOOLCHAIN_MISSING=yes MKGCCCMDS=no MKCOMPAT=no MKCXX=yes '
              'MKDEBUG=no MKDEBUGLIB=no MKX11=no MKLLVM=no MKLLVMRT=no MKLIBCXX=no MKKMOD=no MKGDB=no MKBINUTILS=no '
@@ -65,6 +76,47 @@ class SysrootBuilder:
             if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
                 return self.executable(candidate)
         raise SDKError(f'required host command is unavailable: {name}')
+
+    def select_native_toolset(self):
+        """Load one accepted selection before a build or compiler query."""
+        for name in ('native-toolset', 'native-toolset-sha256',
+                     'native-producer-receipt', 'native-producer-receipt-sha256'):
+            if not self.options.get(name):
+                raise SDKError(f'--{name} is required: select an independently qualified SDK native toolset')
+        if native_toolset.NATIVE_TOOLSET_API != 1:
+            raise SDKError('native toolset API must be 1')
+        self.native = native_toolset.load_native_toolset(
+            self.options['native-toolset'],
+            descriptor_sha256=self.options['native-toolset-sha256'],
+            accepted_producer_receipt={
+                'path': self.options['native-producer-receipt'],
+                'sha256': self.options['native-producer-receipt-sha256']},
+            required_roles=('cc', 'cxx', 'sh', 'python'))
+        # Retain the published explicit compiler selectors as checked aliases.
+        # They cannot replace qualification or change the selected provider.
+        for option, role in (('host-cc', 'cc'), ('host-cxx', 'cxx'), ('python', 'python')):
+            value = self.options.get(option)
+            if not isinstance(value, str) or not os.path.isabs(value):
+                raise SDKError(f'--{option} must be the absolute qualified native {role} path')
+            if self.executable(value) != self.executable(self.native.tool(role)):
+                raise SDKError(f'--{option} differs from the qualified native {role} selection')
+        self.native_selection = self.native.as_dict()
+        self.shell = self.native.tool('sh')
+        self.host_tools = {}
+        for name, role, option in (('cc', 'cc', 'host-cc'), ('c++', 'cxx', 'host-cxx')):
+            selected = self.native.tool(role)
+            canonical = self.executable(selected)
+            # The accepted producer already queried these exact driver paths.
+            # Querying a canonical alias can change GCC's prefix semantics.
+            self.host_tools[name] = dict(path=canonical, selected=selected,
+                alias=self.options[option], sha256=inventory.sha256_file(canonical),
+                origin='accepted-native-toolset', descriptor_sha256=self.native.descriptor_sha256,
+                version=self.native.compiler['version'], gcc_version=self.native.compiler['version'],
+                machine=self.native.compiler['triplet'],
+                programs={tool: self.native.tool(tool) for tool in ('as', 'ld')})
+
+    def require_native_producer_routing(self):
+        raise SDKError(self.NATIVE_ROUTING_GAP)
 
     def git(self, root, *arguments):
         return self.capture(self.git_command, '-C', root, *arguments)[0].strip()
@@ -221,7 +273,7 @@ class SysrootBuilder:
             if inventory.sha256_file(module) != digest:
                 raise SDKError(f'selected SDK source differs from loaded implementation: {module.name}')
             module_hashes[module.name] = digest
-        return dict(path=python, sha256=inventory.sha256_file(python), version=result['version'], api_version=API_VERSION, modules=module_hashes)
+        return dict(path=python, sha256=inventory.sha256_file(self.executable(python)), version=result['version'], api_version=API_VERSION, modules=module_hashes)
 
     def preflight(self):
         process.require_posix()
@@ -234,14 +286,21 @@ class SysrootBuilder:
         for option in ('host-cc', 'host-cxx'):
             if not self.options.get(option):
                 raise SDKError(f'--{option} is required: select the SDK native GCC 16 driver; there is no PATH, cc or Clang fallback')
-        self.git_command, self.shell = self.find_command('git'), self.find_command('sh')
+        self.select_native_toolset()
+        # Git is a source-inspection service. It is not a build-tool provider.
+        self.git_command = self.find_command('git')
+        native_directories = tuple(dict.fromkeys(
+            os.path.dirname(value) for _, value in sorted(self.native.tools.items())))
+        if any(os.pathsep in directory for directory in native_directories):
+            raise SDKError('qualified native tool directory contains the PATH separator')
+        self.environment['PATH'] = os.pathsep.join(native_directories)
         # Darwin PID churn can delay a complete empty snapshot after a producer exits.
         self.process_inspector = process.SessionInspector(env=self.environment, empty_snapshot_timeout=120)
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         for name in ('os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'sdk-source', 'libedit-source'):
             self.paths[name] = paths.build_path(paths.canonical_existing(self.options[name]))
-        self.paths['python'] = self.executable(self.options['python'])
+        self.paths['python'] = self.native.tool('python')
         for name in ('os', 'ports', 'compiler', 'runtime-work', 'pkgsrc', 'sdk-source', 'libedit-source'):
             paths.real_directory(self.paths[name])
         paths.regular_file(self.paths['gcc-archive'])
@@ -280,9 +339,8 @@ class SysrootBuilder:
         self.runtime_command = [self.paths['python'], '-B', os.path.join(self.paths['ports'], self.VERIFIER), 'check', self.paths['runtime-work'], self.paths['gcc-archive'], self.paths['pkgsrc'], '--sdk-source', self.paths['sdk-source']]
         self.compiler_record = self.compiler()
         self.runtime_record = self.verify_runtime()
-        self.host_tools = host_compiler.select_pair(self.options, lambda argv: self.capture(*argv))
-        self.flags = self.FLAGS + [f'EXTERNAL_TOOLCHAIN={self.paths["compiler"]}', f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}', f'EMBER_EXTERNAL_GCC_RUNTIME={prefix}', f'HOST_CC={self.host_tools["cc"]["path"]}', f'HOST_CXX={self.host_tools["c++"]["path"]}']
-        self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
+        self.flags = self.FLAGS + [f'EXTERNAL_TOOLCHAIN={self.paths["compiler"]}', f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}', f'EMBER_EXTERNAL_GCC_RUNTIME={prefix}', f'HOST_CC={self.native.tool("cc")}', f'HOST_CXX={self.native.tool("cxx")}'] + native_host_flags(self.native_selection)
+        self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, native_toolset=self.native_selection, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
         self.configure_signature()
         self.contexts = {name: self.inspect_context(self.paths[name]) for name in ('objects', 'tools')}
         self.build_command = [self.shell, os.path.join(self.paths['os'], 'build.sh'), '-U', '-u', '-j' + jobs, '-m', self.target['machine'], '-a', self.target['arch'], '-O', self.paths['objects'], '-T', self.paths['tools'], '-D', self.paths['destination']]
@@ -291,7 +349,8 @@ class SysrootBuilder:
         self.build_command.extend(('tools', 'libs'))
         self.loader_command = [os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine']), '-C', os.path.join(self.paths['os'], 'libexec/ld.elf_so'), '-j' + jobs, 'dependall']
         self.install_command = self.loader_command[:-1] + ['install']
-        self.receipt = dict(format='emberbsd-sysroot-build', version=1, scope='sysroot-build', qualification='not-built', execution_acceptance='not-run', workspace=layout, paths=self.paths, sources=self.sources, previous_contexts=self.contexts, signature=self.signature, commands=self.commands, plan=[self.runtime_command, self.build_command, self.loader_command, self.install_command, self.runtime_command, self.runtime_command], working_directory=self.paths['os'], copy=dict(source=prefix, destination=os.path.join(self.paths['destination'], 'usr/pkg/gcc16'), verification='exact pre/copy/post inventory'), not_checked=['target execution', 'ABI compatibility', 'SDK release'])
+        self.receipt = dict(format='emberbsd-sysroot-build', version=1, scope='sysroot-build', qualification='not-built', execution_acceptance='not-run', workspace=layout, paths=self.paths, sources=self.sources, previous_contexts=self.contexts, signature=self.signature, commands=self.commands, plan=[self.runtime_command, self.build_command, self.loader_command, self.install_command, self.runtime_command, self.runtime_command], working_directory=self.paths['os'], copy=dict(source=prefix, destination=os.path.join(self.paths['destination'], 'usr/pkg/gcc16'), verification='exact pre/copy/post inventory'), not_checked=['OS nested native-tool routing', 'target execution', 'ABI compatibility', 'SDK release'])
+        self.receipt['build_admission'] = dict(status='refused', reason=self.NATIVE_ROUTING_GAP)
         return self.receipt
 
     def mkdirs(self, path, boundary):
@@ -430,6 +489,10 @@ class SysrootBuilder:
                                  exclude=(self.RECEIPT, self.MARKER, self.LOG))
 
     def run(self):
+        # No unblock flag exists. A qualified top-level selection does not
+        # establish the OS producer's complete native utility contract.
+        if not self.options.get('plan'):
+            self.require_native_producer_routing()
         self.preflight()
         if self.options.get('plan'):
             return self.receipt

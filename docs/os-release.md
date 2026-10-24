@@ -1,5 +1,11 @@
 # Compose and publish OS releases
 
+Actual OS release builds currently fail before preflight or producer execution.
+The OS nested native-tool contract is not qualified. There is no override flag.
+A qualified [native toolset](native-toolset.md) permits a read-only `--plan`.
+The [sysroot guide](sysroot.md#recorded-producer-sequence) identifies the exact
+OS source routes that keep execution blocked.
+
 SDK owns release orchestration, kit composition and immutable publication.
 The OS owns `build.sh`, distribution rules, media layout and installer checks.
 Ports owns the common GCC16 compiler and its verified runtime.
@@ -48,6 +54,10 @@ python3 scripts/build-os-release.py \
   --libedit-source /absolute/prepared-libedit \
   --host-cc /absolute/native-gcc16/bin/gcc \
   --host-cxx /absolute/native-gcc16/bin/g++ \
+  --native-toolset /absolute/evidence/native-toolset.json \
+  --native-toolset-sha256 "$descriptor_hash" \
+  --native-producer-receipt /absolute/evidence/qualification.json \
+  --native-producer-receipt-sha256 "$accepted_receipt_hash" \
   --compiler /absolute/gcc16-cross \
   --runtime-work /absolute/gcc16-runtime-work \
   --gcc-archive /absolute/gcc-16.2.0.tar.xz \
@@ -56,14 +66,19 @@ python3 scripts/build-os-release.py \
   --jobs 4 --plan
 ```
 
-Inspect the plan before removing `--plan`. The workspace target must match the
+The plan reports `build_admission` as refused. Removing `--plan` still refuses
+execution. The workspace target must match the
 profile. The destination must be new or empty and must be outside the active
 sysroot. Use paths without whitespace. `--objects` and `--tools` select shared
 workspace object paths; reuse requires an identical compatible context.
 Do not point this producer at a core-sysroot object's incompatible context.
 No compilation or output writes occur in plan mode.
+The three driver/interpreter path options are checked aliases for the accepted
+native roles. The context binds the complete normalized native selection.
+Only native `HOST_*` flags receive its ABI arguments. Saved profile verification
+checks command and selection consistency; it does not requalify local tools.
 
-AArch64 runs `tools kernel=EMBER64`, then `distribution sets`.
+The recorded AArch64 sequence uses `tools kernel=EMBER64`, then `distribution sets`.
 The amd64 profile runs `tools release`, the OS UEFI `install_image` target,
 then `iso-image`. It retains GENERIC kernel and modules, with the INSTALL boot
 kernel profile selected through command variables. Both profiles omit native
@@ -73,7 +88,7 @@ OS sets do not own the external SDK or GCC16 package payload. Select one matchin
 Ports runtime provider separately and check image dependency closure before
 VM qualification. The adapter alone does not compose that runtime package.
 
-The producer records the exact commands, source commits, compiler/runtime
+After native routing qualification, the producer is designed to record exact commands, source commits, compiler/runtime
 hashes, source archive and output hashes. It sanitizes inherited make controls.
 The common SDK log and incomplete receipt remain on failure. `build-success`
 appears only after all producer operations and receipt checks succeed.

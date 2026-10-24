@@ -1,5 +1,10 @@
 # Select SDK build tools
 
+The sysroot and OS release commands currently refuse actual builds before
+preflight. The OS nested native-tool routes are not qualified. No override
+flag bypasses that gate. Their `--plan` mode requires accepted native-toolset
+evidence. A successful plan does not authorize execution.
+
 ## Required build policy
 
 Use the selected SDK tool set for OS, Ports, application, and test builds.
@@ -65,12 +70,21 @@ These exceptions do not authorize a Clang-built production generator.
 
 ## Native host compiler selection
 
-`sysroot_builder.SysrootBuilder` and the release builder require
-`--host-cc` and `--host-cxx`. Each value is the absolute path of a native
-GCC16 driver. The builder does not search `PATH` and has no `cc` or Clang
-fallback.
+`sysroot_builder.SysrootBuilder` and the release builder require the four
+selectors `--native-toolset`, `--native-toolset-sha256`,
+`--native-producer-receipt`, and `--native-producer-receipt-sha256`.
+The [NativeToolset API](native-toolset.md) verifies the accepted evidence and
+current files once for the configuration, before compiler or runtime queries.
+No descriptor, bootstrap seed, or self-supplied receipt hash is implicit.
 
-The common selector `host_compiler` refuses a missing or relative selection.
+`--host-cc`, `--host-cxx`, and `--python` remain explicit checked aliases.
+They must resolve to the selected native `cc`, `cxx`, and `python` members.
+Commands use the qualified selected spelling. The compiler identity record
+marks `origin=accepted-native-toolset` and binds the descriptor hash.
+Its version metadata comes from accepted evidence, not a new `--version` run.
+The builder does not repeat compiler probes through canonical aliases.
+
+The standalone legacy selector `host_compiler` refuses a missing or relative selection.
 It also refuses a driver that resolves into `/usr/bin`, `/usr/local`,
 `/opt/homebrew`, `/opt/local`, Xcode, or Command Line Tools.
 It queries the predefined macros and refuses `__clang__` or a `__GNUC__` other than 16.
@@ -78,12 +92,20 @@ It refuses a `--version` text that names Clang, LLVM, or Apple.
 Both drivers must report the same GCC version and machine.
 The receipt records the resolved path, hash, version text, machine, and the
 assembler and linker that each driver selects.
-The release builder refuses a recorded host tool set that the selector does not accept.
+Its path and query checks alone do not replace NativeToolset qualification.
+Offline release validation checks recorded native command paths and ABI flags,
+plus exact GCC family, full version, and native triplet consistency.
+Accepted version suffixes remain intact. This path does not apply the standalone
+selector's narrower version syntax. It does not consult mutable local tool
+paths or establish live qualification from a saved selection.
 `tests/test_host_compiler.py` contains the refusal regressions.
 
 ## Remaining enforcement gaps
 
-On Darwin, the native GCC16 driver uses the assembler and linker of the host
-SDK. The receipt records them; the selector does not yet replace them.
-Nested producers in Ports and OS build rules must also use the selected
-drivers. Check them as well as the top-level plan.
+The native loader requires receipt-bound in-bundle assembler and linker members.
+It refuses bare or external driver-component paths. A complete ordinary native
+provider and the separate bootstrap seed producer remain required inputs.
+The OS still searches for make and invokes undeclared utilities. The exact
+[source routes](sysroot.md#recorded-producer-sequence) prevent actual SDK builds.
+SDK-only planned `PATH` directories and four selected direct roles do not prove
+complete nested routing. Ports consumers need their own checked mappings too.

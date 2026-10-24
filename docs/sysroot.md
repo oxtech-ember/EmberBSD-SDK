@@ -1,8 +1,13 @@
 # Build an EmberBSD sysroot
 
-The SDK builder orchestrates the existing EmberBSD and Ports producers. It
-builds target headers, OS CRT and libraries, the dynamic loader, and the audited
-GCC16 developer support. It does not install a system on a board.
+Actual sysroot builds currently fail before preflight or producer execution.
+The OS producer does not yet enforce complete native-tool routing.
+There is no override flag. A qualified native toolset permits a read-only
+`--plan`; it does not remove this execution gate.
+
+The recorded producer sequence covers target headers, OS CRT and libraries,
+the dynamic loader, and audited GCC16 developer support. It does not install
+a system on a board.
 
 ## Required inputs
 
@@ -12,8 +17,13 @@ See [host platforms](host-platforms.md).
 Apply the [SDK tool selection policy](tool-selection.md).
 Use SDK native GCC16 for host programs and SDK cross GCC16 for target code.
 Keep host tools and target inputs separate.
-The current automatic `cc`/`c++` selection is an enforcement gap, not an approved default.
-Inspect that gap before treating a successful plan as permission to build.
+Select an accepted [native toolset](native-toolset.md) with its descriptor and
+independently accepted producer receipt, each pinned by SHA256.
+The loader runs before compiler or runtime queries. It requires the direct
+`cc`, `cxx`, `sh`, and `python` roles, in addition to its compiler-component checks.
+`--host-cc`, `--host-cxx`, and `--python` remain required checked aliases.
+They must resolve to the corresponding qualified role. Commands retain the
+qualified path spelling, including a qualified in-bundle symlink.
 
 Provide:
 
@@ -53,6 +63,10 @@ python3 scripts/build-sysroot.py \
   --libedit-source /absolute/prepared-libedit \
   --host-cc /absolute/native-gcc16/bin/gcc \
   --host-cxx /absolute/native-gcc16/bin/g++ \
+  --native-toolset /absolute/evidence/native-toolset.json \
+  --native-toolset-sha256 "$descriptor_hash" \
+  --native-producer-receipt /absolute/evidence/qualification.json \
+  --native-producer-receipt-sha256 "$accepted_receipt_hash" \
   --compiler /absolute/gcc16-cross \
   --runtime-work /absolute/gcc16-runtime-work \
   --gcc-archive /absolute/gcc-16.2.0.tar.xz \
@@ -60,9 +74,9 @@ python3 scripts/build-sysroot.py \
   --target aarch64 --jobs 2 --plan
 ```
 
-The plan validates inputs and reports the exact build commands. It does not
-compile or create a successful-build receipt. Remove `--plan` for the actual
-build only after the preflight succeeds.
+The plan validates inputs and reports the recorded build commands. It does not
+compile or create a successful-build receipt. It reports `build_admission`
+as refused. Removing `--plan` still refuses execution.
 
 The builder first compares `--target` with the canonical layout declaration.
 An unknown or different target fails before compiler, runtime or producer
@@ -81,8 +95,27 @@ Keep the active sysroot unchanged while other consumers use it.
 `obj`. Defaults use stable host/target names. Object reuse requires the recorded
 compiler, runtime, host, target and configuration context. The tool does not
 clear an incompatible context to make a build pass.
+The context includes the normalized native selection, descriptor hash, accepted
+producer receipt reference, tool paths, and ABI flags. An older context without
+that identity is incompatible. Native ABI flags map only to `HOST_CPPFLAGS`,
+`HOST_CFLAGS`, `HOST_CXXFLAGS`, and `HOST_LDFLAGS`. They do not enter target flags.
+The planned environment contains only directories of declared native tools in
+`PATH`. Git is selected separately for source inspection.
+This consumer refuses a native tool directory that contains the host `PATH`
+separator. Such a directory cannot be represented as one `PATH` entry.
 
-## Producer sequence
+## Recorded producer sequence
+
+Execution of this sequence remains blocked. At OS commit
+[`51e33e73`](https://github.com/oxtech-ember/EmberBSD/tree/51e33e73bad73e84801a4c99adcaa898b32f9e79),
+[`build.sh:1807`](https://github.com/oxtech-ember/EmberBSD/blob/51e33e73bad73e84801a4c99adcaa898b32f9e79/build.sh#L1807)
+searches `PATH` for make. Its
+[`bootstrap:1906`](https://github.com/oxtech-ember/EmberBSD/blob/51e33e73bad73e84801a4c99adcaa898b32f9e79/build.sh#L1906)
+invokes bare `env` and retains `${HOST_CC-cc}`.
+Its [shell selection](https://github.com/oxtech-ember/EmberBSD/blob/51e33e73bad73e84801a4c99adcaa898b32f9e79/build.sh#L408)
+also has system fallbacks. Selecting four direct roles does not qualify these
+nested utilities or their searches. The OS needs its own checked selector
+contract before this SDK execution gate can be replaced.
 
 The selected OS source provides these operations:
 

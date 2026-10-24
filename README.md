@@ -80,6 +80,9 @@ maintain another compiler recipe or another libc.
 ## Build and validation boundaries
 
 Follow the [SDK tool selection policy](docs/tool-selection.md), including its current enforcement gap.
+Sysroot and OS release execution currently fails before preflight until the OS
+nested native-tool contract is qualified. Accepted native-toolset evidence
+permits read-only plans; there is no execution override.
 Use SDK native GCC16 for host generators and SDK cross GCC16 for EmberBSD target code.
 Reject implicit system compiler and build-tool selection.
 Use [native toolset validation](docs/native-toolset.md) to check an explicit bundle

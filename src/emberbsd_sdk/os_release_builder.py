@@ -11,8 +11,8 @@ import re
 import shutil
 
 from .errors import SDKError
-from . import host_compiler, inventory, jsonio, libedit
-from .sysroot_builder import SysrootBuilder
+from . import inventory, jsonio, libedit
+from .sysroot_builder import SysrootBuilder, native_host_flags
 from .targets import target_definition
 from .os_release import check, full_hash, tag, images, product_version, source_version, KERNEL, SYSROOT_SETS
 
@@ -31,14 +31,14 @@ def flags_for(target):
     return common + [f'{k}={v}' for k, v in replacements.items()]
 
 
-def producer_commands(target, paths, host, sha, timestamp, jobs, shell):
+def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_selection):
     definition = target_definition(target)
     flags = flags_for(target) + [f'EXTERNAL_TOOLCHAIN={paths["compiler"]}',
         f'EMBER_EXTERNAL_GCC_RUNTIME={paths["runtime-prefix"]}',
         f'EMBER_LIBEDIT_SOURCE={paths["libedit-source"]}',
-        f'HOST_CC={host["cc"]["path"]}', f'HOST_CXX={host["c++"]["path"]}',
+        f'HOST_CC={native_selection["tools"]["cc"]}', f'HOST_CXX={native_selection["tools"]["cxx"]}',
         f'MKREPRO_TIMESTAMP={timestamp}', f'EMBER_BUILD_ID={sha}', f'BUILDINFO=EmberBSD:{sha}',
-        f'KERNOBJDIR={paths["objects"]}/kernels']
+        f'KERNOBJDIR={paths["objects"]}/kernels'] + native_host_flags(native_selection)
     if target == 'aarch64':
         flags += ['RELEASEMACHINEDIR=evbarm-aarch64', 'MAKETARSETS=base comp', 'MKDEBUGKERNEL=no']
     else:
@@ -61,6 +61,28 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell):
                      'INSTIMG_RELEASEDIR=' + paths['destination'] + '/release/images', 'install_image'],
                     base + ['iso-image']]
     return flags, commands
+
+
+def check_native_command_identity(signature, shell):
+    """Check saved command consistency, without establishing live qualification."""
+    native = signature['native_toolset']
+    check(type(native['api']) is int and native['api'] == 1 and full_hash(native['descriptor_sha256']) and
+          full_hash(native['producer_receipt']['sha256']), 'Missing native selection identity')
+    version = native['compiler']['version']
+    check(native['compiler']['family'] == 'gcc' and isinstance(version, str) and
+          re.fullmatch(r'16\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9_.-]+)?', version) is not None and
+          set(signature['host_tools']) == {'cc', 'c++'}, 'Missing native GCC16 compiler identity')
+    check(all(record.get('origin') == 'accepted-native-toolset' and
+              record.get('descriptor_sha256') == native['descriptor_sha256'] and
+              record.get('gcc_version') == native['compiler']['version'] and
+              record.get('version') == native['compiler']['version'] and
+              record.get('machine') == native['compiler']['triplet'] and full_hash(record.get('sha256'))
+              for record in signature['host_tools'].values()), 'Mixed native compiler identity origin')
+    check(native['tools']['cc'] == signature['host_tools']['cc']['selected'] and
+          native['tools']['cxx'] == signature['host_tools']['c++']['selected'] and
+          native['tools']['python'] == signature['python']['path'] and
+          native['tools']['sh'] == shell, 'Mixed native selection and producer commands')
+    return native
 
 
 def validate_profile(profile, sha, target):
@@ -104,8 +126,10 @@ def validate_profile(profile, sha, target):
     for key in ('os', 'ports', 'sdk-source', 'compiler', 'runtime-prefix', 'objects', 'tools', 'destination', 'libedit-source'):
         check(isinstance(paths[key], str) and paths[key].startswith('/') and not re.search(r'\s', paths[key]), 'Invalid producer path')
     check(signature['target'] == target_definition(target), 'Mixed target signature')
-    host_compiler.check_record(signature['host_tools'])
-    flags, commands = producer_commands(target, paths, signature['host_tools'], sha, profile['source_timestamp'], profile['jobs'], profile['shell'])
+    # This checks saved command consistency. Only load_native_toolset can
+    # establish a live selection from independently accepted evidence.
+    native = check_native_command_identity(signature, profile['shell'])
+    flags, commands = producer_commands(target, paths, signature['host_tools'], sha, profile['source_timestamp'], profile['jobs'], profile['shell'], native)
     check(signature['flags'] == flags and profile['commands'] == commands, 'Build command does not select the exact required profile')
     executed = [r for r in receipt['commands'] if r.get('scope') != 'runtime-check']
     check([r['argv'] for r in executed] == commands and all(r['status'] == 'passed' and r['exit_status'] == 0 for r in executed),
@@ -131,7 +155,7 @@ class OSReleaseBuilder(SysrootBuilder):
         self.product_version = source_version(Path(self.paths['os'], 'share/mk/bsd.own.mk').read_text())
         self.signature['product_version'] = self.product_version
         self.flags, self.release_commands = producer_commands(self.options['target'], self.paths, self.host_tools,
-            self.sources['os']['commit'], self.timestamp, self.options['jobs'], self.shell)
+            self.sources['os']['commit'], self.timestamp, self.options['jobs'], self.shell, self.native_selection)
         self.signature['flags'] = self.flags
         self.signature['release_profile'] = self.options['target']
 
@@ -140,7 +164,7 @@ class OSReleaseBuilder(SysrootBuilder):
         super().preflight()
         self.receipt.update(format='emberbsd-os-release-build', version=2, scope='os-release-build',
                             previous_contexts=self.contexts, plan=[self.runtime_command, *self.release_commands, self.runtime_command],
-                            not_checked=['target execution', 'VM installation', 'physical hardware', 'binary publication'])
+                            not_checked=['OS nested native-tool routing', 'target execution', 'VM installation', 'physical hardware', 'binary publication'])
         self.receipt.pop('copy', None)
         return self.receipt
 

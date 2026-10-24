@@ -16,12 +16,20 @@ import tarfile
 from unittest.mock import patch
 
 from test_core import TemporaryCase, header, SDK_SOURCE
-from test_builder import fixture, write, commit, snapshot
+from test_builder import fixture, write, commit, snapshot, fixture_native_selection
 from libedit_fixture import installation_source
 from emberbsd_sdk import os_release as kit, jsonio
-from emberbsd_sdk.os_release_builder import OSReleaseBuilder, validate_profile
+from emberbsd_sdk.os_release_builder import OSReleaseBuilder as ProductionReleaseBuilder, validate_profile
 from emberbsd_sdk.os_release_github import GitHub
 from emberbsd_sdk.errors import SDKError
+
+
+class OSReleaseBuilder(ProductionReleaseBuilder):
+    """Keep original fake release dispatch tests separate from admission."""
+    select_native_toolset = fixture_native_selection
+
+    def require_native_producer_routing(self):
+        pass
 
 
 def tar_bytes(files, mode='w:xz'):
@@ -292,6 +300,27 @@ else: raise SystemExit('unexpected operation')
 
 
 class BuilderReleaseTests(TemporaryCase):
+    def test_saved_profile_preserves_accepted_native_version_suffix(self):
+        options = release_fixture(self.root, 'aarch64')
+        receipt = OSReleaseBuilder(options).run()
+        profile = jsonio.read_json(Path(options['destination']) / 'build-profile.json')
+        signature = profile['sdk_receipt']['signature']
+        signature['native_toolset']['compiler']['version'] = '16.2.0+sdk.1'
+        for record in signature['host_tools'].values():
+            record['version'] = record['gcc_version'] = '16.2.0+sdk.1'
+        # The old standalone regex rejected this otherwise consistent profile.
+        validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
+        previous_major = copy.deepcopy(profile)
+        old_signature = previous_major['sdk_receipt']['signature']
+        old_signature['native_toolset']['compiler']['version'] = '15.2.0'
+        for record in old_signature['host_tools'].values():
+            record['version'] = record['gcc_version'] = '15.2.0'
+        with self.assertRaisesRegex(SDKError, 'Missing native GCC16 compiler identity'):
+            validate_profile(previous_major, receipt['sources']['os']['commit'], 'aarch64')
+        signature['host_tools']['c++']['gcc_version'] = '16.2.0'
+        with self.assertRaisesRegex(SDKError, 'Mixed native compiler identity'):
+            validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
+
     def test_release_rejects_incomplete_installed_libedit(self):
         for failure in ('missing_libedit', 'missing_histedit', 'missing_editline_marker', 'wrong_editline_marker',
                         'wrong_libedit_soname', 'extra_libedit_provider'):
