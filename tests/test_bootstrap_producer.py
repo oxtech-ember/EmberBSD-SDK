@@ -125,6 +125,8 @@ class MetadataTests(unittest.TestCase):
             self.assertEqual(row['env']['PATH'], str(self.utility_bin))
             self.assertEqual(row['env']['TMPDIR'], str(self.work))
         variables = set(producer.VARIABLES)
+        self.assertEqual(len(producer.VARIABLES), 56)
+        self.assertIn('BOOTSTRAP_DEPENDS', variables)
         self.assertTrue(set('WRKDIR WRKSRC OBJDIR CONFIGURE_DIRS BUILD_DIRS MAKE_DIRS DISTFILES '
                             'EXTRACT_ONLY MASTER_SITES DIST_SUBDIR PATCHFILES PATCH_SITES '
                             'MACHINE_GNU_PLATFORM GCC_TARGET_MACHINE'.split()) <= variables)
@@ -133,6 +135,17 @@ class MetadataTests(unittest.TestCase):
                          [word for name in producer.VARIABLES for word in ('-V', name + '=${' + name + '}')])
         self.assertNotIn('show-vars', argv)
         self.assertNotIn('show-vars-eval', argv)
+        self.assertEqual(argv.count('BOOTSTRAP_DEPENDS=${BOOTSTRAP_DEPENDS}'), 1)
+
+    def test_current_source_refuses_legacy_producer_commands(self):
+        # Retain historical plans with their exact old SDK source. The new
+        # parser can read accepted old logs without admitting old live queries.
+        for step in self.plan['commands']:
+            if step['id'].endswith('-vars'):
+                self.assertEqual(step['argv'][-2:], ['-V', 'BOOTSTRAP_DEPENDS=${BOOTSTRAP_DEPENDS}'])
+                del step['argv'][-2:]
+        with self.assertRaisesRegex(SDKError, 'fixed source-owned query'):
+            self.validate()
 
     def test_parallel_profile_histories_emit_the_same_budget_and_launcher(self):
         original = copy.deepcopy(self.plan)

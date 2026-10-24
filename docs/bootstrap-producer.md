@@ -118,17 +118,29 @@ routes, dependency inputs, tools, and consumed makefiles. It also includes
 `WRKDIR`, `WRKSRC`, `OBJDIR`, `CONFIGURE_DIRS`, `BUILD_DIRS`, `MAKE_DIRS`,
 `DISTFILES`, `EXTRACT_ONLY`, `MASTER_SITES`, `DIST_SUBDIR`, `PATCHFILES`, and `PATCH_SITES`.
 `MACHINE_GNU_PLATFORM` and `GCC_TARGET_MACHINE` pin the output compiler triplet.
+The current 56-name roster also observes `BOOTSTRAP_DEPENDS` directly. Keep
+these prerequisites in the complete build graph. The common `show-depends`
+target does not support that variable; do not use it as an extra query target.
 These exact fields support the later object-directory and distfile plan.
 The caller cannot add an arbitrary variable query.
 The variables command has no target. bmake expands each expression directly.
 It does not use recipe echo commands or job-output blank-line filtering.
 Use `metadata_values(log_reference)` to read a pinned variables log.
-The helper requires all fixed names once, in their declared order.
+The helper accepts exactly the current 56-name roster or the previous fixed
+55-name `LEGACY_VARIABLES` roster. It requires all names once, in their order.
+It returns only observed keys. A legacy record has no `BOOTSTRAP_DEPENDS` key;
+the helper does not invent an empty value. A complete new dependency graph
+must require that observation. Keep each old raw log linked to its accepted
+command, result and exact SDK source before using it as local-source proof.
 It partitions each line at the first `=` and preserves the remaining value.
 It does not execute shell code or remove quoting and backslashes.
 Diagnostics, missing fields, extra lines, embedded newlines, CR and NUL are refused.
 An empty value does not distinguish an undefined make variable from a defined empty variable.
 The helper reads observations. It does not issue qualification or accept a dependency graph.
+New producer plans always use the 56-name command. Replay a historical
+55-name producer plan with its exact retained SDK source. New-source plan
+validation refuses the old command tuple. Reader compatibility does not
+admit an old live query or relabel old observations as a complete build graph.
 Each recognized parallel Ports profile also needs `EMBERBSD_DARWIN_CPU_BUDGET`.
 SDK sets it to the accepted job count. Metadata with that profile uses one job
 and an empty linker prefix. A parallel recipe build needs the separate full-plan

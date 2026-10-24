@@ -28,7 +28,7 @@ PARALLEL_PROFILE_SHA256 = '6adbb69112056a867b463fd825a0842294b1eb7e67331433184c1
 BUILTIN_PROFILE_SHA256 = '73209380dcfeeb36abe13f0637a87bc1fd441817c98458ffb92751605c7b543b'
 LIBTOOL_PROFILE_SHA256 = 'ec0354fe315fb02605be2e08299b7495590fc1086d511f67093f4fbb8f4775e0'
 EARLY_TOOLS = tuple('awk basename cat cut date dirname env expr grep head id pwd sed sort tail tr uname uniq wc'.split())
-VARIABLES = tuple('PKGNAME PKGPATH PKGVERSION PKGREVISION OPSYS MACHINE_ARCH NATIVE_OPSYS NATIVE_OS_VERSION '
+LEGACY_VARIABLES = tuple('PKGNAME PKGPATH PKGVERSION PKGREVISION OPSYS MACHINE_ARCH NATIVE_OPSYS NATIVE_OS_VERSION '
                   'NATIVE_OPSYS_VERSION PKGSRC_COMPILER GCC_REQD _GCC_VERSION CC CXX CPP PKG_CC PKG_CXX '
                   'PKG_CPP CPPFLAGS CFLAGS CXXFLAGS LDFLAGS CWRAPPERS_PREPEND.cc CWRAPPERS_PREPEND.cxx '
                   'CWRAPPERS_PREPEND.cpp _WRAP_EXTRA_ARGS.CC _WRAP_EXTRA_ARGS.CXX _WRAP_EXTRA_ARGS.CPP '
@@ -36,6 +36,7 @@ VARIABLES = tuple('PKGNAME PKGPATH PKGVERSION PKGREVISION OPSYS MACHINE_ARCH NAT
                   'WRKDIR WRKSRC OBJDIR CONFIGURE_DIRS BUILD_DIRS MAKE_DIRS DISTFILES EXTRACT_ONLY '
                   'MASTER_SITES DIST_SUBDIR PATCHFILES PATCH_SITES MACHINE_GNU_PLATFORM GCC_TARGET_MACHINE '
                   'MAKE SHELL MAKECONF NATIVE_PKG_INFO_CMD NATIVE_PKG_ADMIN_CMD .MAKE.MAKEFILES'.split())
+VARIABLES = (*LEGACY_VARIABLES, 'BOOTSTRAP_DEPENDS')
 
 
 def _parallel_profile(digest):
@@ -57,9 +58,10 @@ def metadata_values(reference):
     _require(text.endswith('\n') and '\r' not in text and '\x00' not in text,
              'unsupported metadata observation framing')
     lines = text.split('\n')[:-1]
-    _require(len(lines) == len(VARIABLES), 'metadata observations must contain the complete fixed roster')
+    rosters = {len(VARIABLES): VARIABLES, len(LEGACY_VARIABLES): LEGACY_VARIABLES}
+    _require(len(lines) in rosters, 'metadata observations must contain a complete fixed roster')
     result = {}
-    for expected, line in zip(VARIABLES, lines):
+    for expected, line in zip(rosters[len(lines)], lines):
         name, separator, value = line.partition('=')
         _require(separator and name == expected,
                  'metadata observation names or order differ from the fixed roster')

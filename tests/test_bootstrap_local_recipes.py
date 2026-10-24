@@ -77,6 +77,18 @@ class LocalRecipeTests(unittest.TestCase):
                         for path in (self.case.work / 'distfiles').rglob('*') if path.is_file())
         self.assertEqual(actual, sorted(expected))
 
+    def test_exact_legacy_logs_keep_local_source_proof_links(self):
+        for name in LOCAL_LAYOUTS:
+            values = {key: '' for key in producer.LEGACY_VARIABLES}
+            values['PKGPATH'] = name
+            raw = ''.join(key + '=' + values[key] + '\n' for key in producer.LEGACY_VARIABLES).encode()
+            reference = self.f.raw(raw)
+            self.plan['recipes'][name]['distfile_metadata'] = reference
+            self.assertNotIn('BOOTSTRAP_DEPENDS', producer.metadata_values(reference))
+        with patch('subprocess.Popen', side_effect=AssertionError('no native process')):
+            self.assertEqual(self.case.validate(), self.plan)
+            self.assertEqual(self.case.validate(inspect_inputs=False), self.plan)
+
     def test_nonlocal_and_legacy_empty_distfiles_are_refused(self):
         original = copy.deepcopy(self.plan['recipes']['devel/gmp']['distfiles'])
         for metadata in (False, True):
