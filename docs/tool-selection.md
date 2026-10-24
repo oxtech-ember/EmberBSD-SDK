@@ -22,6 +22,8 @@ Keep native executables separate from target ELF files.
 Use current shared Ports recipes for third-party tools and dependencies.
 Keep native OS tool build rules in the OS repository.
 SDK selects and records these producers; it must not copy their recipes.
+Use the [first-native GCC16 bootstrap contract](bootstrap-seed.md) when no qualified
+native GCC16 exists. That scoped seed cannot be used as an ordinary provider.
 
 Select the entire build tool set explicitly.
 This includes preprocessors, assemblers, linkers, archivers, metadata tools,

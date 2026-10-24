@@ -104,9 +104,9 @@ def _json(reference):
     return result
 
 
-def _envelope(value, name):
+def _envelope(value, name, *, scope='native-build'):
     _require(value.get('format') == name and type(value.get('version')) is int
-             and value['version'] == 1 and value.get('scope') == 'native-build',
+             and value['version'] == 1 and value.get('scope') == scope,
              f'unsupported {name} format, version or scope')
 
 
@@ -140,7 +140,7 @@ def _gcc(value, host):
              'compiler triplet does not describe the actual native host')
 
 
-def _native_image(path, host, *, object_file=False):
+def _native_image(path, host, *, object_file=False, shared_library=False):
     """Reject scripts, target images and renamed wrappers before selection."""
     handle, before = open_regular(path)
     with handle:
@@ -151,13 +151,13 @@ def _native_image(path, host, *, object_file=False):
         expected = {'x86_64': 0x01000007, 'aarch64': 0x0100000c}.get(cpu)
         valid = len(header) >= 32 and header[:4] == b'\xcf\xfa\xed\xfe'
         valid = valid and struct.unpack_from('<I', header, 4)[0] == expected
-        valid = valid and struct.unpack_from('<I', header, 12)[0] == (1 if object_file else 2)
+        valid = valid and struct.unpack_from('<I', header, 12)[0] == (1 if object_file else 6 if shared_library else 2)
     else:
         expected = {'x86_64': 62, 'aarch64': 183}.get(cpu)
         valid = len(header) >= 64 and header[:7] == b'\x7fELF\x02\x01\x01'
         valid = valid and struct.unpack_from('<H', header, 18)[0] == expected
-        valid = valid and struct.unpack_from('<H', header, 16)[0] in ((1,) if object_file else (2, 3))
-    kind = 'object' if object_file else 'executable, not a wrapper'
+        valid = valid and struct.unpack_from('<H', header, 16)[0] in ((1,) if object_file else (3,) if shared_library else (2, 3))
+    kind = 'object' if object_file else 'shared library' if shared_library else 'executable, not a wrapper'
     _require(expected is not None and valid, f'expected a native {kind}: {path}')
 
 
@@ -221,6 +221,99 @@ def _flags(value, allowed_roots=None):
             index += 1
         result[name] = tuple(normalized)
     return MappingProxyType(result)
+
+
+def _payload(descriptor, required_roles):
+    """Shared current-byte checks for native and separately scoped seed inputs."""
+    root = _absolute(descriptor['bundle_root'])
+    _require(canonical_existing(root) == root and os.path.isdir(root),
+             'bundle root must be a real directory with real ancestors')
+    provider_root(root, live=True)
+    host, compiler, providers = descriptor['host'], descriptor['compiler'], descriptor['providers']
+    inventory = _json(descriptor['inventory'])
+    _require(not inside(descriptor['inventory']['path'], root),
+             'inventory must be outside its payload')
+    _require(snapshot_tree(root) == inventory, 'native bundle inventory changed')
+    tools, records = {}, descriptor['tools']
+    _require(isinstance(records, dict) and records, 'explicit tool members are required')
+    _require(isinstance(required_roles, (list, tuple, set, frozenset)) and required_roles,
+             'required_roles must be an explicit nonempty collection')
+    required = set(required_roles) | {'cc', 'cxx', 'cpp', 'as', 'ld'}
+    for role in required:
+        _require(isinstance(role, str) and _ROLE.fullmatch(role) and role in records,
+                 f'missing required native tool role: {role}')
+    for role, record in records.items():
+        _require(isinstance(role, str) and _ROLE.fullmatch(role), 'invalid tool role')
+        selected = _absolute(record['path'])
+        resolved = canonical_existing(selected)
+        _require(inside(selected, root) and inside(resolved, root),
+                 f'tool is outside the native bundle: {role}')
+        _require(record['provider'] in providers, f'unknown provider: {role}')
+        _text(record['version'], 'tool version')
+        if role in ('cc', 'cxx', 'cpp'):
+            _require(record['version'] == compiler['version'], 'compiler member version mismatch')
+        _require(sha256_file(resolved) == _sha(record['sha256']) and
+                 stat.S_IMODE(os.stat(resolved).st_mode) & 0o111,
+                 f'changed or nonexecutable native member: {role}')
+        tools[role] = selected
+        if record['kind'] == 'native':
+            _native_image(resolved, host)
+        else:
+            _require(record['kind'] == 'script' and role not in
+                     {'cc', 'cxx', 'cpp', *_DRIVERS}, 'compiler wrappers are not native tools')
+    for role, record in records.items():
+        if record['kind'] == 'script':
+            interpreter = record.get('interpreter')
+            _require(interpreter in records and records[interpreter]['kind'] == 'native',
+                     'script needs an explicit native interpreter member')
+            _require(not any(char.isspace() for char in tools[interpreter]),
+                     'script interpreter path must not contain whitespace')
+            handle, before = open_regular(canonical_existing(tools[role]))
+            with handle:
+                first = handle.readline(4097)
+            verify_stable(canonical_existing(tools[role]), before)
+            _require(first == ('#!' + tools[interpreter] + '\n').encode('utf-8'),
+                     'script shebang must select exactly its bundled interpreter')
+    abi = descriptor['host_abi']
+    _require(isinstance(abi, dict) and set(abi) == {'headers', 'libraries'},
+             'native ABI headers and libraries must be separate inputs')
+    roots, abi_inventories = [root], []
+    for kind in ('headers', 'libraries'):
+        _require(isinstance(abi[kind], list) and abi[kind], f'missing native ABI {kind}')
+        for item in abi[kind]:
+            abi_root = _absolute(item['root'])
+            _require(canonical_existing(abi_root) == abi_root and os.path.isdir(abi_root),
+                     'ABI root must be a real directory')
+            abi_inventory = _json(item['inventory'])
+            _require(snapshot_tree(abi_root) == abi_inventory,
+                     f'native ABI {kind} inventory changed')
+            roots.append(abi_root)
+            abi_inventories.append((abi_root, abi_inventory))
+    flags = _flags(descriptor['abi_flags'], roots)
+    return root, inventory, tools, records, abi_inventories, flags
+
+
+def _driver_queries(descriptor, checks, tools, commands):
+    compiler, records = descriptor['compiler'], descriptor['tools']
+    for option, expected in (('-dumpfullversion', compiler['version']),
+                             ('-dumpmachine', compiler['triplet'])):
+        for role in ('cc', 'cxx'):
+            query = checks['identity'][role][option]
+            _require(query.get('argv') == [*commands[role], option], 'compiler identity query mismatch')
+            _require(_command(query, tools[role]).decode('utf-8', 'strict').strip() == expected,
+                     'compiler identity output mismatch')
+    components = descriptor['driver_components']
+    _require(set(components) == set(_DRIVERS), 'incomplete GCC driver closure')
+    for component, role in components.items():
+        _require(role in tools and records[role]['kind'] == 'native', 'driver member is not native')
+        if component in ('as', 'ld'):
+            _require(role == component, 'assembler and linker must match selected native roles')
+        driver = 'cxx' if component == 'cc1plus' else 'cc'
+        query = checks['driver_components'][component]
+        _require(query.get('argv') == [*commands[driver], '-print-prog-name=' + component],
+                 'driver component query mismatch')
+        output = _command(query, tools[driver]).decode('utf-8', 'strict').strip()
+        _require(output == tools[role], f'driver selected an undeclared or implicit member: {component}')
 
 
 @dataclass(frozen=True)
@@ -334,69 +427,21 @@ def _load(path, descriptor_sha256, accepted_producer_receipt, required_roles):
                  build.get('recipe_sha256') == provider['recipe_sha256'],
                  'provider build does not match its source and recipe')
         _gcc(build['compiler'], host)
-        _require(build.get('accepted_input_scope') == 'qualified-native',
-                 'bootstrap seed is not an ordinary native provider')
-        _bytes(build['build_log'])
-    inventory = _json(descriptor['inventory'])
-    _require(not inside(descriptor['inventory']['path'], root),
-             'inventory must be outside its payload')
-    _require(snapshot_tree(root) == inventory, 'native bundle inventory changed')
-    tools, records = {}, descriptor['tools']
-    _require(isinstance(records, dict) and records, 'explicit tool members are required')
-    _require(isinstance(required_roles, (list, tuple, set, frozenset)) and required_roles,
-             'required_roles must be an explicit nonempty collection')
-    required = set(required_roles) | {'cc', 'cxx', 'cpp', 'as', 'ld'}
-    for role in required:
-        _require(isinstance(role, str) and _ROLE.fullmatch(role) and role in records,
-                 f'missing required native tool role: {role}')
-    for role, record in records.items():
-        _require(isinstance(role, str) and _ROLE.fullmatch(role), 'invalid tool role')
-        selected = _absolute(record['path'])
-        resolved = canonical_existing(selected)
-        _require(inside(selected, root) and inside(resolved, root),
-                 f'tool is outside the native bundle: {role}')
-        _require(record['provider'] in providers, f'unknown provider: {role}')
-        _text(record['version'], 'tool version')
-        if role in ('cc', 'cxx', 'cpp'):
-            _require(record['version'] == compiler['version'], 'compiler member version mismatch')
-        _require(sha256_file(resolved) == _sha(record['sha256']) and
-                 stat.S_IMODE(os.stat(resolved).st_mode) & 0o111,
-                 f'changed or nonexecutable native member: {role}')
-        tools[role] = selected
-        if record['kind'] == 'native':
-            _native_image(resolved, host)
+        if build.get('accepted_input_scope') == 'bootstrap-seed':
+            # Only the first native GCC16 recipe closure can graduate. The seed
+            # scope remains unchanged. Final ordinary qualification is still required.
+            from .bootstrap_seed import verify_native_gcc16_graduation
+            verify_native_gcc16_graduation(
+                build.get('bootstrap_graduation'), output_descriptor=descriptor,
+                output_descriptor_sha256=descriptor_sha256, provider=provider)
         else:
-            _require(record['kind'] == 'script' and role not in
-                     {'cc', 'cxx', 'cpp', *_DRIVERS}, 'compiler wrappers are not native tools')
-    for role, record in records.items():
-        if record['kind'] == 'script':
-            interpreter = record.get('interpreter')
-            _require(interpreter in records and records[interpreter]['kind'] == 'native',
-                     'script needs an explicit native interpreter member')
-            _require(not any(char.isspace() for char in tools[interpreter]),
-                     'script interpreter path must not contain whitespace')
-            handle, before = open_regular(canonical_existing(tools[role]))
-            with handle:
-                first = handle.readline(4097)
-            verify_stable(canonical_existing(tools[role]), before)
-            _require(first == ('#!' + tools[interpreter] + '\n').encode('utf-8'),
-                     'script shebang must select exactly its bundled interpreter')
+            _require(build.get('accepted_input_scope') == 'qualified-native',
+                     'bootstrap seed is not an ordinary native provider')
+            _require('bootstrap_graduation' not in build,
+                     'bootstrap input scope cannot be relabeled as qualified-native')
+        _bytes(build['build_log'])
+    root, inventory, tools, records, abi_inventories, flags = _payload(descriptor, required_roles)
     abi = descriptor['host_abi']
-    _require(isinstance(abi, dict) and set(abi) == {'headers', 'libraries'},
-             'native ABI headers and libraries must be separate inputs')
-    roots, abi_inventories = [root], []
-    for kind in ('headers', 'libraries'):
-        _require(isinstance(abi[kind], list) and abi[kind], f'missing native ABI {kind}')
-        for item in abi[kind]:
-            abi_root = _absolute(item['root'])
-            _require(canonical_existing(abi_root) == abi_root and os.path.isdir(abi_root),
-                     'ABI root must be a real directory')
-            abi_inventory = _json(item['inventory'])
-            _require(snapshot_tree(abi_root) == abi_inventory,
-                     f'native ABI {kind} inventory changed')
-            roots.append(abi_root)
-            abi_inventories.append((abi_root, abi_inventory))
-    flags = _flags(descriptor['abi_flags'], roots)
     _require(receipt.get('host_abi') == abi and receipt.get('abi_flags') == descriptor['abi_flags'],
              'producer native ABI inputs mismatch')
     checks = receipt['checks']
@@ -426,25 +471,7 @@ def _load(path, descriptor_sha256, accepted_producer_receipt, required_roles):
             _require(stdout == (expected_output if phase == 'run' else b''),
                      f'native {phase} output mismatch')
         _require(_bytes(probe['run']['stderr']) == b'', 'native probe wrote unexpected stderr')
-    for option, expected in (('-dumpfullversion', compiler['version']),
-                             ('-dumpmachine', compiler['triplet'])):
-        for role in ('cc', 'cxx'):
-            query = checks['identity'][role][option]
-            _require(query.get('argv') == [tools[role], option], 'compiler identity query mismatch')
-            _require(_command(query, tools[role]).decode('utf-8', 'strict').strip() == expected,
-                     'compiler identity output mismatch')
-    components = descriptor['driver_components']
-    _require(set(components) == set(_DRIVERS), 'incomplete GCC driver closure')
-    for component, role in components.items():
-        _require(role in tools and records[role]['kind'] == 'native', 'driver member is not native')
-        if component in ('as', 'ld'):
-            _require(role == component, 'assembler and linker must match selected native roles')
-        driver = 'cxx' if component == 'cc1plus' else 'cc'
-        query = checks['driver_components'][component]
-        _require(query.get('argv') == [tools[driver], '-print-prog-name=' + component],
-                 'driver component query mismatch')
-        output = _command(query, tools[driver]).decode('utf-8', 'strict').strip()
-        _require(output == tools[role], f'driver selected an undeclared or implicit member: {component}')
+    _driver_queries(descriptor, checks, tools, {role: (path,) for role, path in tools.items()})
     audit = _json(receipt['execution_audit'])
     _envelope(audit, 'emberbsd-native-execution-audit')
     _require(audit.get('status') == 'PASS' and audit.get('descriptor_sha256') == descriptor_sha256

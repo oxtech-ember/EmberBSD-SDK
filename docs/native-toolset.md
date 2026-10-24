@@ -37,6 +37,8 @@ It must accept the native C and C++ compile, link, and run results.
 This loader does not replace that producer or perform that acceptance decision.
 A compiler name, version output, copied binary, symlink, or file hash is insufficient.
 Bootstrap seed qualification has a separate scope. This API refuses bootstrap inputs.
+The [first-native GCC16 contract](bootstrap-seed.md) defines separate seed admission
+and output graduation. Graduation does not replace final qualification.
 
 ## Consumer interface
 
@@ -207,7 +209,10 @@ scope `native-build`, status `PASS`, and these fields:
 The compiler must be native GCC16. The source and recipe must match the provider.
 The acceptance gate must qualify that build and its compiler inputs.
 A historical Clang build or unqualified bootstrap seed is not an ordinary provider.
-The first bootstrap producer contract is separate and is not implemented here.
+For the first native GCC16, the separate [bootstrap contract](bootstrap-seed.md)
+permits `accepted_input_scope: "bootstrap-seed"` only with its complete
+`bootstrap_graduation` evidence reference. The seed keeps its original scope.
+The output must still pass every ordinary qualification check below.
 
 The execution audit has format `emberbsd-native-execution-audit`, version `1`,
 scope `native-build`, status `PASS`, matching `descriptor_sha256` and `host`,
