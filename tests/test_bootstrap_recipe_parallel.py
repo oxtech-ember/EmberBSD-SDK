@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 import test_bootstrap_recipe
-from emberbsd_sdk import bootstrap_producer as producer, bootstrap_recipe as recipe
+from emberbsd_sdk import bootstrap_pilot, bootstrap_producer as producer, bootstrap_recipe as recipe
 from emberbsd_sdk.errors import ProcessOwnershipError, SDKError
 from emberbsd_sdk.inventory import sha256_file, snapshot_tree
 from emberbsd_sdk.process import ContextLocks
@@ -54,7 +54,7 @@ class ParallelRecipeTests(unittest.TestCase):
         case.plan['ports_export'] = dict(source=case.descriptor['sources']['ports'], **metadata['export'])
         launcher = str(Path(recipe.__file__).resolve().parents[2] / 'scripts/link-launcher.py')
         case.plan['link_control'] = {
-            'python': dict(path=sys.executable, sha256=sha256_file(sys.executable)),
+            'python': dict(path=sys.executable, sha256=sha256_file(str(Path(sys.executable).resolve(strict=True)))),
             'launcher': dict(path=launcher, sha256=sha256_file(launcher))}
         case.plan['resources']['cpu_jobs'] = 18
         case.refresh()
@@ -83,6 +83,120 @@ class ParallelRecipeTests(unittest.TestCase):
         for name, value in data.items():
             if name.startswith('EMBERBSD_GCC16_SEED_') or name in ('LDFLAGS', 'OSX_SDK_PATH'):
                 self.assertEqual(value, expected[name])
+
+    def control_alias(self):
+        case = self.case
+        target = case.base / 'control-python-target'
+        target.write_bytes(b'synthetic current control Python; never executed\n')
+        target.chmod(0o755)
+        alias = case.base / 'current-control-python'
+        alias.symlink_to(target.name)
+        case.plan['link_control']['python'] = dict(path=str(alias), sha256=sha256_file(str(target)))
+        case.refresh()
+        return alias, target
+
+    def test_current_python_symlink_keeps_invocation_and_leases_its_target(self):
+        case = self.case
+        alias, target = self.control_alias()
+        def inspect(argv, log, **kwargs):
+            for context in (str(alias), str(target)):
+                lock = case.base / ('.prebuild-sdk-lock-' + hashlib.sha256(context.encode()).hexdigest())
+                with lock.open('rb') as handle:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return case.fake_command(argv, log, **kwargs)
+        with patch.object(recipe.sys, 'executable', str(alias)), \
+                patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=inspect):
+            self.assertEqual(case.validate(), case.plan)
+            self.assertEqual(shlex.split(recipe.recipe_linker_launcher(case.plan))[0], str(alias))
+            with self.assertRaises(SDKError):
+                recipe._file(case.plan['link_control']['python'])
+            result = case.invoke()
+        self.assertEqual(result['status'], 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW')
+        self.assertTrue(result['inputs_revalidated_after_drain'] and result['all_leases_closed'])
+        self.assertNotIn('python', case.descriptor['tools'])
+
+    def test_current_python_symlink_needs_regular_executable_and_matching_bytes(self):
+        alias, target = self.control_alias()
+        value = self.case.plan['link_control']
+        directory = self.case.base / 'not-an-interpreter'
+        directory.mkdir()
+        with patch.object(recipe.sys, 'executable', str(alias)):
+            for destination in ('missing-control-python', alias.name, directory.name):
+                with self.subTest(destination=destination):
+                    alias.unlink()
+                    alias.symlink_to(destination)
+                    with self.assertRaises(SDKError):
+                        recipe.validate_link_control(value, inspect_inputs=True)
+            alias.unlink()
+            alias.symlink_to(target.name)
+            target.chmod(0o644)
+            with self.assertRaisesRegex(SDKError, 'not executable'):
+                recipe.validate_link_control(value, inspect_inputs=True)
+            target.chmod(0o755)
+            target.write_bytes(b'changed control payload\n')
+            with self.assertRaisesRegex(SDKError, 'referenced input changed'):
+                recipe.validate_link_control(value, inspect_inputs=True)
+
+    def test_current_python_symlink_retarget_during_hash_is_refused(self):
+        alias, target = self.control_alias()
+        other = target.with_name('same-bytes-other-python')
+        other.write_bytes(target.read_bytes())
+        other.chmod(0o755)
+        original = recipe._file
+        def retarget(reference):
+            result = original(reference)
+            if reference['path'] == str(target):
+                alias.unlink()
+                alias.symlink_to(other.name)
+            return result
+        with patch.object(recipe.sys, 'executable', str(alias)), \
+                patch.object(recipe, '_file', side_effect=retarget):
+            with self.assertRaisesRegex(SDKError, 'target changed during inspection'):
+                recipe.validate_link_control(self.case.plan['link_control'], inspect_inputs=True)
+
+    def test_current_python_target_rechecked_under_leases_before_work_creation(self):
+        case = self.case
+        alias, target = self.control_alias()
+        other = target.with_name('same-bytes-before-dispatch')
+        other.write_bytes(target.read_bytes())
+        other.chmod(0o755)
+        class RetargetLocks(ContextLocks):
+            def __enter__(self):
+                answer = super().__enter__()
+                if self.shared and str(target) in self.paths:
+                    alias.unlink()
+                    alias.symlink_to(other.name)
+                return answer
+        with patch.object(recipe.sys, 'executable', str(alias)), \
+                patch.object(bootstrap_pilot, 'ContextLocks', RetargetLocks), \
+                patch.object(bootstrap_pilot, 'run_logged') as run:
+            with self.assertRaisesRegex(SDKError, 'target changed before dispatch'):
+                case.invoke()
+            run.assert_not_called()
+        self.assertFalse(case.work.exists())
+        with ContextLocks([str(alias), str(target)], str(case.base)):
+            pass
+
+    def test_current_python_same_byte_retarget_after_drain_fails_revalidation(self):
+        case = self.case
+        alias, target = self.control_alias()
+        other = target.with_name('same-bytes-after-drain')
+        other.write_bytes(target.read_bytes())
+        other.chmod(0o755)
+        def retarget(argv, log, **kwargs):
+            result = case.fake_command(argv, log, **kwargs)
+            if argv == case.plan['commands'][-1]['argv']:
+                alias.unlink()
+                alias.symlink_to(other.name)
+            return result
+        with patch.object(recipe.sys, 'executable', str(alias)), \
+                patch.object(bootstrap_pilot, 'run_logged', side_effect=retarget):
+            result = case.invoke()
+        self.assertEqual(result['status'], 'FAILED')
+        self.assertIn('target changed during execution', result['error'])
+        self.assertFalse(result['inputs_revalidated_after_drain'])
+        self.assertTrue(result['all_commands_drained'] and result['all_leases_closed'])
 
     def test_control_plane_alias_foreign_script_changed_bytes_and_extra_flags_refuse(self):
         case = self.case
@@ -206,6 +320,7 @@ class ParallelRecipeTests(unittest.TestCase):
         case.plan['link_control']['launcher']['path'] = str(case.base / 'retired/sdk/scripts/link-launcher.py')
         case.refresh()
         with patch.object(recipe, '_file', side_effect=AssertionError('no retired control read')), \
+                patch.object(recipe, 'canonical_existing', side_effect=AssertionError('no retired control resolve')), \
                 patch.object(recipe.os, 'cpu_count', side_effect=AssertionError('no current host CPU query')):
             self.assertEqual(case.validate(inspect_inputs=False), case.plan)
 

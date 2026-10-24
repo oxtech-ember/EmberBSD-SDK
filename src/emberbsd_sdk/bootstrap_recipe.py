@@ -16,7 +16,7 @@ from .bootstrap_producer import (metadata_environment, metadata_paths,
                                  validate_metadata_inputs)
 from .inventory import sha256_file
 from .native_toolset import _file, _require, _sha
-from .paths import canonical_new, reject_overlap
+from .paths import canonical_existing, canonical_new, reject_overlap
 
 BOOTSTRAP_FORMAT = 'emberbsd-native-gcc16-bootstrap-plan'
 
@@ -30,6 +30,7 @@ def recipe_linker_launcher(plan):
 
 
 def validate_link_control(value, *, inspect_inputs):
+    """Return the live canonical Python target, or None for offline validation."""
     _require(isinstance(value, dict) and set(value) == {'python', 'launcher'},
              'link control needs only its exact Python and SDK launcher references')
     for reference in value.values():
@@ -43,8 +44,16 @@ def validate_link_control(value, *, inspect_inputs):
         expected = str(Path(__file__).resolve().parents[2] / 'scripts/link-launcher.py')
         _require(value['python']['path'] == sys.executable and value['launcher']['path'] == expected,
                  'link control must use this same SDK control-plane Python and source')
-        for reference in value.values():
-            _file(reference)
+        # Keep the invocation spelling, including virtual-environment semantics.
+        # Only this control-plane reference may resolve to a regular executable.
+        invocation = value['python']['path']
+        target = canonical_existing(invocation)
+        _require(os.access(target, os.X_OK), 'control-plane Python target is not executable')
+        _file(dict(path=target, sha256=value['python']['sha256']))
+        _require(canonical_existing(invocation) == target,
+                 'control-plane Python target changed during inspection')
+        _file(value['launcher'])
+        return target
 
 
 def recipe_order(plan):

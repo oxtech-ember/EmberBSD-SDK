@@ -326,7 +326,13 @@ The same full-plan format accepts one optional `link_control` object.
 It has exactly `python` and `launcher`, each an exact `{path, sha256}` reference.
 `python.path` must equal the running SDK process's `sys.executable` spelling.
 `launcher.path` must equal `scripts/link-launcher.py` in this same SDK source.
-Both current files are hashed under their read leases before a command runs.
+The Python invocation can be a symlink. Its SHA256 identifies the resolved
+regular executable. Keep the original invocation in the launcher prefix,
+including virtual-environment semantics. Do not substitute its resolved path.
+The controller leases both that invocation and its resolved target. It checks
+the same target and hash under these leases before dispatch and after drainage.
+A target change during inspection or execution fails the run.
+The launcher remains a regular source file with its own pinned SHA256.
 These are SDK control-plane services. They are not seed tools or a new Python
 provider. A copied interpreter, alternate alias, foreign script or extra
 launcher arguments fail before execution.

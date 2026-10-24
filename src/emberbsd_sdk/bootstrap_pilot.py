@@ -159,7 +159,7 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     from .bootstrap_make import MAKE_PROBE_FORMAT, make_probe_sources, verify_make_step
     from .bootstrap_producer import PRODUCER_FORMAT, metadata_paths
     from .bootstrap_program import program_outputs, program_sources, verify_program_step
-    from .bootstrap_recipe import BOOTSTRAP_FORMAT, prepare_recipe_work
+    from .bootstrap_recipe import BOOTSTRAP_FORMAT, prepare_recipe_work, validate_link_control
     from .bootstrap_seed import load_bootstrap_seed
     from .native_toolset import _json
     _require(threading.current_thread() is threading.main_thread(),
@@ -211,11 +211,18 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         shared.update(_references(_json(plan['program']['source']['source_proof'])))
     if relocation:
         shared.update(_references(_json(plan['relocation']['originals'])))
+    control_python = None
+    if recipe and 'link_control' in plan:
+        control_python = validate_link_control(plan['link_control'], inspect_inputs=True)
+        shared.add(control_python)
     if recipe:
         for path in shared:
             reject_overlap(work, path)
     # Re-read all acceptance and plan bytes under their shared fences.
     with ContextLocks(sorted(shared), root, shared=True), ContextLocks([work], root):
+        if control_python is not None:
+            _require(validate_link_control(plan['link_control'], inspect_inputs=True) == control_python,
+                     'control-plane Python target changed before dispatch')
         selected = load_bootstrap_seed(descriptor_path, **options)
         selected_plan = selected.as_dict()['plan']
         _require(selected_plan == plan, 'pilot plan changed before dispatch')
@@ -331,6 +338,9 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         result['all_commands_drained'] = True
         try:
             load_bootstrap_seed(descriptor_path, **options)
+            if control_python is not None:
+                _require(validate_link_control(plan['link_control'], inspect_inputs=True) == control_python,
+                         'control-plane Python target changed during execution')
             result['inputs_revalidated_after_drain'] = True
         except SDKError as exc:
             result.update(status='FAILED', error=str(exc), inputs_revalidated_after_drain=False)
