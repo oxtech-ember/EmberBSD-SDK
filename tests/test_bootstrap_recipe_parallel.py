@@ -73,7 +73,10 @@ class ParallelRecipeTests(unittest.TestCase):
         self.assertEqual(data['EMBERBSD_DARWIN_JOBS'], '18')
         self.assertNotIn('python', case.descriptor['tools'])
         for step in case.plan['commands']:
-            self.assertIn('-j18', step['argv'])
+            if step['role'] == 'make':
+                self.assertFalse(any(word.startswith(('-j', '--jobs')) for word in step['argv']))
+            else:
+                self.assertIn('-j18', step['argv'])
             self.assertEqual(step['argv'][:len(case.commands[step['role']])], list(case.commands[step['role']]))
             self.assertEqual(step['env']['GCC_HOST_LINKER_LAUNCHER'],
                              data['EMBERBSD_GCC16_LINKER_LAUNCHER'])
@@ -83,6 +86,21 @@ class ParallelRecipeTests(unittest.TestCase):
         for name, value in data.items():
             if name.startswith('EMBERBSD_GCC16_SEED_') or name in ('LDFLAGS', 'OSX_SDK_PATH'):
                 self.assertEqual(value, expected[name])
+
+    def test_outer_make_parallel_options_fail_before_dispatch(self):
+        case = self.case
+        for option in ('-j18', '-j1', '--jobs=18'):
+            for number in (0, 1):
+                with self.subTest(option=option, phase=case.plan['commands'][number]['phase']):
+                    original = copy.deepcopy(case.plan['commands'])
+                    step = case.plan['commands'][number]
+                    step['argv'].insert(len(case.commands['make']) + 1, option)
+                    with patch('emberbsd_sdk.bootstrap_pilot.run_logged') as run:
+                        with self.assertRaisesRegex(SDKError, 'complete source-owned route'):
+                            case.invoke()
+                        run.assert_not_called()
+                    case.plan['commands'] = original
+        self.assertFalse(case.work.exists())
 
     def control_alias(self):
         case = self.case

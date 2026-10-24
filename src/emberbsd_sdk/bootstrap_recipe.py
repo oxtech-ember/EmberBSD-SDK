@@ -107,7 +107,7 @@ def recipe_steps(plan, descriptor, commands, flags):
                         '-C', _safe_path(plan['recipes'][recipe]['object_directory']), 'compare']))
             result.append(dict(id=f'r{number:03d}-' + phase, recipe=recipe, phase=phase, role='make',
                 cwd=work, env=dict(env), argv=[*commands['make'], 'EMBERBSD_DARWIN_BOOTSTRAP=yes',
-                    jobs, '-C', os.path.join(export, recipe), phase]))
+                    '-C', os.path.join(export, recipe), phase]))
     return result
 
 

@@ -337,7 +337,7 @@ the evaluated `WRKDIR`, `WRKSRC` and `OBJDIR` metadata. It must be below
 
 1. Visit dependencies in sorted order, then visit each consumer.
 2. Run the complete selected `make` tuple, `EMBERBSD_DARWIN_BOOTSTRAP=yes`,
-   `-j1`, `-C`, the common recipe directory, and `build`.
+   `-C`, the common recipe directory, and `build`.
 3. Install each dependency with the same tuple and the `install` target.
 4. After the GCC build, run the complete selected `gmake` tuple,
    `--no-print-directory -j1 -C object_directory compare`.
@@ -386,7 +386,12 @@ This route requires the fixed Ports parallel profile SHA256
 It keeps the original profile available for serial and historical plans.
 `cpu_jobs` is a positive integer no greater than the current `os.cpu_count()`.
 An unavailable host CPU count fails closed. The deadline and `link_jobs: 1`
-requirements remain. Source-owned `-jN` replaces `-j1` in the same fixed tuples.
+requirements remain.
+The outer pkgsrc `make` build and install commands stay serial. They have no
+`-j` option, including `-j1`. pkgsrc rejects parallel infrastructure commands.
+The direct GNU GCC comparison keeps `-jN`. The common Ports `MAKE_JOBS` policy
+passes the accepted job count to inner package builds. It retains each recipe's
+`MAKE_JOBS_SAFE` decision.
 MAKECONF gets `EMBERBSD_DARWIN_CPU_BUDGET` and `EMBERBSD_DARWIN_JOBS` from that
 same accepted job count. It gets `EMBERBSD_GCC16_LINKER_LAUNCHER` from exactly:
 

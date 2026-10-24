@@ -101,6 +101,10 @@ class RecipeTests(unittest.TestCase):
         for step in self.plan['commands']:
             self.assertEqual(step['argv'][:len(self.commands[step['role']])], list(self.commands[step['role']]))
             self.assertEqual(step['env'], producer.metadata_environment(self.plan, self.commands))
+            if step['role'] == 'make':
+                self.assertFalse(any(word.startswith(('-j', '--jobs')) for word in step['argv']))
+            else:
+                self.assertIn('-j1', step['argv'])
         self.assertEqual(self.plan['commands'][3]['argv'][-1], 'compare')
 
     def test_wrong_tail_bare_tuple_and_route_overrides_fail_before_child(self):
