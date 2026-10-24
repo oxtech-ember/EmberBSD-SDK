@@ -114,7 +114,9 @@ the receipt contents.
 the accepted producer receipt path and its gate-supplied SHA256. The selector
 reopens the receipt and requires it to bind the exact pending producer result.
 The audit reruns the output's version query, a positive makefile and shell
-behavior check, and an expected failing recipe. A passing audit receipt has
+behavior check, and an expected failing recipe. On the supported NetBSD host,
+bmake reports a failing recipe as process exit 1 even when the recipe exits 7;
+the audit requires that exit and the recipe's failure marker. A passing audit receipt has
 `accepted_input_scope: "bmake-bootstrap"` and
 `ordinary_provider_qualified: false`. It neither reuses producer logs as
 the independent gate nor proves package builds, a complete makefile binding,
