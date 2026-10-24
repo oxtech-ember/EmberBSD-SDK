@@ -25,6 +25,21 @@ name: Complete OS release producer
       compiler:
         description: Common verified GCC16 compiler prefix
         required: true
+      host_toolchain:
+        description: Explicit SDK native GCC16 provider root
+        required: true
+      host_cc:
+        description: Absolute native C compiler selected by the provider manifest
+        required: true
+      host_cxx:
+        description: Absolute native C++ compiler selected by the provider manifest
+        required: true
+      host_toolchain_manifest:
+        description: Native SDK provider input manifest
+        required: true
+      libedit_source:
+        description: Prepared libedit source for the selected Ports recipe
+        required: true
       runtime_work:
         description: Verified Ports runtime work directory
         required: true
@@ -54,6 +69,11 @@ jobs:
       PORTS_COMMIT: ${{ inputs.ports_commit }}
       SDK_WORKSPACE: ${{ inputs.workspace }}
       COMPILER: ${{ inputs.compiler }}
+      HOST_TOOLCHAIN: ${{ inputs.host_toolchain }}
+      HOST_CC: ${{ inputs.host_cc }}
+      HOST_CXX: ${{ inputs.host_cxx }}
+      HOST_TOOLCHAIN_MANIFEST: ${{ inputs.host_toolchain_manifest }}
+      LIBEDIT_SOURCE: ${{ inputs.libedit_source }}
       RUNTIME_WORK: ${{ inputs.runtime_work }}
       GCC_ARCHIVE: ${{ inputs.gcc_archive }}
       PKGSRC: ${{ inputs.pkgsrc }}
@@ -82,6 +102,8 @@ jobs:
           set -- --profile "$PROFILE" --python "$(command -v python3)" \
             --sdk-source "$GITHUB_WORKSPACE" --sdk "$SDK_WORKSPACE" \
             --os-source "$OS_SOURCE" --ports "$PORTS_SOURCE" --compiler "$COMPILER" \
+            --host-toolchain "$HOST_TOOLCHAIN" --host-cc "$HOST_CC" --host-cxx "$HOST_CXX" \
+            --host-toolchain-manifest "$HOST_TOOLCHAIN_MANIFEST" --libedit-source "$LIBEDIT_SOURCE" \
             --runtime-work "$RUNTIME_WORK" --gcc-archive "$GCC_ARCHIVE" --pkgsrc "$PKGSRC" \
             --destination "$DESTINATION" --jobs 4
           python3 -B scripts/build-os-release.py "$@" --plan

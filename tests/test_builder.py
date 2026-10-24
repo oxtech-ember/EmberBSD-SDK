@@ -22,6 +22,7 @@ from emberbsd_sdk.sysroot_builder import SysrootBuilder as B
 from emberbsd_sdk.workspace import create
 from emberbsd_sdk.libedit import prepare_source
 from libedit_fixture import recipe_fixture, installation_source
+from native_compiler_fixture import fixture as native_fixture
 
 
 def write(path, data, mode=0o644):
@@ -176,7 +177,7 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
         git(path, 'init', '-q'); commit(path)
     prepare_source(ports, root / 'libedit.tar.gz', root / 'libedit-source')
     write(root / 'gcc.tar.xz', 'Fixture archive; no extraction')
-    return {key: str(value) for key, value in {'sdk': sdk, 'os': os_source, 'ports': ports, 'compiler': compiler, 'runtime-work': work, 'gcc-archive': root / 'gcc.tar.xz', 'pkgsrc': root / 'pkgsrc', 'target': target, 'jobs': '2', 'python': sys.executable, 'sdk-source': root / 'sdk-source', 'libedit-source': root / 'libedit-source'}.items()}
+    return {key: str(value) for key, value in {'sdk': sdk, 'os': os_source, 'ports': ports, 'compiler': compiler, 'runtime-work': work, 'gcc-archive': root / 'gcc.tar.xz', 'pkgsrc': root / 'pkgsrc', 'target': target, 'jobs': '2', 'python': sys.executable, 'sdk-source': root / 'sdk-source', 'libedit-source': root / 'libedit-source'}.items()} | native_fixture(root)
 
 
 class BuilderTests(TemporaryCase):
@@ -189,6 +190,17 @@ class BuilderTests(TemporaryCase):
 
     def run_builder(self, **changes):
         return B(self.options | changes).run()
+
+    def test_native_compiler_options_are_mandatory_before_queries(self):
+        for name in ('host-toolchain', 'host-cc', 'host-cxx', 'host-toolchain-manifest'):
+            with self.subTest(name=name):
+                options = self.options | dict(plan=True)
+                options.pop(name, None)
+                before = snapshot(self.root)
+                with patch.object(B, 'find_command', side_effect=AssertionError('implicit tool query')):
+                    with self.assertRaisesRegex(SDKError, name):
+                        B(options).run()
+                self.assertEqual(snapshot(self.root), before)
 
     def refusal_unchanged(self, match=None, **changes):
         before = snapshot(self.root)
@@ -223,6 +235,9 @@ class BuilderTests(TemporaryCase):
             self.assertIn(flag, record['plan'][1])
         self.assertNotIn('MKOBJDIRS=no', record['plan'][1])
         self.assertIn('EMBER_LIBEDIT_SOURCE=' + self.options['libedit-source'], record['plan'][1])
+        for name, option in (('HOST_CC', 'host-cc'), ('HOST_CXX', 'host-cxx')):
+            self.assertIn(name + '=' + self.options[option], record['plan'][1])
+        self.assertIn('native_compiler', record['signature'])
         self.assertEqual(record['signature']['libedit']['recipe']['ports_commit'], record['sources']['ports']['commit'])
         self.assertEqual(record['plan'][2][-1], 'dependall'); self.assertEqual(record['plan'][3][-1], 'install')
         self.assertEqual(record['paths']['destination'], self.options['sdk'] + '/sysroot')

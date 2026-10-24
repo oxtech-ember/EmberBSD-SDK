@@ -22,6 +22,8 @@ build prerequisites and an ISO-capable libarchive `tar`. Each source checkout
 must be clean and fully materialized. Select exact OS, Ports and SDK commits.
 The common compiler must be GCC 16.2.0 with POSIX threads for the selected ABI.
 The normal Ports verifier must accept its runtime stage and source inputs.
+Select the mandatory [native compiler provider inputs](native-compiler.md).
+The shared selector supplies `HOST_CC` and `HOST_CXX` for both release profiles.
 
 Select `aarch64-sysroot` for complete base/comp sets and an EMBER64 test kernel.
 Select `amd64` for the reduced UEFI ISO, USB image and installation sets.
@@ -47,6 +49,10 @@ python3 scripts/build-os-release.py \
   --ports /absolute/EmberBSD-Ports \
   --libedit-source /absolute/prepared-libedit \
   --compiler /absolute/gcc16-cross \
+  --host-toolchain /absolute/sdk-native-gcc16 \
+  --host-cc /absolute/sdk-native-gcc16/bin/gcc \
+  --host-cxx /absolute/sdk-native-gcc16/bin/g++ \
+  --host-toolchain-manifest /absolute/native-gcc16-inputs.json \
   --runtime-work /absolute/gcc16-runtime-work \
   --gcc-archive /absolute/gcc-16.2.0.tar.xz \
   --pkgsrc /absolute/prepared-pkgsrc \
@@ -96,7 +102,7 @@ checker independently from the build source. The checker must match its tracked
 HEAD bytes. New manifests record its commit and SHA256 separately; they never
 replace the producer's source identity. This permits a current Python checker
 to inspect a preserved historical build. The tool defaults to the recorded OS
-checkout for a schema 2 build. Historical exported trees need `--os-source`.
+checkout for a schema 2 or 3 build. Historical exported trees need `--os-source`.
 
 The amd64 kit takes sets from the actual ISO and verifies its embedded SHA512.
 It compares the boot and installed kernel bytes and checks USB gzip integrity.
@@ -157,8 +163,10 @@ needs its own accepted HTTPS frontend; a DNS alias alone is insufficient.
 Existing schema 1 amd64 and `emberbsd.aarch64.sysroot.v1` manifests remain
 verifiable without rewriting their receipts. Their bootstrap GCC12 provenance
 stays explicit. It is not evidence for today's common GCC16 build profile.
-New builds use schema 2 receipts with the common SDK source/compiler/runtime
-identity and executed commands. Existing immutable tags must not be repurposed.
+Historical schema 2 receipts remain verifiable under their original contract.
+They do not gain native SDK compiler qualification. New builds use schema 3
+profiles and receipts with explicit native compiler identities. Version 2 kit
+containers accept both profile versions. Existing immutable tags must not be repurposed.
 
 Run `python3 -B -m unittest discover -s tests -p 'test_*.py'`.
 The release tests exercise archive composition, qualification binding, actual
@@ -170,7 +178,8 @@ acceptance before its binaries can be called qualified.
 The automatic SDK workflow runs host contracts only. The manual
 [OS release workflow](../.github/workflows/os-release.yml) requires a prepared
 self-hosted runner labelled `emberbsd-release`. It requires explicit clean
-source pins, workspace, GCC16, runtime, archive and pkgsrc inputs. Missing
-inputs fail; the job does not substitute a GCC12 build or report a skipped
+source pins, workspace, GCC16, native compiler declarations, libedit source,
+runtime, archive and pkgsrc inputs. Missing inputs fail; the job does not
+substitute a GCC12 build or report a skipped
 producer as a successful binary build. This migration does not establish that
 such a runner exists or qualify its complete producer pipeline.

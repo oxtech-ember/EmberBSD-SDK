@@ -17,7 +17,7 @@ import stat
 import tarfile
 import tempfile
 
-from . import inventory, jsonio, paths, publication, tarstream
+from . import inventory, jsonio, native_compiler, paths, publication, tarstream
 from .errors import SDKError
 from .targets import target_definition
 
@@ -180,13 +180,15 @@ def _provenance(receipt, target):
     definition = target_definition(target)
     try:
         if (receipt['format'] != 'emberbsd-sysroot-build' or type(receipt['version']) is not int
-                or receipt['version'] != 1 or receipt['qualification'] != 'built-and-inspected'
+                or receipt['version'] not in (1, 2) or receipt['qualification'] != 'built-and-inspected'
                 or receipt['workspace']['layout_version'] != 2
                 or receipt['workspace']['target'] != target
                 or receipt['workspace']['triplet'] != definition['triplet']
                 or receipt['signature']['target'] != definition):
             raise SDKError('export requires a completed matching SDK sysroot build')
         signature = receipt['signature']
+        if receipt['version'] == 2:
+            native_compiler.validate_binding(signature, receipt['paths'])
         compiler = signature['compiler']
         if (compiler['version'] != '16.2.0' or compiler['triplet'] != definition['triplet']
                 or compiler['threads'] != 'posix'):

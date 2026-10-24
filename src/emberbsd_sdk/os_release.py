@@ -274,7 +274,7 @@ def _verify(directory, profile):
     check((directory / 'SHA256').read_text() == checksum_text(directory, names + ['manifest.json']), 'Checksum manifest changed')
     if profile != 'amd64' or modern:
         p = read_json(directory / 'build-profile.json')
-        check(type(p['schema']) is int and p['schema'] == (2 if modern else 1), 'Manifest and build profile schema differ')
+        check(type(p['schema']) is int and p['schema'] in ((2, 3) if modern else (1,)), 'Manifest and build profile schema differ')
         profile_check(p, sha, version, 'amd64' if profile == 'amd64' else 'aarch64')
         check(m['source_archive_sha256'] == p['source_sha256'] and m['build_profile'] == p, 'Source/build receipt changed')
         check((directory / 'source-export.sha256').read_text() == p['source_sha256'] + '  source.tar.gz\n', 'Source export hash receipt changed')
@@ -333,7 +333,7 @@ def prepare_sysroot(build, directory, qualification):
         write_json(directory / 'qualification.json', q)
         shutil.copyfile(build / EVIDENCE, directory / EVIDENCE)
         names += ['qualification.json', EVIDENCE]
-    modern = p.get('schema') == 2
+    modern = p.get('schema') in (2, 3)
     compiler = 'the verified common GCC16 and runtime' if modern else 'the historical in-tree GCC12.5 bootstrap'
     (directory / 'release-notes.md').write_text(
         f'# EmberBSD {version} AArch64 development sysroot\n\nSource: `{sha}`. Compatibility base: NetBSD 11.0.\n'

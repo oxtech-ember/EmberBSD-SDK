@@ -12,8 +12,8 @@ See [host platforms](host-platforms.md).
 Apply the [SDK tool selection policy](tool-selection.md).
 Use SDK native GCC16 for host programs and SDK cross GCC16 for target code.
 Keep host tools and target inputs separate.
-The current automatic `cc`/`c++` selection is an enforcement gap, not an approved default.
-Inspect that gap before treating a successful plan as permission to build.
+Select the mandatory [native compiler inputs](native-compiler.md).
+Their provider declaration and measured bytes do not qualify the complete SDK.
 
 Provide:
 
@@ -52,6 +52,10 @@ python3 scripts/build-sysroot.py \
   --ports /absolute/EmberBSD-Ports \
   --libedit-source /absolute/prepared-libedit \
   --compiler /absolute/gcc16-cross \
+  --host-toolchain /absolute/sdk-native-gcc16 \
+  --host-cc /absolute/sdk-native-gcc16/bin/gcc \
+  --host-cxx /absolute/sdk-native-gcc16/bin/g++ \
+  --host-toolchain-manifest /absolute/native-gcc16-inputs.json \
   --runtime-work /absolute/gcc16-runtime-work \
   --gcc-archive /absolute/gcc-16.2.0.tar.xz \
   --pkgsrc /absolute/prepared-pkgsrc \
@@ -107,6 +111,9 @@ sysroot or device image. That package composition is a separate operation.
 A completed build records source pins, tool/runtime identities, actual commands,
 file/link inventory and SHA256 values. It checks required headers, CRT,
 libraries and loader, target ELF architecture, and contained relative links.
+New build receipts use version 2 with the explicit native compiler identity.
+Transfer still accepts historical version 1 receipts under their original checks.
+They do not establish compliance with the new native compiler input contract.
 An error retains an explicit incomplete state and its evidence; a previous
 artifact does not become the result of that failed build.
 

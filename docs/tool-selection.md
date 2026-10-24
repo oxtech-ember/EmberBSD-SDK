@@ -63,15 +63,20 @@ Record diagnostic inputs and keep those outputs outside packages, sysroots, and 
 Replay fuzz corpora with GCC16 as that procedure requires.
 These exceptions do not authorize a Clang-built production generator.
 
-## Current enforcement gap
+## Implemented compiler selection and remaining limits
 
-The current `sysroot_builder.SysrootBuilder` searches `PATH` for `cc` and `c++`.
-It records those tools and supplies them as `HOST_CC` and `HOST_CXX` to OS build rules.
-The release builder inherits this selection.
-The code does not yet verify that these are SDK native GCC16 tools.
-Its existing successful plan therefore does not establish compliance with this policy.
+The sysroot and release builders require explicit native GCC16 compiler paths,
+a provider root, and a [provider input manifest](native-compiler.md).
+The common selector checks hashes, containment, driver subprocesses, and native
+compiler identity. It rejects missing selectors, system provider roots, Clang,
+older GCC, foreign host targets, and incompatible object contexts.
+Both producers pass the selected paths through `HOST_CC` and `HOST_CXX`.
 
-Repair the common selector and its consumers before accepting a build that depends on this fallback.
-Require explicit native-tool inputs, provider validation, and refusal tests.
-Check nested producers as well as the top-level plan.
-The documentation change does not claim that this executable enforcement is implemented.
+The manifest is a caller-trusted provenance declaration. Its hashes do not prove
+source-to-binary correspondence or authenticate the producer. No accepted native
+development-host GCC16 installation is established by this change.
+Full provider provisioning and qualification remain open.
+
+The selector does not enforce this policy for every build executable, dynamic
+dependency, header search, or nested producer. Other tool selection gaps remain.
+A successful plan or fixture test does not establish complete SDK compliance.

@@ -19,7 +19,7 @@ class UniqueOption(argparse.Action):
 
 def main():
     parser = argparse.ArgumentParser(description='Build or plan a GCC16 EmberBSD OS sysroot with a Darwin or Linux process backend.')
-    for name in ('sdk', 'os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'target', 'jobs', 'python', 'sdk-source', 'libedit-source'):
+    for name in ('sdk', 'os', 'ports', 'compiler', 'host-toolchain', 'host-cc', 'host-cxx', 'host-toolchain-manifest', 'runtime-work', 'gcc-archive', 'pkgsrc', 'target', 'jobs', 'python', 'sdk-source', 'libedit-source'):
         parser.add_argument('--' + name, required=True, action=UniqueOption, help='explicit host Python 3.15+ interpreter' if name == 'python' else 'selected SDK source checkout' if name == 'sdk-source' else None)
     for name in ('destination', 'objects', 'tools'):
         parser.add_argument('--' + name, action=UniqueOption)

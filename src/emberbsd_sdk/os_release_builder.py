@@ -11,7 +11,7 @@ import re
 import shutil
 
 from .errors import SDKError
-from . import inventory, jsonio, libedit
+from . import inventory, jsonio, libedit, native_compiler
 from .sysroot_builder import SysrootBuilder
 from .targets import target_definition
 from .os_release import check, full_hash, tag, images, product_version, source_version, KERNEL, SYSROOT_SETS
@@ -64,8 +64,9 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell):
 
 
 def validate_profile(profile, sha, target):
-    """Validate schema 2 without consulting mutable local source or compiler paths."""
-    check(type(profile['schema']) is int and profile['schema'] == 2 and profile['status'] == 'built', 'Incomplete release build profile')
+    """Validate historical schema 2 and explicit-native schema 3 portably."""
+    check(type(profile['schema']) is int and profile['schema'] in (2, 3) and profile['status'] == 'built', 'Incomplete release build profile')
+    explicit_native = profile['schema'] == 3
     check(profile['source_commit'] == sha and full_hash(sha, 40), 'Build receipt belongs to another source')
     check(profile['source_repository'] == 'https://github.com/oxtech-ember/EmberBSD', 'Wrong source repository')
     check(profile['architecture'] == target and profile['machine'] == target_definition(target)['machine'], 'Wrong release target')
@@ -73,11 +74,13 @@ def validate_profile(profile, sha, target):
           'Invalid source export identity')
     version = product_version(profile['product_version'])
     receipt = profile['sdk_receipt']
-    check(receipt['format'] == 'emberbsd-os-release-build' and receipt['version'] == 2 and
+    check(receipt['format'] == 'emberbsd-os-release-build' and receipt['version'] == profile['schema'] and
           receipt['qualification'] == 'built-and-inspected' and receipt['execution_acceptance'] == 'not-run', 'Incomplete SDK build receipt')
     check(set(receipt['sources']) == {'os', 'ports', 'sdk'} and receipt['sources']['os']['commit'] == sha and
           all(full_hash(v['commit'], 40) for v in receipt['sources'].values()), 'Mixed source receipts')
     signature = receipt['signature']
+    if explicit_native:
+        native_compiler.validate_binding(signature, receipt['paths'])
     check(signature['product_version'] == version, 'Mixed source product version')
     libedit.validate_identity(signature['libedit'])
     check(signature['libedit']['recipe']['ports_commit'] == receipt['sources']['ports']['commit'], 'Mixed libedit Ports source')
@@ -101,7 +104,8 @@ def validate_profile(profile, sha, target):
     for key in ('GCC_RUNTIME_INPUTS_SHA256', 'GCC_RUNTIME_STAGE_SHA256', 'GCC_RUNTIME_LINKS_SHA256'):
         check(full_hash(metadata[key]), 'Missing runtime receipt hash')
     paths = receipt['paths']
-    for key in ('os', 'ports', 'sdk-source', 'compiler', 'runtime-prefix', 'objects', 'tools', 'destination', 'libedit-source'):
+    native_options = native_compiler.OPTIONS if explicit_native else ()
+    for key in ('os', 'ports', 'sdk-source', 'compiler', 'runtime-prefix', 'objects', 'tools', 'destination', 'libedit-source', *native_options):
         check(isinstance(paths[key], str) and paths[key].startswith('/') and not re.search(r'\s', paths[key]), 'Invalid producer path')
     check(signature['target'] == target_definition(target), 'Mixed target signature')
     flags, commands = producer_commands(target, paths, signature['host_tools'], sha, profile['source_timestamp'], profile['jobs'], profile['shell'])
@@ -137,7 +141,7 @@ class OSReleaseBuilder(SysrootBuilder):
     def preflight(self):
         check('destination' in self.options, 'OS release requires an explicit destination stage')
         super().preflight()
-        self.receipt.update(format='emberbsd-os-release-build', version=2, scope='os-release-build',
+        self.receipt.update(format='emberbsd-os-release-build', version=3, scope='os-release-build',
                             previous_contexts=self.contexts, plan=[self.runtime_command, *self.release_commands, self.runtime_command],
                             not_checked=['target execution', 'VM installation', 'physical hardware', 'binary publication'])
         self.receipt.pop('copy', None)
@@ -177,7 +181,7 @@ class OSReleaseBuilder(SysrootBuilder):
         if self.options.get('plan'):
             return receipt
         output = Path(self.paths['destination'])
-        profile = dict(schema=2, status='built', source_repository='https://github.com/oxtech-ember/EmberBSD',
+        profile = dict(schema=3, status='built', source_repository='https://github.com/oxtech-ember/EmberBSD',
                        source_commit=self.sources['os']['commit'], source_timestamp=self.timestamp, product_version=self.product_version,
                        source_sha256=self.source_sha256, architecture=self.options['target'], machine=self.target['machine'],
                        jobs=self.options['jobs'], shell=self.shell, commands=self.release_commands,

@@ -292,6 +292,40 @@ else: raise SystemExit('unexpected operation')
 
 
 class BuilderReleaseTests(TemporaryCase):
+    def test_native_schema3_identity_and_historical_schema2(self):
+        from emberbsd_sdk import native_compiler
+        options = release_fixture(self.root, 'aarch64')
+        receipt = OSReleaseBuilder(options).run()
+        output = Path(options['destination'])
+        profile = jsonio.read_json(output / 'build-profile.json')
+        sha = receipt['sources']['os']['commit']
+        self.assertEqual(profile['schema'], 3)
+        self.assertEqual(profile['sdk_receipt']['version'], 3)
+        for mutation in ('missing', 'host-toolchain', 'host-cc', 'host-cxx', 'host-toolchain-manifest', 'cxx-role'):
+            changed = copy.deepcopy(profile)
+            signature = changed['sdk_receipt']['signature']
+            if mutation == 'missing':
+                del signature['native_compiler']
+            elif mutation == 'cxx-role':
+                del signature['native_compiler']['compilers']['cxx']['macros']['__cplusplus']
+                signature['host_tools'] = native_compiler.host_tools(signature['native_compiler'])
+            else:
+                changed['sdk_receipt']['paths'][mutation] = '/different/provider'
+            with self.subTest(mutation=mutation), self.assertRaises((SDKError, KeyError)):
+                validate_profile(changed, sha, 'aarch64')
+        # Historical verification does not manufacture the new native identity.
+        historical = copy.deepcopy(profile)
+        historical['schema'] = historical['sdk_receipt']['version'] = 2
+        del historical['sdk_receipt']['signature']['native_compiler']
+        for key in native_compiler.OPTIONS:
+            del historical['sdk_receipt']['paths'][key]
+        validate_profile(historical, sha, 'aarch64')
+        jsonio.write_json(output / 'build-profile.json', historical, exclusive=False)
+        result = kit.prepare(output, self.root / 'historical-schema2-kit', 'aarch64-sysroot')
+        self.assertEqual(result['build_profile']['schema'], 2)
+        self.assertNotIn('native_compiler', result['build_profile']['sdk_receipt']['signature'])
+        kit.verify(self.root / 'historical-schema2-kit', 'aarch64-sysroot')
+
     def test_release_rejects_incomplete_installed_libedit(self):
         for failure in ('missing_libedit', 'missing_histedit', 'missing_editline_marker', 'wrong_editline_marker',
                         'wrong_libedit_soname', 'extra_libedit_provider'):
@@ -335,7 +369,7 @@ class BuilderReleaseTests(TemporaryCase):
         validate_profile(p, receipt['sources']['os']['commit'], 'aarch64')
         observed = [json.loads(line) for line in (output / 'observed-argv.jsonl').read_text().splitlines()]
         self.assertEqual(observed, [a[2:] for a in p['commands']])
-        self.assertEqual(p['schema'], 2)
+        self.assertEqual(p['schema'], 3)
         self.assertEqual(p['product_version'], '2.7+fixture')
         self.assertFalse(any(a.startswith('EMBER_VERSION=') for c in p['commands'] for a in c))
         self.assertFalse(any('HAVE_GCC=' in a for c in p['commands'] for a in c))

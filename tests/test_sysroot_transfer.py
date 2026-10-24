@@ -4,6 +4,7 @@
 """Transfer contracts use build fixtures. They do not qualify target execution."""
 
 import hashlib
+import copy
 import io
 import json
 import os
@@ -74,6 +75,25 @@ class SysrootTransferTests(TemporaryCase):
         receipt = json.loads(path.read_text())
         mutate(receipt)
         path.write_text(json.dumps(receipt))
+
+    def test_explicit_native_v2_and_historical_v1_build_receipts(self):
+        from emberbsd_sdk import native_compiler
+        original = json.loads((self.source / Builder.RECEIPT).read_text())
+        self.assertEqual(original['version'], 2)
+        for mutation in ('identity', 'host-toolchain', 'host-cc', 'host-cxx', 'host-toolchain-manifest', 'flags'):
+            changed = copy.deepcopy(original)
+            if mutation == 'identity': del changed['signature']['native_compiler']
+            elif mutation == 'flags': changed['signature']['flags'].append('HOST_CC=/usr/bin/cc')
+            else: changed['paths'][mutation] = '/different/provider'
+            with self.subTest(mutation=mutation), self.assertRaises(SDKError):
+                transfer._provenance(changed, 'aarch64')
+        historical = copy.deepcopy(original); historical['version'] = 1
+        del historical['signature']['native_compiler']
+        for name in native_compiler.OPTIONS: del historical['paths'][name]
+        transfer._provenance(historical, 'aarch64')
+        (self.source / Builder.RECEIPT).write_text(json.dumps(historical))
+        pin = self.export()['manifest_sha256']
+        self.restore(pin)
 
     def repin(self, mutate):
         path = self.bundle / 'manifest.json'

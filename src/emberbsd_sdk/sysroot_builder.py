@@ -13,7 +13,7 @@ import signal
 import stat
 import sysconfig
 import time
-from . import API_VERSION, inventory, jsonio, libedit, paths, process, provenance, workspace
+from . import API_VERSION, inventory, jsonio, libedit, native_compiler, paths, process, provenance, workspace
 from .errors import SDKError, ProcessOwnershipError
 from .targets import TARGETS, target_definition
 
@@ -45,6 +45,7 @@ class SysrootBuilder:
         self.locks = None
         self.receipt_file = None
         self.signal_handlers = {}
+        self.contexts_prepared = False
 
     def capture(self, *argv, directory=None):
         result = process.capture(argv, cwd=directory, env=self.environment)
@@ -231,12 +232,13 @@ class SysrootBuilder:
             raise SDKError('jobs must be a positive integer')
         layout = workspace.inspect_layout(self.options['sdk'])
         workspace.require_target(layout, self.options['target'])
+        native_compiler.required_options(self.options)
         self.git_command, self.shell = self.find_command('git'), self.find_command('sh')
         # Darwin PID churn can delay a complete empty snapshot after a producer exits.
         self.process_inspector = process.SessionInspector(env=self.environment, empty_snapshot_timeout=120)
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
-        for name in ('os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'sdk-source', 'libedit-source'):
+        for name in ('os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'sdk-source', 'libedit-source', *native_compiler.OPTIONS):
             self.paths[name] = paths.build_path(paths.canonical_existing(self.options[name]))
         self.paths['python'] = self.executable(self.options['python'])
         for name in ('os', 'ports', 'compiler', 'runtime-work', 'pkgsrc', 'sdk-source', 'libedit-source'):
@@ -256,7 +258,7 @@ class SysrootBuilder:
             paths.reject_overlap(self.paths['destination'], os.path.join(sdk, name))
         for left, right in itertools.combinations(('destination', 'objects', 'tools'), 2):
             paths.reject_overlap(self.paths[left], self.paths[right])
-        for input_name in ('os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'sdk-source', 'python', 'libedit-source'):
+        for input_name in ('os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'sdk-source', 'python', 'libedit-source', *native_compiler.OPTIONS):
             for output_name in ('destination', 'objects', 'tools'):
                 paths.reject_overlap(self.paths[input_name], self.paths[output_name])
         for name in ('include', 'lib', 'libexec/ld.elf_so', 'tools', 'share/mk', 'sys', 'distrib', 'etc'):
@@ -277,12 +279,14 @@ class SysrootBuilder:
         self.runtime_command = [self.paths['python'], '-B', os.path.join(self.paths['ports'], self.VERIFIER), 'check', self.paths['runtime-work'], self.paths['gcc-archive'], self.paths['pkgsrc'], '--sdk-source', self.paths['sdk-source']]
         self.compiler_record = self.compiler()
         self.runtime_record = self.verify_runtime()
-        self.host_tools = {}
-        for name in ('cc', 'c++'):
-            path = self.find_command(name)
-            self.host_tools[name] = dict(path=path, sha256=inventory.sha256_file(path), version=''.join(self.capture(path, '--version')).strip())
+        self.native_compiler = native_compiler.inspect(self.options, self.environment)
+        self.host_tools = native_compiler.host_tools(self.native_compiler)
+        for rows in self.native_compiler['references'].values():
+            for row in rows:
+                for name in ('destination', 'objects', 'tools'):
+                    paths.reject_overlap(row['path'], self.paths[name])
         self.flags = self.FLAGS + [f'EXTERNAL_TOOLCHAIN={self.paths["compiler"]}', f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}', f'EMBER_EXTERNAL_GCC_RUNTIME={prefix}', f'HOST_CC={self.host_tools["cc"]["path"]}', f'HOST_CXX={self.host_tools["c++"]["path"]}']
-        self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
+        self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, native_compiler=self.native_compiler, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
         self.configure_signature()
         self.contexts = {name: self.inspect_context(self.paths[name]) for name in ('objects', 'tools')}
         self.build_command = [self.shell, os.path.join(self.paths['os'], 'build.sh'), '-U', '-u', '-j' + jobs, '-m', self.target['machine'], '-a', self.target['arch'], '-O', self.paths['objects'], '-T', self.paths['tools'], '-D', self.paths['destination']]
@@ -291,7 +295,7 @@ class SysrootBuilder:
         self.build_command.extend(('tools', 'libs'))
         self.loader_command = [os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine']), '-C', os.path.join(self.paths['os'], 'libexec/ld.elf_so'), '-j' + jobs, 'dependall']
         self.install_command = self.loader_command[:-1] + ['install']
-        self.receipt = dict(format='emberbsd-sysroot-build', version=1, scope='sysroot-build', qualification='not-built', execution_acceptance='not-run', workspace=layout, paths=self.paths, sources=self.sources, previous_contexts=self.contexts, signature=self.signature, commands=self.commands, plan=[self.runtime_command, self.build_command, self.loader_command, self.install_command, self.runtime_command, self.runtime_command], working_directory=self.paths['os'], copy=dict(source=prefix, destination=os.path.join(self.paths['destination'], 'usr/pkg/gcc16'), verification='exact pre/copy/post inventory'), not_checked=['target execution', 'ABI compatibility', 'SDK release'])
+        self.receipt = dict(format='emberbsd-sysroot-build', version=2, scope='sysroot-build', qualification='not-built', execution_acceptance='not-run', workspace=layout, paths=self.paths, sources=self.sources, previous_contexts=self.contexts, signature=self.signature, commands=self.commands, plan=[self.runtime_command, self.build_command, self.loader_command, self.install_command, self.runtime_command, self.runtime_command], working_directory=self.paths['os'], copy=dict(source=prefix, destination=os.path.join(self.paths['destination'], 'usr/pkg/gcc16'), verification='exact pre/copy/post inventory'), not_checked=['target execution', 'ABI compatibility', 'SDK release'])
         return self.receipt
 
     def mkdirs(self, path, boundary):
@@ -343,6 +347,7 @@ class SysrootBuilder:
             raise ProcessOwnershipError(group.pid, f'object contexts are quarantined: {exc}') from exc
 
     def dispatch(self, argv):
+        self.verify_native_compiler()
         row = dict(argv=argv, status='running')
         self.commands.append(row)
         self.save_receipt()
@@ -380,6 +385,7 @@ class SysrootBuilder:
         finally:
             if not cleanup_attempted and group.pid is not None:
                 self.stop_group(group)
+            self.verify_native_compiler()
 
     def copy_runtime(self):
         if self.verify_runtime() != self.runtime_record:
@@ -417,6 +423,18 @@ class SysrootBuilder:
     def configure_signature(self):
         """Allow a producer profile to bind its flags before object reuse checks."""
 
+    def verify_native_compiler(self):
+        try:
+            if native_compiler.inspect(self.options, self.environment) != self.native_compiler:
+                raise SDKError('native compiler inputs changed after preflight')
+        except (SDKError, OSError, UnicodeError):
+            if self.contexts_prepared:
+                for name in ('objects', 'tools'):
+                    path = os.path.join(self.paths[name], self.QUARANTINE)
+                    if paths.entry(path) is None:
+                        jsonio.write_json(path, dict(reason='native compiler inputs changed during build'))
+            raise
+
     def build_payload(self):
         """Run the producer sequence under the shared ownership contract."""
         for command in (self.build_command, self.loader_command, self.install_command):
@@ -440,6 +458,7 @@ class SysrootBuilder:
             self.interrupted()
             self.locks = process.ContextLocks([self.paths[name] for name in ('objects', 'tools')], os.path.join(self.paths['sdk'], 'obj')).acquire()
             self.empty_destination()
+            self.verify_native_compiler()
             self.mkdirs(self.paths['destination'], self.paths['sdk'])
             marker = os.path.join(self.paths['destination'], self.MARKER)
             handle = self.exclusive_file(marker)
@@ -452,6 +471,7 @@ class SysrootBuilder:
             self.receipt['qualification'] = 'incomplete'
             self.save_receipt()
             self.prepare_contexts()
+            self.contexts_prepared = True
             if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports']) != self.libedit_record:
                 raise SDKError('libedit source changed before build')
             self.build_payload()
@@ -462,6 +482,7 @@ class SysrootBuilder:
                     raise SDKError(f'{name} source changed during build')
             if self.compiler() != self.compiler_record:
                 raise SDKError('compiler changed during build')
+            self.verify_native_compiler()
             if self.python_identity() != self.python:
                 raise SDKError('Python or SDK implementation changed during build')
             self.receipt['outputs'] = self.inspect_payload()

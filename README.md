@@ -79,7 +79,7 @@ maintain another compiler recipe or another libc.
 
 ## Build and validation boundaries
 
-Follow the [SDK tool selection policy](docs/tool-selection.md), including its current enforcement gap.
+Follow the [SDK tool selection policy](docs/tool-selection.md), including its remaining enforcement limits.
 Use SDK native GCC16 for host generators and SDK cross GCC16 for EmberBSD target code.
 Reject implicit system compiler and build-tool selection.
 The selected target architecture, ABI and runtime must agree. Build-host tools
