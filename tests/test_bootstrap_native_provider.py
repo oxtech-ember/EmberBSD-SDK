@@ -209,6 +209,41 @@ class NativeProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'source-built LLVM and LLD'):
             case.validate()
 
+    def test_default_runpath_profile_preserves_provider_routes_and_historical_mapping(self):
+        self.archive_role()
+        case = self.case
+        for role in ('install_name_tool', 'llvm_readtapi'):
+            case.descriptor['tools'][role] = dict(case.descriptor['tools']['libtool_darwin'])
+            case.commands[role] = (case.descriptor['tools'][role]['path'],)
+            case.plan['required_roles'].append(role)
+        case.plan['link_control'] = dict(
+            python=dict(path='/selected/control-python', sha256='1' * 64),
+            launcher=dict(path='/selected/sdk/scripts/link-launcher.py', sha256='2' * 64))
+        case.plan['metadata']['profile']['sha256'] = producer.NATIVE_PROVIDER_PROFILE_SHA256
+        previous = self.values()
+        case.plan['metadata']['profile']['sha256'] = producer.NO_DEFAULT_RPATH_PROFILE_SHA256
+        self.assertTrue(producer._recognized_profile(producer.NO_DEFAULT_RPATH_PROFILE_SHA256))
+        self.assertTrue(producer._parallel_profile(producer.NO_DEFAULT_RPATH_PROFILE_SHA256))
+        self.assertEqual(self.values(), previous)
+        # Flags remain in the pinned Ports source profile, not the ABI map.
+        self.assertNotIn('-nodefaultrpaths', self.values()['LDFLAGS'])
+        changed = '0' + producer.NO_DEFAULT_RPATH_PROFILE_SHA256[1:]
+        self.assertFalse(producer._recognized_profile(changed))
+
+    def test_default_runpath_profile_keeps_metadata_and_full_closure_guards(self):
+        self.case.plan['metadata']['recipes'] = ['lang/gcc16', 'lang/llvm']
+        self.case.plan['metadata']['profile']['sha256'] = producer.NO_DEFAULT_RPATH_PROFILE_SHA256
+        self.case.plan['resources']['cpu_jobs'] = 1
+        with patch('subprocess.Popen', side_effect=AssertionError('no native process')):
+            with self.assertRaisesRegex(SDKError, 'explicit native role: libtool_darwin'):
+                self.case.validate()
+        case = test_bootstrap_recipe.RecipeTests()
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        case.plan['metadata']['profile']['sha256'] = producer.NO_DEFAULT_RPATH_PROFILE_SHA256
+        with self.assertRaisesRegex(SDKError, 'source-built LLVM and LLD'):
+            case.validate()
+
 
 if __name__ == '__main__':
     unittest.main()

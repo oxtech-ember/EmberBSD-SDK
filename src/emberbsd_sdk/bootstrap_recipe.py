@@ -179,8 +179,8 @@ def validate_bound_recipe_plan(plan, descriptor, commands, flags, *, inspect_inp
              all(descriptor['tools'].get(role, {}).get('kind') == 'native'
                  for role in ('pkg_add', 'pkg_create')),
              'bound recipe installation needs explicit native pkg_add and pkg_create roles')
-    from .bootstrap_producer import NATIVE_PROVIDER_PROFILE_SHA256
-    if plan['metadata']['profile']['sha256'] == NATIVE_PROVIDER_PROFILE_SHA256:
+    from .bootstrap_producer import _native_provider_profile
+    if _native_provider_profile(plan['metadata']['profile']['sha256']):
         _require({'lang/llvm', 'devel/lld'} <= set(plan['recipes']),
                  'native GCC defaults require the common source-built LLVM and LLD recipes')
     from .bootstrap_pilot import _references, _validate_resources

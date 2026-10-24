@@ -29,6 +29,7 @@ BUILTIN_PROFILE_SHA256 = '73209380dcfeeb36abe13f0637a87bc1fd441817c98458ffb92751
 LIBTOOL_PROFILE_SHA256 = 'ec0354fe315fb02605be2e08299b7495590fc1086d511f67093f4fbb8f4775e0'
 RANLIB_PROFILE_SHA256 = '5b48cba0ea1bd64b883631028d94db1aca574d87f235299a3fc9e768253907db'
 NATIVE_PROVIDER_PROFILE_SHA256 = '9fe8cf29f9d8a5dfb92f3a7f8bc44d0c9f6bcbb584f37636934bf54b6299c3cb'
+NO_DEFAULT_RPATH_PROFILE_SHA256 = '8ddcfcc680622d9990289c51e9d44a476397a09999e1609c20e7051b0844e417'
 EARLY_TOOLS = tuple('awk basename cat cut date dirname env expr grep head id pwd sed sort tail tr uname uniq wc'.split())
 _DARWIN_CMAKE_TOOLS = (('LIBTOOL', 'libtool_darwin'), ('INSTALL_NAME_TOOL', 'install_name_tool'),
                        ('TAPI', 'llvm_readtapi'))
@@ -45,7 +46,11 @@ VARIABLES = (*LEGACY_VARIABLES, 'BOOTSTRAP_DEPENDS')
 
 def _parallel_profile(digest):
     return digest in (PARALLEL_PROFILE_SHA256, BUILTIN_PROFILE_SHA256, LIBTOOL_PROFILE_SHA256,
-                      RANLIB_PROFILE_SHA256, NATIVE_PROVIDER_PROFILE_SHA256)
+                      RANLIB_PROFILE_SHA256) or _native_provider_profile(digest)
+
+
+def _native_provider_profile(digest):
+    return digest in (NATIVE_PROVIDER_PROFILE_SHA256, NO_DEFAULT_RPATH_PROFILE_SHA256)
 
 
 def _recognized_profile(digest):
@@ -125,7 +130,7 @@ def metadata_assignments(plan, descriptor, commands, flags):
                       ('AR', 'ar'), ('RANLIB', 'ranlib'), ('NM', 'nm'), ('STRIP', 'strip')]:
         _require(len(commands[role]) == 1, 'metadata utility must have one selected invocation')
         variables['EMBERBSD_GCC16_' + key] = _safe_path(commands[role][0])
-    if data['profile']['sha256'] == NATIVE_PROVIDER_PROFILE_SHA256:
+    if _native_provider_profile(data['profile']['sha256']):
         for key, role in _DARWIN_CMAKE_TOOLS:
             if role in plan['required_roles']:
                 _require(len(commands.get(role, ())) == 1 and
@@ -159,7 +164,7 @@ def metadata_assignments(plan, descriptor, commands, flags):
         if 'link_control' in plan:
             from .bootstrap_recipe import recipe_linker_launcher
             variables['EMBERBSD_GCC16_LINKER_LAUNCHER'] = recipe_linker_launcher(plan)
-        if data['profile']['sha256'] == NATIVE_PROVIDER_PROFILE_SHA256:
+        if _native_provider_profile(data['profile']['sha256']):
             variables['EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER'] = ''
             if 'link_control' in plan:
                 from .bootstrap_recipe import recipe_cmake_linker_launcher
@@ -282,7 +287,7 @@ def validate_metadata_inputs(plan, descriptor, commands, flags, *, inspect_input
              len(plan['required_roles']) == len(set(plan['required_roles'])) and
              required <= set(plan['required_roles']) <= set(commands), 'metadata input tool roles are incomplete')
     if {'lang/llvm', 'devel/lld', 'devel/cmake'} & set(data['recipes']):
-        _require(data['profile']['sha256'] == NATIVE_PROVIDER_PROFILE_SHA256,
+        _require(_native_provider_profile(data['profile']['sha256']),
                  'CMake provider recipes need the native-provider source profile')
         for _, role in _DARWIN_CMAKE_TOOLS:
             _require(role in plan['required_roles'] and len(commands.get(role, ())) == 1 and

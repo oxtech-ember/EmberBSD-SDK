@@ -178,5 +178,7 @@ These roles do not replace the raw `libtool` utility or create ordinary provider
 With `link_control`, SDK emits the same resource command as a CMake command list.
 Ports forwards it to C/C++ final links, including nested `try_compile` work.
 The source profile adds static GCC runtime link options separately from ABI flags.
+Its default-runpath variant also adds the supported GCC `-nodefaultrpaths` option.
+This suppresses seed compiler-library runpaths without changing explicit package paths.
 Historical profile hashes retain their previous MAKECONF contents.
 Native execution, source-built provider receipts and full graduation remain required.
