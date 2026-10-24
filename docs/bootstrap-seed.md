@@ -58,10 +58,10 @@ Preserve actual child results on failure. Never infer successful child exit from
 The check command does not execute commands. `run-pilot` provides only the
 separate finite pilot controller, not a full recipe-build executor.
 
-### Fixed Darwin seed binding
+### Fixed Darwin seed bindings
 
-An optional `driver_binding` recognizes only
-`ports-gcc16-darwin-llvm-mc-seed-v1` on Darwin arm64.
+An optional `driver_binding` recognizes two fixed Ports bindings on Darwin arm64.
+The original binding is `ports-gcc16-darwin-llvm-mc-seed-v1`.
 It has exactly `kind`, `ports_source`, `template_relative`, `template`,
 `instantiated`, `deployment`, and `reported_programs`.
 `ports_source` must equal `sources.ports`.
@@ -86,6 +86,30 @@ It never changes the selected execution role or `LD` binding.
 Do not use canonical inode equality as linker flavor evidence.
 An actual pilot must preserve the observed collect2 and `ld64.lld` route.
 Ordinary NativeToolset driver-query checks remain unchanged.
+
+`ports-gcc16-darwin-llvm-mc-seed-v2` adds the source-owned Mach-O platform
+version selector for LLD. It keeps the same compiler tuple and nominal query
+mapping. Its template path is
+`profiles/development-toolchain/bootstrap/darwin-llvm-mc-lld-seed.specs.in`.
+The exact template SHA256 is
+`ef055eaac77dcb506165e366a984839820edc900c8e39bff5ce1e797945bd15b`.
+The exact instantiation SHA256 is
+`bc8bda2a69069af27154c7da4ba3fa711136558a86a6076f012edf82544c64a2`.
+Only `@DEPLOYMENT@` to `26.0` and `@SDK_VERSION@` to `26.5` are substituted.
+The Ports template appends the modern platform option to the existing link
+spec. It does not replace collect2 or the upstream link command.
+
+The v2 binding has two additional required fields: `sdk_version: 26.5`
+(a string) and `sdk_metadata`, an exact file reference.
+The reference path must equal `SDKSettings.json` in exactly one declared
+`host_abi.headers` root. Its SHA256 must equal that root's pinned inventory row.
+Current metadata must have `Version: 26.5`, `CanonicalName: macosx26.5`,
+`DefaultVariant: macos`, and
+`SupportedTargets.macosx.BuildVersionPlatformID: 1`, all strings.
+Compiler defaults in that ABI metadata are data. They do not select a tool.
+Historical graduation checks keep these identities and the small ABI inventory.
+They do not require a retired SDK payload. The live seed admission checks do.
+The original v1 fields and hashes remain supported without this extension.
 
 ## Seed metadata
 

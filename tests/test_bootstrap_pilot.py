@@ -341,3 +341,75 @@ class FixedBindingTests(unittest.TestCase):
         self.binding['instantiated']['sha256'] = '0' * 64
         with self.assertRaises(SDKError):
             bootstrap_binding.seed_commands(self.descriptor, inspect_inputs=False)
+
+
+class FixedLLDBindingTests(FixedBindingTests):
+    def setUp(self):
+        super().setUp()
+        template = Path(self.binding['template']['path'])
+        template.write_bytes(b'source-owned @DEPLOYMENT@ @SDK_VERSION@ fixture\n')
+        specs = Path(self.binding['instantiated']['path'])
+        specs.write_bytes(b'source-owned 26.0 26.5 fixture\n')
+        ref = lambda p: dict(path=str(p), sha256=hashlib.sha256(p.read_bytes()).hexdigest())
+        self.binding.update(kind=bootstrap_binding.DARWIN_LLVM_MC_LLD_SEED,
+                            template_relative=bootstrap_binding._LLD_TEMPLATE_RELATIVE,
+                            template=ref(template), instantiated=ref(specs), sdk_version='26.5')
+        self.sdk = self.root / 'host-sdk'
+        self.sdk.mkdir()
+        self.metadata = dict(Version='26.5', CanonicalName='macosx26.5', DefaultVariant='macos',
+                             SupportedTargets=dict(macosx=dict(BuildVersionPlatformID='1')),
+                             DefaultCompiler='historical ABI metadata only')
+        self.metadata_path = self.sdk / 'SDKSettings.json'
+        self.inventory_path = self.root / 'sdk-inventory.json'
+        self.descriptor['host_abi'] = dict(headers=[dict(root=str(self.sdk), inventory={})])
+        self.seal_sdk()
+        for name, value in (('_LLD_TEMPLATE_SHA256', ref(template)['sha256']),
+                             ('_LLD_INSTANTIATED_SHA256', ref(specs)['sha256'])):
+            mock = patch.object(bootstrap_binding, name, value)
+            mock.start()
+            self.addCleanup(mock.stop)
+
+    def seal_sdk(self):
+        self.metadata_path.write_text(json.dumps(self.metadata))
+        self.binding['sdk_metadata'] = dict(path=str(self.metadata_path),
+                                           sha256=hashlib.sha256(self.metadata_path.read_bytes()).hexdigest())
+        self.inventory_path.write_text(json.dumps(snapshot_tree(str(self.sdk))))
+        self.descriptor['host_abi']['headers'][0]['inventory'] = dict(
+            path=str(self.inventory_path), sha256=hashlib.sha256(self.inventory_path.read_bytes()).hexdigest())
+
+    def test_sdk_version_and_platform_metadata_must_match_the_fixed_binding(self):
+        original = copy.deepcopy(self.metadata)
+        for field, value in (('Version', '26.4'), ('CanonicalName', 'iphoneos26.5'),
+                             ('DefaultVariant', 'ios'), ('SupportedTargets', {})):
+            with self.subTest(field=field):
+                self.metadata = copy.deepcopy(original)
+                self.metadata[field] = value
+                self.seal_sdk()
+                with self.assertRaisesRegex(SDKError, 'pinned macOS 26.5 SDK metadata'):
+                    bootstrap_binding.seed_commands(self.descriptor)
+
+    def test_sdk_metadata_cannot_use_another_root_or_inventory_hash(self):
+        original = copy.deepcopy(self.binding['sdk_metadata'])
+        self.binding['sdk_metadata']['path'] = str(self.root / 'outside-SDKSettings.json')
+        with self.assertRaisesRegex(SDKError, 'outside its declared headers'):
+            bootstrap_binding.seed_commands(self.descriptor)
+        self.binding['sdk_metadata'] = original
+        self.binding['sdk_metadata']['sha256'] = '0' * 64
+        with self.assertRaisesRegex(SDKError, 'pinned ABI inventory'):
+            bootstrap_binding.seed_commands(self.descriptor)
+
+    def test_sdk_version_selector_is_required_and_cannot_use_an_implicit_default(self):
+        self.binding['sdk_version'] = '26.4'
+        with self.assertRaisesRegex(SDKError, 'unsupported fixed seed SDK version'):
+            bootstrap_binding.seed_commands(self.descriptor)
+        self.binding.pop('sdk_version')
+        with self.assertRaisesRegex(SDKError, 'unsupported bootstrap driver binding fields'):
+            bootstrap_binding.seed_commands(self.descriptor)
+
+    def test_retired_sdk_payload_is_not_read_during_metadata_only_graduation(self):
+        self.metadata_path.unlink()
+        commands = bootstrap_binding.seed_commands(self.descriptor, inspect_inputs=False)
+        self.assertEqual(commands['cc'][-1], '-mmacosx-version-min=26.0')
+        self.binding['sdk_metadata']['sha256'] = '0' * 64
+        with self.assertRaisesRegex(SDKError, 'pinned ABI inventory'):
+            bootstrap_binding.seed_commands(self.descriptor, inspect_inputs=False)
