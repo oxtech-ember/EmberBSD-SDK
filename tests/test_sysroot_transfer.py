@@ -21,7 +21,7 @@ from test_core import SDK_SOURCE, TemporaryCase
 from test_builder import fixture, write
 from emberbsd_sdk import inventory, publication, sysroot_transfer as transfer
 from emberbsd_sdk.errors import SDKError
-from emberbsd_sdk.sysroot_builder import SysrootBuilder as Builder
+from test_builder import B as Builder
 from emberbsd_sdk.targets import TARGETS
 
 
@@ -77,19 +77,19 @@ class SysrootTransferTests(TemporaryCase):
         path.write_text(json.dumps(receipt))
 
     def test_explicit_native_v2_and_historical_v1_build_receipts(self):
-        from emberbsd_sdk import host_compiler
         original = json.loads((self.source / Builder.RECEIPT).read_text())
         self.assertEqual(original['version'], 2)
-        for mutation in ('identity', 'host-toolchain', 'host-cc', 'host-cxx', 'host-toolchain-manifest', 'flags'):
+        for mutation in ('identity', 'native-toolset', 'host-cc', 'host-cxx', 'native-producer-receipt', 'flags'):
             changed = copy.deepcopy(original)
-            if mutation == 'identity': del changed['signature']['native_compiler']
+            if mutation == 'identity': del changed['signature']['native_toolset']
             elif mutation == 'flags': changed['signature']['flags'].append('HOST_CC=/usr/bin/cc')
             else: changed['paths'][mutation] = '/different/provider'
             with self.subTest(mutation=mutation), self.assertRaises(SDKError):
                 transfer._provenance(changed, 'aarch64')
         historical = copy.deepcopy(original); historical['version'] = 1
-        del historical['signature']['native_compiler']
-        for name in host_compiler.OPTIONS: del historical['paths'][name]
+        del historical['signature']['native_toolset']
+        del historical['signature']['native_inputs']
+        for name in ('host-cc', 'host-cxx', 'native-toolset', 'native-producer-receipt'): del historical['paths'][name]
         transfer._provenance(historical, 'aarch64')
         (self.source / Builder.RECEIPT).write_text(json.dumps(historical))
         pin = self.export()['manifest_sha256']

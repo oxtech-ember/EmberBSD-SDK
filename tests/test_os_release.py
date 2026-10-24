@@ -16,12 +16,20 @@ import tarfile
 from unittest.mock import patch
 
 from test_core import TemporaryCase, header, SDK_SOURCE
-from test_builder import fixture, write, commit, snapshot
+from test_builder import fixture, write, commit, snapshot, fixture_native_selection
 from libedit_fixture import installation_source
 from emberbsd_sdk import os_release as kit, jsonio
-from emberbsd_sdk.os_release_builder import OSReleaseBuilder, validate_profile
+from emberbsd_sdk.os_release_builder import OSReleaseBuilder as ProductionReleaseBuilder, validate_profile, producer_commands
 from emberbsd_sdk.os_release_github import GitHub
 from emberbsd_sdk.errors import SDKError
+
+
+class OSReleaseBuilder(ProductionReleaseBuilder):
+    """Keep original fake release dispatch tests separate from admission."""
+    load_native_toolset = fixture_native_selection
+
+    def require_native_producer_routing(self):
+        pass
 
 
 def tar_bytes(files, mode='w:xz'):
@@ -293,38 +301,65 @@ else: raise SystemExit('unexpected operation')
 
 class BuilderReleaseTests(TemporaryCase):
     def test_native_schema3_identity_and_historical_schema2(self):
-        from emberbsd_sdk import host_compiler
         options = release_fixture(self.root, 'aarch64')
         receipt = OSReleaseBuilder(options).run()
         output = Path(options['destination'])
         profile = jsonio.read_json(output / 'build-profile.json')
         sha = receipt['sources']['os']['commit']
         self.assertEqual(profile['schema'], 3)
-        self.assertEqual(profile['sdk_receipt']['version'], 3)
-        for mutation in ('missing', 'host-toolchain', 'host-cc', 'host-cxx', 'host-toolchain-manifest', 'cxx-role'):
+        for mutation in ('identity', 'inputs', 'pin', 'host-cc', 'host-cxx', 'python',
+                         'native-toolset', 'native-producer-receipt', 'flags', 'environment'):
             changed = copy.deepcopy(profile)
             signature = changed['sdk_receipt']['signature']
-            if mutation == 'missing':
-                del signature['native_compiler']
-            elif mutation == 'cxx-role':
-                del signature['native_compiler']['compilers']['cxx']['macros']['__cplusplus']
-                signature['host_tools'] = host_compiler.host_tools(signature['native_compiler'])
-            else:
-                changed['sdk_receipt']['paths'][mutation] = '/different/provider'
-            with self.subTest(mutation=mutation), self.assertRaises((SDKError, KeyError)):
-                validate_profile(changed, sha, 'aarch64')
-        # Historical verification does not manufacture the new native identity.
+            if mutation == 'identity': del signature['native_toolset']
+            elif mutation == 'inputs': del signature['native_inputs']
+            elif mutation == 'pin': signature['native_inputs']['native-toolset-sha256'] = 'f' * 64
+            elif mutation == 'flags': signature['flags'].append('HOST_CC=/usr/bin/cc')
+            elif mutation == 'environment': signature['environment']['PATH'] = '/usr/bin:/bin'
+            else: changed['sdk_receipt']['paths'][mutation] = '/different/provider'
+            with self.subTest(mutation=mutation), self.assertRaises(SDKError): validate_profile(changed, sha, 'aarch64')
         historical = copy.deepcopy(profile)
         historical['schema'] = historical['sdk_receipt']['version'] = 2
-        del historical['sdk_receipt']['signature']['native_compiler']
-        for key in host_compiler.OPTIONS:
+        signature = historical['sdk_receipt']['signature']
+        del signature['native_toolset']; del signature['native_inputs']
+        for key in ('host-cc', 'host-cxx', 'native-toolset', 'native-producer-receipt'):
             del historical['sdk_receipt']['paths'][key]
-        validate_profile(historical, sha, 'aarch64')
+        signature['host_tools'] = {name: dict(path='/usr/bin/' + name, sha256='0' * 64,
+                                             version='historical system compiler') for name in ('cc', 'c++')}
+        signature['flags'], historical['commands'] = producer_commands(
+            'aarch64', historical['sdk_receipt']['paths'], signature['host_tools'], sha,
+            historical['source_timestamp'], historical['jobs'], historical['shell'])
+        historical['sdk_receipt']['commands'] = [dict(argv=argv, status='passed', exit_status=0)
+                                                 for argv in historical['commands']]
+        with patch('emberbsd_sdk.native_toolset.canonical_existing', side_effect=AssertionError('offline filesystem read')):
+            validate_profile(profile, sha, 'aarch64')
+            validate_profile(historical, sha, 'aarch64')
         jsonio.write_json(output / 'build-profile.json', historical, exclusive=False)
-        result = kit.prepare(output, self.root / 'historical-schema2-kit', 'aarch64-sysroot')
+        kit.prepare(output, self.root / 'historical-kit', 'aarch64-sysroot')
+        result = kit.verify(self.root / 'historical-kit', 'aarch64-sysroot')
         self.assertEqual(result['build_profile']['schema'], 2)
-        self.assertNotIn('native_compiler', result['build_profile']['sdk_receipt']['signature'])
-        kit.verify(self.root / 'historical-schema2-kit', 'aarch64-sysroot')
+        self.assertNotIn('native_toolset', result['build_profile']['sdk_receipt']['signature'])
+
+    def test_saved_profile_preserves_accepted_native_version_suffix(self):
+        options = release_fixture(self.root, 'aarch64')
+        receipt = OSReleaseBuilder(options).run()
+        profile = jsonio.read_json(Path(options['destination']) / 'build-profile.json')
+        signature = profile['sdk_receipt']['signature']
+        signature['native_toolset']['compiler']['version'] = '16.2.0+sdk.1'
+        for record in signature['host_tools'].values():
+            record['version'] = record['gcc_version'] = '16.2.0+sdk.1'
+        # The old standalone regex rejected this otherwise consistent profile.
+        validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
+        previous_major = copy.deepcopy(profile)
+        old_signature = previous_major['sdk_receipt']['signature']
+        old_signature['native_toolset']['compiler']['version'] = '15.2.0'
+        for record in old_signature['host_tools'].values():
+            record['version'] = record['gcc_version'] = '15.2.0'
+        with self.assertRaisesRegex(SDKError, 'native build tools require GCC16'):
+            validate_profile(previous_major, receipt['sources']['os']['commit'], 'aarch64')
+        signature['host_tools']['c++']['gcc_version'] = '16.2.0'
+        with self.assertRaisesRegex(SDKError, 'Mixed native compiler identity'):
+            validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
 
     def test_release_rejects_incomplete_installed_libedit(self):
         for failure in ('missing_libedit', 'missing_histedit', 'missing_editline_marker', 'wrong_editline_marker',

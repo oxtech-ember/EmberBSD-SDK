@@ -1,5 +1,11 @@
 # Compose and publish OS releases
 
+Actual OS release builds currently fail before preflight or producer execution.
+The OS nested native-tool contract is not qualified. There is no override flag.
+A qualified [native toolset](native-toolset.md) permits a read-only `--plan`.
+The [sysroot guide](sysroot.md#recorded-producer-sequence) identifies the exact
+OS source routes that keep execution blocked.
+
 SDK owns release orchestration, kit composition and immutable publication.
 The OS owns `build.sh`, distribution rules, media layout and installer checks.
 Ports owns the common GCC16 compiler and its verified runtime.
@@ -22,8 +28,6 @@ build prerequisites and an ISO-capable libarchive `tar`. Each source checkout
 must be clean and fully materialized. Select exact OS, Ports and SDK commits.
 The common compiler must be GCC 16.2.0 with POSIX threads for the selected ABI.
 The normal Ports verifier must accept its runtime stage and source inputs.
-Select the mandatory [native compiler provider inputs](native-compiler.md).
-The shared selector supplies `HOST_CC` and `HOST_CXX` for both release profiles.
 
 Select `aarch64-sysroot` for complete base/comp sets and an EMBER64 test kernel.
 Select `amd64` for the reduced UEFI ISO, USB image and installation sets.
@@ -48,11 +52,13 @@ python3 scripts/build-os-release.py \
   --os-source /absolute/EmberBSD \
   --ports /absolute/EmberBSD-Ports \
   --libedit-source /absolute/prepared-libedit \
+  --host-cc /absolute/native-gcc16/bin/gcc \
+  --host-cxx /absolute/native-gcc16/bin/g++ \
+  --native-toolset /absolute/evidence/native-toolset.json \
+  --native-toolset-sha256 "$descriptor_hash" \
+  --native-producer-receipt /absolute/evidence/qualification.json \
+  --native-producer-receipt-sha256 "$accepted_receipt_hash" \
   --compiler /absolute/gcc16-cross \
-  --host-toolchain /absolute/sdk-native-gcc16 \
-  --host-cc /absolute/sdk-native-gcc16/bin/gcc \
-  --host-cxx /absolute/sdk-native-gcc16/bin/g++ \
-  --host-toolchain-manifest /absolute/native-gcc16-inputs.json \
   --runtime-work /absolute/gcc16-runtime-work \
   --gcc-archive /absolute/gcc-16.2.0.tar.xz \
   --pkgsrc /absolute/prepared-pkgsrc \
@@ -60,14 +66,19 @@ python3 scripts/build-os-release.py \
   --jobs 4 --plan
 ```
 
-Inspect the plan before removing `--plan`. The workspace target must match the
+The plan reports `build_admission` as refused. Removing `--plan` still refuses
+execution. The workspace target must match the
 profile. The destination must be new or empty and must be outside the active
 sysroot. Use paths without whitespace. `--objects` and `--tools` select shared
 workspace object paths; reuse requires an identical compatible context.
 Do not point this producer at a core-sysroot object's incompatible context.
 No compilation or output writes occur in plan mode.
+The three driver/interpreter path options are checked aliases for the accepted
+native roles. The context binds the complete normalized native selection.
+Only native `HOST_*` flags receive its ABI arguments. Saved profile verification
+checks command and selection consistency; it does not requalify local tools.
 
-AArch64 runs `tools kernel=EMBER64`, then `distribution sets`.
+The recorded AArch64 sequence uses `tools kernel=EMBER64`, then `distribution sets`.
 The amd64 profile runs `tools release`, the OS UEFI `install_image` target,
 then `iso-image`. It retains GENERIC kernel and modules, with the INSTALL boot
 kernel profile selected through command variables. Both profiles omit native
@@ -77,11 +88,16 @@ OS sets do not own the external SDK or GCC16 package payload. Select one matchin
 Ports runtime provider separately and check image dependency closure before
 VM qualification. The adapter alone does not compose that runtime package.
 
-The producer records the exact commands, source commits, compiler/runtime
+After native routing qualification, the producer is designed to record exact commands, source commits, compiler/runtime
 hashes, source archive and output hashes. It sanitizes inherited make controls.
 The common SDK log and incomplete receipt remain on failure. `build-success`
 appears only after all producer operations and receipt checks succeed.
 A build result is not a VM, hardware or publication qualification.
+
+New release profiles and SDK release receipts use schema 3. Their portable verification binds the native selection,
+input pins, tool paths, ABI flags, and environment. It does not read the original compiler files.
+Historical schema 2 profiles retain their original command contract and acquire no native-toolset qualification.
+The kit wrapper remains version 2 for both profile schemas.
 
 ## Prepare a kit
 
@@ -163,10 +179,11 @@ needs its own accepted HTTPS frontend; a DNS alias alone is insufficient.
 Existing schema 1 amd64 and `emberbsd.aarch64.sysroot.v1` manifests remain
 verifiable without rewriting their receipts. Their bootstrap GCC12 provenance
 stays explicit. It is not evidence for today's common GCC16 build profile.
-Historical schema 2 receipts remain verifiable under their original contract.
-They do not gain native SDK compiler qualification. New builds use schema 3
-profiles and receipts with explicit native compiler identities. Version 2 kit
-containers accept both profile versions. Existing immutable tags must not be repurposed.
+Historical schema 2 receipts retain their source, compiler, runtime and command
+checks. They do not establish native toolset qualification. New plans use
+schema 3 and bind the accepted native selection. Actual builds remain blocked
+until nested producer routing is qualified. Existing immutable tags must not
+be repurposed.
 
 Run `python3 -B -m unittest discover -s tests -p 'test_*.py'`.
 The release tests exercise archive composition, qualification binding, actual
@@ -178,8 +195,7 @@ acceptance before its binaries can be called qualified.
 The automatic SDK workflow runs host contracts only. The manual
 [OS release workflow](../.github/workflows/os-release.yml) requires a prepared
 self-hosted runner labelled `emberbsd-release`. It requires explicit clean
-source pins, workspace, GCC16, native compiler declarations, libedit source,
-runtime, archive and pkgsrc inputs. Missing inputs fail; the job does not
-substitute a GCC12 build or report a skipped
+source pins, workspace, GCC16, runtime, archive and pkgsrc inputs. Missing
+inputs fail; the job does not substitute a GCC12 build or report a skipped
 producer as a successful binary build. This migration does not establish that
 such a runner exists or qualify its complete producer pipeline.

@@ -18,20 +18,15 @@ class UniqueOption(argparse.Action):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Build or plan a complete GCC16 EmberBSD OS release with a Darwin or Linux process backend.')
-    input_help = {
-        'python': 'explicit host Python 3.15+ interpreter',
-        'sdk-source': 'selected SDK source checkout',
-        'host-toolchain': 'absolute SDK native GCC16 provider root',
-        'host-cc': 'absolute native GCC16 C compiler path from the provider manifest',
-        'host-cxx': 'absolute native GCC16 C++ compiler path from the provider manifest',
-        'host-toolchain-manifest': 'absolute provider input manifest path',
-    }
-    for name in ('sdk', 'os-source', 'ports', 'compiler', 'host-toolchain', 'host-cc', 'host-cxx', 'host-toolchain-manifest', 'runtime-work', 'gcc-archive', 'pkgsrc', 'jobs', 'python', 'sdk-source', 'libedit-source'):
-        parser.add_argument('--' + name, required=True, action=UniqueOption, help=input_help.get(name))
+    parser = argparse.ArgumentParser(description='Plan a complete GCC16 EmberBSD OS release. Actual builds are refused until OS nested native-tool routing is qualified.')
+    for name in ('sdk', 'os-source', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'jobs', 'python', 'sdk-source', 'libedit-source', 'host-cc', 'host-cxx'):
+        parser.add_argument('--' + name, required=True, action=UniqueOption, help='explicit host Python 3.15+ interpreter' if name == 'python' else 'selected SDK source checkout' if name == 'sdk-source' else 'absolute SDK native GCC 16 driver (no PATH or Clang fallback)' if name.startswith('host-') else None)
     parser.add_argument('--profile', required=True, choices=('amd64', 'aarch64-sysroot'))
     for name in ('destination', 'objects', 'tools'):
         parser.add_argument('--' + name, action=UniqueOption, required=name == 'destination')
+    for name in ('native-toolset', 'native-toolset-sha256', 'native-producer-receipt', 'native-producer-receipt-sha256'):
+        parser.add_argument('--' + name, required=True, action=UniqueOption,
+                            help='explicit qualified native toolset evidence; see docs/native-toolset.md')
     parser.add_argument('--plan', action='store_true', help='inspect inputs and emit commands without creating outputs')
     arguments = parser.parse_args()
     try:

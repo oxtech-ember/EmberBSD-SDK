@@ -46,7 +46,7 @@ The descriptor path is absolute. Both SHA256 arguments are lowercase hex strings
 `accepted_producer_receipt` has exactly `path` and `sha256` keys.
 `required_roles` is an explicit nonempty list, tuple, set, or frozen set.
 The loader always requires native `cc`, `cxx`, `cpp`, `as`, and `ld`.
-It also verifies every declared member and all six GCC driver components.
+It also verifies every declared member and all seven GCC driver components.
 It raises `emberbsd_sdk.errors.SDKError` on refusal.
 
 | Member | Result |
@@ -92,7 +92,7 @@ The following fields are required in addition to the envelope:
 | `providers` | Named providers. Each has a `source` key from `sources`, a source-relative `recipe`, and `recipe_sha256`. |
 | `inventory` | File reference for the complete `inventory.snapshot_tree(bundle_root)` JSON object. Store it outside the bundle. |
 | `tools` | Explicit role-to-member mapping described below. |
-| `driver_components` | Exactly `cc1`, `cc1plus`, `collect2`, `lto1`, `as`, and `ld`, each mapped to an explicit native member role. The `as` and `ld` values must be `as` and `ld`. |
+| `driver_components` | Exactly `cc1`, `cc1plus`, `collect2`, `lto1`, `lto-wrapper`, `as`, and `ld`, each mapped to an explicit native member role. The `as` and `ld` values must be `as` and `ld`. |
 | `host_abi` | Separate nonempty `headers` and `libraries` arrays. Each entry has `root` and an `inventory` file reference for that complete real input directory. |
 | `abi_flags` | Exactly `cppflags`, `cflags`, `cxxflags`, and `ldflags`, each a JSON array of arguments. |
 
@@ -111,6 +111,11 @@ even when recorded `-dumpmachine` output repeats the same invalid tuple.
 Each tool member has `path`, `sha256`, `version`, `provider`, and `kind`.
 The path is absolute and inside `bundle_root`.
 The resolved member must also stay inside that root and be executable.
+General system roots and tool trees cannot be bundle providers, even with an accepted receipt.
+This includes `/usr`, general `/usr/local`, Homebrew, MacPorts, Linuxbrew, and Apple developer tool trees.
+A dedicated provider such as `/usr/local/emberbsd-sdk/native` remains permitted.
+Live checks also compare filesystem identity for case-insensitive paths.
+
 Relative in-bundle symlinks are permitted only when the complete inventory binds them.
 Absolute or external bundle symlinks are refused.
 `kind` is `native` or `script`.
@@ -164,7 +169,7 @@ exactly from the descriptor. It also contains these fields:
   All six probe files must have distinct identities. None can alias a selected tool.
 * `checks.identity.cc` and `checks.identity.cxx` each map `-dumpfullversion` and
   `-dumpmachine` to actual query command records with matching stdout.
-* `checks.driver_components` maps all six component names to actual
+* `checks.driver_components` maps all seven component names to actual
   `-print-prog-name=<component>` command records.
   Use `cxx` for `cc1plus` and `cc` for the other queries.
   Stdout must be exactly the selected absolute member path, apart from surrounding whitespace.
@@ -258,25 +263,20 @@ compiler scripts, implicit interpreters, probe failure, metadata-only probes,
 source/object/artifact substitution, output mismatch, driver escapes,
 audit escapes, and ABI flag separation.
 
-This API checks a separately accepted producer receipt and its bound bundle.
-It does not provision a native GCC16 bundle or qualify its producer automatically.
-The caller must obtain the accepted receipt hash from its trusted acceptance gate.
+The sysroot and release builders use this API before compiler or runtime queries.
+They require explicit descriptor and accepted-receipt pins. Compiler and Python options remain checked aliases.
+Commands preserve the qualified selected paths, native ABI flags, and declared-tool `PATH`.
+The builders repeat this same loader before outputs, before each dispatch, and after producer execution.
+Detected drift after context preparation quarantines both object trees. Restoring input bytes does not permit their reuse.
+Keep the selected files immutable; these checks do not provide a lifetime lease.
 
-The sysroot and release builders use the shared `host_compiler` selector.
-They require four explicit [native compiler inputs](native-compiler.md), including a provider input declaration.
-That selector queries the selected drivers and checks hashes, containment, native ABI, and default C/C++ roles.
-It also checks driver subprocesses, including assembler and linker, before producer dispatch.
-Its identity binds object contexts and build receipts.
+Actual builds remain blocked before preflight until OS nested native-tool routing is qualified.
+There is no override flag. See the [remaining enforcement gaps](tool-selection.md#remaining-enforcement-gaps).
+Fixture dispatch tests override admission only inside test subclasses. They qualify no real provider or OS build.
 
-The provider input declaration is not a qualification format or an accepted producer receipt.
-Referencing a qualification receipt in that declaration checks its bytes only; it does not validate the receipt's qualification semantics.
-The live compiler checks do not replace this API's complete bundle and accepted-evidence checks.
-This API does not replace the builders' live checks or their required declaration.
-
-The builders do not yet call `load_native_toolset` or accept its descriptor as `--host-toolchain-manifest`.
-Consumer integration must bind both selections to the same compiler files and build configuration.
-It must also select all required native roles and verify nested producer commands.
-Use this accepted-receipt contract for that integration; do not add another qualification format.
-The [remaining enforcement limits](tool-selection.md#implemented-compiler-selection-and-remaining-limits)
-apply until each producer enforces its complete toolset.
-A real accepted native provider remains separate from these synthetic contract tests.
+`validate_selection(value, required_roles=...)` checks the existing serialized selection without reading local files.
+It reuses the compiler and ABI argument grammar. It checks recorded consistency, not live qualification.
+New sysroot receipts use version 2; release profiles use schema 3.
+They bind this selection and its input pins to tool paths, native flags, and the producer environment.
+Historical sysroot version 1 and release schema 2 retain their original portable verification contracts.
+They do not acquire native-toolset qualification from historical verification.

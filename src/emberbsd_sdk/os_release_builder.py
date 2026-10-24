@@ -11,8 +11,9 @@ import re
 import shutil
 
 from .errors import SDKError
-from . import inventory, jsonio, libedit, host_compiler
-from .sysroot_builder import SysrootBuilder
+from . import inventory, jsonio, libedit
+from .sysroot_builder import (SysrootBuilder, native_host_flags, check_native_command_identity,
+                              validate_native_binding)
 from .targets import target_definition
 from .os_release import check, full_hash, tag, images, product_version, source_version, KERNEL, SYSROOT_SETS
 
@@ -31,14 +32,17 @@ def flags_for(target):
     return common + [f'{k}={v}' for k, v in replacements.items()]
 
 
-def producer_commands(target, paths, host, sha, timestamp, jobs, shell):
+def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_selection=None):
     definition = target_definition(target)
+    # Only portable historical validation uses the original command contract.
+    cc = host['cc']['path'] if native_selection is None else native_selection['tools']['cc']
+    cxx = host['c++']['path'] if native_selection is None else native_selection['tools']['cxx']
     flags = flags_for(target) + [f'EXTERNAL_TOOLCHAIN={paths["compiler"]}',
         f'EMBER_EXTERNAL_GCC_RUNTIME={paths["runtime-prefix"]}',
         f'EMBER_LIBEDIT_SOURCE={paths["libedit-source"]}',
-        f'HOST_CC={host["cc"]["path"]}', f'HOST_CXX={host["c++"]["path"]}',
+        f'HOST_CC={cc}', f'HOST_CXX={cxx}',
         f'MKREPRO_TIMESTAMP={timestamp}', f'EMBER_BUILD_ID={sha}', f'BUILDINFO=EmberBSD:{sha}',
-        f'KERNOBJDIR={paths["objects"]}/kernels']
+        f'KERNOBJDIR={paths["objects"]}/kernels'] + (native_host_flags(native_selection) if native_selection is not None else [])
     if target == 'aarch64':
         flags += ['RELEASEMACHINEDIR=evbarm-aarch64', 'MAKETARSETS=base comp', 'MKDEBUGKERNEL=no']
     else:
@@ -64,7 +68,7 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell):
 
 
 def validate_profile(profile, sha, target):
-    """Validate historical schema 2 and explicit-native schema 3 portably."""
+    """Validate current and historical profiles without reading mutable tool paths."""
     check(type(profile['schema']) is int and profile['schema'] in (2, 3) and profile['status'] == 'built', 'Incomplete release build profile')
     explicit_native = profile['schema'] == 3
     check(profile['source_commit'] == sha and full_hash(sha, 40), 'Build receipt belongs to another source')
@@ -79,8 +83,6 @@ def validate_profile(profile, sha, target):
     check(set(receipt['sources']) == {'os', 'ports', 'sdk'} and receipt['sources']['os']['commit'] == sha and
           all(full_hash(v['commit'], 40) for v in receipt['sources'].values()), 'Mixed source receipts')
     signature = receipt['signature']
-    if explicit_native:
-        host_compiler.validate_binding(signature, receipt['paths'])
     check(signature['product_version'] == version, 'Mixed source product version')
     libedit.validate_identity(signature['libedit'])
     check(signature['libedit']['recipe']['ports_commit'] == receipt['sources']['ports']['commit'], 'Mixed libedit Ports source')
@@ -104,11 +106,16 @@ def validate_profile(profile, sha, target):
     for key in ('GCC_RUNTIME_INPUTS_SHA256', 'GCC_RUNTIME_STAGE_SHA256', 'GCC_RUNTIME_LINKS_SHA256'):
         check(full_hash(metadata[key]), 'Missing runtime receipt hash')
     paths = receipt['paths']
-    native_options = host_compiler.OPTIONS if explicit_native else ()
-    for key in ('os', 'ports', 'sdk-source', 'compiler', 'runtime-prefix', 'objects', 'tools', 'destination', 'libedit-source', *native_options):
+    for key in ('os', 'ports', 'sdk-source', 'compiler', 'runtime-prefix', 'objects', 'tools', 'destination', 'libedit-source'):
         check(isinstance(paths[key], str) and paths[key].startswith('/') and not re.search(r'\s', paths[key]), 'Invalid producer path')
     check(signature['target'] == target_definition(target), 'Mixed target signature')
-    flags, commands = producer_commands(target, paths, signature['host_tools'], sha, profile['source_timestamp'], profile['jobs'], profile['shell'])
+    # This checks saved command consistency. Only load_native_toolset can
+    # establish a live selection from independently accepted evidence.
+    native = None
+    if explicit_native:
+        validate_native_binding(signature, paths, profile['shell'])
+        native = signature['native_toolset']
+    flags, commands = producer_commands(target, paths, signature['host_tools'], sha, profile['source_timestamp'], profile['jobs'], profile['shell'], native)
     check(signature['flags'] == flags and profile['commands'] == commands, 'Build command does not select the exact required profile')
     executed = [r for r in receipt['commands'] if r.get('scope') != 'runtime-check']
     check([r['argv'] for r in executed] == commands and all(r['status'] == 'passed' and r['exit_status'] == 0 for r in executed),
@@ -134,7 +141,7 @@ class OSReleaseBuilder(SysrootBuilder):
         self.product_version = source_version(Path(self.paths['os'], 'share/mk/bsd.own.mk').read_text())
         self.signature['product_version'] = self.product_version
         self.flags, self.release_commands = producer_commands(self.options['target'], self.paths, self.host_tools,
-            self.sources['os']['commit'], self.timestamp, self.options['jobs'], self.shell)
+            self.sources['os']['commit'], self.timestamp, self.options['jobs'], self.shell, self.native_selection)
         self.signature['flags'] = self.flags
         self.signature['release_profile'] = self.options['target']
 
@@ -143,7 +150,7 @@ class OSReleaseBuilder(SysrootBuilder):
         super().preflight()
         self.receipt.update(format='emberbsd-os-release-build', version=3, scope='os-release-build',
                             previous_contexts=self.contexts, plan=[self.runtime_command, *self.release_commands, self.runtime_command],
-                            not_checked=['target execution', 'VM installation', 'physical hardware', 'binary publication'])
+                            not_checked=['OS nested native-tool routing', 'target execution', 'VM installation', 'physical hardware', 'binary publication'])
         self.receipt.pop('copy', None)
         return self.receipt
 

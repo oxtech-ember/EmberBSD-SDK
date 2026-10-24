@@ -22,7 +22,8 @@ from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.inventory import snapshot_tree
 from emberbsd_sdk.jsonio import json_bytes
 from emberbsd_sdk.native_toolset import (NATIVE_TOOLSET_API, NATIVE_TOOL_ROLES,
-                                        NATIVE_C_PROBE, NATIVE_CXX_PROBE, _gcc, load_native_toolset)
+                                        NATIVE_C_PROBE, NATIVE_CXX_PROBE, _gcc, load_native_toolset,
+                                        provider_root, validate_selection)
 
 
 def digest(path):
@@ -47,7 +48,7 @@ class Fixture:
                                    commit='1' * 40) for name in ('sdk', 'ports')}
         self.providers = dict(ports=dict(source='ports', recipe='native/tools', recipe_sha256='2' * 64))
         self.records = {}
-        for role in (*NATIVE_TOOL_ROLES, 'cc1', 'cc1plus', 'collect2', 'lto1'):
+        for role in (*NATIVE_TOOL_ROLES, 'cc1', 'cc1plus', 'collect2', 'lto1', 'lto-wrapper'):
             path = self.bundle / role
             path.write_bytes(self.image)
             path.chmod(0o755)
@@ -70,7 +71,7 @@ class Fixture:
                                host_abi=abi, abi_flags={name: [] for name in
                                                        ('cppflags', 'cflags', 'cxxflags', 'ldflags')},
                                driver_components={key: key for key in
-                                                  ('cc1', 'cc1plus', 'collect2', 'lto1', 'as', 'ld')})
+                                                  ('cc1', 'cc1plus', 'collect2', 'lto1', 'lto-wrapper', 'as', 'ld')})
         checks = {}
         for role in ('cc', 'cxx'):
             source = self.base / ('probe.c' if role == 'cc' else 'probe.cc')
@@ -192,6 +193,49 @@ class NativeToolsetTests(unittest.TestCase):
                         dict(required_roles=[]), dict(required_roles=['not-installed'])):
             with self.subTest(options=options), self.assertRaises(SDKError):
                 self.fixture.load(**options)
+
+    def test_system_provider_roots_cannot_be_qualified(self):
+        for root in ('/', '/usr', '/USR', '/usr/local', '/usr/bin', '/opt/homebrew', '/opt/local',
+                     '/Library', '/library/developer', '/Applications', '/Applications/Xcode-beta.app',
+                     '/home/linuxbrew/.linuxbrew'):
+            with self.subTest(root=root), self.assertRaises(SDKError): provider_root(root)
+        provider_root('/usr/local/emberbsd-sdk/native')
+        if os.path.exists('/USR') and os.path.samefile('/USR', '/usr'):
+            with self.assertRaises(SDKError): provider_root('/USR', live=True)
+        self.fixture.descriptor['bundle_root'] = '/usr'
+        self.fixture.seal()
+        with self.assertRaisesRegex(SDKError, 'provider root|system'): self.fixture.load()
+
+    def test_lto_wrapper_requires_pinned_native_member_and_query(self):
+        original = copy.deepcopy(self.fixture.descriptor['driver_components'])
+        del self.fixture.descriptor['driver_components']['lto-wrapper']
+        self.fixture.seal()
+        with self.assertRaisesRegex(SDKError, 'incomplete GCC driver closure'): self.fixture.load()
+        self.fixture.descriptor['driver_components'] = original
+        query = self.fixture.receipt['checks']['driver_components']['lto-wrapper']
+        original_stdout = query['stdout']
+        for value in ('lto-wrapper', '/usr/libexec/lto-wrapper'):
+            query['stdout'] = self.fixture.raw((value + '\n').encode())
+            self.fixture.seal()
+            with self.subTest(value=value), self.assertRaisesRegex(SDKError, 'undeclared or implicit member'):
+                self.fixture.load()
+        query['stdout'] = original_stdout; self.fixture.seal()
+        self.fixture.load()
+        Path(self.fixture.records['lto-wrapper']['path']).write_bytes(b'changed wrapper')
+        with self.assertRaisesRegex(SDKError, 'inventory changed'): self.fixture.load()
+
+    def test_portable_selection_checks_grammar_without_local_files(self):
+        selected = self.fixture.load().as_dict()
+        with patch('emberbsd_sdk.native_toolset.canonical_existing', side_effect=AssertionError('filesystem read')):
+            validate_selection(selected, required_roles=('python', 'sh'))
+            for label in ('abi', 'version', 'path', 'pin'):
+                changed = copy.deepcopy(selected)
+                if label == 'abi': changed['abi_flags']['cflags'] = ['-B/usr/bin']
+                elif label == 'version': changed['compiler']['version'] = '14.3.0'
+                elif label == 'path': changed['tools']['cc'] = '/usr/bin/cc'
+                else: changed['producer_receipt']['sha256'] = 'not-a-hash'
+                with self.subTest(label=label), self.assertRaises(SDKError):
+                    validate_selection(changed, required_roles=('python', 'sh'))
 
     def test_receipt_cannot_accept_another_descriptor(self):
         self.fixture.receipt['descriptor_sha256'] = '0' * 64

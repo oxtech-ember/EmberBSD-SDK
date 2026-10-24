@@ -1,5 +1,10 @@
 # Select SDK build tools
 
+The sysroot and OS release commands currently refuse actual builds before
+preflight. The OS nested native-tool routes are not qualified. No override
+flag bypasses that gate. Their `--plan` mode requires accepted native-toolset
+evidence. A successful plan does not authorize execution.
+
 ## Required build policy
 
 Use the selected SDK tool set for OS, Ports, application, and test builds.
@@ -63,24 +68,38 @@ Record diagnostic inputs and keep those outputs outside packages, sysroots, and 
 Replay fuzz corpora with GCC16 as that procedure requires.
 These exceptions do not authorize a Clang-built production generator.
 
-## Implemented compiler selection and remaining limits
+## Native host compiler selection
 
-The sysroot and release builders require explicit native GCC16 compiler paths,
-a provider root, and a [provider input manifest](native-compiler.md).
-The shared `emberbsd_sdk.host_compiler` selector checks hashes, containment,
-driver subprocesses, and native compiler identity. It rejects missing selectors, system provider roots, Clang,
-older GCC, foreign host targets, and incompatible object contexts.
-Both producers pass the selected paths through `HOST_CC` and `HOST_CXX`.
+`sysroot_builder.SysrootBuilder` and the release builder require the four
+selectors `--native-toolset`, `--native-toolset-sha256`,
+`--native-producer-receipt`, and `--native-producer-receipt-sha256`.
+The [NativeToolset API](native-toolset.md) verifies the accepted evidence and
+current files before compiler or runtime queries. The builders repeat the same
+loader before output creation, dispatch, and completion.
+No descriptor, bootstrap seed, or self-supplied receipt hash is implicit.
 
-The manifest is a caller-trusted provenance declaration. Its hashes do not prove
-source-to-binary correspondence or authenticate the producer. No accepted native
-development-host GCC16 installation is established by this change.
-Full provider provisioning and qualification remain open.
+`--host-cc`, `--host-cxx`, and `--python` remain explicit checked aliases.
+They must resolve to the selected native `cc`, `cxx`, and `python` members.
+Commands use the qualified selected spelling. The compiler identity record
+marks `origin=accepted-native-toolset` and binds the descriptor hash.
+Its version metadata comes from accepted evidence, not a new `--version` run.
+The builder does not repeat compiler probes through canonical aliases.
 
-The [native toolset API](native-toolset.md) checks a complete declared bundle against a separately accepted producer receipt.
-It does not provision or qualify that producer. The sysroot and release builders do not yet call this API.
-Their compiler input declaration is not a substitute for accepted qualification evidence.
+System tool trees cannot become SDK providers through a receipt declaration.
+The common loader rejects system roots and checks contained members and pinned driver components,
+including `lto-wrapper`. Dedicated SDK directories remain permitted.
+Offline verification of new receipts checks the saved native selection, input pins,
+checked aliases, native flags, and declared-tool `PATH`. It reads no mutable local tool paths.
+It establishes consistency, not live qualification. Accepted GCC16 version suffixes remain intact.
+Historical receipts retain their original checks without gaining native qualification.
+The contracts are in `tests/test_native_toolset.py` and `tests/test_native_consumers.py`.
 
-The selector does not enforce this policy for every build executable, dynamic
-dependency, header search, or nested producer. Other tool selection gaps remain.
-A successful plan or fixture test does not establish complete SDK compliance.
+## Remaining enforcement gaps
+
+The native loader requires receipt-bound in-bundle assembler and linker members.
+It refuses bare or external driver-component paths. A complete ordinary native
+provider and the separate bootstrap seed producer remain required inputs.
+The OS still searches for make and invokes undeclared utilities. The exact
+[source routes](sysroot.md#recorded-producer-sequence) prevent actual SDK builds.
+SDK-only planned `PATH` directories and four selected direct roles do not prove
+complete nested routing. Ports consumers need their own checked mappings too.
