@@ -13,7 +13,7 @@ import signal
 import stat
 import sysconfig
 import time
-from . import API_VERSION, inventory, jsonio, libedit, native_compiler, paths, process, provenance, workspace
+from . import API_VERSION, inventory, jsonio, libedit, host_compiler, paths, process, provenance, workspace
 from .errors import SDKError, ProcessOwnershipError
 from .targets import TARGETS, target_definition
 
@@ -232,13 +232,13 @@ class SysrootBuilder:
             raise SDKError('jobs must be a positive integer')
         layout = workspace.inspect_layout(self.options['sdk'])
         workspace.require_target(layout, self.options['target'])
-        native_compiler.required_options(self.options)
+        host_compiler.required_options(self.options)
         self.git_command, self.shell = self.find_command('git'), self.find_command('sh')
         # Darwin PID churn can delay a complete empty snapshot after a producer exits.
         self.process_inspector = process.SessionInspector(env=self.environment, empty_snapshot_timeout=120)
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
-        for name in ('os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'sdk-source', 'libedit-source', *native_compiler.OPTIONS):
+        for name in ('os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'sdk-source', 'libedit-source', *host_compiler.OPTIONS):
             self.paths[name] = paths.build_path(paths.canonical_existing(self.options[name]))
         self.paths['python'] = self.executable(self.options['python'])
         for name in ('os', 'ports', 'compiler', 'runtime-work', 'pkgsrc', 'sdk-source', 'libedit-source'):
@@ -258,7 +258,7 @@ class SysrootBuilder:
             paths.reject_overlap(self.paths['destination'], os.path.join(sdk, name))
         for left, right in itertools.combinations(('destination', 'objects', 'tools'), 2):
             paths.reject_overlap(self.paths[left], self.paths[right])
-        for input_name in ('os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'sdk-source', 'python', 'libedit-source', *native_compiler.OPTIONS):
+        for input_name in ('os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'sdk-source', 'python', 'libedit-source', *host_compiler.OPTIONS):
             for output_name in ('destination', 'objects', 'tools'):
                 paths.reject_overlap(self.paths[input_name], self.paths[output_name])
         for name in ('include', 'lib', 'libexec/ld.elf_so', 'tools', 'share/mk', 'sys', 'distrib', 'etc'):
@@ -279,8 +279,8 @@ class SysrootBuilder:
         self.runtime_command = [self.paths['python'], '-B', os.path.join(self.paths['ports'], self.VERIFIER), 'check', self.paths['runtime-work'], self.paths['gcc-archive'], self.paths['pkgsrc'], '--sdk-source', self.paths['sdk-source']]
         self.compiler_record = self.compiler()
         self.runtime_record = self.verify_runtime()
-        self.native_compiler = native_compiler.inspect(self.options, self.environment)
-        self.host_tools = native_compiler.host_tools(self.native_compiler)
+        self.native_compiler = host_compiler.inspect(self.options, self.environment)
+        self.host_tools = host_compiler.host_tools(self.native_compiler)
         for rows in self.native_compiler['references'].values():
             for row in rows:
                 for name in ('destination', 'objects', 'tools'):
@@ -425,7 +425,7 @@ class SysrootBuilder:
 
     def verify_native_compiler(self):
         try:
-            if native_compiler.inspect(self.options, self.environment) != self.native_compiler:
+            if host_compiler.inspect(self.options, self.environment) != self.native_compiler:
                 raise SDKError('native compiler inputs changed after preflight')
         except (SDKError, OSError, UnicodeError):
             if self.contexts_prepared:

@@ -293,7 +293,7 @@ else: raise SystemExit('unexpected operation')
 
 class BuilderReleaseTests(TemporaryCase):
     def test_native_schema3_identity_and_historical_schema2(self):
-        from emberbsd_sdk import native_compiler
+        from emberbsd_sdk import host_compiler
         options = release_fixture(self.root, 'aarch64')
         receipt = OSReleaseBuilder(options).run()
         output = Path(options['destination'])
@@ -308,7 +308,7 @@ class BuilderReleaseTests(TemporaryCase):
                 del signature['native_compiler']
             elif mutation == 'cxx-role':
                 del signature['native_compiler']['compilers']['cxx']['macros']['__cplusplus']
-                signature['host_tools'] = native_compiler.host_tools(signature['native_compiler'])
+                signature['host_tools'] = host_compiler.host_tools(signature['native_compiler'])
             else:
                 changed['sdk_receipt']['paths'][mutation] = '/different/provider'
             with self.subTest(mutation=mutation), self.assertRaises((SDKError, KeyError)):
@@ -317,7 +317,7 @@ class BuilderReleaseTests(TemporaryCase):
         historical = copy.deepcopy(profile)
         historical['schema'] = historical['sdk_receipt']['version'] = 2
         del historical['sdk_receipt']['signature']['native_compiler']
-        for key in native_compiler.OPTIONS:
+        for key in host_compiler.OPTIONS:
             del historical['sdk_receipt']['paths'][key]
         validate_profile(historical, sha, 'aarch64')
         jsonio.write_json(output / 'build-profile.json', historical, exclusive=False)

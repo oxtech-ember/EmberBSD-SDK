@@ -67,8 +67,8 @@ These exceptions do not authorize a Clang-built production generator.
 
 The sysroot and release builders require explicit native GCC16 compiler paths,
 a provider root, and a [provider input manifest](native-compiler.md).
-The common selector checks hashes, containment, driver subprocesses, and native
-compiler identity. It rejects missing selectors, system provider roots, Clang,
+The shared `emberbsd_sdk.host_compiler` selector checks hashes, containment,
+driver subprocesses, and native compiler identity. It rejects missing selectors, system provider roots, Clang,
 older GCC, foreign host targets, and incompatible object contexts.
 Both producers pass the selected paths through `HOST_CC` and `HOST_CXX`.
 

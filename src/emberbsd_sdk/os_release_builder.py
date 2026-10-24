@@ -11,7 +11,7 @@ import re
 import shutil
 
 from .errors import SDKError
-from . import inventory, jsonio, libedit, native_compiler
+from . import inventory, jsonio, libedit, host_compiler
 from .sysroot_builder import SysrootBuilder
 from .targets import target_definition
 from .os_release import check, full_hash, tag, images, product_version, source_version, KERNEL, SYSROOT_SETS
@@ -80,7 +80,7 @@ def validate_profile(profile, sha, target):
           all(full_hash(v['commit'], 40) for v in receipt['sources'].values()), 'Mixed source receipts')
     signature = receipt['signature']
     if explicit_native:
-        native_compiler.validate_binding(signature, receipt['paths'])
+        host_compiler.validate_binding(signature, receipt['paths'])
     check(signature['product_version'] == version, 'Mixed source product version')
     libedit.validate_identity(signature['libedit'])
     check(signature['libedit']['recipe']['ports_commit'] == receipt['sources']['ports']['commit'], 'Mixed libedit Ports source')
@@ -104,7 +104,7 @@ def validate_profile(profile, sha, target):
     for key in ('GCC_RUNTIME_INPUTS_SHA256', 'GCC_RUNTIME_STAGE_SHA256', 'GCC_RUNTIME_LINKS_SHA256'):
         check(full_hash(metadata[key]), 'Missing runtime receipt hash')
     paths = receipt['paths']
-    native_options = native_compiler.OPTIONS if explicit_native else ()
+    native_options = host_compiler.OPTIONS if explicit_native else ()
     for key in ('os', 'ports', 'sdk-source', 'compiler', 'runtime-prefix', 'objects', 'tools', 'destination', 'libedit-source', *native_options):
         check(isinstance(paths[key], str) and paths[key].startswith('/') and not re.search(r'\s', paths[key]), 'Invalid producer path')
     check(signature['target'] == target_definition(target), 'Mixed target signature')

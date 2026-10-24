@@ -6,14 +6,14 @@ import json
 from pathlib import Path
 import sys
 
-from emberbsd_sdk import inventory, jsonio, native_compiler
+from emberbsd_sdk import inventory, jsonio, host_compiler
 
 
 def fixture(root):
     root = Path(root)
     prefix = root / 'native'
     (prefix / 'bin').mkdir(parents=True)
-    host = native_compiler.current_host()
+    host = host_compiler.current_host()
     suffix = {'Darwin': 'apple-darwin27.0.0', 'Linux': 'pc-linux-gnu', 'NetBSD': '-netbsd'}[host['system']]
     host['triplet'] = host['machine'] + '-' + suffix
     cpu = {'aarch64': '__aarch64__', 'x86_64': '__x86_64__', 'i386': '__i386__'}[host['machine']]
@@ -27,8 +27,12 @@ def fixture(root):
 import json, sys
 from pathlib import Path
 c = json.loads(Path({str(control)!r}).read_text())
+c = c | c.get('drivers', {{}}).get(Path(sys.argv[0]).name, {{}})
 arg = sys.argv[1]
-if arg == '-dumpfullversion': print(c.get('version', '16.2.0'))
+if arg == '--version':
+    print(c.get('banner', 'gcc (SDK fixture) 16.2.0'))
+    if c.get('stderr_banner'): print(c['stderr_banner'], file=sys.stderr)
+elif arg == '-dumpfullversion': print(c.get('version', '16.2.0'))
 elif arg == '-dumpmachine': print(c.get('triplet', {host['triplet']!r}))
 elif arg.startswith('-print-prog-name='):
     name = arg.split('=', 1)[1]
@@ -43,7 +47,7 @@ elif arg == '-dM':
 else: raise SystemExit('Unexpected native fixture invocation')
 '''
     tools = {}
-    for name in native_compiler.TOOLS:
+    for name in host_compiler.TOOLS:
         relative = 'bin/' + {'cc': 'gcc', 'cxx': 'g++'}.get(name, name)
         path = prefix / relative
         path.write_text(script if name in ('cc', 'cxx') else '#!/bin/sh\nexit 0\n')
@@ -53,7 +57,7 @@ else: raise SystemExit('Unexpected native fixture invocation')
     abi.write_text('Fixture host ABI input; no system header qualification.\n')
     evidence = root / 'native-producer.txt'
     evidence.write_text('Fixture provider declaration; no real compiler build.\n')
-    value = dict(format=native_compiler.FORMAT, version=1, host=host, gcc_version='16.2.0',
+    value = dict(format=host_compiler.FORMAT, version=1, host=host, gcc_version='16.2.0',
                  producer=dict(repository='https://example.invalid/sdk-producer', revision='a' * 40, recipe='gcc16/native.py'),
                  tools=tools, abi_inputs=[dict(path=str(abi), sha256=inventory.sha256_file(abi))],
                  provenance=[dict(path=str(evidence), sha256=inventory.sha256_file(evidence))])

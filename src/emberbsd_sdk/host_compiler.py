@@ -21,7 +21,7 @@ SYSTEM_PREFIXES = ('/', '/usr', '/usr/local', '/opt', '/Library', '/Applications
 SYSTEM_TOOL_ROOTS = ('/usr/bin', '/usr/sbin', '/usr/lib', '/usr/libexec', '/usr/pkg',
                      '/usr/local/bin', '/usr/local/sbin', '/usr/local/lib', '/usr/local/libexec',
                      '/usr/local/Cellar', '/usr/local/Homebrew', '/usr/local/opt',
-                     '/bin', '/sbin', '/opt/homebrew', '/opt/local',
+                     '/bin', '/sbin', '/opt/homebrew', '/opt/local', '/home/linuxbrew',
                      '/Library/Developer', '/System/Library', '/Applications/Xcode.app')
 
 
@@ -48,6 +48,7 @@ def provider_root(root, *, live=False):
             'invalid SDK provider root')
     require(not any(os.path.commonpath((folded, path.casefold())) == path.casefold() for path in SYSTEM_TOOL_ROOTS),
             'system tool directories cannot be SDK compiler providers')
+    require(not folded.startswith('/applications/xcode'), 'Xcode cannot be an SDK compiler provider')
     if live:
         for path in SYSTEM_PREFIXES:
             if paths.entry(path) is not None:
@@ -152,8 +153,9 @@ def validate_record(record):
         require(record['references'] == {n: declared[n] for n in ('abi_inputs', 'provenance')}, 'native input references differ')
         require(set(record['compilers']) == {'cc', 'cxx'}, 'incomplete native compiler query identity')
         for name, row in record['compilers'].items():
-            require(set(row) == {'version', 'triplet', 'macros'} and row['version'] == declared['gcc_version']
+            require(set(row) == {'version', 'triplet', 'macros', 'banner'} and row['version'] == declared['gcc_version']
                     and row['triplet'] == declared['host']['triplet'], 'native compiler identity differs')
+            validate_banner(row['banner'])
             validate_macros(row['macros'], declared['host'])
             require((name == 'cxx') == ('__cplusplus' in row['macros']), 'native C/C++ frontend mismatch')
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
@@ -165,8 +167,17 @@ def inventory_hash(value):
     return hashlib.sha256(jsonio.json_bytes(value)).hexdigest()
 
 
+def validate_banner(banner):
+    # Darwin GCC driver names can contain an apple target triplet. Reject
+    # compiler vendor markers without rejecting that native platform spelling.
+    require(isinstance(banner, str) and banner.strip() and
+            not re.search(r'clang|llvm|(?:^|\n)\s*apple(?:\s|$)|\(\s*apple(?:\s|\))', banner, re.I),
+            'expected a GCC compiler version banner')
+
+
 def validate_macros(macros, host):
-    require(isinstance(macros, dict) and macros.get('__GNUC__') == '16' and '__clang__' not in macros,
+    require(isinstance(macros, dict) and macros.get('__GNUC__') == '16' and
+            not any(name in macros for name in ('__clang__', '__apple_build_version__')),
             'expected genuine GCC16 predefined macros')
     require(macros.get('__SIZEOF_POINTER__') == str(host['pointer_bits'] // 8), 'native pointer ABI mismatch')
     endian = '__ORDER_LITTLE_ENDIAN__' if host['byteorder'] == 'little' else '__ORDER_BIG_ENDIAN__'
@@ -214,13 +225,17 @@ def inspect(options, environment):
     # Query the same environment used by the producer. Refuse implicit or
     # external driver selections; a temporary PATH must not conceal them.
     env = environment
-    def query(driver, *args, input=None):
-        return process.capture([driver, *args], env=env, input=input).stdout.decode('utf-8', 'strict').strip()
+    def query(driver, *args, input=None, include_stderr=False):
+        result = process.capture([driver, *args], env=env, input=input)
+        output = result.stdout + (result.stderr if include_stderr else b'')
+        return output.decode('utf-8', 'strict').strip()
     compilers = {}
     probe = Path(__file__).with_name('native_probe.c')
     require(probe.read_bytes() == PROBE_CONTENT, 'native language probe bytes differ')
     for name, language in (('cc', 'c'), ('cxx', 'c++')):
         driver = binaries[name]['path']
+        banner = query(driver, '--version', include_stderr=True)
+        validate_banner(banner)
         version, triplet = query(driver, '-dumpfullversion'), query(driver, '-dumpmachine')
         require(version == manifest['gcc_version'] and triplet == host['triplet'], 'expected native GCC 16.2.0: ' + name)
         for tool in ('cc1plus' if name == 'cxx' else 'cc1', 'collect2', 'lto1', 'lto-wrapper', 'as', 'ld'):
@@ -235,7 +250,7 @@ def inspect(options, environment):
         macros = dict(re.findall(r'^#define ([A-Za-z_][A-Za-z0-9_]*) (.*)$', text, re.M))
         validate_macros(macros, host)
         require((language == 'c++') == ('__cplusplus' in macros), 'native C/C++ frontend mismatch')
-        compilers[name] = dict(version=version, triplet=triplet, macros=macros)
+        compilers[name] = dict(version=version, triplet=triplet, macros=macros, banner=banner)
     for row in binaries.values():
         require(paths.canonical_existing(row['selected_path']) == row['path'] and
                 inventory.sha256_file(row['path']) == row['sha256'], 'native tool changed during inspection')

@@ -17,7 +17,7 @@ import stat
 import tarfile
 import tempfile
 
-from . import inventory, jsonio, native_compiler, paths, publication, tarstream
+from . import inventory, jsonio, host_compiler, paths, publication, tarstream
 from .errors import SDKError
 from .targets import target_definition
 
@@ -188,7 +188,7 @@ def _provenance(receipt, target):
             raise SDKError('export requires a completed matching SDK sysroot build')
         signature = receipt['signature']
         if receipt['version'] == 2:
-            native_compiler.validate_binding(signature, receipt['paths'])
+            host_compiler.validate_binding(signature, receipt['paths'])
         compiler = signature['compiler']
         if (compiler['version'] != '16.2.0' or compiler['triplet'] != definition['triplet']
                 or compiler['threads'] != 'posix'):

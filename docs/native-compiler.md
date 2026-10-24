@@ -7,6 +7,7 @@ The sysroot and OS release builders require four explicit inputs:
 - `--host-toolchain-manifest`: the provider's native compiler input declaration.
 
 The Python API requires the same keys, with hyphens, in its options dictionary.
+Both producers use the shared `emberbsd_sdk.host_compiler` selector.
 Missing inputs fail before tool queries or output writes. The builders never
 select native `cc` or `c++` from `PATH`. The target `--compiler` remains separate.
 System tool directories cannot serve as native SDK provider roots. This includes
@@ -73,6 +74,9 @@ Host process backend qualification remains a separate requirement.
 
 The selector checks the running host against the declaration. It checks GCC
 version, predefined GCC/OS/CPU macros, pointer width, byte order, and C/C++ roles.
+It records both version-banner streams and rejects Clang, LLVM, or Apple compiler vendor markers.
+An `apple` triplet in a native Darwin GCC driver name remains permitted.
+Clang and Apple compiler marker macros also fail, even with GCC compatibility macros.
 Both drivers preprocess the same supplied `.c` probe without a forced language.
 The probe contains only a comment; its exact bytes are checked before and after
 each query. A C driver cannot pass the C++ role by forcing `-x c++`.

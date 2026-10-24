@@ -22,7 +22,7 @@ from emberbsd_sdk.sysroot_builder import SysrootBuilder as B
 from emberbsd_sdk.workspace import create
 from emberbsd_sdk.libedit import prepare_source
 from libedit_fixture import recipe_fixture, installation_source
-from native_compiler_fixture import fixture as native_fixture
+from host_compiler_fixture import fixture as native_fixture
 
 
 def write(path, data, mode=0o644):

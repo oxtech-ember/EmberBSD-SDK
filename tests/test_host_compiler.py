@@ -12,8 +12,8 @@ from unittest.mock import patch
 
 from test_core import TemporaryCase, SDK_SOURCE
 from test_builder import fixture as builder_fixture, snapshot, write
-from native_compiler_fixture import fixture
-from emberbsd_sdk import inventory, jsonio, native_compiler as native, process
+from host_compiler_fixture import fixture
+from emberbsd_sdk import inventory, jsonio, host_compiler as native, process
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.sysroot_builder import SysrootBuilder
 from emberbsd_sdk.os_release_builder import OSReleaseBuilder
@@ -49,7 +49,8 @@ class NativeCompilerTests(TemporaryCase):
             with self.subTest(relative=option), self.assertRaisesRegex(SDKError, 'absolute'):
                 self.inspect(**{option: 'gcc-16'})
         for root in ('/', '/usr', '/USR', '/usr/local', '/opt/homebrew', '/opt/local', '/Applications',
-                     '/Library', '/LiBrArY', '/Applications/Xcode.app', '/library/developer'):
+                     '/Library', '/LiBrArY', '/Applications/Xcode.app', '/Applications/Xcode-beta.app',
+                     '/applications/XCODE-preview.app/toolchain', '/library/developer', '/home/linuxbrew/.linuxbrew'):
             with self.subTest(root=root), self.assertRaisesRegex(SDKError, 'provider|system tool'):
                 native.provider_root(root)
         native.provider_root('/usr/local/emberbsd-sdk/native')
@@ -60,14 +61,47 @@ class NativeCompilerTests(TemporaryCase):
             self.inspect(**{'host-cc': '/usr/bin/cc'})
 
     def test_gcc14_clang_cross_target_and_host_abi_refusals(self):
-        cases = [dict(version='14.3.0'), dict(triplet='aarch64--netbsd'),
-                 dict(macros={'__clang__': '1'}), dict(macros={'__GNUC__': '14'}),
+        cases = [dict(version='14.3.0'), dict(version='15.2.0'), dict(triplet='aarch64--netbsd'),
+                 dict(macros={'__clang__': '1'}), dict(macros={'__apple_build_version__': '16000000'}),
+                 dict(macros={'__GNUC__': '14'}),
                  dict(macros={'__SIZEOF_POINTER__': '2'}), dict(macros={'__BYTE_ORDER__': 'invalid'})]
         other_os = '__linux__' if native.current_host()['system'] != 'Linux' else '__APPLE__'
         cases.append(dict(macros={other_os: '1'}))
         for case in cases:
             with self.subTest(case=case), self.assertRaises(SDKError):
                 self.control(**case); self.inspect()
+
+    def test_clang_llvm_and_apple_banners_cannot_claim_gcc_macros(self):
+        banners = ('Apple clang version 21.0.0', 'clang version 21.0.0', 'LLVM GCC 16.2.0',
+                   'Apple GCC 16.2.0', 'gcc (Apple GCC) 16.2.0')
+        for banner in banners:
+            for channel in ('banner', 'stderr_banner'):
+                for driver in ('gcc', 'g++'):
+                    self.control(drivers={driver: {channel: banner}})
+                    with self.subTest(banner=banner, channel=channel, driver=driver), self.assertRaisesRegex(SDKError, 'version banner'):
+                        self.inspect()
+        self.control(banner='')
+        with self.assertRaisesRegex(SDKError, 'version banner'): self.inspect()
+
+    def test_darwin_gcc_triplet_banner_is_not_an_apple_vendor_marker(self):
+        banner = 'aarch64-apple-darwin27.0.0-gcc (GCC) 16.2.0'
+        self.control(banner=banner)
+        record = self.inspect()
+        self.assertEqual(record['compilers']['cc']['banner'], banner)
+        native.validate_record(record)
+
+    def test_missing_nonexecutable_and_mixed_driver_inputs_are_rejected(self):
+        tool = Path(self.options['host-cxx'])
+        original = tool.read_bytes()
+        tool.unlink()
+        with self.assertRaises((SDKError, OSError)): self.inspect()
+        tool.write_bytes(original); tool.chmod(0o644)
+        with self.assertRaisesRegex(SDKError, 'not executable'): self.inspect()
+        tool.chmod(0o755)
+        for change in (dict(version='16.1.0'), dict(triplet='aarch64-none-elf')):
+            self.control(drivers={'g++': change})
+            with self.subTest(change=change), self.assertRaisesRegex(SDKError, 'expected native GCC'):
+                self.inspect()
 
     def test_swapped_and_identical_default_driver_roles_are_rejected(self):
         baseline = jsonio.read_json(self.manifest)
@@ -83,7 +117,7 @@ class NativeCompilerTests(TemporaryCase):
 
     def test_probe_content_is_checked_without_plan_writes(self):
         probe = self.root / 'native_probe.c'; probe.write_bytes(native.PROBE_CONTENT)
-        with patch.object(native, '__file__', str(self.root / 'native_compiler.py')):
+        with patch.object(native, '__file__', str(self.root / 'host_compiler.py')):
             before = snapshot(self.root); self.inspect(); self.assertEqual(snapshot(self.root), before)
             probe.write_bytes(b'/* altered */\n')
             with self.assertRaisesRegex(SDKError, 'probe bytes differ'): self.inspect()
@@ -134,13 +168,18 @@ class NativeCompilerTests(TemporaryCase):
             with self.subTest(label=label), self.assertRaises(SDKError): self.inspect()
         jsonio.write_json(self.manifest, baseline, exclusive=False)
         record = self.inspect()
-        for label in ('content', 'binary', 'query', 'cxx-role'):
+        for label in ('content', 'binary', 'query', 'apple-query', 'banner', 'cxx-role'):
             changed = copy.deepcopy(record)
             if label == 'content': changed['manifest']['content']['producer']['revision'] = 'b' * 40
             elif label == 'binary': changed['binaries']['cc']['path'] = '/usr/bin/cc'
             elif label == 'query': changed['compilers']['cc']['macros']['__clang__'] = '1'
+            elif label == 'apple-query': changed['compilers']['cc']['macros']['__apple_build_version__'] = '16000000'
+            elif label == 'banner': changed['compilers']['cxx']['banner'] = 'LLVM GCC 16.2.0'
             else: del changed['compilers']['cxx']['macros']['__cplusplus']
             with self.subTest(label=label), self.assertRaises(SDKError): native.validate_record(changed)
+        legacy = {name: dict(path='/usr/bin/' + name, sha256='0' * 64, version='Apple clang version 21.0.0')
+                  for name in ('cc', 'c++')}
+        with self.assertRaisesRegex(SDKError, 'invalid native compiler identity'): native.validate_record(legacy)
         Path(baseline['provenance'][0]['path']).write_text('changed provider receipt')
         with self.assertRaisesRegex(SDKError, 'provenance hash differs'): self.inspect()
 
