@@ -151,7 +151,7 @@ class MetadataTests(unittest.TestCase):
         original = copy.deepcopy(self.plan)
         outputs = []
         for digest in (producer.PARALLEL_PROFILE_SHA256, producer.BUILTIN_PROFILE_SHA256,
-                       producer.LIBTOOL_PROFILE_SHA256):
+                       producer.LIBTOOL_PROFILE_SHA256, producer.RANLIB_PROFILE_SHA256):
             self.plan['metadata']['profile']['sha256'] = digest
             self.plan['resources']['cpu_jobs'] = 18
             self.plan['link_control'] = dict(
@@ -194,6 +194,9 @@ class MetadataTests(unittest.TestCase):
 
     def test_libtool_profile_retains_full_source_checks_and_metadata_job_gate(self):
         self._check_parallel_profile_job_gate('LIBTOOL_PROFILE_SHA256')
+
+    def test_ranlib_profile_retains_full_source_checks_and_metadata_job_gate(self):
+        self._check_parallel_profile_job_gate('RANLIB_PROFILE_SHA256')
 
     def test_host_facts_recipe_and_resource_changes_are_refused(self):
         for kind in ('host', 'stage', 'recipe', 'jobs', 'timeout'):
