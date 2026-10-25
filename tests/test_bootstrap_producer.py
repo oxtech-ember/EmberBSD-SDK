@@ -139,6 +139,31 @@ class MetadataTests(unittest.TestCase):
         self.assertNotIn('show-vars-eval', argv)
         self.assertEqual(argv.count('BOOTSTRAP_DEPENDS=${BOOTSTRAP_DEPENDS}'), 1)
 
+    def test_metadata_makeconf_restores_both_make_values_after_profile(self):
+        raw = producer.metadata_makeconf(self.plan, self.descriptor, self.commands,
+                                         self.descriptor['abi_flags'])
+        make = shlex.join(self.commands['make'])
+        expected = ('.include "' + self.plan['metadata']['profile']['path'] + '"\n'
+                    '_MAKE= ' + make + '\nMAKE= ' + make + '\n').encode()
+        self.assertTrue(raw.endswith(expected))
+        self.assertEqual(raw.splitlines().count(('_MAKE= ' + make).encode()), 1)
+        self.assertEqual(raw.splitlines().count(('MAKE= ' + make).encode()), 1)
+
+    def test_recursive_metadata_binding_does_not_change_other_formats_or_stages(self):
+        values = dict(EMBERBSD_DARWIN_MAKE=shlex.join(self.commands['make']), LDFLAGS='')
+        for kind, stage in [('emberbsd-native-gcc16-bootstrap-plan', 'metadata'),
+                            (producer.PRODUCER_FORMAT, 'utility-relocation'),
+                            (producer.PRODUCER_FORMAT, None)]:
+            with self.subTest(format=kind, stage=stage):
+                plan = copy.deepcopy(self.plan)
+                plan.update(format=kind, stage=stage)
+                with patch.object(producer, 'metadata_assignments', return_value=values):
+                    raw = producer.metadata_makeconf(plan, self.descriptor, self.commands, {})
+                self.assertFalse(any(line.startswith((b'_MAKE=', b'MAKE='))
+                                     for line in raw.splitlines()))
+                self.assertTrue(raw.endswith(('.include "' +
+                                self.plan['metadata']['profile']['path'] + '"\n').encode()))
+
     def test_read_only_queries_bind_the_complete_recursive_make(self):
         override = 'MAKE=' + shlex.join(self.commands['make'])
         for step in self.plan['commands']:

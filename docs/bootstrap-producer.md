@@ -167,6 +167,9 @@ and an empty linker prefix. A parallel recipe build needs the separate full-plan
 Each command starts with the complete selected bmake tuple.
 Each read-only metadata query also sets command-line `MAKE` to that full tuple.
 Nested `show-var` queries must use the initial make before the recipe closure exists.
+Metadata MAKECONF restores both `_MAKE` and `MAKE` after the profile include.
+Parse-time queries can run before bmake exports its command-line overrides in `MAKEFLAGS`.
+This restoration applies only to the metadata stage of the producer format.
 This override keeps the source-owned `BOOTSTRAP_DEPENDS` edges.
 Complete recipe builds keep the separate Ports make handoff.
 `EMBERBSD_DARWIN_BOOTSTRAP=yes` precedes `-C`. The job count is explicit.

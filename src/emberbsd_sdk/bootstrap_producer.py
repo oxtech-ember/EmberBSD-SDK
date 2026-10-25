@@ -196,6 +196,10 @@ def metadata_makeconf(plan, descriptor, commands, flags):
         else:
             lines += [name + '= ' + value]
     lines += ['.include "' + _safe_path(plan['metadata']['profile']['path']) + '"']
+    if plan.get('format') == PRODUCER_FORMAT and plan.get('stage') == 'metadata':
+        # Parse-time submakes can run before MAKEFLAGS is exported.
+        make = variables['EMBERBSD_DARWIN_MAKE']
+        lines += ['_MAKE= ' + make, 'MAKE= ' + make]
     return ('\n'.join(lines) + '\n').encode('ascii')
 
 
