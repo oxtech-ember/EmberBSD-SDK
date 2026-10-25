@@ -227,6 +227,15 @@ class FiletimeComponentTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'work source changed'):
             component.prepare(c.plan['commands'][0], c.plan, [])
 
+    def test_new_source_header_cannot_shadow_the_owned_namespace(self):
+        c = self.case
+        c.work.mkdir()
+        for name, data in component.sources(c.plan).items():
+            (c.work / name).write_bytes(data)
+        (c.source / 'lib/libc/gen/namespace.h').write_text('unexpected source header')
+        with self.assertRaisesRegex(SDKError, 'source tree changed'):
+            component.prepare(c.plan['commands'][0], c.plan, [])
+
     def test_normal_and_finite_source_selection_and_function_checks_agree(self):
         root = self.owner
         self.assertIn('COMPAT_FILETIME_SRCS= utimens.c',

@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import stat
 
-from .inventory import sha256_file
+from .inventory import sha256_file, snapshot_tree
 from .native_toolset import _bytes, _envelope, _json, _require
 from .paths import entry
 
@@ -46,7 +46,7 @@ def sources(plan):
     value, root = manifest(plan), Path(plan['program']['source']['root'])
     names = [value['control'], value['check'],
              *(row['source'] for row in value['probes']),
-             'tools/compat/compat_filetime.h', 'tools/compat/bootstrap_cdefs.h']
+             *HEADERS]
     return {Path(name).name: (root / name).read_bytes() for name in names}
 
 
@@ -178,9 +178,8 @@ def prepare(step, plan, completed):
         ref = _regular(Path(plan['work_root'], name))
         _require(_bytes(ref) == data, 'component work source changed before child')
     root = plan['program']['source']['root']
-    for name, row in _json(plan['program']['source']['inventory']).items():
-        if row['kind'] == 'file':
-            _bytes(dict(path=os.path.join(root, name), sha256=row['sha256']))
+    _require(snapshot_tree(root) == _json(plan['program']['source']['inventory']),
+             'component source tree changed before child')
     _dependencies(completed)
     if any(row['id'] == PROBES[-1] for row in completed):
         _require(_bytes(_regular(Path(plan['work_root'], 'nbtool_config.h'))) ==
