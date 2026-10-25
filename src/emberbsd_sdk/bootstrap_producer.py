@@ -33,6 +33,7 @@ NO_DEFAULT_RPATH_PROFILE_SHA256 = '8ddcfcc680622d9990289c51e9d44a476397a09999e16
 UNPRIVILEGED_PROFILE_SHA256 = '34648560a0c6fd66f74b134d6a832ff28a7a1bc74ba06cf554a18bbf6203a8a8'
 BSDINSTALL_PROFILE_SHA256 = 'ccc42348223b31cc62ff90588104dc616c46947576e2b0569b9f427448e3012b'
 FOUNDATION_PROFILE_SHA256 = 'f96b910712f3a3bf15365704805d8101563398b757389cbf337e8351564990f5'
+BOOTSTRAP_PKGTOOLS_PROFILE_SHA256 = 'e9221d9b002724963d9c3eb642429d12b3d33e8a1d6977b316c6a8745a5867cd'
 EARLY_TOOLS = tuple('awk basename cat cut date dirname env expr grep head id pwd sed sort tail tr uname uniq wc'.split())
 # Recipe builds run these bare commands, which pkgsrc does not create as tools:
 # ninja-build's bootstrap runs od, and meson's Darwin compiler checks run lipo.
@@ -57,7 +58,8 @@ def _parallel_profile(digest):
 
 def _native_provider_profile(digest):
     return digest in (NATIVE_PROVIDER_PROFILE_SHA256, NO_DEFAULT_RPATH_PROFILE_SHA256,
-                      UNPRIVILEGED_PROFILE_SHA256, BSDINSTALL_PROFILE_SHA256, FOUNDATION_PROFILE_SHA256)
+                      UNPRIVILEGED_PROFILE_SHA256, BSDINSTALL_PROFILE_SHA256, FOUNDATION_PROFILE_SHA256,
+                      BOOTSTRAP_PKGTOOLS_PROFILE_SHA256)
 
 
 def _recognized_profile(digest):
@@ -354,7 +356,8 @@ def validate_producer_plan(plan, descriptor, commands, flags):
         from .bootstrap_relocation import validate_relocation_plan
         return validate_relocation_plan(plan, descriptor, commands, flags)
     if plan.get('stage') in ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
-                            'diffutils-bootstrap', 'findutils-bootstrap', 'bsdinstall-bootstrap'):
+                            'diffutils-bootstrap', 'findutils-bootstrap', 'bsdinstall-bootstrap',
+                            'pkg-install-bootstrap'):
         from .bootstrap_program import validate_program_plan
         return validate_program_plan(plan, descriptor, commands, flags)
     _envelope(plan, PRODUCER_FORMAT, scope='gcc16-bootstrap')

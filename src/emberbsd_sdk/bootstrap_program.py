@@ -75,6 +75,9 @@ def _native_program_contract(manifest, name):
 
 
 def program_manifest(plan):
+    if plan.get('stage') == 'pkg-install-bootstrap':
+        from .bootstrap_pkg_install import pkg_install_manifest
+        return pkg_install_manifest(plan)
     if plan.get('stage') == 'bsdinstall-bootstrap':
         from .bootstrap_bsdinstall import bsdinstall_manifest
         return bsdinstall_manifest(plan)
@@ -106,10 +109,16 @@ def program_manifest(plan):
 
 
 def program_sources(plan):
+    if plan.get('stage') == 'pkg-install-bootstrap':
+        from .bootstrap_pkg_install import pkg_install_sources
+        return pkg_install_sources(plan)
     return {name: value.encode('utf-8') for name, value in program_manifest(plan)['files'].items()}
 
 
 def program_outputs(plan):
+    if plan.get('stage') == 'pkg-install-bootstrap':
+        from .bootstrap_pkg_install import pkg_install_outputs
+        return pkg_install_outputs(plan)
     if plan.get('stage') == 'bsdinstall-bootstrap':
         from .bootstrap_bsdinstall import bsdinstall_outputs
         return bsdinstall_outputs(plan)
@@ -122,6 +131,9 @@ def program_outputs(plan):
 
 
 def program_steps(plan, descriptor, commands, flags):
+    if plan.get('stage') == 'pkg-install-bootstrap':
+        from .bootstrap_pkg_install import pkg_install_steps
+        return pkg_install_steps(plan, descriptor, commands, flags)
     if plan.get('stage') == 'bsdinstall-bootstrap':
         from .bootstrap_bsdinstall import bsdinstall_steps
         return bsdinstall_steps(plan, descriptor, commands, flags)
@@ -163,6 +175,9 @@ def program_steps(plan, descriptor, commands, flags):
 
 
 def verify_program_step(step, work, plan):
+    if plan.get('stage') == 'pkg-install-bootstrap':
+        from .bootstrap_pkg_install import verify_pkg_install_step
+        return verify_pkg_install_step(step, work, plan)
     """Check separate actual streams only after the owned command drains."""
     if plan.get('stage') == 'bsdinstall-bootstrap':
         from .bootstrap_bsdinstall import verify_bsdinstall_step
@@ -199,6 +214,9 @@ def verify_program_step(step, work, plan):
 
 
 def validate_program_plan(plan, descriptor, commands, flags):
+    if plan.get('stage') == 'pkg-install-bootstrap':
+        from .bootstrap_pkg_install import validate_pkg_install_plan
+        return validate_pkg_install_plan(plan, descriptor, commands, flags)
     if plan.get('stage') == 'bsdinstall-bootstrap':
         from .bootstrap_bsdinstall import validate_bsdinstall_plan
         return validate_bsdinstall_plan(plan, descriptor, commands, flags)

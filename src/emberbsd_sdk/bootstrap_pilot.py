@@ -173,6 +173,7 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     from .bootstrap_program import program_outputs, program_sources, verify_program_step
     from .bootstrap_gnu_program import GNU_PROGRAM_STAGES, prepare_gnu_work
     from .bootstrap_bsdinstall import prepare_bsdinstall_work
+    from .bootstrap_pkg_install import prepare_pkg_install_work
     from .bootstrap_recipe import BOOTSTRAP_FORMAT, prepare_recipe_work, validate_link_control
     from .bootstrap_seed import load_bootstrap_seed
     from .native_toolset import _json
@@ -188,7 +189,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     metadata = profile == 'producer' and plan.get('stage') == 'metadata'
     gnu_program = profile == 'producer' and plan.get('stage') in GNU_PROGRAM_STAGES
     bsdinstall = profile == 'producer' and plan.get('stage') == 'bsdinstall-bootstrap'
-    program = profile == 'producer' and (gnu_program or bsdinstall or plan.get('stage') in
+    pkg_install = profile == 'producer' and plan.get('stage') == 'pkg-install-bootstrap'
+    program = profile == 'producer' and (gnu_program or bsdinstall or pkg_install or plan.get('stage') in
                                         ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap'))
     relocation = profile == 'producer' and plan.get('stage') == 'utility-relocation'
     recipe = profile == 'bootstrap'
@@ -211,10 +213,12 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         roots += [plan['metadata']['export']['root'], plan['metadata']['utility_bin']]
     if program:
         roots += [plan['program']['source']['root']]
-        if gnu_program or bsdinstall:
+        if gnu_program or bsdinstall or pkg_install:
             roots += [plan['program']['owner']['root']]
-        if bsdinstall:
+        if bsdinstall or pkg_install:
             roots += [plan['program']['compat']['root']]
+        if pkg_install:
+            roots += [plan['program']['export']['root']]
     if relocation:
         roots += list(relocation_read_roots(plan))
     sdk_root = str(Path(__file__).resolve().parents[2])
@@ -230,9 +234,11 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         shared.update(_references(_json(plan['metadata']['export']['source_proof'])))
     if program:
         shared.update(_references(_json(plan['program']['source']['source_proof'])))
-        if gnu_program or bsdinstall:
+        if gnu_program or bsdinstall or pkg_install:
             shared.update(_references(_json(plan['program']['owner']['source_proof'])))
-        if bsdinstall:
+        if pkg_install:
+            shared.update(_references(_json(plan['program']['export']['source_proof'])))
+        if bsdinstall or pkg_install:
             component = _json(plan['program']['compat']['component_receipt'])
             shared.update(_references(component))
             shared.update(_references(_json(component['preparation'])['source_seed_descriptor']))
@@ -276,6 +282,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
             prepare_recipe_work(plan)
         if gnu_program:
             prepare_gnu_work(plan, descriptor, selected.commands)
+        if pkg_install:
+            prepare_pkg_install_work(plan, selected.commands)
         result = dict(format=('emberbsd-native-gcc16-producer-result' if metadata or program or relocation or recipe else
                               'emberbsd-bootstrap-make-probe-result' if make_probe else
                               'emberbsd-native-gcc16-pilot-result'), version=1,
@@ -284,6 +292,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                       bootstrap_plan=bootstrap_plan, commands=[], all_commands_drained=False,
                       evidence_level='command-reported-routes-and-actual-exits',
                       ordinary_provider_qualified=False)
+        if pkg_install:
+            result['stage'] = 'pkg-install-bootstrap'
         if relocation:
             result['stage'] = 'utility-relocation'
         if recipe:
@@ -304,7 +314,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                     if step['phase'] == 'run':
                         _native_image(step['argv'][0], descriptor['host'])
                     heavy = ((recipe and 'link_control' not in plan) or step['phase'] == 'link' or
-                             gnu_program and step['phase'] in ('gnu-configure', 'gnu-build'))
+                             gnu_program and step['phase'] in ('gnu-configure', 'gnu-build') or
+                             pkg_install and step['phase'] in ('pkg-configure', 'pkg-build'))
                     context = [resources['heavy_link_context']] if heavy else []
                     with ContextLocks(context, root):
                         remaining = deadline - time.monotonic()
