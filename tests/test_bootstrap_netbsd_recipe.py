@@ -203,6 +203,7 @@ class NetBSDRecipeStepTests(unittest.TestCase):
             driver_prefix=str(compiler_prefix / 'libexec/gcc16'),
             abi_flags={'cppflags': [], 'cflags': [], 'cxxflags': [], 'ldflags': []},
             make_binding=None)
+        descriptor['tools']['awk'] = dict(path=str(utility), sha256=sha256_file(str(utility)))
         commands = {role: (str(self.seed / ('bin/' + name)),) for role, name in {
             'cc':'gcc', 'cxx':'g++', 'cpp':'cpp', 'as':'as', 'ld':'ld', 'ar':'ar',
             'ranlib':'ranlib', 'nm':'nm', 'strip':'strip', 'python':'python3', 'sh':'sh'}.items()}
@@ -288,6 +289,33 @@ class NetBSDRecipeStepTests(unittest.TestCase):
                    snapshot_tree(path)):
             self.assertIs(bootstrap_netbsd_recipe.validate_netbsd_recipe_plan(
                 plan, descriptor, commands, descriptor['abi_flags']), plan)
+            admitted_awk = descriptor['tools'].pop('awk')
+            with self.assertRaisesRegex(SDKError, 'utility.*accepted seed'):
+                bootstrap_netbsd_recipe.validate_netbsd_recipe_plan(
+                    plan, descriptor, commands, descriptor['abi_flags'])
+            descriptor['tools']['awk'] = admitted_awk
+            for key, value in (('path', str(self.root / 'other-awk')),
+                               ('sha256', '0' * 64)):
+                with self.subTest(seed_utility_mismatch=key):
+                    descriptor['tools']['awk'] = dict(admitted_awk, **{key: value})
+                    with self.assertRaisesRegex(SDKError, 'utility.*accepted seed'):
+                        bootstrap_netbsd_recipe.validate_netbsd_recipe_plan(
+                            plan, descriptor, commands, descriptor['abi_flags'])
+            descriptor['tools']['awk'] = admitted_awk
+            # SDK controller Python is separate from native recipe generators.
+            # This graph consumes make roles and needs no initial Python tool.
+            del commands['python']
+            plan['required_roles'].remove('python')
+            plan['commands'] = bootstrap_netbsd_recipe.netbsd_recipe_steps(
+                plan, descriptor, commands, descriptor['abi_flags'])
+            self.assertIs(bootstrap_netbsd_recipe.validate_netbsd_recipe_plan(
+                plan, descriptor, commands, descriptor['abi_flags']), plan)
+            self.assertNotIn('PYTHON', plan['commands'][0]['env'])
+            plan['required_roles'].append('python')
+            with self.assertRaisesRegex(SDKError, 'required native role'):
+                bootstrap_netbsd_recipe.validate_netbsd_recipe_plan(
+                    plan, descriptor, commands, descriptor['abi_flags'])
+            plan['required_roles'].remove('python')
             plan['recipes']['lang/gcc16']['dependencies'] = []
             with self.assertRaises(SDKError):
                 bootstrap_netbsd_recipe.validate_netbsd_recipe_plan(

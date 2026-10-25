@@ -47,6 +47,14 @@ build and install steps select the source-built `LOCALBASE/bin/gas` and
 `LOCALBASE/bin/gld`. The plan keeps a real serial `gmake compare` phase; a
 failed comparison remains a failed build result.
 
+`required_roles` names the initial tools consumed by the recipe graph.
+Control-plane Python does not provide a native recipe generator role.
+The plan may omit an initial `python` role when no recipe consumes it.
+A requested role without an accepted command is refused; PATH cannot supply it.
+The final ordinary bundle still needs source-built Python for consumers that request it.
+Each utility roster entry must match the accepted seed's tool path and SHA256.
+Its provider history and bundle bytes therefore receive the shared seed checks.
+
 ## Admission limit
 
 The available compiler record is an `emberbsd-bootstrap-compiler-seed` with

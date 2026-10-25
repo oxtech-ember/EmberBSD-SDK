@@ -274,6 +274,11 @@ def validate_netbsd_recipe_plan(plan, descriptor, commands, flags, *, inspect_in
     utility_bin = _absolute(netbsd['utility_bin'])
     utility_tools = netbsd['utility_tools']
     _validate_utility_roster(utility_bin, utility_tools, inspect_inputs=inspect_inputs)
+    for role, reference in utility_tools.items():
+        admitted = descriptor.get('tools', {}).get(role, {})
+        _require(admitted.get('path') == reference['path'] and
+                 admitted.get('sha256') == reference['sha256'],
+                 f'NetBSD utility {role} differs from the accepted seed member')
     profile_ref = _ref(netbsd['profile'], 'NetBSD source-owned profile')
     _require(profile_ref['path'] == os.path.join(plan['ports_export']['root'], PROFILE_FILE),
              'NetBSD source profile does not use the fixed export filename')
@@ -339,8 +344,15 @@ def validate_netbsd_recipe_plan(plan, descriptor, commands, flags, *, inspect_in
                 _require(isinstance(distfile['relative'], str) and
                          not os.path.isabs(distfile['relative']) and '..' not in distfile['relative'].split('/'),
                          'NetBSD distfile destination escapes its isolated cache')
-    _require(set(plan['required_roles']) >= {'cc', 'cxx', 'cpp', 'as', 'ld', 'make', 'gmake', 'sh', 'python'},
+    roles = plan['required_roles']
+    _require(isinstance(roles, list) and all(isinstance(role, str) for role in roles) and
+             len(roles) == len(set(roles)) and set(roles) >=
+             {'cc', 'cxx', 'cpp', 'as', 'ld', 'ar', 'ranlib', 'nm', 'strip', 'make', 'gmake', 'sh'},
              'NetBSD first-native tool role closure is incomplete')
+    # Control-plane Python does not provide a native recipe generator role.
+    # Consumers that request one still need an explicitly admitted command.
+    _require(set(roles) <= set(commands) | {'make', 'gmake', 'sh'},
+             'NetBSD required native role has no accepted command')
     _require(descriptor.get('make_binding') is None,
              'NetBSD route cannot consume a Darwin-bound make profile')
     from .bootstrap_pilot import _validate_resources
