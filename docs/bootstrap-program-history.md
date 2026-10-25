@@ -153,7 +153,8 @@ Within this scope, strict JSON checks can reuse a successful exact-byte validati
 The marker binds the byte digest, length, parser limits and reuse budgets.
 Each return uses a new decoded object. Callers never share mutable parsed metadata.
 The first read retains duplicate-key, nesting, UTF-8 and finite-number checks.
-Changed bytes or limits cannot reuse that marker. Parser errors discard all JSON markers.
+Changed bytes or limits cannot reuse that marker. Byte-input parser errors discard all JSON markers.
+String inputs keep full strict parsing and do not change existing byte markers.
 At most 1,024 markers cover 64 MiB of distinct validated document bytes.
 Only markers are retained, not documents or decoded objects.
 When either budget is full, reads continue through the full strict parser.
