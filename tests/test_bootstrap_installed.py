@@ -123,7 +123,7 @@ class InstalledHistoryTests(unittest.TestCase):
                 ('nawk', 'lang/nawk', ['awk']), ('grep', 'textproc/grep', ['grep']),
                 ('gsed', 'textproc/gsed', ['sed']), ('coreutils', 'sysutils/coreutils',
                     ['basename', 'cat', 'cut', 'date', 'dirname', 'env', 'expr', 'head', 'id',
-                     'pwd', 'sort', 'tail', 'tr', 'uname', 'uniq', 'wc']),
+                     'od', 'pwd', 'sort', 'tail', 'tr', 'uname', 'uniq', 'wc']),
                 ('pkg_install', 'pkgtools/pkg_install', ['pkg_info', 'pkg_admin'])):
             with self.subTest(package=package):
                 descriptor = copy.deepcopy(self.seed.descriptor)

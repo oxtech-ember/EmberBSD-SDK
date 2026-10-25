@@ -52,7 +52,7 @@ This finite variant supports only these package paths and tool roles:
 | `lang/nawk` | `awk` |
 | `textproc/grep` | `grep` |
 | `textproc/gsed` | `sed` |
-| `sysutils/coreutils` | `basename`, `cat`, `cut`, `date`, `dirname`, `env`, `expr`, `head`, `id`, `pwd`, `sort`, `tail`, `tr`, `uname`, `uniq`, `wc` |
+| `sysutils/coreutils` | `basename`, `cat`, `cut`, `date`, `dirname`, `env`, `expr`, `head`, `id`, `od`, `pwd`, `sort`, `tail`, `tr`, `uname`, `uniq`, `wc` |
 | `pkgtools/pkg_install` | `pkg_info`, `pkg_admin` |
 
 The package name starts with the corresponding package name and a version.

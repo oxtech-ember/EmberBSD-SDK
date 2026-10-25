@@ -34,6 +34,9 @@ UNPRIVILEGED_PROFILE_SHA256 = '34648560a0c6fd66f74b134d6a832ff28a7a1bc74ba06cf55
 BSDINSTALL_PROFILE_SHA256 = 'ccc42348223b31cc62ff90588104dc616c46947576e2b0569b9f427448e3012b'
 FOUNDATION_PROFILE_SHA256 = 'f96b910712f3a3bf15365704805d8101563398b757389cbf337e8351564990f5'
 EARLY_TOOLS = tuple('awk basename cat cut date dirname env expr grep head id pwd sed sort tail tr uname uniq wc'.split())
+# Recipe builds run these bare commands, which pkgsrc does not create as tools:
+# ninja-build's bootstrap runs od, and meson's Darwin compiler checks run lipo.
+RECIPE_UTILITIES = {'devel/meson': ('lipo',), 'devel/ninja-build': ('od',)}
 _DARWIN_CMAKE_TOOLS = (('LIBTOOL', 'libtool_darwin'), ('INSTALL_NAME_TOOL', 'install_name_tool'),
                        ('TAPI', 'llvm_readtapi'))
 LEGACY_VARIABLES = tuple('PKGNAME PKGPATH PKGVERSION PKGREVISION OPSYS MACHINE_ARCH NATIVE_OPSYS NATIVE_OS_VERSION '
@@ -315,6 +318,11 @@ def validate_metadata_inputs(plan, descriptor, commands, flags, *, inspect_input
              all(_recipe_name(name) for name in data['recipes']) and
              len(data['recipes']) == len({name.casefold() for name in data['recipes']}) and
              'lang/gcc16' in data['recipes'], 'metadata needs a finite explicit recipe list')
+    for recipe, roles in RECIPE_UTILITIES.items():
+        for role in roles if recipe in data['recipes'] else ():
+            _require(role in data['native_tools'] and role in plan['required_roles'] and
+                     descriptor['tools'].get(role, {}).get('kind') == 'native',
+                     f'{recipe} needs native utility {role} in the utility PATH')
     export = data['export']
     _require(set(export) == {'root', 'inventory', 'source_proof'}, 'unsupported prepared export fields')
     root = _safe_path(export['root'])

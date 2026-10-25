@@ -105,6 +105,13 @@ Compiler and make tuples cannot be replaced by raw utility aliases.
 Native and source tool selections cannot overlap.
 A named source provider adds no runnable binary or qualification claim.
 Missing active utilities or runtime dependencies still refuse the dependent step.
+Some recipe builds run a bare command that pkgsrc does not create as a tool.
+A closure with `devel/ninja-build` needs a native `od` role, because the
+ninja bootstrap runs `od`. A closure with `devel/meson` needs a native `lipo`
+role, because meson's Darwin compiler checks run `lipo -info`. Select the
+in-bundle coreutils `od` and LLVM `llvm-lipo`. Each role must be in
+`native_tools`, `required_roles` and the descriptor; otherwise the plan is
+refused before any child runs. `RECIPE_UTILITIES` exports this map.
 
 The metadata stage has fresh work children `obj`, `distfiles`, `packages`,
 `prefix`, and `pkgdb`. The configuration binds its isolated local prefix and

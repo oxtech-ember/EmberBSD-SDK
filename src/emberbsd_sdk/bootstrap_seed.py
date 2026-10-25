@@ -56,7 +56,8 @@ def _installed_history(value, name, descriptor, file, *, inspect_inputs, package
                 'textproc/grep': ('grep', {'grep'}),
                 'textproc/gsed': ('gsed', {'sed'}),
                 'sysutils/coreutils': ('coreutils', {'basename', 'cat', 'cut', 'date', 'dirname',
-                    'env', 'expr', 'head', 'id', 'pwd', 'sort', 'tail', 'tr', 'uname', 'uniq', 'wc'}),
+                    'env', 'expr', 'head', 'id', 'od', 'pwd', 'sort', 'tail', 'tr', 'uname', 'uniq',
+                    'wc'}),
                 'pkgtools/pkg_install': ('pkg_install', {'pkg_info', 'pkg_admin'})}
     path = value['package_path']
     _require(path in packages, 'installed history is limited to named bootstrap input packages')

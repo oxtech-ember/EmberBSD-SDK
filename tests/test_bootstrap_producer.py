@@ -254,6 +254,52 @@ class MetadataTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'MAKECONF differs'):
             self.validate()
 
+    def _recipe_utility_plan(self, recipes, roles):
+        for name in recipes:
+            (self.export / name).mkdir(parents=True, exist_ok=True)
+            (self.export / name / 'Makefile').write_bytes(b'# recipe fixture; never executed\n')
+        for role in roles:
+            path = self.f.bundle / role
+            path.write_bytes(self.f.image)
+            path.chmod(0o755)
+            self.descriptor['tools'][role] = dict(path=str(path), sha256=hashlib.sha256(self.f.image).hexdigest(),
+                                                kind='native', provider='ports', version='synthetic')
+            (self.utility_bin / role).symlink_to('../' + role)
+            self.commands[role] = type(self.commands['grep'])([str(path)])
+        self.proof['inventory'] = self.f.document(snapshot_tree(str(self.export)))
+        data = self.plan['metadata']
+        data['export'] = dict(root=str(self.export), inventory=self.proof['inventory'],
+                              source_proof=self.f.document(self.proof))
+        data['native_tools'] = sorted([*self.tools, *roles])
+        data['recipes'] = sorted(['lang/gcc16', *recipes])
+        self.plan['required_roles'] = sorted({*self.plan['required_roles'], *roles})
+        conf = data['makeconf']
+        raw = producer.metadata_makeconf(self.plan, self.descriptor, self.commands, self.descriptor['abi_flags'])
+        Path(conf['path']).write_bytes(raw)
+        conf['sha256'] = hashlib.sha256(raw).hexdigest()
+        self.plan['commands'] = producer.producer_steps(self.plan, self.descriptor, self.commands,
+                                                       self.descriptor['abi_flags'])
+
+    def test_meson_and_ninja_closures_need_their_bare_utilities(self):
+        recipes = ['devel/meson', 'devel/ninja-build']
+        for missing, recipe in (('od', 'devel/ninja-build'), ('lipo', 'devel/meson')):
+            with self.subTest(missing=missing):
+                self.setUp()
+                self._recipe_utility_plan(recipes, [role for role in ('lipo', 'od') if role != missing])
+                with self.assertRaisesRegex(SDKError, f'{recipe} needs native utility {missing}'):
+                    self.validate()
+        self.setUp()
+        self._recipe_utility_plan(recipes, ['lipo', 'od'])
+        self.assertIs(self.validate(), self.plan)
+        self.descriptor['tools']['od']['kind'] = 'script'
+        with self.assertRaisesRegex(SDKError, 'devel/ninja-build needs native utility od'):
+            self.validate()
+        # Closures without these recipes keep their existing roster.
+        self.setUp()
+        self._recipe_utility_plan(['devel/pcre2'], [])
+        self.assertIs(self.validate(), self.plan)
+        self.assertEqual(producer.RECIPE_UTILITIES, {'devel/meson': ('lipo',), 'devel/ninja-build': ('od',)})
+
     def test_missing_extra_or_wrong_utility_alias_is_refused(self):
         path = self.utility_bin / 'grep'
         path.unlink()
