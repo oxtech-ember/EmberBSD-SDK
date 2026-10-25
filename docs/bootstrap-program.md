@@ -110,7 +110,8 @@ Independent output review must inspect actual filesystem effects before acceptan
 A zero child exit or a self-consistent report is not independent acceptance.
 
 The runtime observation repeats the first successful case in its own fresh directory.
-It uses the selected shell's fixed umask and `exec` builtin, with DYLD diagnostics enabled.
+The selected shell sets the fixed umask, then exports DYLD diagnostics before its `exec` builtin.
+The shell starts without DYLD diagnostics. The trace records only the final program image.
 Its filesystem report is also retained and checked. It never reuses mutated semantic fixtures.
 Native Darwin behavior, ordinary cross-host operation, and C memory analysis remain separate checks.
 

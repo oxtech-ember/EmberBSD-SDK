@@ -203,6 +203,12 @@ class FileUtilityProfiles(unittest.TestCase):
                         self.assertEqual(step['cwd'], plan['work_root'] + '/cases/' + case['name'])
                         self.assertIn('umask 0022;', step['argv'][-1])
                     self.assertEqual(steps[-1]['cwd'], plan['work_root'] + '/cases/runtime-observation')
+                    self.assertNotIn('DYLD_PRINT_LIBRARIES', steps[-1]['env'])
+                    import shlex
+                    self.assertEqual(steps[-1]['argv'], [*commands['sh'], '-c',
+                        'umask 0022; export DYLD_PRINT_LIBRARIES=1; exec ' +
+                        shlex.join([plan['work_root'] + '/' + name,
+                                    *manifest['runtime_cases'][0]['args']])])
                     self.assertEqual(len([x for x in program.program_outputs(plan) if x.endswith('.filesystem.json')]), count + 1)
                 total += count
         self.assertEqual(total, 43)

@@ -366,8 +366,9 @@ def program_steps(plan, descriptor, commands, flags):
         first = manifest['runtime_cases'][0]
         _require(first['exit'] == 0, 'filesystem runtime observation needs a successful first case')
         runtime_cwd = str(filesystem.case_directory(work, 'runtime-observation'))
+        observed = dict(env)
         runtime_argv = [*commands['sh'], '-c', 'umask ' + first['filesystem']['umask'] +
-                        '; exec ' + shlex.join(runtime_argv)]
+                        '; export DYLD_PRINT_LIBRARIES=1; exec ' + shlex.join(runtime_argv)]
     result.append(dict(id='runtime-observation', phase='run', cwd=runtime_cwd, env=observed, expected_exit=0,
                        argv=runtime_argv))
     return result
