@@ -194,6 +194,13 @@ def metadata_environment(plan, commands):
     result = dict(PATH=_safe_path(data['utility_bin']), LC_ALL='C', TZ='UTC', TMPDIR=work,
                MAKECONF=_safe_path(data['makeconf']['path']), SHELL=_safe_path(commands['sh'][0]),
                CONFIG_SHELL=_safe_path(commands['sh'][0]))
+    if plan['format'] == 'emberbsd-native-gcc16-bootstrap-plan':
+        _require(len(commands.get('strip', ())) == 1,
+                 'GCC comparison needs one selected strip invocation')
+        result['GCC_COMPARE_DEBUG_STRIP'] = _safe_path(commands['strip'][0])
+        prefix = _safe_path(plan['output_bundle_root'])
+        result['GCC_COMPARE_DEBUG_OBJDUMP'] = os.path.join(prefix, 'bin', 'llvm-objdump')
+        result['GCC_COMPARE_DEBUG_OBJCOPY'] = os.path.join(prefix, 'bin', 'llvm-objcopy')
     if 'link_control' in plan:
         from .bootstrap_recipe import recipe_linker_launcher
         # The direct GNU compare command does not pass through pkgsrc MAKE_ENV.
