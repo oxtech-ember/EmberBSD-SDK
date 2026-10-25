@@ -23,6 +23,8 @@ MANIFEST_RELATIVE = 'profiles/common-build-tools/bootstrap/pkg-install.json'
 MANIFEST_SHA256 = '9a0d854e0b476e6b0d308cc5dee5e1b86dc69431e4c290f3192cb2030ef0608a'
 _PATCH = 'profiles/common-build-tools/patches/pkgsrc-pkg-install-dyld-cache.patch'
 _PREFIXES = ('archivers/libarchive/', 'pkgtools/pkg_install/')
+# libarchive configure compares its grep capability outputs with this tool.
+_CONFIGURE_UTILITIES = {'diff'}
 _DRIVERS = {'cc', 'cxx', 'cpp', 'as', 'ld', 'ar', 'ranlib', 'nm', 'strip', 'make'}
 _OUTPUTS = {name: 'pkg_install/' + directory + '/' + name for name, directory in
             (('pkg_add', 'add'), ('pkg_admin', 'admin'), ('pkg_create', 'create'), ('pkg_info', 'info'))}
@@ -137,7 +139,7 @@ def prepare_pkg_install_work(plan, commands):
                     for n, r in before.items()}
         _require(snapshot_tree(str(destination)) == expected, 'staged pkg_install source differs')
     os.mkdir(work + '/bin')
-    for role in sorted(set(manifest['required_tool_roles']) - _DRIVERS):
+    for role in sorted((set(manifest['required_tool_roles']) | _CONFIGURE_UTILITIES) - _DRIVERS):
         os.symlink(commands[role][0], work + '/bin/' + role)
     for directory in ('pkgdb', 'target', 'config'):
         os.mkdir(work + '/' + directory)
@@ -249,10 +251,10 @@ def validate_pkg_install_plan(plan, descriptor, commands, flags):
     _require(' '.join(manifest['components'][0]['configure_args']) in flat and
              '--enable-bootstrap' in flat and 'STATIC_LIBARCHIVE=' in flat,
              'initial pkg_install configure sequence differs from canonical bootstrap')
-    required = set(manifest['required_tool_roles']) | set(descriptor['driver_components'].values())
+    required = set(manifest['required_tool_roles']) | _CONFIGURE_UTILITIES | set(descriptor['driver_components'].values())
     _require(isinstance(plan['required_roles'], list) and len(set(plan['required_roles'])) == len(plan['required_roles']) and
              required <= set(plan['required_roles']) <= set(commands), 'initial pkg_install input roles are incomplete')
-    for role in set(manifest['required_tool_roles']) - _DRIVERS:
+    for role in (set(manifest['required_tool_roles']) | _CONFIGURE_UTILITIES) - _DRIVERS:
         _require(len(commands[role]) == 1 and descriptor['tools'][role]['kind'] == 'native',
                  'initial pkg_install utility must retain its selected native spelling')
     _compat(value['compat'], descriptor)

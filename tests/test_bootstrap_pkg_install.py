@@ -55,7 +55,7 @@ class PkgInstallTests(unittest.TestCase):
         mocked = patch.object(pkg, 'MANIFEST_SHA256', raw_ref['sha256'])
         mocked.start()
         self.addCleanup(mocked.stop)
-        for role in self.manifest['required_tool_roles']:
+        for role in set(self.manifest['required_tool_roles']) | pkg._CONFIGURE_UTILITIES:
             if role not in self.commands:
                 self.commands[role] = (str(self.base / ('selected-' + role)),)
                 self.descriptor['tools'][role] = dict(kind='native')
@@ -69,7 +69,8 @@ class PkgInstallTests(unittest.TestCase):
         self.profile['path'] = str(profile_path)
         self.plan = dict(format=producer.PRODUCER_FORMAT, version=1, scope='gcc16-bootstrap', stage=pkg.STAGE,
             seed_descriptor={}, host=self.descriptor['host'], sources=self.descriptor['sources'], work_root=str(self.work),
-            required_roles=sorted(set(self.manifest['required_tool_roles']) | set(self.descriptor['driver_components'].values())),
+            required_roles=sorted(set(self.manifest['required_tool_roles']) | pkg._CONFIGURE_UTILITIES |
+                                  set(self.descriptor['driver_components'].values())),
             resources=dict(cpu_jobs=1, link_jobs=1, runtime_seconds=1200, lock_root=str(self.base),
                            heavy_link_context=str(self.base / 'heavy')),
             program=dict(source=self.old.tree(self.source, owner=False), owner=self.old.tree(self.owner, owner=True),
@@ -128,6 +129,32 @@ class PkgInstallTests(unittest.TestCase):
         self.descriptor['compiler']['triplet'] += '-changed'
         with self.assertRaises(SDKError):
             self.validate()
+
+    def test_configure_diff_is_required_native_and_exact_alias(self):
+        # The source-owner manifest is a minimum; configure needs selected diff too.
+        self.assertNotIn('diff', self.manifest['required_tool_roles'])
+        self.assertIs(self.validate(), self.plan)
+        for mutation in ('required-role', 'missing-command', 'wrong-kind'):
+            with self.subTest(mutation=mutation):
+                roles = list(self.plan['required_roles'])
+                command = self.commands['diff']
+                record = dict(self.descriptor['tools']['diff'])
+                if mutation == 'required-role':
+                    self.plan['required_roles'].remove('diff')
+                elif mutation == 'missing-command':
+                    del self.commands['diff']
+                else:
+                    self.descriptor['tools']['diff']['kind'] = 'source'
+                with self.assertRaises(SDKError):
+                    self.validate()
+                self.plan['required_roles'] = roles
+                self.commands['diff'] = command
+                self.descriptor['tools']['diff'] = record
+        self.work.mkdir()
+        pkg.prepare_pkg_install_work(self.plan, self.commands)
+        alias = self.work / 'bin/diff'
+        self.assertTrue(alias.is_symlink())
+        self.assertEqual(os.readlink(alias), self.commands['diff'][0])
 
     def test_preparation_preserves_source_mtimes_and_has_no_bare_make_alias(self):
         self.work.mkdir()

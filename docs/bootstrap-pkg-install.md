@@ -23,6 +23,8 @@ compression libraries, or crypto providers. The package tools use
 excludes `pkg_delete` and normal signature and vulnerability facilities. The
 ordinary common recipe retains its complete dependencies and security behavior.
 
+The fixed configure support utility `diff` is also a required selected native
+input. Its exact work PATH alias supports the unchanged grep capability test.
 The selected bmake tuple remains in direct and recursive invocations. A data
 make fragment carries the actual generated `libarchive.pc` private libraries to
 submakes. It permits library names only. It does not accept extra shell code or
