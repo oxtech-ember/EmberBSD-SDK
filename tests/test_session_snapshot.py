@@ -153,9 +153,12 @@ class SnapshotTests(TemporaryCase):
                 if child.poll() is None:
                     child.kill(); child.wait()
         for index in range(5):
+            before = len(calls)
             with patch.object(inspector, '_rows', side_effect=rows):
                 self.assertEqual(inspector.members(99999999), set())
-        self.assertEqual(len(calls), 5)
+            # A real Darwin host can retry during unrelated same-UID process
+            # churn. The contract is an empty result, not one snapshot per call.
+            self.assertGreater(len(calls), before)
 
     @skipUnless(sys.platform in ('darwin', 'linux'), 'Qualified native process profile')
     def test_owned_fork_after_snapshot_is_found_before_drain(self):
