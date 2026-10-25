@@ -13,7 +13,7 @@ from .bootstrap_program_data import data_size, decode_data
 from .native_toolset import _json, _require
 from .jsonio import json_bytes
 
-PROGRAMS = ('chmod', 'mkdir', 'ln', 'rmdir')
+PROGRAMS = ('chmod', 'mkdir', 'ln', 'rmdir', 'rm')
 MAX_NODES = 64
 MAX_BYTES = 1024 * 1024
 _DIRECTORY = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)

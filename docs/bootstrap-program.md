@@ -80,6 +80,21 @@ Modes are four-digit octal strings from `0000` through `0777`.
 The selected shell sets the literal umask before the owned child.
 No case contains an executable hook or controller expression.
 
+The fixed `rm-bootstrap` stage uses the same filesystem contract and executor.
+Its manifest SHA256 is `8ae57707433b60bb726b4b070d3389abc775514fc663064dca75180b816342fc`.
+It binds the canonical `bin/rm/rm.c`, normal host recipe and source-owned Python check.
+The 25 cases produce 28 fixed commands, including one separate runtime observation.
+Ordinary hardlink cases retain exact peer bytes and link identity.
+The four `-P` cases use unique files of 0, 1, 8192 and 8193 bytes.
+An absent pathname is only a bounded removal result. It does not prove every overwrite pass.
+Random final peer data is not an exact-byte oracle and has no alternate schema here.
+Separate source-owned diagnostics must cover pass ordering, readback and cache-control/I/O refusal.
+The Darwin source keeps O_SYNC and requests checked F_NOCACHE before overwrite I/O.
+Small or misaligned operations can still use cached paths.
+No O_RSYNC equivalence or physical-erasure guarantee follows from that request.
+Native API, C analysis, memory and ordinary qualification remain separate gates.
+Origin: EmberBSD contributors. AI assistance was used for this profile and its checks.
+
 Each case uses a fresh `work/cases/<case-name>` directory.
 Fixture paths are bounded relative names with explicit directory ancestors.
 Absolute paths, dot components, case-folding collisions, and symlink ancestors are refused.

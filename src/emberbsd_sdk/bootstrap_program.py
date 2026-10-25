@@ -59,7 +59,8 @@ _FILESYSTEM_MANIFESTS = {
     'chmod': '0139b41d150bb82e79a99547c4d3a6f5cac975152c32e850922af7bdb269e1ae',
     'mkdir': '111fe0d327e4ccdc7de008ac3844e49893edfbd43d62400ef2dbc4ceb76c5453',
     'ln': '3b3fc97c04775eb92f447b3b466b2f2867002fba2736da33971a441d630260e5',
-    'rmdir': '22e24af317a8e1c18559c407f0497a18f24bfb9c88ff8a89b48a9aa09b3ae995'}
+    'rmdir': '22e24af317a8e1c18559c407f0497a18f24bfb9c88ff8a89b48a9aa09b3ae995',
+    'rm': '8ae57707433b60bb726b4b070d3389abc775514fc663064dca75180b816342fc'}
 _NBTOOL_CONFIG = 'tools/compat/bootstrap/nbtool_config.h'
 _NATIVE_LOCAL_HEADERS = {'cmp': ('extern.h',), 'tr': ('extern.h',), 'tail': ('extern.h',), 'hexdump': ('hexdump.h',),
                          'date': ('extern.h',), 'cut': ('x_cut.c',), 'sort': ('sort.h', 'fsort.h', 'pathnames.h')}
@@ -78,7 +79,7 @@ _NATIVE_SOURCES = {**{name: ('bin/' + name + '/' + name + '.c',) for name in fil
                    'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'), 'pwd': ('bin/pwd/pwd.c',), 'cut': ('usr.bin/cut/cut.c', *_EFUN_SOURCES),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
                       for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf', 'env', 'uname', 'id')}}
-_LITERAL_CASE_COUNTS = dict(chmod=12, mkdir=10, ln=12, rmdir=9, basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
+_LITERAL_CASE_COUNTS = dict(chmod=12, mkdir=10, ln=12, rmdir=9, rm=25, basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
 _ALIASES = {'grep': ('egrep', 'fgrep'), 'tail': ('tac',), 'id': ('groups', 'whoami'), 'hexdump': ('od',)}
@@ -161,7 +162,8 @@ def _profile(plan):
     return ('tools/' + name + '/bootstrap.json',
             digest, _NATIVE_SOURCES[name],
             ('tools/' + name + '/Makefile', 'tools/Makefile.host', directory + '/Makefile',
-             'tools/' + name + '/README.md', *(_EFUN_PROVENANCE if name in EFUN_PROGRAMS else ())))
+             'tools/' + name + '/README.md', *(_EFUN_PROVENANCE if name in EFUN_PROGRAMS else ()),
+             *(('tools/rm/test-source.py',) if name == 'rm' else ())))
 
 
 def _native_program_contract(manifest, name):
