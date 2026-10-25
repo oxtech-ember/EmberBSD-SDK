@@ -13,7 +13,8 @@ class ComparisonEnvironmentTests(unittest.TestCase):
                           makeconf=dict(path='/source-test/mk.conf')))
 
     def commands(self):
-        return dict(sh=['/source-test/sh'], strip=['/source-test/llvm-strip'])
+        return dict(sh=['/source-test/sh'], strip=['/source-test/llvm-strip'],
+                    uname=['/source-test/uname'])
 
     def test_metadata_environment_stays_unchanged(self):
         result = metadata_environment(self.plan('emberbsd-native-gcc16-producer-plan'), self.commands())
@@ -23,6 +24,8 @@ class ComparisonEnvironmentTests(unittest.TestCase):
 
     def test_full_plan_binds_selected_strip(self):
         result = metadata_environment(self.plan('emberbsd-native-gcc16-bootstrap-plan'), self.commands())
+        self.assertEqual(result['GCC_CONFIGURE_SDK'], 'yes')
+        self.assertEqual(result['GCC_CONFIGURE_UNAME'], '/source-test/uname')
         self.assertEqual(result['GCC_COMPARE_DEBUG_STRIP'], '/source-test/llvm-strip')
         self.assertEqual(result['GCC_COMPARE_DEBUG_OBJDUMP'], '/source-test/prefix/bin/llvm-objdump')
         self.assertEqual(result['GCC_COMPARE_DEBUG_OBJCOPY'], '/source-test/prefix/bin/llvm-objcopy')
