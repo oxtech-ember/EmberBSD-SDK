@@ -55,6 +55,7 @@ def _installed_history(value, name, descriptor, file, *, inspect_inputs, package
                 'lang/nawk': ('nawk', {'awk'}),
                 'textproc/grep': ('grep', {'grep'}),
                 'textproc/gsed': ('gsed', {'sed'}),
+                'textproc/nbsed': ('nbsed', {'sed'}),
                 'sysutils/coreutils': ('coreutils', {'basename', 'cat', 'cut', 'date', 'dirname',
                     'env', 'expr', 'head', 'id', 'od', 'pwd', 'sort', 'tail', 'tr', 'uname', 'uniq',
                     'wc'}),

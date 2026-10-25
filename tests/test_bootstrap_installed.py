@@ -121,7 +121,8 @@ class InstalledHistoryTests(unittest.TestCase):
     def test_source_owned_utility_packages_only_provide_their_named_roles(self):
         for package, path, roles in (
                 ('nawk', 'lang/nawk', ['awk']), ('grep', 'textproc/grep', ['grep']),
-                ('gsed', 'textproc/gsed', ['sed']), ('coreutils', 'sysutils/coreutils',
+                ('gsed', 'textproc/gsed', ['sed']), ('nbsed', 'textproc/nbsed', ['sed']),
+                ('coreutils', 'sysutils/coreutils',
                     ['basename', 'cat', 'cut', 'date', 'dirname', 'env', 'expr', 'head', 'id',
                      'od', 'pwd', 'sort', 'tail', 'tr', 'uname', 'uniq', 'wc']),
                 ('pkg_install', 'pkgtools/pkg_install', ['pkg_info', 'pkg_admin'])):
@@ -143,6 +144,56 @@ class InstalledHistoryTests(unittest.TestCase):
                     with self.assertRaisesRegex(SDKError, 'cannot provide these bootstrap roles'):
                         _history(descriptor['history'], descriptor['providers'], descriptor=descriptor)
                     descriptor['tools'].pop(forbidden)
+
+    def _nbsed_descriptor(self):
+        descriptor = copy.deepcopy(self.seed.descriptor)
+        descriptor['tools']['make']['provider'] = 'ports'
+        descriptor['tools']['sed'] = copy.deepcopy(self.member)
+        history = descriptor['history'][self.name]
+        history.update(package_name='nbsed-fixture1', package_path='textproc/nbsed',
+            package_metadata=dict(build_info=self.seed.native.raw(
+                b'PKGPATH=textproc/nbsed\nCC_VERSION=clang-21.0.0\n'),
+                contents=self.seed.native.raw(b'@name nbsed-fixture1\nbin/nbsed\n')),
+            installed_member_inventory=self.seed.native.document({'bin/nbsed': dict(
+                kind='file', sha256=self.member['sha256'])}))
+        history['provisioned_members'][0]['installed_relative'] = 'bin/nbsed'
+        return descriptor, history
+
+    def test_nbsed_preserves_original_identity_and_unknowns_without_execution(self):
+        descriptor, history = self._nbsed_descriptor()
+        with patch('subprocess.Popen', side_effect=AssertionError('no native command')):
+            unknowns = _history(descriptor['history'], descriptor['providers'], descriptor=descriptor)
+        self.assertEqual(unknowns[self.name], self.history['unknowns'])
+        self.assertEqual(history['package_path'], 'textproc/nbsed')
+        self.assertEqual(history['provisioned_members'][0]['installed_relative'], 'bin/nbsed')
+
+    def test_nbsed_cannot_be_relabelled_as_gsed(self):
+        for changes, message in (
+                ({'package_path': 'textproc/gsed'}, 'package name does not match'),
+                ({'package_name': 'gsed-fixture1'}, 'package name does not match'),
+                ({'package_path': 'textproc/gsed', 'package_name': 'gsed-fixture1'},
+                 'metadata identity mismatch')):
+            with self.subTest(changes=changes):
+                descriptor, history = self._nbsed_descriptor()
+                history.update(changes)
+                with self.assertRaisesRegex(SDKError, message):
+                    _history(descriptor['history'], descriptor['providers'], descriptor=descriptor)
+
+    def test_nbsed_keeps_member_path_digest_and_unknown_checks(self):
+        for change, message in (
+                (lambda h: h['provisioned_members'][0].update(sha256='0' * 64),
+                 'preserved SHA256 roster'),
+                (lambda h: h['provisioned_members'][0].update(
+                    selected_path=str(self.base / 'outside')), 'escapes or repeats'),
+                (lambda h: h['provisioned_members'][0].update(installed_relative='bin/gsed'),
+                 'preserved SHA256 roster'),
+                (lambda h: h['unknowns'].remove('historical-toolchain-closure'),
+                 'name every unknown')):
+            with self.subTest(message=message):
+                descriptor, history = self._nbsed_descriptor()
+                change(history)
+                with self.assertRaisesRegex(SDKError, message):
+                    _history(descriptor['history'], descriptor['providers'], descriptor=descriptor)
 
     def test_unmapped_installed_utility_package_is_refused(self):
         self.history['package_path'] = 'lang/gawk'
