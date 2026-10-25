@@ -87,6 +87,10 @@ The six source-owned commands check:
 5. Bmake child failure with observed make exit 2.
 6. GNU make child failure with observed make exit 2.
 
+GNU make fixture output uses `:; print` to require the selected shell.
+The leading no-op prevents direct execution of the shell builtin.
+The final `print` command retains its exit status.
+
 The last three commands must fail in the specified way. The controller retains
 their exact nonzero exits and required output markers. Unexpected success fails
 the probe. The custom implicit rule uses only shell builtins. It does not execute

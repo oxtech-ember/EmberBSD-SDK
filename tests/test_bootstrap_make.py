@@ -7,6 +7,7 @@ import fcntl
 import hashlib
 import json
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -214,6 +215,33 @@ class MakeTests(unittest.TestCase):
             self.assertEqual(row['env']['TMPDIR'], str(self.work))
             self.assertNotIn('DYLD_LIBRARY_PATH', row['env'])
             self.assertNotIn('-c', row['argv'] if row['phase'] == 'make' else [])
+
+    def assert_gnu_print_shell_dispatch(self, recipe, marker):
+        lexer = shlex.shlex(recipe.removeprefix('\t@'), posix=True, punctuation_chars=';')
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+        self.assertEqual(tokens[:5], [':', ';', 'print', '-r', '--'])
+        self.assertEqual(tokens[5:], [marker])
+
+    def test_gnu_positive_builtin_output_forces_selected_shell(self):
+        source = bootstrap_make.make_probe_sources(self.seed.descriptor, self.seed.commands)['GMakefile'].decode()
+        recipes = [line for line in source.splitlines() if line.startswith('\t') and 'print -r --' in line]
+        self.assertEqual(len(recipes), 3)
+        for recipe, marker in zip(recipes[:2], ('gmake-shell $(SHELL)', 'gmake-positive-ok')):
+            with self.subTest(marker=marker):
+                self.assert_gnu_print_shell_dispatch(recipe, marker)
+        self.assertEqual(recipes[2], '\t@print -r -- expected-gmake-failure; exit 7')
+        self.assertIn('ifneq ($(SHELL),' + self.seed.commands['sh'][0] + ')', source)
+
+    def test_recursive_gnu_builtin_output_keeps_exact_make_tuple(self):
+        sources = bootstrap_make.make_probe_sources(self.seed.descriptor, self.seed.commands)
+        recursive = sources['GRecursive.mk'].decode()
+        recipes = [line for line in recursive.splitlines() if line.startswith('\t') and 'print -r --' in line]
+        self.assertEqual(len(recipes), 1)
+        self.assert_gnu_print_shell_dispatch(recipes[0], 'gmake-recursive-ok')
+        self.assertIn('\t+' + shlex.join(self.seed.commands['gmake']) +
+                      ' --no-print-directory -j1 -f GRecursive.mk child\n', sources['GMakefile'].decode())
+        self.assertEqual([row['expected_exit'] for row in self.plan['commands']], [0, 0, 0, 7, 2, 2])
 
     def test_six_synthetic_steps_keep_expected_nonzero_codes_and_fences(self):
         original_write = bootstrap_pilot.write_json

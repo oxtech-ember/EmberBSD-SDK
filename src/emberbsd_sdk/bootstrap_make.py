@@ -123,13 +123,13 @@ def make_probe_sources(descriptor, commands):
                   '$(error bootstrap GNU MAKECONF was not loaded)\nendif\n')
     gnu = (common_gnu + '.PHONY: all fail\nall:\n'
            "\t@case \"$${KSH_VERSION-}\" in *MIRBSD*) ;; *) exit 42;; esac\n"
-           f"\t@print -r -- 'gmake-shell $(SHELL)'\n"
+           f"\t@:; print -r -- 'gmake-shell $(SHELL)'\n"
            f'\t+{shlex.join(commands["gmake"])} --no-print-directory -j1 -f GRecursive.mk child\n'
-           "\t@print -r -- gmake-positive-ok\n"
+           "\t@:; print -r -- gmake-positive-ok\n"
            "fail:\n\t@print -r -- expected-gmake-failure; exit 7\n")
     gnu_recursive = (common_gnu + '.PHONY: child\nchild:\n'
                      "\t@case \"$${KSH_VERSION-}\" in *MIRBSD*) ;; *) exit 42;; esac\n"
-                     "\t@print -r -- gmake-recursive-ok\n")
+                     "\t@:; print -r -- gmake-recursive-ok\n")
     return {name: text.encode('ascii') for name, text in
             [('BMakefile', bsd), ('BRecursive.mk', bsd_recursive),
              ('GMakefile', gnu), ('GRecursive.mk', gnu_recursive), ('fixture.probe', 'finite-input\n')]}
