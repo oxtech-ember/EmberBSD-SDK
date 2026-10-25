@@ -47,6 +47,8 @@ import restores a new local tree without replacing an existing destination.
 Use [Ports update plans](docs/ports-plan.md) to compare evaluated package graphs,
 identify affected consumers, and verify explicit artifact receipts. These tools
 leave builds and fixes to the coding agent and existing Ports producers.
+Use the [libedit](docs/libedit.md) and [libelf](docs/libelf.md) source contracts
+to prepare canonical Ports sources for native OS consumers.
 Use [release preparation and tags](docs/release-tags.md) to set the source
 product version before building and tag the checked OS, Ports, and SDK commits.
 Use [OS release composition](docs/os-release.md) for complete OS producer orchestration,

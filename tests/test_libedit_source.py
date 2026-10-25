@@ -3,6 +3,7 @@
 """Exercise extraction and real patch application, including refusal paths."""
 import hashlib
 from pathlib import Path
+import shutil
 import subprocess
 from unittest.mock import patch
 
@@ -58,6 +59,22 @@ class LibeditTests(TemporaryCase):
         expected.update(('doc/editline.3', 'ports.distinfo', RECEIPT))
         self.assertEqual({str(p.relative_to(self.output)) for p in self.output.rglob('*')
                           if p.is_file()}, expected)
+
+    def test_shared_patch_helper_preserves_libedit_invocation(self):
+        from emberbsd_sdk import libedit
+        original = libedit.process.capture
+        calls = []
+        def record(argv, **kwargs):
+            if Path(argv[0]).name == 'patch':
+                calls.append(list(argv))
+            return original(argv, **kwargs)
+        with patch.object(libedit.process, 'capture', side_effect=record):
+            self.prepare()
+        expected = [shutil.which('patch'), '-p0', '-F0', '--posix', '--batch',
+                    '--forward', '--no-backup-if-mismatch', '-i']
+        self.assertEqual(len(calls), 7)
+        for argv in calls:
+            self.assertEqual(argv[:8], expected)
 
     def test_patch_backup_and_reject_files_are_still_refused(self):
         from emberbsd_sdk import libedit
