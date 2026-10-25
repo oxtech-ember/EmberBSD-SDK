@@ -119,7 +119,16 @@ The reader uses that image's own `LC_RPATH` entries in their recorded order.
 An entry can be an absolute in-bundle directory or `@loader_path` with an
 optional relative suffix. `@loader_path` refers to the directory of the image
 that owns this `LC_RPATH`, not the executable or another requesting image.
-Empty, `.` and `..` suffix components fail.
+Empty, `.` and `..` suffix components fail for `@loader_path`.
+A selected in-bundle `MH_EXECUTE` image can also use its own
+`@executable_path` entries. The anchor is that executable's directory.
+For example, `@executable_path/../lib/` selects its sibling `lib` directory.
+Empty and `.` components normalize away. Each `..` requires a real existing
+directory, and each traversed component must stay within the bundle.
+Every existing component must be a real directory. Symlink traversal fails,
+even when a later `..` would remove that component from the normalized path.
+A dylib has no executable context in this reader. It cannot use this expansion.
+Explicit output executables outside the bundle cannot supply this context.
 Each anchor and existing target must have its real in-bundle spelling.
 An image with an aliased selected or dependent load path cannot own these edges.
 This avoids guessing a symlink-dependent loader anchor.
@@ -132,7 +141,7 @@ Each image supports at most 64 `LC_RPATH` entries for this resolution.
 The complete audit supports at most 4096 rpath candidates, including repeats.
 
 No environment, working-directory, default-library, or external search is used.
-Inherited rpaths and `@executable_path` expansion are not implemented.
+Inherited rpaths and cross-image executable contexts are not implemented.
 A missing own-image match fails, including a weak request.
 The reader does not convert it to a null weak edge or try an inherited path.
 Cached-image and lazy-blob `@rpath` requests remain unsupported.
