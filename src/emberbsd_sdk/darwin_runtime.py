@@ -340,6 +340,28 @@ class _Cache:
             rest = rest[consumed:]
 
 
+def _executable_rpath_anchor(rpath, image, path, bundle):
+    """Expand only this selected executable's own, contained LC_RPATH."""
+    _require(image['filetype'] == 2 and inside(path, bundle),
+             'executable-relative rpath requires its selected in-bundle executable owner')
+    anchor = os.path.dirname(path)
+    for part in rpath[len('@executable_path'):].split('/'):
+        if part in ('', '.'):
+            continue
+        if part == '..':
+            # Do not erase a missing or aliased directory before checking it.
+            real_directory(anchor)
+            anchor = os.path.dirname(anchor)
+        else:
+            anchor = os.path.join(anchor, part)
+        _require(os.path.commonpath((anchor, bundle)) == bundle and
+                 canonical_new(anchor) == anchor,
+                 'executable-relative rpath leaves the bundle or uses an aliased directory')
+        if os.path.lexists(anchor):
+            real_directory(anchor)
+    return anchor
+
+
 def _rpath_target(load, image, path, bundle, missing, candidates_used, output_root=None):
     """Resolve a successful own-image rpath before inherited paths are needed."""
     name = load['name']
@@ -364,6 +386,8 @@ def _rpath_target(load, image, path, bundle, missing, candidates_used, output_ro
             _require(all(part not in ('', '.', '..') for part in suffix),
                      'unsupported loader-relative rpath traversal')
             anchor = os.path.join(os.path.dirname(path), *suffix)
+        elif rpath == '@executable_path' or rpath.startswith('@executable_path/'):
+            anchor = _executable_rpath_anchor(rpath, image, path, bundle)
         else:
             anchor = _absolute(rpath)
         output_anchor = (output_root is not None and rpath.startswith('@loader_path') and

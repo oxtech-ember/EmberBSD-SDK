@@ -500,6 +500,99 @@ class DarwinRuntimeTests(unittest.TestCase):
             path=str(gcc), target=str(gcc))])
         validate_darwin_runtime_closure(closure, f.descriptor)
 
+    def test_executable_own_rpath_normalizes_parent_and_trailing_separator(self):
+        for rpath in ('@executable_path', '@executable_path/../lib/'):
+            with self.subTest(rpath=rpath):
+                f = Fixture(self)
+                binary = f.bundle / 'bin'
+                binary.mkdir()
+                f.tool.rename(binary / 'cc')
+                f.tool = binary / 'cc'
+                f.descriptor['tools']['cc']['path'] = str(f.tool)
+                directory = binary if rpath == '@executable_path' else f.bundle / 'lib'
+                directory.mkdir(exist_ok=True)
+                library = directory / 'library.dylib'
+                library.write_bytes(macho(0x100000000, [(0xc, ALIAS)],
+                                          install_name='@rpath/library.dylib'))
+                f.tool.write_bytes(macho(0x100000000, [(0xc, '@rpath/library.dylib')],
+                                         rpaths=(rpath,)))
+                audit, closure = f.accepted()
+                edge = audit['nodes'][str(f.tool)]['image']['loads'][0]
+                self.assertEqual(edge['target'], str(library))
+                self.assertEqual(edge['rpath_resolution'], dict(owner=str(f.tool),
+                    candidates=[dict(rpath=rpath, path=str(library), target=str(library))]))
+                validate_darwin_runtime_closure(closure, f.descriptor)
+
+    def test_executable_rpath_cannot_escape_or_hide_symlink_traversal(self):
+        for suffix in ('/../../outside', '/../alias', '/alias/../lib', '/plain/../lib',
+                       '/missing/../lib'):
+            with self.subTest(suffix=suffix):
+                f = Fixture(self)
+                binary = f.bundle / 'bin'
+                binary.mkdir()
+                f.tool.rename(binary / 'cc')
+                f.tool = binary / 'cc'
+                f.descriptor['tools']['cc']['path'] = str(f.tool)
+                libraries = f.bundle / 'lib'
+                libraries.mkdir()
+                (f.bundle / 'alias').symlink_to('lib')
+                (binary / 'alias').symlink_to('../lib')
+                (binary / 'plain').write_bytes(b'not a directory')
+                library = libraries / 'library.dylib'
+                library.write_bytes(macho(0x100000000, [(0xc, ALIAS)],
+                                          install_name='@rpath/library.dylib'))
+                f.tool.write_bytes(macho(0x100000000, [(0xc, '@rpath/library.dylib')],
+                    rpaths=('@executable_path' + suffix, str(libraries))))
+                with self.assertRaises(SDKError):
+                    f.capture()
+
+    def test_executable_rpath_distinct_existing_targets_remain_ambiguous(self):
+        f = Fixture(self)
+        second = f.bundle / 'second'
+        second.mkdir()
+        data = macho(0x100000000, [(0xc, ALIAS)], install_name='@rpath/library.dylib')
+        for directory in (f.bundle, second):
+            (directory / 'library.dylib').write_bytes(data)
+        f.tool.write_bytes(macho(0x100000000, [(0xc, '@rpath/library.dylib')],
+            rpaths=('@executable_path', '@executable_path/second')))
+        with self.assertRaisesRegex(SDKError, 'ambiguous image-local'):
+            f.capture()
+
+    def test_dylib_own_executable_rpath_has_no_executable_context(self):
+        f = Fixture(self)
+        library = f.bundle / 'library.dylib'
+        library.write_bytes(macho(0x100000000, [(0xc, ALIAS)],
+                                  install_name='@rpath/library.dylib'))
+        dependent = f.bundle / 'dependent.dylib'
+        dependent.write_bytes(macho(0x100000000, [(0xc, '@rpath/library.dylib')],
+            install_name=str(dependent), rpaths=('@executable_path',)))
+        f.tool.write_bytes(macho(0x100000000, [(0xc, str(dependent))]))
+        with self.assertRaises(SDKError):
+            f.capture()
+
+    def test_executable_rpath_target_cannot_be_a_symlink(self):
+        f = Fixture(self)
+        actual = f.bundle / 'actual.dylib'
+        actual.write_bytes(macho(0x100000000, [(0xc, ALIAS)],
+                                 install_name='@rpath/library.dylib'))
+        (f.bundle / 'library.dylib').symlink_to(actual.name)
+        f.tool.write_bytes(macho(0x100000000, [(0xc, '@rpath/library.dylib')],
+                                 rpaths=('@executable_path',)))
+        with self.assertRaisesRegex(SDKError, 'target must be a real in-bundle path'):
+            f.capture()
+
+    def test_output_executable_rpath_cannot_supply_an_external_owner_context(self):
+        f = self.output_fixture()
+        library = f.bundle / 'library.dylib'
+        library.write_bytes(macho(0x100000000, [(0xc, ALIAS)],
+                                  install_name='@rpath/library.dylib'))
+        f.output.write_bytes(macho(0x100000000, [(0xc, '@rpath/library.dylib')], uuid=5,
+            rpaths=('@executable_path/../bundle',)))
+        f.output_ref['sha256'] = hashlib.sha256(f.output.read_bytes()).hexdigest()
+        self.refresh_observation(f)
+        with self.assertRaisesRegex(SDKError, 'selected in-bundle executable owner'):
+            self.output_capture(f)
+
     def test_rpath_distinct_existing_targets_are_ambiguous(self):
         f = Fixture(self)
         directories = [f.bundle / name for name in ('first', 'second')]
@@ -513,7 +606,7 @@ class DarwinRuntimeTests(unittest.TestCase):
             f.capture()
 
     def test_rpath_external_alias_and_unsupported_anchors_are_refused(self):
-        for kind in ('external', 'alias', 'parent', 'executable'):
+        for kind in ('external', 'alias', 'parent'):
             with self.subTest(kind=kind):
                 f = Fixture(self)
                 library = f.bundle / 'library.dylib'
@@ -525,10 +618,8 @@ class DarwinRuntimeTests(unittest.TestCase):
                     alias = f.bundle / 'alias'
                     alias.symlink_to('.')
                     anchor = str(alias)
-                elif kind == 'parent':
-                    anchor = '@loader_path/..'
                 else:
-                    anchor = '@executable_path'
+                    anchor = '@loader_path/..'
                 f.tool.write_bytes(macho(0x100000000, [(0xc, '@rpath/library.dylib')],
                                          rpaths=(anchor,)))
                 with self.assertRaises(SDKError):
