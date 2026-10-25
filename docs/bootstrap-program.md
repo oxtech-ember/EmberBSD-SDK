@@ -395,3 +395,33 @@ Embedded version whitespace remains unchanged. Child output never supplies expec
 Run `test_bootstrap_program_env_uname` with `EMBERBSD_TEST_OS_SOURCE` for source consistency.
 Unit tests use synthetic children and API replies. Native compilation, actual API results,
 C analysis and memory acceptance remain separate checks before qualification.
+
+## Fixed tail profile and bounded data
+
+The OS owns `tools/tail/bootstrap.json`. Its fixed pin binds all semantic cases.
+The profile compiles the five complete `usr.bin/tail` sources and uses their shared header.
+The twelve source members include both makefiles, the host integration, annotation header and README.
+It keeps the existing `tac` invocation as a relative alias of the same output.
+The shared runner creates only manifest-declared aliases after the link check.
+
+There are 31 cases and 38 commands. Eight files exercise ordinary and large inputs.
+Cases cover line and byte counts, reverse output, headers, stdin, errors and the existing alias.
+Large regular files exercise the 10 MiB mapping boundary and a nonaligned final window.
+The initial profile keeps the existing C source unchanged for a native failing regression run.
+Follow and kqueue code remain unchanged. Real append, rotation and truncation coverage remains pending.
+The pipe `-f` case checks the existing pipe behavior only.
+
+Fixture files and literal stdout accept strings or bounded segment lists.
+Each list contains one to sixteen strings or objects with exactly `text` and `repeat`.
+The text is nonempty UTF-8; repeat is an integer from zero through 33554432.
+Boolean counts, nested lists, extra fields and invalid Unicode refuse before child execution.
+Each decoded value is limited to 32 MiB. All fixture files together are limited to 64 MiB.
+The shared decoder validates byte sizes before allocating repeated data.
+It serves fixture creation, current semantic checks and historical semantic checks.
+A larger retained stream is read only up to its validated expected size.
+The ordinary 16 MiB metadata bound remains unchanged. Existing string cases keep exact UTF-8 bytes.
+Stdin and nonempty-error predicates keep their existing contracts.
+
+Run `test_bootstrap_program_data` and `test_bootstrap_program_tail` with `EMBERBSD_TEST_OS_SOURCE`.
+Unit checks use synthetic compiler children. Native GCC16 execution, independent output review,
+C analysis and memory validation remain separate gates.

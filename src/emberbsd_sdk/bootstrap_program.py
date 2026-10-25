@@ -10,12 +10,13 @@ import shlex
 import socket
 
 from .bootstrap_producer import PRODUCER_FORMAT
+from .bootstrap_program_data import decode_data, data_size, MAX_FILE_BYTES
 from .bootstrap_shell import literal_stdin
 from .bootstrap_gnu_program import GNU_PROGRAM_STAGES
 from .bootstrap_compat import (SOURCES as _EFUN_SOURCES, HEADERS as _EFUN_HEADERS,
                                PROVENANCE as _EFUN_PROVENANCE)
 from .inventory import sha256_file, snapshot_tree
-from .native_toolset import _absolute, _bytes, _envelope, _json, _require, _source
+from .native_toolset import MAX_JSON, _absolute, _bytes, _envelope, _json, _require, _source
 from .paths import canonical_existing, entry
 
 BOOTSTRAP_PROGRAM_API = 1
@@ -25,7 +26,7 @@ _SOURCES = tuple('usr.bin/grep/' + name + '.c' for name in ('fastgrep', 'file', 
 _PROVENANCE = ('tools/grep/Makefile', 'tools/Makefile.host', 'usr.bin/grep/Makefile', 'tools/grep/README.md')
 PROGRAM_STAGES = ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
                   'basename-bootstrap', 'dirname-bootstrap',
-                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap', 'env-bootstrap', 'uname-bootstrap')
+                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap', 'env-bootstrap', 'uname-bootstrap', 'tail-bootstrap')
 CMP_MANIFEST_SHA256 = 'a3267d3387b08780fb1e372f5a742dccd9faa84568292506d3389f35e869ad56'
 HOSTNAME_MANIFEST_SHA256 = '32450fa3c2d68e63c13f1d32795f4d3e14cab8b5beac909ee27242cef279750d'
 _CMP_SOURCES = tuple('usr.bin/cmp/' + name + '.c' for name in ('cmp', 'misc', 'regular', 'special'))
@@ -43,17 +44,21 @@ CUT_MANIFEST_SHA256 = '169b46d73ce9b36094bd5589bc6def4a061f78fe5d9d3c2579641d41f
 PWD_MANIFEST_SHA256 = '598906e66805438e5386f6f12478d69147e36d020849dec655d7a1826026a6bd'
 ENV_MANIFEST_SHA256 = 'b16ad21f0c3b820ba1345c40606f42ee379eb92c3d098448e0e61b5c83b39846'
 UNAME_MANIFEST_SHA256 = '668f39859e9bcf7995f9402e046bf1598527f2db294515a40dceb895ca97148d'
+TAIL_MANIFEST_SHA256 = '15ab76bc438699a789dc94351e71151301b2560072345243040aa446028f34c8'
 _NATIVE_DIRECTORIES = {'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
                        'basename': 'usr.bin/basename', 'dirname': 'usr.bin/dirname',
                        'cat': 'bin/cat', 'head': 'usr.bin/head', 'uniq': 'usr.bin/uniq',
-                       'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut', 'env': 'usr.bin/env', 'uname': 'usr.bin/uname'}
-_NATIVE_SOURCES = {'cmp': _CMP_SOURCES, 'hostname': _HOSTNAME_SOURCES, 'cat': ('bin/cat/cat.c',),
+                       'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut', 'env': 'usr.bin/env', 'uname': 'usr.bin/uname', 'tail': 'usr.bin/tail'}
+_NATIVE_SOURCES = {'tail': tuple('usr.bin/tail/' + name + '.c' for name in
+                           ('forward', 'misc', 'read', 'reverse', 'tail')),
+                   'cmp': _CMP_SOURCES, 'hostname': _HOSTNAME_SOURCES, 'cat': ('bin/cat/cat.c',),
                    'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'), 'pwd': ('bin/pwd/pwd.c',), 'cut': ('usr.bin/cut/cut.c', *_EFUN_SOURCES),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
                       for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf', 'env', 'uname')}}
-_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15)
+_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31)
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
+_ALIASES = {'grep': ('egrep', 'fgrep'), 'tail': ('tac',)}
 _UNAME_FIELDS = ('sysname', 'nodename', 'release', 'version', 'machine', 'machine_arch')
 
 
@@ -94,11 +99,11 @@ def _literal_cases(manifest, count, *, work_root_output=False, uname_output=Fals
                  set(case) in (base | {'stderr'}, base | {'stderr_nonempty'}),
                  'unsupported literal program case fields')
         _require(isinstance(case['name'], str) and re.fullmatch(r'[a-z][a-z0-9-]*', case['name']) and
-                 case['name'] not in names and case['invocation'] == manifest['name'] and
+                 case['name'] not in names and case['invocation'] in manifest['invocations'] and
                  isinstance(case['args'], list) and
                  all(isinstance(word, str) and '\0' not in word for word in case['args']) and
                  isinstance(case['stdin'], str) and
-                 (isinstance(case['stdout'], str) if output_key == 'stdout' else
+                 (data_size(case['stdout']) >= 0 if output_key == 'stdout' else
                   case['stdout_work_root'] is True and case['exit'] == 0 if output_key == 'stdout_work_root' else
                   isinstance(case['stdout_uname'], list) and bool(case['stdout_uname']) and
                   all(field in _UNAME_FIELDS for field in case['stdout_uname']) and
@@ -121,7 +126,7 @@ def _profile(plan):
               'cat': CAT_MANIFEST_SHA256, 'head': HEAD_MANIFEST_SHA256, 'uniq': UNIQ_MANIFEST_SHA256,
               'wc': WC_MANIFEST_SHA256, 'tr': TR_MANIFEST_SHA256,
               'printf': PRINTF_MANIFEST_SHA256, 'pwd': PWD_MANIFEST_SHA256, 'cut': CUT_MANIFEST_SHA256,
-              'env': ENV_MANIFEST_SHA256, 'uname': UNAME_MANIFEST_SHA256}[name]
+              'env': ENV_MANIFEST_SHA256, 'uname': UNAME_MANIFEST_SHA256, 'tail': TAIL_MANIFEST_SHA256}[name]
     return ('tools/' + name + '/bootstrap.json',
             digest, _NATIVE_SOURCES[name],
             ('tools/' + name + '/Makefile', 'tools/Makefile.host', directory + '/Makefile',
@@ -141,11 +146,11 @@ def _native_program_contract(manifest, name):
         manifest['source_makefile'] == directory + '/Makefile' and
         manifest['compiler'] == dict(family='gcc', major=16, abi='native') and
         manifest['sources'] == list(_NATIVE_SOURCES[name]) and
-        manifest['headers'] == ([directory + '/x_cut.c', _BOOTSTRAP_CDEFS, *_EFUN_HEADERS] if cut else [directory + '/extern.h', _BOOTSTRAP_CDEFS] if name in ('cmp', 'tr') else [_BOOTSTRAP_CDEFS]) and
-        manifest['include_dirs'] == ([directory, 'tools/compat', 'common/lib/libc/stdlib'] if cut else [directory] if name in ('cmp', 'tr') else []) and
+        manifest['headers'] == ([directory + '/x_cut.c', _BOOTSTRAP_CDEFS, *_EFUN_HEADERS] if cut else [directory + '/extern.h', _BOOTSTRAP_CDEFS] if name in ('cmp', 'tr', 'tail') else [_BOOTSTRAP_CDEFS]) and
+        manifest['include_dirs'] == ([directory, 'tools/compat', 'common/lib/libc/stdlib'] if cut else [directory] if name in ('cmp', 'tr', 'tail') else []) and
         manifest['cppflags'] == (['-DHAVE_NBTOOL_CONFIG_H=1', '-include', 'nbtool_config.h'] if cut else ['-include', _BOOTSTRAP_CDEFS]) and
         all(manifest[key] == [] for key in ('cflags', 'link_flags', 'libraries')) and
-        manifest['invocations'] == [name], 'unsupported direct-source ' + name + ' contract')
+        manifest['invocations'] == [name, *_ALIASES.get(name, ())], 'unsupported direct-source ' + name + ' contract')
     if cmp:
         _require(set(manifest['files']) == {'same.txt', 'different.txt', 'short.txt', 'skip-left.txt', 'skip-right.txt'} and
                  all(isinstance(value, str) for value in manifest['files'].values()) and
@@ -159,7 +164,8 @@ def _native_program_contract(manifest, name):
             files = manifest['files']
             _require(isinstance(files, dict) and bool(files) and
                      all(isinstance(key, str) and re.fullmatch(r'[a-z][a-z0-9-]*\.txt', key) and
-                         key != 'missing.txt' and isinstance(value, str) for key, value in files.items()),
+                         key != 'missing.txt' for key in files) and
+                     sum(data_size(value) for value in files.values()) <= MAX_FILE_BYTES,
                      'filter programs need bounded immutable fixture files')
         _literal_cases(manifest, _LITERAL_CASE_COUNTS[name], work_root_output=name == 'pwd', uname_output=name == 'uname')
     else:
@@ -215,7 +221,7 @@ def program_sources(plan):
         from .bootstrap_pkg_install import pkg_install_sources
         return pkg_install_sources(plan)
     manifest = program_manifest(plan)
-    result = {name: value.encode('utf-8') for name, value in manifest['files'].items()}
+    result = {name: decode_data(value) for name, value in manifest['files'].items()}
     if plan.get('stage') == 'cut-bootstrap':
         from .bootstrap_compat import probe_sources
         result.update(probe_sources(plan, manifest))
@@ -307,11 +313,11 @@ def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
         from .bootstrap_gnu_program import verify_gnu_step
         return verify_gnu_step(step, work, plan)
     if step['phase'] == 'link':
-        if plan['stage'] != 'grep-bootstrap':
-            return {}
-        for name in ('egrep', 'fgrep'):
-            os.symlink('grep', os.path.join(work, name))
-        return {'invocation_aliases': dict(egrep='grep', fgrep='grep')}
+        name = program_manifest(plan)['name']
+        aliases = {alias: name for alias in _ALIASES.get(name, ())}
+        for alias, target in aliases.items():
+            os.symlink(target, os.path.join(work, alias))
+        return {'invocation_aliases': aliases} if aliases else {}
     if step['phase'] != 'program-case':
         return {}
     case = next(row for row in program_manifest(plan)['runtime_cases'] if step['id'] == 'case-' + row['name'])
@@ -320,7 +326,7 @@ def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
     for name in ('stdout', 'stderr'):
         path = os.path.join(work, case['name'] + '.' + name)
         reference = dict(path=path, sha256=sha256_file(path))
-        data = _bytes(reference)
+        data = _bytes(reference, limit=max(MAX_JSON, data_size(case[name])) if name in case else MAX_JSON)
         if name == 'stdout' and program == 'hostname' and case.get('stdout_nonempty') is True:
             current = socket.gethostname()
             expected = current if case['args'] == [] else current.split('.', 1)[0]
@@ -335,7 +341,7 @@ def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
         elif name == 'stderr' and case.get('stderr_nonempty') is True:
             _require(bool(data), program + ' error case did not produce actual stderr')
         else:
-            _require(data == case[name].encode('utf-8'), program + ' case actual ' + name + ' differs from its source contract')
+            _require(data == decode_data(case[name]), program + ' case actual ' + name + ' differs from its source contract')
         streams[name] = reference
     return streams
 
@@ -390,7 +396,7 @@ def validate_program_plan(plan, descriptor, commands, flags):
         blob = hashlib.sha1(b'blob ' + str(len(raw)).encode('ascii') + b'\0' + raw).hexdigest()
         _require(set(row) == {'git_blob', 'sha256'} and row['git_blob'] == blob and
                  row['sha256'] == inventory[relative]['sha256'], 'bootstrap program Git blob or content differs')
-    if manifest['name'] in ('grep', 'cmp', 'cat', 'head', 'uniq', 'wc', 'cut', 'env'):
+    if manifest['name'] in ('grep', 'cmp', 'cat', 'head', 'uniq', 'wc', 'cut', 'env', 'tail'):
         _require(entry(os.path.join(plan['work_root'], 'missing.txt')) is None,
                  manifest['name'] + ' missing-file control already exists')
     _require(plan['commands'] == program_steps(plan, descriptor, commands, flags),

@@ -313,6 +313,14 @@ class ProgramHistoryTests(unittest.TestCase):
         self.history['provisioned_members'][0]['invocation'] = 'awk'
         with self.assertRaises(SDKError): self.verify()
 
+    def test_tail_history_requires_the_declared_alias_record(self):
+        self.make_fixture('tail')
+        self.assertEqual(self.verify(), {'os-basename': []})
+        link = next(row for row in self.result['commands'] if row['phase'] == 'link')
+        link['invocation_aliases'] = {'tac': 'other'}
+        with self.assertRaises(SDKError):
+            self.verify()
+
     def test_cut_control_cannot_be_provisioned_as_the_program(self):
         self.make_fixture('cut')
         self.assertEqual(self.verify(), {'os-basename': []})

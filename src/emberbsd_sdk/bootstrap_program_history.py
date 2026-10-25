@@ -7,9 +7,10 @@ import hashlib
 import os
 from pathlib import Path
 
+from .bootstrap_program_data import decode_data, data_size
 from .errors import SDKError
 from .jsonio import json_bytes
-from .native_toolset import (_absolute, _bytes, _envelope, _file, _gcc, _json,
+from .native_toolset import (MAX_JSON, _absolute, _bytes, _envelope, _file, _gcc, _json,
                              _native_image, _require, _sha, _text)
 from .paths import canonical_existing, inside, regular_file
 
@@ -70,7 +71,8 @@ def _streams(actual, case, work, outputs):
         path = os.path.join(work, case['name'] + '.' + stream)
         _require(reference['path'] == path and outputs.get(os.path.basename(path)) == reference['sha256'],
                  'historical semantic stream differs from the producer output roster')
-        data = _bytes(reference)
+        data = _bytes(reference, limit=max(MAX_JSON, data_size(case[stream]))
+                      if stream in case else MAX_JSON)
         if stream == 'stderr' and case.get('stderr_nonempty') is True:
             _require(bool(data), 'historical error case has empty stderr')
         elif stream == 'stdout' and 'stdout' not in case:
@@ -78,7 +80,7 @@ def _streams(actual, case, work, outputs):
             # Retain its exact bytes. Never recompute facts on the current host.
             pass
         else:
-            _require(data == case[stream].encode('utf-8'), 'historical source-owned semantic output differs')
+            _require(data == decode_data(case[stream]), 'historical source-owned semantic output differs')
 
 
 def _commands(plan, result, manifest):
@@ -114,10 +116,11 @@ def _commands(plan, result, manifest):
                      'historical compiler output differs from the recorded SHA256 roster')
         if wanted['id'] in cases:
             _streams(row, cases[wanted['id']], plan['work_root'], outputs)
-    if plan['stage'] == 'grep-bootstrap':
+    aliases = {name: manifest['name'] for name in manifest['invocations'] if name != manifest['name']}
+    if aliases:
         link = next(row for row in actual if row['phase'] == 'link')
-        _require(link.get('invocation_aliases') == {'egrep': 'grep', 'fgrep': 'grep'},
-                 'historical grep invocation aliases differ')
+        _require(link.get('invocation_aliases') == aliases,
+                 'historical program invocation aliases differ')
     if plan['stage'] == 'cut-bootstrap':
         from .bootstrap_compat import compat_manifest, configuration_bytes
         contract = compat_manifest(plan, manifest)

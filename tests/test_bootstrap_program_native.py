@@ -63,9 +63,9 @@ class NativeProgramTests(unittest.TestCase):
         case.manifest.update(name=name, canonical_host_recipe='tools/' + name + '/Makefile',
             source_makefile=(('bin/' if name in ('hostname', 'cat', 'pwd') else 'usr.bin/') + name) + '/Makefile',
             sources=list(sources),
-            headers=(['usr.bin/' + name + '/extern.h'] if name in ('cmp', 'tr') else []) + [program._BOOTSTRAP_CDEFS],
-            include_dirs=['usr.bin/' + name] if name in ('cmp', 'tr') else [],
-            cppflags=['-include', program._BOOTSTRAP_CDEFS], invocations=[name], files={}, runtime_cases=[])
+            headers=(['usr.bin/' + name + '/extern.h'] if name in ('cmp', 'tr', 'tail') else []) + [program._BOOTSTRAP_CDEFS],
+            include_dirs=['usr.bin/' + name] if name in ('cmp', 'tr', 'tail') else [],
+            cppflags=['-include', program._BOOTSTRAP_CDEFS], invocations=[name, 'tac'] if name == 'tail' else [name], files={}, runtime_cases=[])
         if name == 'cmp':
             # Empty literal data is intentional. No real cmp binary is run.
             case.manifest['files'] = dict.fromkeys(
@@ -84,6 +84,12 @@ class NativeProgramTests(unittest.TestCase):
             case.manifest['runtime_cases'][-1].update(args=['missing.txt'], exit=1, stdout='')
             del case.manifest['runtime_cases'][-1]['stderr']
             case.manifest['runtime_cases'][-1]['stderr_nonempty'] = True
+        elif name == 'tail':
+            case.manifest['files'] = {'input.txt': ['prefix:', {'text': 'x', 'repeat': 3}, '\n']}
+            case.manifest['runtime_cases'] = [dict(name='case' + str(index), invocation=name,
+                args=['input.txt'], stdin='', exit=0, stdout='synthetic result\n', stderr='')
+                for index in range(31)]
+            case.manifest['runtime_cases'][-1]['invocation'] = 'tac'
         elif name == 'tr':
             case.manifest['runtime_cases'] = [dict(name='case' + str(index), invocation=name,
                 args=['a', 'b'], stdin='synthetic input\n', exit=0, stdout='synthetic result\n', stderr='')
