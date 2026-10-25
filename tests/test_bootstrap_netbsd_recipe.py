@@ -274,7 +274,10 @@ class NetBSDRecipeStepTests(unittest.TestCase):
         source_proof = {'ports_source': sources['ports'], 'fixture': True}
         transfer = dict(scope='pkgsrc-source-transfer', source_proof=source_proof,
             output_root=str(export_root), output_inventory=inventory_ref)
-        with patch('emberbsd_sdk.bootstrap_netbsd_recipe._accepted_sources',
+        with patch('emberbsd_sdk.bootstrap_netbsd_recipe.platform.system', return_value='NetBSD'), \
+             patch('emberbsd_sdk.bootstrap_netbsd_recipe.platform.machine', return_value='amd64'), \
+             patch('emberbsd_sdk.bootstrap_netbsd_recipe.platform.release', return_value='11.0'), \
+             patch('emberbsd_sdk.bootstrap_netbsd_recipe._accepted_sources',
                    return_value=(plan['netbsd']['source_export_acceptance'],
                                  plan['netbsd']['source_transfer_acceptance'], transfer)), \
              patch('emberbsd_sdk.bootstrap_netbsd_gcc16.load_pkgsrc_bootstrap_tools',
