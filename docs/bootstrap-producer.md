@@ -85,6 +85,10 @@ The loader reconstructs and compares those bytes.
 Every command tuple and native ABI argument comes from the accepted selection.
 Compiler arguments appear once in the selected compiler command.
 Link-only arguments appear in `LDFLAGS`.
+For a complete bound-recipe plan, initialize these arguments only in
+the pkgsrc `BSD_PKG_MK` context. A nested BSD make inherits the complete
+pkgsrc `LDFLAGS`, including dependency library paths. Reading its `MAKECONF`
+must not replace those flags. Metadata-only configuration bytes stay unchanged.
 The file includes only the pinned source-owner profile after its input assignments.
 Paths exclude whitespace and make syntax. No arbitrary configuration suffix is accepted.
 

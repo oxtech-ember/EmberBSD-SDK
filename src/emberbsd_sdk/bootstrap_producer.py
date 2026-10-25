@@ -178,7 +178,12 @@ def metadata_makeconf(plan, descriptor, commands, flags):
     variables = metadata_assignments(plan, descriptor, commands, flags)
     lines = ['# SPDX-License-Identifier: BSD-2-Clause',
              '# Source-owned SDK metadata inputs. This file is not qualification.']
-    lines += [name + '= ' + value for name, value in sorted(variables.items())]
+    for name, value in sorted(variables.items()):
+        if name == 'LDFLAGS' and plan.get('format') == 'emberbsd-native-gcc16-bootstrap-plan':
+            # A nested BSD make inherits pkgsrc's ABI and dependency link flags.
+            lines += ['.if defined(BSD_PKG_MK)', name + '= ' + value, '.endif']
+        else:
+            lines += [name + '= ' + value]
     lines += ['.include "' + _safe_path(plan['metadata']['profile']['path']) + '"']
     return ('\n'.join(lines) + '\n').encode('ascii')
 
