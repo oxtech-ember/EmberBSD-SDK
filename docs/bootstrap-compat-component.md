@@ -24,12 +24,15 @@ It adds no external-tool exception.
 
 There are 12 ordered commands:
 
-1. Compile, link and run the mandatory native utimensat control.
+1. Compile, link and run the mandatory native utimensat control with loader diagnostics.
 2. Link two native-function probes for utimens and lutimens.
 3. Compile the complete canonical source.
 4. Archive its object with selected ar; index it with selected ranlib.
 5. Compile and link the source-owned component check.
 6. Run that check normally and with the existing loader diagnostic setting.
+
+The control run and final check observation each retain their own loader trace.
+No extra command is added for runtime capture.
 
 Only probe exits zero and one are capability observations. All other commands
 must return zero. Every diagnostic remains available for independent review.

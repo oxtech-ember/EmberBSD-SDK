@@ -77,6 +77,23 @@ class FiletimeComponentTests(unittest.TestCase):
             [*c.commands['ranlib'], str(c.work / 'libnbcompat.a')])
         self.assertNotIn('yacc', c.plan['required_roles'])
 
+    def test_both_executed_images_have_separate_owned_runtime_traces(self):
+        c = self.case
+        steps = c.plan['commands']
+        self.assertEqual(len(steps), 12)
+        traced = {row['id']: row for row in steps
+                  if 'DYLD_PRINT_LIBRARIES' in row['env']}
+        self.assertEqual(set(traced), {'filetime-control-run', 'runtime-observation'})
+        for name, image in [('filetime-control-run', 'filetime-control'),
+                            ('runtime-observation', 'filetime-check')]:
+            self.assertEqual(traced[name]['phase'], 'run')
+            self.assertEqual(traced[name]['argv'], [str(c.work / image)])
+            self.assertEqual(traced[name]['env']['DYLD_PRINT_LIBRARIES'], '1')
+            self.assertEqual(traced[name]['expected_exit'], 0)
+        traced['filetime-control-run']['env'].pop('DYLD_PRINT_LIBRARIES')
+        with self.assertRaisesRegex(SDKError, 'command differs'):
+            c.validate()
+
     def test_missing_ar_or_changed_command_refuses(self):
         c = self.case
         commands = dict(c.commands)

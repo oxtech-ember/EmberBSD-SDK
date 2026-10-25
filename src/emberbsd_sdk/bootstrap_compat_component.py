@@ -79,7 +79,7 @@ def steps(plan, descriptor, commands, flags):
             [*cc, '-c', path('filetime-control.c'), '-o', path('filetime-control.o')]),
         row('filetime-control-link', 'link',
             [*ld, path('filetime-control.o'), *ldflags, '-o', path('filetime-control')]),
-        row('filetime-control-run', 'run', [path('filetime-control')])]
+        row('filetime-control-run', 'run', [path('filetime-control')], runtime=True)]
     for probe in value['probes']:
         result.append(row(probe['name'], 'compat-probe-link',
             [*cc, path(probe['name'] + '.c'), *ldflags, '-o', path(probe['name'])], [0, 1]))
