@@ -165,6 +165,10 @@ SDK sets it to the accepted job count. Metadata with that profile uses one job
 and an empty linker prefix. A parallel recipe build needs the separate full-plan
 `link_control` service. The original profile's MAKECONF bytes stay unchanged.
 Each command starts with the complete selected bmake tuple.
+Each read-only metadata query also sets command-line `MAKE` to that full tuple.
+Nested `show-var` queries must use the initial make before the recipe closure exists.
+This override keeps the source-owned `BOOTSTRAP_DEPENDS` edges.
+Complete recipe builds keep the separate Ports make handoff.
 `EMBERBSD_DARWIN_BOOTSTRAP=yes` precedes `-C`. The job count is explicit.
 No custom target, argument, or environment suffix is supported.
 

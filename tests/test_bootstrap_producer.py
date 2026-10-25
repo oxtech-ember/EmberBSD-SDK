@@ -6,7 +6,9 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import shlex
 import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -136,6 +138,38 @@ class MetadataTests(unittest.TestCase):
         self.assertNotIn('show-vars', argv)
         self.assertNotIn('show-vars-eval', argv)
         self.assertEqual(argv.count('BOOTSTRAP_DEPENDS=${BOOTSTRAP_DEPENDS}'), 1)
+
+    def test_read_only_queries_bind_the_complete_recursive_make(self):
+        override = 'MAKE=' + shlex.join(self.commands['make'])
+        for step in self.plan['commands']:
+            self.assertEqual(step['argv'].count(override), 1)
+            self.assertLess(step['argv'].index(override), step['argv'].index('-C'))
+            self.assertEqual(shlex.split(override.removeprefix('MAKE=')),
+                             list(self.commands['make']))
+
+    def test_recursive_make_tuple_reaches_a_synthetic_nested_query(self):
+        commands = copy.deepcopy(self.commands)
+        commands['make'] = (str(self.base / 'selected make'), '-m', str(self.base / 'mk files'),
+                            'SHELL=' + str(self.base / 'selected shell'),
+                            'MAKECONF=' + str(self.base / 'mk config'))
+        with patch.object(producer, 'metadata_environment', return_value={}):
+            steps = producer.producer_steps(self.plan, self.descriptor, commands,
+                                            self.descriptor['abi_flags'])
+        override = next(word for word in steps[0]['argv'] if word.startswith('MAKE='))
+        nested = shlex.split(override.removeprefix('MAKE=')) + ['show-var', 'VARNAME=PKGNAME']
+        # The child receives argv as data. It does not execute a selected make.
+        code = 'import json,sys; print(json.dumps(sys.argv[1:]))'
+        result = subprocess.run([sys.executable, '-B', '-c', code, *nested],
+                                check=True, capture_output=True, text=True)
+        self.assertEqual(json.loads(result.stdout),
+                         [*commands['make'], 'show-var', 'VARNAME=PKGNAME'])
+        self.assertEqual(result.stderr, '')
+
+    def test_query_without_recursive_make_binding_is_refused(self):
+        for step in self.plan['commands']:
+            step['argv'] = [word for word in step['argv'] if not word.startswith('MAKE=')]
+        with self.assertRaisesRegex(SDKError, 'fixed source-owned query'):
+            self.validate()
 
     def test_current_source_refuses_legacy_producer_commands(self):
         # Retain historical plans with their exact old SDK source. The new

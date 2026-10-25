@@ -232,7 +232,7 @@ def producer_steps(plan, descriptor, commands, flags):
         for name, tail in queries:
             result.append(dict(id=f'r{number:02d}-' + name, phase='metadata', recipe=recipe, cwd=work,
                                argv=[*commands['make'], 'EMBERBSD_DARWIN_BOOTSTRAP=yes',
-                                     '-j' + str(plan['resources']['cpu_jobs']), '-C',
+                                     'MAKE=' + shlex.join(commands['make']), '-j' + str(plan['resources']['cpu_jobs']), '-C',
                                      os.path.join(data['export']['root'], recipe), *tail], env=dict(env)))
     return result
 
