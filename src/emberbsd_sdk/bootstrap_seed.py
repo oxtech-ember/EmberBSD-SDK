@@ -169,6 +169,11 @@ def _history(histories, providers, *, descriptor=None, inspect_inputs=True):
         if value['kind'] == 'installed-package':
             unknowns[name] = _installed_history(value, name, descriptor, file, inspect_inputs=inspect_inputs)
         elif value['kind'] == 'source-build':
+            if 'program_build' in value:
+                from .bootstrap_program_history import verify_program_build_history
+                unknowns[name] = verify_program_build_history(value, name, descriptor,
+                                                              inspect_inputs=inspect_inputs)
+                continue
             _require(value['source_archives'], 'seed source archives are required')
             record = _json(value['build_record'])
             _envelope(record, 'emberbsd-bootstrap-seed-history', scope=_SCOPE)

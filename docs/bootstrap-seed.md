@@ -161,6 +161,12 @@ The record references `emberbsd-bootstrap-seed-history`, version 1,
 scope `gcc16-bootstrap`, with nonempty `historical_compiler` and a `build_log` reference.
 The independent gate checks the origin and completeness of that history.
 
+OS direct-source programs can instead use the strict
+[Git-program history](bootstrap-program-history.md) variant.
+It binds the actual source proof, finite production and independent output
+acceptance with explicit copied-member hashes. Only that variant permits empty
+source archives for a `source-build` origin. It issues no qualification.
+
 A `binary-release` history has `release_url`, `release_version`, exact `artifact`
 file reference, original `release_metadata` reference, and `embedded_configuration`
 (a file reference or null).
