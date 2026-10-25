@@ -124,8 +124,10 @@ Missing active utilities or runtime dependencies still refuse the dependent step
 Some recipe builds run a bare command that pkgsrc does not create as a tool.
 A closure with `devel/ninja-build` needs a native `od` role, because the
 ninja bootstrap runs `od`. A closure with `devel/meson` needs a native `lipo`
-role, because meson's Darwin compiler checks run `lipo -info`. Select the
-in-bundle coreutils `od` and LLVM `llvm-lipo`. Each role must be in
+role, because meson's Darwin compiler checks run `lipo -info`. Select an
+accepted native `od` and LLVM `llvm-lipo`. The
+[finite hexdump/od route](bootstrap-program.md#fixed-hexdump-and-od-profile)
+can produce the initial `od` input. Each role must be in
 `native_tools`, `required_roles` and the descriptor; otherwise the plan is
 refused before any child runs. `RECIPE_UTILITIES` exports this map.
 Keep the native `gzip`, `gunzip` and `gzcat` roles: the seed recipes and
