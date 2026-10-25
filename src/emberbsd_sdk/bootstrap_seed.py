@@ -135,6 +135,13 @@ def _installed_history(value, name, descriptor, file, *, inspect_inputs, package
 
 
 def _history(histories, providers, *, descriptor=None, inspect_inputs=True):
+    from .bootstrap_history_context import validate_history
+    return validate_history((histories, providers, descriptor, inspect_inputs),
+        lambda: _history_uncached(histories, providers, descriptor=descriptor, inspect_inputs=inspect_inputs),
+        memoize=not inspect_inputs)
+
+
+def _history_uncached(histories, providers, *, descriptor=None, inspect_inputs=True):
     _require(isinstance(histories, dict) and set(histories) == set(providers),
              'every seed provider needs explicit historical provenance')
     unknowns = {}

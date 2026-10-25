@@ -122,3 +122,49 @@ separate gates. Record pending checks explicitly in the acceptance limitations.
 
 The verifier runs no compiler, shell, Git command or runtime executable.
 The tests use synthetic children. They do not establish native execution.
+
+## Ports Byacc history
+
+The fixed `byacc-bootstrap` stage also uses this history envelope.
+Its provider binds the original Ports pin, `pkgsrc/devel/byacc/bootstrap.json`,
+and tool version `byacc-20260126`. Only the `yacc` invocation is provisionable.
+`source_archives` contains the original archive URL and file reference.
+`patches` contains both original patch URLs and file references in recipe order.
+Patch URLs use the original Ports repository, commit and recipe paths.
+Use `bootstrap_byacc.history_origins(plan)` to obtain these exact origin fields.
+The acceptance check roster starts with `ports-release-and-patch-membership`.
+The other independent checks and the ordinary-provider exclusion stay unchanged.
+
+Verification checks the complete archive-derived tree and both exact patch outputs.
+It also checks actual capability observations, the generated configuration,
+repeatable parser-generation records, generated source bytes and parser semantics.
+The current host never supplies a replacement configuration or expected parser output.
+No archive, patch or extra history field is accepted for the existing OS profiles.
+
+## Bounded history traversal
+
+One top-level history validation owns an in-memory context for its nested history graph.
+The key includes complete history, provider and descriptor values and the input-inspection mode.
+A previously completed node can reuse its unknown-list result within that call only.
+No context, result or receipt cache survives the top-level call, including a failed call.
+Separate seed loads always start fresh. Historical and current input-inspection modes cannot share a result.
+
+A memo hit rehashes the files observed during the original validation.
+It also repeats complete source inventories and checks file and directory identities.
+Changed bytes, paths, modes, links or source timestamps refuse the hit.
+This preserves archive-derived source proofs that bind modification times.
+Results are copied; callers cannot alter cached historical unknowns.
+The complete validation still runs once for each distinct node.
+Original receipt comparisons and unknown-list checks are unchanged.
+Current input inspection never uses a memoized result. Each call repeats native image,
+executable permission and invocation alias checks. Only nested historical nodes can reuse results.
+
+Active-node recurrence refuses cycles. The scope permits at most 256 history nodes,
+64 active levels and 32768 input guard entries. A tree consumes one entry per member,
+plus its root; separately hashed files also consume entries.
+An encoded node key or inventory fingerprint input is limited to 16 MiB.
+Exceeding a bound fails validation; it never truncates a graph or omits evidence.
+The context supplies no admission and never starts a process.
+
+`test_bootstrap_history_context` checks shared DAG expansion counts, cycles,
+bounds, changed source and metadata inputs, unknown-list preservation and fresh calls.
