@@ -313,7 +313,7 @@ def _tools(value, *, inspect_inputs):
                  'source export utility must have an exact path and hash')
         path = _absolute(row['path'])
         _sha(row['sha256'])
-        names = ('patch', 'gpatch') if role == 'patch' else ('git',)
+        names = ('patch', 'gpatch', 'nbpatch') if role == 'patch' else ('git',)
         _require(os.path.basename(path) in names and role not in _FORBIDDEN_TOOLS,
                  'source export utility path cannot substitute for a compiler or make')
         if inspect_inputs:
@@ -372,7 +372,8 @@ def create_export_plan(source_ref, work_root, lock_root, python, tools, *, plan_
         source_ref['path'], source_ref['sha256'], plan_path], cwd=work,
         env=dict(PATH=os.pathsep.join(sorted({os.path.dirname(python['path']),
                                               *(os.path.dirname(row['path']) for row in tools.values())})),
-                 LC_ALL='C', TZ='UTC', TMPDIR=work, PYTHONDONTWRITEBYTECODE='1'),
+                 LC_ALL='C', TZ='UTC', TMPDIR=work, PATCH_VERSION_CONTROL='none',
+                 PYTHONDONTWRITEBYTECODE='1'),
         expected_exit=0)]
     return validate_export_plan(plan, read_json(source_ref['path']), source_ref=source_ref,
                                 inspect_inputs=False)
@@ -421,7 +422,8 @@ def validate_export_plan(plan, source, *, source_ref=None, inspect_inputs=True,
     _require(plan['commands'] == [dict(id='export-current-pkgsrc', argv=expected_command,
         cwd=work, env=dict(PATH=os.pathsep.join(sorted({os.path.dirname(python['path']),
              *(os.path.dirname(row['path']) for row in plan['tools'].values())})),
-             LC_ALL='C', TZ='UTC', TMPDIR=work, PYTHONDONTWRITEBYTECODE='1'), expected_exit=0)],
+             LC_ALL='C', TZ='UTC', TMPDIR=work, PATCH_VERSION_CONTROL='none',
+             PYTHONDONTWRITEBYTECODE='1'), expected_exit=0)],
         'pkgsrc export command differs from its fixed controller route')
     if inspect_inputs:
         if allow_claimed_work:
@@ -481,7 +483,8 @@ def worker_main(source_path, source_sha256, plan_path):
                 return self.routes[role]
 
         environment = dict(PATH=plan['commands'][0]['env']['PATH'], LC_ALL='C', TZ='UTC',
-                           TMPDIR=plan['work_root'], GIT_OPTIONAL_LOCKS='0',
+                           TMPDIR=plan['work_root'], PATCH_VERSION_CONTROL='none',
+                           GIT_OPTIONAL_LOCKS='0',
                            GIT_NO_LAZY_FETCH='1', GIT_TERMINAL_PROMPT='0',
                            PYTHONDONTWRITEBYTECODE='1')
         routes = {row['path']: role for role, row in plan['tools'].items()}

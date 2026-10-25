@@ -29,8 +29,12 @@ checks the claimed commits against those upstream sources.
 
 The SDK accepts exactly two executable selections for this stage: Git and
 patch. The Git executable must be named `git`. The selected patch executable
-must be named `patch` or `gpatch`. The latter name supports GNU patch without
-an alias. Both selections retain their exact absolute path and SHA256 checks.
+must be named `patch`, `gpatch`, or `nbpatch`. `nbpatch` selects the packaged
+BSD patch utility without a wrapper. The fixed worker environment sets
+`PATCH_VERSION_CONTROL=none`; the Ports exporter also passes `-V none` to
+disable backups. It does not use `--posix`, because that option changes file
+name selection and rejects valid `/dev/null` additions. Both selections retain
+their exact absolute path and SHA256 checks.
 The worker receives a restricted PATH containing those exact tool
 directories and the selected Python directory. Compiler and make names cannot
 be supplied through those selectors. The worker imports only

@@ -44,8 +44,8 @@ class PkgsrcExportToolTests(TemporaryCase):
             tools[role] = dict(path=str(path), sha256=sha256_file(path))
         return tools
 
-    def test_patch_and_gpatch_are_exact_selected_patch_names(self):
-        for name in ('patch', 'gpatch'):
+    def test_patch_gpatch_and_nbpatch_are_exact_selected_patch_names(self):
+        for name in ('patch', 'gpatch', 'nbpatch'):
             tools = self.tools(name)
             for inspect_inputs in (False, True):
                 with self.subTest(name=name, inspect_inputs=inspect_inputs):
@@ -152,6 +152,18 @@ class SourceFixture(TemporaryCase):
 
 
 class PkgsrcExportSourceTests(SourceFixture):
+    def test_plan_selects_backup_policy_without_posix_path_selection(self):
+        plan = create_export_plan(self.source_ref, str(self.work), str(self.lock_root),
+                                  self.python_ref, self.tools, plan_path=str(self.root / 'inputs/export-plan.json'))
+        self.assertEqual(plan['commands'][0]['env'].get('PATCH_VERSION_CONTROL'), 'none')
+        changed = dict(plan)
+        changed['commands'] = [dict(plan['commands'][0], env={
+            key: value for key, value in plan['commands'][0]['env'].items()
+            if key != 'PATCH_VERSION_CONTROL'})]
+        with self.assertRaisesRegex(SDKError, 'fixed controller route'):
+            validate_export_plan(changed, self.source, source_ref=self.source_ref,
+                                 inspect_inputs=False)
+
     def test_shared_transfer_inventory_ignores_only_symlink_mode(self):
         source = {
             'regular': dict(kind='file', mode=0o755, size=4, sha256='a' * 64),
