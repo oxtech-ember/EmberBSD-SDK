@@ -46,6 +46,7 @@ SOURCE_GZIP_HANDOFF_PROFILE_SHA256 = '39f572f94655383e3a4041e41d51477dc6cd2dbf10
 SOURCE_GZIP_MAKE_SPLIT_PROFILE_SHA256 = 'c707c392394e9765fe48ce3cc10e13bb924b1c731d529e35e89736813a214169'
 RUNTIME_FLAGS_REAPPLY_PROFILE_SHA256 = '15793fddb726c8fdd56c41b5000e414060e67f9e0991fe09622e3cbdece1f17d'
 NATIVE_RUNTIME_SHELL_PROFILE_SHA256 = '42772112699331e4c091eec7d7cad0a5ce04461e7db3c807497673b69046681c'
+INITIAL_DARWIN_PROFILE_SHA256 = 'd54e703a263c307917f6b3d376e83bae04720aa74d1325d530faea50cfb6b765'
 EARLY_TOOLS = tuple('awk basename cat cut date dirname env expr grep head id pwd sed sort tail tr uname uniq wc'.split())
 # Recipe builds run these bare commands, which pkgsrc does not create as tools:
 # ninja-build's bootstrap runs od, and meson's Darwin compiler checks run lipo.
@@ -77,11 +78,33 @@ def _native_provider_profile(digest):
                       METADATA_PHASE_PROFILE_SHA256, CA_METADATA_PHASE_PROFILE_SHA256,
                       GZIP_HANDOFF_PROFILE_SHA256, SOURCE_GZIP_HANDOFF_PROFILE_SHA256,
                       SOURCE_GZIP_MAKE_SPLIT_PROFILE_SHA256, RUNTIME_FLAGS_REAPPLY_PROFILE_SHA256,
-                      NATIVE_RUNTIME_SHELL_PROFILE_SHA256)
+                      NATIVE_RUNTIME_SHELL_PROFILE_SHA256, INITIAL_DARWIN_PROFILE_SHA256)
 
 
 def _recognized_profile(digest):
     return digest == PROFILE_SHA256 or _parallel_profile(digest)
+
+
+def darwin_tool_phase(plan):
+    """Select the bounded initial phase without changing historical full plans."""
+    data = plan['metadata']
+    phase = data.get('darwin_tool_phase', 'full')
+    _require(type(phase) is str and phase in ('initial', 'full'), 'unsupported Darwin tool phase')
+    _require(phase != 'initial' or data['profile']['sha256'] == INITIAL_DARWIN_PROFILE_SHA256,
+             'initial Darwin tools require their pinned common profile')
+    return phase
+
+
+def required_recipe_utilities(plan):
+    """Keep future graph utilities separate from the fixed executed prefix."""
+    if darwin_tool_phase(plan) == 'full':
+        recipes = plan['metadata']['recipes']
+    elif plan.get('stage') == 'metadata' and plan.get('format') == PRODUCER_FORMAT:
+        recipes = ()  # The fixed -V queries run no recipe configure or build.
+    else:
+        from .bootstrap_recipe import initial_execution_order
+        recipes = initial_execution_order(plan)
+    return {name: roles for name, roles in RECIPE_UTILITIES.items() if name in recipes}
 
 
 def _recipe_name(value):
@@ -144,9 +167,12 @@ def metadata_paths(work):
 def metadata_assignments(plan, descriptor, commands, flags):
     """Construct source-owner variables. This function issues no acceptance."""
     data, work = plan['metadata'], _safe_path(plan['work_root'])
+    phase = darwin_tool_phase(plan)
     facts = data['host_facts']
     variables = {'EMBERBSD_DARWIN_HOST_' + key.upper(): _word(value) for key, value in facts.items()}
     variables.update(metadata_paths(work))
+    if 'darwin_tool_phase' in data:
+        variables['EMBERBSD_DARWIN_TOOL_PHASE'] = phase
     if plan.get('format') == PRODUCER_FORMAT and plan.get('stage') == 'metadata':
         variables['EMBERBSD_DARWIN_METADATA'] = 'yes'
     for key, role in [('MAKE', 'make'), ('GMAKE', 'gmake')]:
@@ -313,7 +339,10 @@ def validate_metadata_inputs(plan, descriptor, commands, flags, *, inspect_input
     """Validate shared source-owner inputs. Offline graduation retains their pins."""
     data = plan['metadata']
     _require(set(data) == {'export', 'profile', 'makeconf', 'host_facts', 'utility_bin',
-                          'native_tools', 'source_tools', 'recipes'}, 'unsupported metadata input fields')
+                          'native_tools', 'source_tools', 'recipes'} |
+             ({'darwin_tool_phase'} if 'darwin_tool_phase' in data else set()),
+             'unsupported metadata input fields')
+    phase = darwin_tool_phase(plan)
     parallel = 'link_control' in plan
     _require(not parallel or plan.get('format') == 'emberbsd-native-gcc16-bootstrap-plan' and
              _parallel_profile(data['profile']['sha256']),
@@ -339,7 +368,7 @@ def validate_metadata_inputs(plan, descriptor, commands, flags, *, inspect_input
     if {'lang/llvm', 'devel/lld', 'devel/cmake'} & set(data['recipes']):
         _require(_native_provider_profile(data['profile']['sha256']),
                  'CMake provider recipes need the native-provider source profile')
-        for _, role in _DARWIN_CMAKE_TOOLS:
+        for _, role in (_DARWIN_CMAKE_TOOLS if phase == 'full' else ()):
             _require(role in plan['required_roles'] and len(commands.get(role, ())) == 1 and
                      descriptor['tools'].get(role, {}).get('kind') == 'native',
                      'CMake provider recipes need an explicit native role: ' + role)
@@ -349,8 +378,8 @@ def validate_metadata_inputs(plan, descriptor, commands, flags, *, inspect_input
              all(_recipe_name(name) for name in data['recipes']) and
              len(data['recipes']) == len({name.casefold() for name in data['recipes']}) and
              'lang/gcc16' in data['recipes'], 'metadata needs a finite explicit recipe list')
-    for recipe, roles in RECIPE_UTILITIES.items():
-        for role in roles if recipe in data['recipes'] else ():
+    for recipe, roles in required_recipe_utilities(plan).items():
+        for role in roles:
             _require(role in data['native_tools'] and role in plan['required_roles'] and
                      descriptor['tools'].get(role, {}).get('kind') == 'native',
                      f'{recipe} needs native utility {role} in the utility PATH')

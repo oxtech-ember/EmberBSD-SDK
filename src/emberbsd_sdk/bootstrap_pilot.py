@@ -347,7 +347,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         if relocation:
             result['stage'] = 'utility-relocation'
         if recipe:
-            result['stage'] = 'full-recipe-bootstrap'
+            result['stage'] = ('initial-darwin-tools' if plan.get('purpose') == 'initial-darwin-tools'
+                               else 'full-recipe-bootstrap')
         result_path = os.path.join(work, 'result.json')
         write_json(result_path, result)
         for name, source in sources.items():
@@ -431,6 +432,21 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                 path = os.path.join(work, 'output-inventory.json')
                 write_json(path, inventory)
                 result['output_inventory'] = dict(path=path, sha256=sha256_file(path))
+                if not netbsd_recipe and plan.get('purpose') == 'initial-darwin-tools':
+                    from .bootstrap_recipe import (INITIAL_DARWIN_TARGETS,
+                        initial_execution_order, initial_tool_outputs)
+                    completed = initial_execution_order(plan)[:-1]
+                    initial = dict(format='emberbsd-initial-darwin-tool-output', version=1,
+                        scope=_SCOPE, bootstrap_plan=bootstrap_plan,
+                        llvm_recipe=plan['recipes']['lang/llvm']['inventory'],
+                        profile=plan['metadata']['profile'], targets=list(INITIAL_DARWIN_TARGETS),
+                        outputs=initial_tool_outputs(plan), installed_dependencies=completed,
+                        not_installed_recipes=sorted(set(plan['recipes']) - set(completed)),
+                        full_package_qualified=False, gcc_comparison_performed=False,
+                        ordinary_provider_qualified=False)
+                    path = os.path.join(work, 'initial-tool-output.json')
+                    write_json(path, initial)
+                    result['initial_tool_output'] = dict(path=path, sha256=sha256_file(path))
             result['status'] = 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW'
         except BaseException as exc:
             result.update(status='FAILED', error=str(exc))

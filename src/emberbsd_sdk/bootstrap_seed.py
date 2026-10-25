@@ -375,7 +375,8 @@ def _plan(reference, descriptor, commands=None, flags=None, *, inspect_inputs=Tr
             descriptor['abi_flags'] if flags is None else flags, inspect_inputs=inspect_inputs)
     _envelope(plan, 'emberbsd-native-gcc16-bootstrap-plan', scope=_SCOPE)
     bound = descriptor.get('make_binding') is not None
-    _require(plan.get('purpose') == 'first-native-gcc16' and
+    _require((plan.get('purpose') == 'first-native-gcc16' or
+              (bound and plan.get('purpose') == 'initial-darwin-tools')) and
              plan.get('host') == descriptor['host'], 'bootstrap plan scope mismatch')
     _gcc(plan['output_compiler'], plan['host'])
     _require(plan['sources'] == descriptor['sources'], 'bootstrap plan source pins mismatch')
@@ -761,8 +762,9 @@ def _graduation(reference, output, output_sha256, provider):
     _require(accepted.get('accepted_history_unknowns') == unknowns,
              'original seed acceptance does not bind its historical unknowns')
     plan = _plan(receipt['bootstrap_plan'], seed, inspect_inputs=False)
-    _require(plan.get('format') == 'emberbsd-native-gcc16-bootstrap-plan',
-             'a finite pilot cannot graduate an ordinary provider')
+    _require(plan.get('format') == 'emberbsd-native-gcc16-bootstrap-plan' and
+             plan.get('purpose') == 'first-native-gcc16',
+             'an initial tool phase or finite pilot cannot graduate an ordinary provider')
     _require(plan['seed_descriptor'] == receipt['seed_descriptor'] and
              plan['host'] == output['host'] and plan['output_compiler'] == output['compiler'] and
              plan['sources'] == output['sources'] and

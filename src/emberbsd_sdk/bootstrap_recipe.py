@@ -8,19 +8,86 @@ from pathlib import Path
 import re
 import shutil
 import shlex
+import stat
 import sys
 
 from .bootstrap_binding import DARWIN_LLVM_MC_LLD_SEED
 from .bootstrap_make import _safe_path
-from .bootstrap_producer import (RECIPE_LIMIT, _recipe_name, metadata_environment,
+from .bootstrap_producer import (RECIPE_LIMIT, _recipe_name, darwin_tool_phase, metadata_environment,
                                  metadata_paths, metadata_values, validate_metadata_inputs)
 from .inventory import sha256_file
-from .native_toolset import _file, _json, _require, _sha
+from .native_toolset import _file, _json, _native_image, _require, _sha
 from .paths import canonical_existing, canonical_new, reject_overlap
 
 BOOTSTRAP_FORMAT = 'emberbsd-native-gcc16-bootstrap-plan'
 # The Ports Darwin profile's make and shell handoff edge. See recipe_make().
 MAKE_PROVIDER = 'devel/bmake'
+INITIAL_DARWIN_PURPOSE = 'initial-darwin-tools'
+INITIAL_DARWIN_TARGETS = ('llvm-libtool-darwin', 'llvm-install-name-tool', 'llvm-readtapi', 'llvm-lipo')
+
+
+def initial_darwin_plan(plan):
+    """Bind the initial purpose to its fixed operations, never arbitrary targets."""
+    initial = plan['purpose'] == INITIAL_DARWIN_PURPOSE
+    phase = darwin_tool_phase(plan)
+    _require(not initial or phase == 'initial', 'initial tool purpose requires the initial phase')
+    _require(phase != 'initial' or initial, 'initial phase requires the initial tool purpose')
+    return initial
+
+
+def initial_execution_order(plan):
+    """Keep the full graph; execute exactly the ordered LLVM dependency closure."""
+    _require(initial_darwin_plan(plan), 'initial execution needs its explicit purpose')
+    order = recipe_order(plan)
+    recipes = plan['recipes']
+    _require({'devel/cmake', 'lang/llvm'} <= set(recipes), 'initial tools require CMake and LLVM')
+    reached = set()
+
+    def visit(name):
+        for child in recipes[name]['dependencies']:
+            if child not in reached:
+                reached.add(child)
+                visit(child)
+
+    visit('lang/llvm')
+    _require('devel/cmake' in reached, 'CMake must be an LLVM dependency')
+    reached.add('lang/llvm')
+    return [name for name in order if name in reached]
+
+
+def initial_llvm_directory(plan):
+    """Validate the metadata-derived LLVM build directory before any child."""
+    initial_execution_order(plan)
+    row = plan['recipes']['lang/llvm']
+    _require(isinstance(row.get('object_directory'), str), 'initial LLVM object directory is required')
+    obj = _safe_path(row['object_directory'])
+    root = metadata_paths(_safe_path(plan['work_root']))['WRKOBJDIR']
+    _require(obj != root and os.path.commonpath((obj, root)) == root,
+             'initial LLVM object directory must stay in owned work')
+    return obj
+
+
+def initial_tool_outputs(plan):
+    """Bind real initial outputs separately from installed dependency packages."""
+    obj = initial_llvm_directory(plan)
+    result = {}
+    for name in INITIAL_DARWIN_TARGETS:
+        path = os.path.join(obj, 'bin', name)
+        resolved = canonical_existing(path)
+        _require(os.path.commonpath((resolved, obj)) == obj,
+                 'initial LLVM tool escapes its object directory')
+        _native_image(resolved, plan['host'])
+        mode = stat.S_IMODE(os.stat(resolved).st_mode)
+        _require(mode & 0o111, 'initial LLVM tool is not executable')
+        result[name] = dict(path=path, resolved_path=resolved,
+                            sha256=sha256_file(resolved), mode=mode)
+    # The upstream recipe declares this spelling as an llvm-objcopy alias.
+    objcopy = canonical_existing(os.path.join(obj, 'bin', 'llvm-objcopy'))
+    _require(os.path.commonpath((objcopy, obj)) == obj and
+             sha256_file(objcopy) == result['llvm-install-name-tool']['sha256'],
+             'initial install-name tool differs from its owner-declared alias')
+    result['llvm-install-name-tool']['alias_of'] = 'llvm-objcopy'
+    return result
 
 
 def _recipe_linker_words(plan):
@@ -145,13 +212,20 @@ def recipe_environment(plan, commands, recipe):
 
 def recipe_steps(plan, descriptor, commands, flags):
     """Construct complete selected tuples and fixed targets. No caller tail."""
+    initial = initial_darwin_plan(plan)
     work = _safe_path(plan['work_root'])
     export = _safe_path(plan['ports_export']['root'])
     jobs = '-j' + str(plan['resources']['cpu_jobs'])
     result = []
-    for number, recipe in enumerate(recipe_order(plan)):
+    for number, recipe in enumerate(initial_execution_order(plan) if initial else recipe_order(plan)):
         make = recipe_make(plan, commands, recipe)
         env = recipe_environment(plan, commands, recipe)
+        if initial and recipe == 'lang/llvm':
+            result.append(dict(id=f'r{number:03d}-build-tools', recipe=recipe, phase='build-tools', role='make',
+                cwd=work, env=dict(env), argv=[*make, 'EMBERBSD_DARWIN_BOOTSTRAP=yes',
+                    '-C', os.path.join(export, recipe),
+                    'BUILD_TARGET=' + ' '.join(INITIAL_DARWIN_TARGETS), 'build']))
+            break
         for phase in ('build', 'install'):
             if recipe == 'lang/gcc16' and phase == 'install':
                 result.append(dict(id='gcc16-compare', recipe=recipe, phase='compare', role='gmake',
@@ -244,6 +318,8 @@ def validate_bound_recipe_plan(plan, descriptor, commands, flags, *, inspect_inp
         'output_compiler', 'ports_export', 'recipes', 'work_root', 'output_bundle_root', 'required_roles',
         'commands', 'comparison_command', 'resources', 'metadata'} |
         ({'link_control'} if 'link_control' in plan else set()), 'unsupported bound full-plan fields')
+    if initial_darwin_plan(plan):
+        initial_llvm_directory(plan)
     _require(descriptor['host']['os'] == 'Darwin' and descriptor['host']['cpu'] in ('arm64', 'aarch64') and
              descriptor['make_binding']['kind'] == 'ports-bootstrap-make-v1' and
              descriptor.get('driver_binding', {}).get('kind') == DARWIN_LLVM_MC_LLD_SEED,
@@ -285,7 +361,7 @@ def validate_bound_recipe_plan(plan, descriptor, commands, flags, *, inspect_inp
             _require(os.path.commonpath((work, path)) not in (work, path),
                      'historical bound work overlaps a recorded input')
     recipe_distfiles(plan)
-    _require(plan['comparison_command'] == 'gcc16-compare' and
+    _require(plan['comparison_command'] == ('initial-llvm-tools' if initial_darwin_plan(plan) else 'gcc16-compare') and
              plan['commands'] == recipe_steps(plan, descriptor, commands, flags),
              'bound recipe command differs from its complete source-owned route')
     return plan

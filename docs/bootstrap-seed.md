@@ -404,6 +404,49 @@ revalidation and an installed `output_inventory` reference. Completion remains
 `COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW`. It never issues qualification,
 stage inventories, a stage comparison acceptance or an execution audit.
 
+### Initial Darwin tools
+
+The bound controller also accepts `purpose: initial-darwin-tools`.
+This purpose requires `metadata.darwin_tool_phase: initial` and its pinned profile.
+The full GCC-root source graph, inventories and dependencies remain mandatory.
+`initial_execution_order(plan)` computes the exact transitive `lang/llvm` closure.
+It filters the validated full order without removing any LLVM dependency.
+`devel/cmake` must be in that closure.
+Unrelated future recipes remain recorded and do not execute.
+
+The controller builds and installs each dependency through the existing recipe route.
+Its final LLVM build has these four fixed targets, in this order:
+`llvm-libtool-darwin`, `llvm-install-name-tool`, `llvm-readtapi`, `llvm-lipo`.
+The make word is one `BUILD_TARGET` assignment, followed by `build`.
+Other targets, omitted dependencies and changed order are refused before execution.
+`comparison_command` is exactly `initial-llvm-tools`; no GCC comparison runs.
+Add the evaluated LLVM `object_directory` below `work_root/obj`.
+Do not infer that path from a recipe name.
+
+The common initial profile selects AR/RANLIB archives and no LLVM shared dylib.
+It keeps all configured backends, options, dependencies and package file lists.
+The complete first CMake build uses its ordinary static-library archive rules.
+Missing Darwin install-name, RPATH-change or shared TBD-export operations fail explicitly.
+They do not acquire tools through `xcrun` or system discovery.
+Normal full plans still require the selected Darwin tools before execution.
+
+The result records installed dependency inventory and `initial_tool_output` separately.
+The latter binds the plan, profile, LLVM recipe and four actual native images.
+It checks the owner-declared `llvm-install-name-tool` alias against `llvm-objcopy`.
+It records uninstalled graph nodes, including the partial LLVM package.
+It does not qualify a full LLVM package, GCC comparison or ordinary provider.
+`graduate` refuses this purpose.
+Independent output review and a later scoped tool-input route remain necessary.
+
+This phase retains all other accepted-input requirements.
+In particular, it needs native `pkg_add` and `pkg_create` for dependency installation.
+Executed Ninja requires `od`; an actual Meson dependency requires `lipo`.
+Future outputs cannot satisfy those requirements before they exist.
+Source and synthetic checks do not prove a native build, installation, runtime,
+C/C++ analysis or memory checks. Those gates remain pending for the selected inputs.
+
+Origin: EmberBSD contributors. AI assistance was used for this interface and its checks.
+
 ### Parallel heavy-link control
 
 The same full-plan format accepts one optional `link_control` object.

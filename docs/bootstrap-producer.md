@@ -41,6 +41,14 @@ The source owner retains the canonical exporter and all recipes in Ports.
 | `source_tools` | Sorted, distinct stock Ports source-provider tool names |
 | `recipes` | One through 256 distinct, case-preserved `category/package` names, including `lang/gcc16` |
 
+The optional `darwin_tool_phase` field selects `full` or `initial`.
+Its absence retains the historical full route and exact MAKECONF bytes.
+The initial route requires profile SHA256
+`d54e703a263c307917f6b3d376e83bae04720aa74d1325d530faea50cfb6b765`.
+It runs the same fixed metadata queries without future Darwin output roles.
+It does not permit recipe execution through this metadata stage.
+See the [initial tools boundary](bootstrap-seed.md#initial-darwin-tools).
+
 The complete prepared export inventory must match current bytes.
 It must contain each requested recipe Makefile with the exact same case.
 Traversal components, duplicate names and names that differ only by case are refused.
@@ -130,6 +138,9 @@ accepted native `od` and LLVM `llvm-lipo`. The
 can produce the initial `od` input. Each role must be in
 `native_tools`, `required_roles` and the descriptor; otherwise the plan is
 refused before any child runs. `RECIPE_UTILITIES` exports this map.
+For initial recipe execution, this map covers the exact LLVM dependency closure.
+Future, unexecuted graph nodes add no runnable tool requirement.
+An actual Meson edge still requires accepted `lipo`; Ninja still requires `od`.
 Keep the native `gzip`, `gunzip` and `gzcat` roles: the seed recipes and
 `archivers/gzip` run them. The Ports profile maps later recipes to the Ports
 gzip, and their tools directory shadows the native commands in the utility PATH.
