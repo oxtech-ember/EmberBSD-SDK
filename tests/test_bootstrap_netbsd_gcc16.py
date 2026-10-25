@@ -16,7 +16,7 @@ from emberbsd_sdk.errors import SDKError
 
 class PkgsrcToolsFixture:
     def __init__(self, root):
-        self.root = Path(root)
+        self.root = Path(root).resolve()
         self.provider = self.root / 'provider'
         self.prefix = self.provider / 'prefix'
         (self.prefix / 'bin').mkdir(parents=True)
