@@ -38,6 +38,8 @@ _EXPORTER = 'scripts/prepare-pkgsrc.py'
 _CONFIG = 'pkgsrc/export.conf'
 _SDK_MODULES = ('bootstrap_pilot.py', 'bootstrap_pkgsrc_export.py', 'elf.py', 'errors.py',
                 'bootstrap_netbsd_gcc16.py', 'bootstrap_netbsd_recipe.py',
+                'bootstrap_netbsd_seed_admission.py', 'bootstrap_binding.py',
+                'bootstrap_seed.py',
                 'bootstrap_pkgsrc_provider.py', 'inventory.py', 'jsonio.py',
                 'native_toolset.py', 'paths.py', 'process.py', 'provenance.py')
 _FORBIDDEN_TOOLS = {'cc', 'c++', 'gcc', 'g++', 'clang', 'clang++', 'make', 'bmake', 'gmake'}

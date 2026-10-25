@@ -10,7 +10,7 @@ from test_core import TemporaryCase
 from emberbsd_sdk.bootstrap_pkgsrc_export import (
     describe_export_source, export_source_manifest, create_export_plan,
     validate_export_source, validate_export_plan, validate_export_transfer_acceptance,
-    worker_main, run_export, _tools,
+    worker_main, run_export, _tools, _SDK_MODULES,
 )
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.inventory import sha256_file, snapshot_tree, transfer_inventory_equal
@@ -36,6 +36,12 @@ def commit(root, *paths):
 
 
 class PkgsrcExportToolTests(TemporaryCase):
+    def test_frozen_sdk_source_manifest_binds_netbsd_seed_admission_call_graph(self):
+        for module in ('bootstrap_netbsd_seed_admission.py', 'bootstrap_binding.py',
+                       'bootstrap_seed.py'):
+            with self.subTest(module=module):
+                self.assertIn(module, _SDK_MODULES)
+
     def tools(self, patch_name='patch'):
         tools = {}
         for role, name in (('git', 'git'), ('patch', patch_name)):

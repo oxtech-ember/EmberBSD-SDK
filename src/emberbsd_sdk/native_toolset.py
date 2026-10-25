@@ -13,7 +13,7 @@ from types import MappingProxyType
 
 from .errors import SDKError
 from . import paths
-from .inventory import sha256_file, snapshot_tree
+from .inventory import sha256_file, snapshot_installed_tree, snapshot_tree
 from .jsonio import MAX_JSON, loads_json
 from .paths import canonical_existing, inside, open_regular, verify_stable
 
@@ -271,8 +271,14 @@ def _flags(value, allowed_roots=None, *, host=None):
     return MappingProxyType(result)
 
 
-def _payload(descriptor, required_roles, *, _current_inventory=None):
+def _payload(descriptor, required_roles, *, _current_inventory=None,
+             allowed_external_tools=(), netbsd_seed_abi=False):
     """Shared current-byte checks for native and separately scoped seed inputs."""
+    allowed_external_tools = dict(allowed_external_tools)
+    _require(set(allowed_external_tools) <= {'as', 'ld'} and
+             all(allowed_external_tools[role] == {'as': '/usr/bin/as', 'ld': '/usr/bin/ld'}[role]
+                 for role in allowed_external_tools),
+             'external native tools require the exact NetBSD configured-driver route')
     root = _absolute(descriptor['bundle_root'])
     _require(canonical_existing(root) == root and os.path.isdir(root),
              'bundle root must be a real directory with real ancestors')
@@ -298,8 +304,12 @@ def _payload(descriptor, required_roles, *, _current_inventory=None):
         _require(isinstance(role, str) and _ROLE.fullmatch(role), 'invalid tool role')
         selected = _absolute(record['path'])
         resolved = canonical_existing(selected)
-        _require(inside(selected, root) and inside(resolved, root),
-                 f'tool is outside the native bundle: {role}')
+        if role in allowed_external_tools:
+            _require(selected == allowed_external_tools[role] and resolved == selected,
+                     f'external tool is outside the exact configured NetBSD route: {role}')
+        else:
+            _require(inside(selected, root) and inside(resolved, root),
+                     f'tool is outside the native bundle: {role}')
         _require(record['provider'] in providers, f'unknown provider: {role}')
         _text(record['version'], 'tool version')
         if role in ('cc', 'cxx', 'cpp'):
@@ -337,7 +347,10 @@ def _payload(descriptor, required_roles, *, _current_inventory=None):
             _require(canonical_existing(abi_root) == abi_root and os.path.isdir(abi_root),
                      'ABI root must be a real directory')
             abi_inventory = _json(item['inventory'])
-            _require(snapshot_tree(abi_root) == abi_inventory,
+            current_abi = (snapshot_installed_tree(abi_root)
+                           if netbsd_seed_abi
+                           else snapshot_tree(abi_root))
+            _require(current_abi == abi_inventory,
                      f'native ABI {kind} inventory changed')
             roots.append(abi_root)
             abi_inventories.append((abi_root, abi_inventory))

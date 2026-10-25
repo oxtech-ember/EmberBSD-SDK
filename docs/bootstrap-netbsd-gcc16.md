@@ -55,6 +55,95 @@ The final ordinary bundle still needs source-built Python for consumers that req
 Each utility roster entry must match the accepted seed's tool path and SHA256.
 Its provider history and bundle bytes therefore receive the shared seed checks.
 
+## Retained NetBSD seed history
+
+The old compiler record remains `emberbsd-bootstrap-compiler-seed` with scope
+`bmake-bootstrap`. The NetBSD first-native descriptor uses
+`admission: netbsd11-amd64-first-native-v1`; it does not rewrite that record.
+Only this plan profile may use provider origins
+`retained-local-netbsd-build`, `retained-netbsd-base-tools`, and
+`retained-r13-pkgsrc-bootstrap-artifact`.
+
+The local-build history binds the old descriptor, its bmake acceptance,
+accepted record and full prefix inventory. It binds the retained producer plan,
+five fingerprinted producer scripts, source archive and patch hashes, build and
+C/C++ acceptance logs, and each provisioned tool member. It accepts only the
+known historical unknowns: command environment, producer attestation, publisher
+signature, recipe commit, source commit, and ordinary-provider qualification.
+GCC/G++ 12.5.0 remains historical provenance; it does not select the next
+compiler. All seven driver components are required, including `lto1` and
+`lto-wrapper`.
+
+The base-tools history binds each copied tool's original path, selected bundle
+path, and SHA256. GCC's retained `--with-as=/usr/bin/as` and
+`--with-ld=/usr/bin/ld` settings make `-B` unable to redirect its configured
+assembler and linker. The fixed `netbsd11-configured-base-as-ld-seed-v1`
+binding records those nominal query results and a hashed read-only compiler
+route report. It also pins the Ports-owned
+`netbsd11-configured-base-seed.specs.in` template, whose exact `*link_libgcc:`
+replacement retains `%D` and removes the historical GCC runtime rpaths. The
+instantiated specs must live inside the seed bundle and match that template
+byte for byte. Compiler commands apply the fixed specs to `cc`, `cxx`, and
+`cpp`; `cc` and `cxx` also receive `-static-libstdc++ -static-libgcc` for the
+finite initial link route. Read-only `-###` evidence must retain collect2 and
+current-bundle CRT/runtime archive paths, show commands selecting the configured
+base assembler and linker, and contain no historical `-rpath` entries. This route evidence
+does not qualify runtime behavior or replace later output DSO closure checks.
+It admits only `/usr/bin/as` and `/usr/bin/ld` as external
+bootstrap members, with current bytes matched to the legacy seed receipt and
+the NetBSD base history. Every other seed descriptor tool stays inside its
+owned bundle. Separately accepted pkgsrc bootstrap tools retain their own scope.
+The input-route acceptance must repeat the binding and exact command plan.
+The NetBSD seed snapshots system ABI directories with installed-tree inventory
+semantics so dangling system symlinks are recorded as links; DSO closure still
+binds each resolved library's current bytes and every dependency edge. These
+exceptions are enabled only after the fixed NetBSD binding validates. Ordinary
+NativeToolset loading stays bundle-only and uses strict ABI snapshots. The
+binding cannot provide a compiler, shell, make, or Python role. Independent
+acceptance must still bind the exact plan, nominal driver queries, actual
+configured as/ld paths, native ABI inventories, and complete DSO graph. The
+final ordinary bundle still uses source-built Binutils `gas` and `gld` from
+the common recipe.
+
+The finite base-tool roster also admits `/usr/bin/gzip`, `/usr/bin/gunzip`,
+`/usr/bin/gzcat`, `/usr/bin/xz`, and `/usr/bin/xzcat` when the evaluated
+bootstrap graph requests those roles. Their selected copies retain the same
+basename because these NetBSD utilities can select behavior from `argv[0]`.
+The list is role-specific; it does not admit an arbitrary system directory.
+
+The GCC prefix's `liblto_plugin.so` is bound separately as a retained shared
+object, using its exact old prefix inventory path and hash. The read-only
+compiler trace must show the exact `-plugin` path, and the DSO graph must
+contain a separately labeled runtime-load edge from selected `/usr/bin/ld` to
+that in-bundle plugin, based on GCC's `-###` `-plugin` argument. It is not a
+`DT_NEEDED` dependency or proof that the linker loaded it; the NetBSD finite
+pilot forces `-flto` at compile and link for both C and C++, then audits the
+resulting DSO closure. The
+retained plugin's ELF records
+`/usr/pkg/gcc12/x86_64--netbsd/lib/.` and `/usr/pkg/gcc12/lib/.` as RPATH
+directories. This fixed admission requires both directories to be absent. It pins
+the exact `readelf -d` report and rechecks those absences and the plugin bytes;
+if either path appears, the seed must be reassessed. This narrow seed metadata cannot relax ordinary
+NativeToolset or final-output runtime checks.
+
+The route evidence includes GCC driver queries and `-###` traces. It does not
+claim that a compiler child, assembler, or linker was executed during this
+input-only admission.
+
+The existing r13 pkgsrc provider receipt stays limited to `make`, `gmake`, and
+`sh`. An initial `digest` input requires a separate fresh acceptance receipt
+that names only the source-built r13 `prefix/bin/digest` artifact, its complete
+provider output inventory, exact provider plan and result, the unchanged
+three-role pkgsrc-tools acceptance, source transfer and export receipts,
+compiler-seed receipt, command logs, and accepted history unknowns. Each
+plan, result, and output-inventory reference must be the original reference
+from that three-role acceptance. Every
+completed digest command must match the plan's exact id, phase, cwd, argv,
+environment, and expected exit. A hashed semantic report binds the exact
+artifact and fixture to fixed SHA256, SHA512, and BLAKE2s golden outputs. The
+selected copy must match that artifact's SHA256 inside the admitted seed
+bundle. This history does not qualify `digest` for ordinary use.
+
 ## Admission limit
 
 The available compiler record is an `emberbsd-bootstrap-compiler-seed` with

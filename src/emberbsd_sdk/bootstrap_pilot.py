@@ -10,6 +10,7 @@ import threading
 import time
 
 from .errors import CommandError, ProcessOwnershipError, SDKError
+from .bootstrap_binding import seed_external_tools
 from .inventory import sha256_file, snapshot_tree
 from .jsonio import write_json
 from .native_toolset import (NATIVE_C_PROBE, NATIVE_CXX_PROBE, _absolute,
@@ -26,6 +27,7 @@ STATIC_RUNTIME_CXX_PROBE = (b'#include <iostream>\n'
     b'std::cout << "emberbsd-native-cxx-v1" << std::endl; return !std::cout; } return 1; }\n')
 _STATIC_RUNTIME_PURPOSE = 'native-c-and-cxx-static-runtime-pilot'
 _LINKER_TRACE_PURPOSE = 'native-c-and-cxx-linker-trace-pilot'
+NETBSD_INITIAL_PILOT_PROFILE = 'netbsd11-amd64-first-native-pilot-v1'
 
 
 def _pilot_sources(static_runtime):
@@ -39,12 +41,16 @@ def pilot_steps(descriptor, commands, flags, work_root, *, static_runtime=False,
     _require(not linker_trace or (not static_runtime and descriptor['host']['os'] == 'Darwin'),
              'linker-trace pilot needs Darwin and a separate non-static purpose')
     work = _absolute(work_root)
-    directories = sorted({os.path.dirname(words[0]) for words in commands.values()})
+    external_tools = seed_external_tools(descriptor)
+    directories = sorted({os.path.dirname(words[0]) for role, words in commands.items()
+                          if role not in external_tools})
     _require(all(os.pathsep not in path for path in directories),
              'pilot tool directory cannot be encoded in PATH')
     environment = {'PATH': os.pathsep.join(directories), 'LC_ALL': 'C', 'TZ': 'UTC',
                    'TMPDIR': work}
     steps = []
+    netbsd_lto = (descriptor['host'] == {'os': 'NetBSD', 'cpu': 'amd64'} and
+                  descriptor.get('admission') == 'netbsd11-amd64-first-native-v1')
     for language, (name, source) in _pilot_sources(static_runtime).items():
         driver = commands['cc' if language == 'c' else 'cxx']
         language_flags = flags['cflags' if language == 'c' else 'cxxflags']
@@ -52,11 +58,16 @@ def pilot_steps(descriptor, commands, flags, work_root, *, static_runtime=False,
         obj = os.path.join(work, language + '.o')
         artifact = os.path.join(work, language + '-probe')
         base = [*driver, *flags['cppflags'], *language_flags, '-v']
+        if netbsd_lto:
+            base.append('-flto')
         steps.append(dict(id=language + '-compile', phase='compile', cwd=work,
                           argv=[*base, '-c', src, '-o', obj], env=dict(environment)))
         link_flags = ['-Wl,--threads=1'] if descriptor['host']['os'] == 'Darwin' else []
         if static_runtime:
-            link_flags += ['-static-libstdc++', '-static-libgcc']
+            link_flags += [flag for flag in ('-static-libstdc++', '-static-libgcc')
+                           if flag not in base]
+        if netbsd_lto and '-flto' not in base:
+            link_flags.append('-flto')
         if linker_trace:
             link_flags += ['-Wl,-v']
         steps.append(dict(id=language + '-link', phase='link', cwd=work,
@@ -73,10 +84,23 @@ def pilot_steps(descriptor, commands, flags, work_root, *, static_runtime=False,
 def validate_pilot_plan(plan, descriptor, commands, flags):
     """Validate this finite pilot. It does not accept a recipe build or provider."""
     _envelope(plan, PILOT_FORMAT, scope=_SCOPE)
-    _require(set(plan) == {'format', 'version', 'scope', 'purpose', 'seed_descriptor',
-                          'host', 'sources', 'work_root', 'required_roles', 'resources', 'commands'},
+    base_fields = {'format', 'version', 'scope', 'purpose', 'seed_descriptor',
+                   'host', 'sources', 'work_root', 'required_roles', 'resources', 'commands'}
+    netbsd_initial = plan.get('netbsd_profile') == NETBSD_INITIAL_PILOT_PROFILE
+    expected_fields = base_fields | ({'netbsd_profile', 'driver_binding'} if netbsd_initial else set())
+    _require(set(plan) == expected_fields,
              'unsupported pilot plan fields')
-    _require(plan['purpose'] in ('native-c-and-cxx-pilot', _STATIC_RUNTIME_PURPOSE, _LINKER_TRACE_PURPOSE) and
+    if netbsd_initial:
+        _require(descriptor['host'] == {'os': 'NetBSD', 'cpu': 'amd64'} and
+                 descriptor.get('admission') == 'netbsd11-amd64-first-native-v1' and
+                 plan.get('driver_binding') == descriptor.get('driver_binding') and
+                 isinstance(descriptor.get('driver_binding'), dict) and
+                 descriptor['driver_binding'].get('kind') ==
+                 'netbsd11-configured-base-as-ld-seed-v1',
+                 'NetBSD initial pilot needs its exact configured-base driver binding')
+    _require(plan['purpose'] in (('native-c-and-cxx-pilot', _STATIC_RUNTIME_PURPOSE,
+                                  _LINKER_TRACE_PURPOSE) if not netbsd_initial else
+                                 (_STATIC_RUNTIME_PURPOSE,)) and
              plan['host'] == descriptor['host'] and plan['sources'] == descriptor['sources'],
              'pilot source or host pins mismatch')
     for source in plan['sources'].values():

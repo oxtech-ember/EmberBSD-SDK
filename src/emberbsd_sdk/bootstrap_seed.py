@@ -12,8 +12,8 @@ from types import MappingProxyType
 
 from .errors import SDKError
 from .bootstrap_binding import (DARWIN_LLVM_MC_LLD_SEED, seed_commands,
-                                seed_reported_tools)
-from .inventory import sha256_file, snapshot_tree
+                                seed_external_tools, seed_reported_tools)
+from .inventory import sha256_file, snapshot_installed_tree, snapshot_tree
 from .native_toolset import (_absolute, _bytes, _driver_queries, _envelope, _file,
                              _gcc, _json, _native_image, _payload, _require,
                              _sha, _source, _text)
@@ -21,6 +21,7 @@ from .paths import canonical_existing, inside
 
 BOOTSTRAP_SEED_API = 1
 _SCOPE = 'gcc16-bootstrap'
+NETBSD_INITIAL_PILOT_PROFILE = 'netbsd11-amd64-first-native-pilot-v1'
 
 
 def _frozen(value):
@@ -166,7 +167,23 @@ def _history_uncached(histories, providers, *, descriptor=None, inspect_inputs=T
 
     for name, provider in providers.items():
         value = histories[name]
-        _require(value['kind'] == provider['origin'], 'seed provider history kind mismatch')
+        origin = provider['origin']
+        if origin in ('retained-local-netbsd-build', 'retained-netbsd-base-tools'):
+            _require(value.get('kind') == origin,
+                     'seed provider history kind mismatch')
+            from .bootstrap_netbsd_seed_admission import (
+                validate_retained_base_history, validate_retained_local_history)
+            validator = (validate_retained_local_history if origin == 'retained-local-netbsd-build'
+                         else validate_retained_base_history)
+            unknowns[name] = validator(value, name, descriptor, file,
+                                       inspect_inputs=inspect_inputs)
+            continue
+        if origin == 'retained-r13-pkgsrc-bootstrap-artifact':
+            from .bootstrap_netbsd_seed_admission import validate_retained_r13_digest_history
+            unknowns[name] = validate_retained_r13_digest_history(
+                value, name, descriptor, file, inspect_inputs=inspect_inputs)
+            continue
+        _require(value['kind'] == origin, 'seed provider history kind mismatch')
         if value['kind'] == 'installed-package-derived':
             from .bootstrap_relocation import validate_derived_installed_history
             unknowns[name] = validate_derived_installed_history(value, name, descriptor, file,
@@ -234,8 +251,9 @@ def _history_uncached(histories, providers, *, descriptor=None, inspect_inputs=T
     return unknowns
 
 
-def _dynamic_closure(value, descriptor):
+def _dynamic_closure(value, descriptor, *, allowed_external_tools=()):
     """Check all recorded edges. An independent audit must establish completeness."""
+    allowed_external_tools = set(dict(allowed_external_tools).values())
     _require(isinstance(value, dict) and value, 'missing dynamic dependency closure')
     if any(isinstance(row, dict) and 'cache_image' in row for row in value.values()):
         from .darwin_runtime import validate_darwin_runtime_closure
@@ -243,15 +261,22 @@ def _dynamic_closure(value, descriptor):
         return
     executable_paths = {canonical_existing(row['path'])
                         for row in descriptor['tools'].values() if row['kind'] == 'native'}
+    binding = descriptor.get('driver_binding')
+    netbsd_binding = (isinstance(binding, dict) and
+                      binding.get('kind') == 'netbsd11-configured-base-as-ld-seed-v1')
+    linker_path = descriptor.get('tools', {}).get('ld', {}).get('path') if netbsd_binding else None
     roots = [descriptor['bundle_root']] + [item['root']
                                           for item in descriptor['host_abi']['libraries']]
     _require(executable_paths <= set(value), 'dynamic closure omits native tools')
     for path, row in value.items():
         _absolute(path)
         _require(canonical_existing(path) == path and
-                 any(inside(path, root) for root in roots),
+                 (path in allowed_external_tools or any(inside(path, root) for root in roots)),
                  'dynamic dependency is outside declared native inputs')
-        _require(isinstance(row, dict) and set(row) == {'sha256', 'dependencies'},
+        expected_fields = ({'sha256', 'dependencies', 'runtime_loads'}
+                           if netbsd_binding and path == linker_path else
+                           {'sha256', 'dependencies'})
+        _require(isinstance(row, dict) and set(row) == expected_fields,
                  'invalid dynamic dependency record')
         _require(sha256_file(path) == _sha(row['sha256']), 'dynamic dependency changed')
         _require(isinstance(row['dependencies'], list) and
@@ -260,10 +285,25 @@ def _dynamic_closure(value, descriptor):
                  'dynamic closure contains an undeclared dependency')
         if path not in executable_paths:
             _native_image(path, descriptor['host'], shared_library=True)
+    if netbsd_binding:
+        plugin = binding.get('lto_plugin')
+        _require(isinstance(plugin, dict) and set(plugin) == {'path', 'sha256'},
+                 'NetBSD dynamic closure needs the pinned LTO plugin')
+        plugin_path = _absolute(plugin['path'])
+        runtime_loads = value.get(linker_path, {}).get('runtime_loads') if linker_path in value else None
+        _require(isinstance(linker_path, str) and linker_path in value and
+                 isinstance(runtime_loads, list) and runtime_loads == [dict(
+                     path=plugin_path, basis='gcc-driver--###-plugin-argument')] and
+                 plugin_path in value and
+                 value[plugin_path]['sha256'] == _sha(plugin['sha256']) and
+                 inside(plugin_path, _absolute(descriptor['bundle_root'])),
+                 'NetBSD dynamic closure lacks the configured runtime LTO plugin edge')
 
 
 def _environment(tools, commands, flags, descriptor=None):
-    directories = sorted({os.path.dirname(path) for path in tools.values()})
+    external_tools = seed_external_tools(descriptor) if descriptor is not None else {}
+    directories = sorted({os.path.dirname(path) for role, path in tools.items()
+                          if role not in external_tools})
     _require(all(os.pathsep not in path for path in directories),
              'bootstrap tool directory cannot be encoded in PATH')
     result = {'PATH': os.pathsep.join(directories)}
@@ -535,6 +575,22 @@ def load_bootstrap_seed(path, *, descriptor_sha256, accepted_seed_receipt,
         raise SDKError(f'invalid bootstrap seed: {exc}') from exc
 
 
+def _validate_driver_prefix(descriptor, tools, external_tools):
+    root = _absolute(descriptor['bundle_root'])
+    prefix = _absolute(descriptor['driver_prefix'])
+    _require(inside(prefix, root) and canonical_existing(prefix) == prefix and os.path.isdir(prefix),
+             'GCC driver prefix must be a real in-bundle directory')
+    # Only a previously validated configured assembler/linker binding can
+    # retain those two exact external paths. Other GCC components use -B.
+    for component, role in descriptor['driver_components'].items():
+        if component in ('as', 'ld') and component in external_tools:
+            _require(role == component and tools[role] == external_tools[component],
+                     'configured GCC driver differs from its explicit prefix exception')
+        else:
+            _require(tools[role] != prefix and os.path.commonpath((tools[role], prefix)) == prefix,
+                     'GCC driver components must use the explicit prefix')
+
+
 def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
     descriptor_sha256 = _sha(descriptor_sha256)
     descriptor = _json(dict(path=os.fspath(path), sha256=descriptor_sha256))
@@ -546,6 +602,11 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
              acceptance.get('bootstrap_plan') == plan_ref and
              acceptance.get('accepted_input_scope') == 'bootstrap-seed',
              'seed was not accepted for this exact bootstrap plan')
+    plan_header = _json(plan_ref)
+    netbsd_recipe = plan_header.get('netbsd_profile') == \
+        'netbsd11-amd64-pkgsrc-native-gcc16-v1'
+    netbsd_initial_pilot = (plan_header.get('format') == 'emberbsd-native-gcc16-pilot-plan' and
+                            plan_header.get('netbsd_profile') == NETBSD_INITIAL_PILOT_PROFILE)
     _require(descriptor['host'] == {'os': platform.system(), 'cpu': platform.machine()},
              'bootstrap seed does not match the actual native host')
     _gcc(descriptor['compiler'], descriptor['host'])
@@ -554,8 +615,17 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
         _source(source)
     _require(isinstance(descriptor['providers'], dict) and descriptor['providers'],
              'seed member provenance is required')
+    retained_origins = {'retained-local-netbsd-build', 'retained-netbsd-base-tools',
+                        'retained-r13-pkgsrc-bootstrap-artifact'}
+    if any(row.get('origin') in retained_origins for row in descriptor['providers'].values()):
+        _require((netbsd_recipe or netbsd_initial_pilot) and
+                 descriptor.get('admission') == 'netbsd11-amd64-first-native-v1' and
+                 descriptor['host'] == {'os': 'NetBSD', 'cpu': 'amd64'},
+                 'retained seed provenance is limited to the NetBSD first-native plan')
     for row in descriptor['providers'].values():
-        _require(row['origin'] in ('source-build', 'binary-release', 'installed-package', 'installed-package-derived'),
+        _require(row['origin'] in ('source-build', 'binary-release', 'installed-package',
+                 'installed-package-derived') or
+                 ((netbsd_recipe or netbsd_initial_pilot) and row['origin'] in retained_origins),
                  'invalid seed provider origin')
         if row['origin'] == 'source-build':
             _require(row['source'] in descriptor['sources'], 'unknown seed provider source')
@@ -564,7 +634,6 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
     unknowns = _history(descriptor['history'], descriptor['providers'], descriptor=descriptor)
     _require(acceptance.get('accepted_history_unknowns') == unknowns,
              'seed acceptance must explicitly accept its historical unknowns')
-    plan_header = _json(plan_ref)
     _require(plan_header['seed_descriptor'] == dict(path=os.fspath(path), sha256=descriptor_sha256),
              'bootstrap plan selects another seed')
     _require(isinstance(required_roles, (tuple, list, set, frozenset)) and required_roles,
@@ -573,18 +642,14 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
                                             'emberbsd-bootstrap-make-probe-plan',
                                             'emberbsd-native-gcc16-producer-plan')
     roles = set(required_roles) | set(plan_header['required_roles']) | (set() if is_pilot else {'sh'})
-    netbsd_recipe = plan_header.get('netbsd_profile') == \
-        'netbsd11-amd64-pkgsrc-native-gcc16-v1'
     seed_roles = roles - ({'make', 'gmake', 'sh'} if netbsd_recipe else set())
-    root, inventory, tools, records, abi_inventories, flags = _payload(descriptor, seed_roles)
-    prefix = _absolute(descriptor['driver_prefix'])
-    _require(inside(prefix, root) and canonical_existing(prefix) == prefix and os.path.isdir(prefix),
-             'GCC driver prefix must be a real in-bundle directory')
-    # The selected spelling must use -B. Its symlink target may be elsewhere in
-    # the bundle. _payload already checks both spellings against that bundle.
-    _require(all(tools[role] != prefix and os.path.commonpath((tools[role], prefix)) == prefix
-                 for role in descriptor['driver_components'].values()),
-             'GCC driver components must use the explicit prefix')
+    external_tools = seed_external_tools(descriptor)
+    _require(not external_tools or netbsd_recipe or netbsd_initial_pilot,
+             'configured NetBSD base drivers are limited to the first-native recipe or pilot')
+    root, inventory, tools, records, abi_inventories, flags = _payload(
+        descriptor, seed_roles, allowed_external_tools=external_tools,
+        netbsd_seed_abi=bool(external_tools))
+    _validate_driver_prefix(descriptor, tools, external_tools)
     commands = _seed_commands(descriptor)
     if netbsd_recipe:
         from .bootstrap_netbsd_gcc16 import load_pkgsrc_bootstrap_tools
@@ -594,7 +659,8 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
             acceptance_sha256=pkgsrc_ref['sha256'])
         commands.update({role: selected_pkgsrc.command(role) for role in ('make', 'gmake', 'sh')})
     plan = _plan(plan_ref, descriptor, commands, flags)
-    _dynamic_closure(descriptor['dynamic_dependencies'], descriptor)
+    _dynamic_closure(descriptor['dynamic_dependencies'], descriptor,
+                     allowed_external_tools=external_tools)
     for key in ('host', 'compiler', 'sources', 'providers', 'host_abi', 'abi_flags',
                 'history', 'dynamic_dependencies', 'driver_prefix'):
         _require(acceptance.get(key) == descriptor[key], f'seed acceptance {key} mismatch')
@@ -614,6 +680,7 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
                  audit.get('dynamic_dependencies') == descriptor['dynamic_dependencies'] and
                  audit.get('expected_commands') == plan['commands'] and
                  audit.get('execution_observed') is False and
+                 (not external_tools or audit.get('driver_binding') == descriptor['driver_binding']) and
                  all(audit.get(key) == [] for key in ('unresolved_tool_routes',
                                                      'unresolved_abi_inputs', 'unresolved_dsos')),
                  'bootstrap input routes were not independently accepted')
@@ -621,7 +688,9 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
         _execution_audit(acceptance, descriptor, descriptor_sha256, plan_ref, records)
     _require(snapshot_tree(root) == inventory, 'bootstrap seed changed during validation')
     for abi_root, rows in abi_inventories:
-        _require(snapshot_tree(abi_root) == rows, 'bootstrap ABI changed during validation')
+        current_abi = (snapshot_installed_tree(abi_root) if external_tools
+                       else snapshot_tree(abi_root))
+        _require(current_abi == rows, 'bootstrap ABI changed during validation')
     selection = dict(format='emberbsd-bootstrap-seed-selection', version=1, api=BOOTSTRAP_SEED_API,
                      scope=_SCOPE, descriptor_sha256=descriptor_sha256,
                      accepted_seed_receipt=acceptance_ref, bootstrap_plan=plan_ref,

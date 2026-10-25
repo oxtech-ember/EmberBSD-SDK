@@ -103,6 +103,44 @@ class PilotTests(unittest.TestCase):
                     self.assertFalse(self.work.exists())
                 self.audit = original
 
+    def test_netbsd_initial_pilot_requires_exact_binding_and_static_runtime_route(self):
+        descriptor = copy.deepcopy(self.seed.descriptor)
+        descriptor['host'] = {'os': 'NetBSD', 'cpu': 'amd64'}
+        descriptor['admission'] = 'netbsd11-amd64-first-native-v1'
+        binding = dict(kind='netbsd11-configured-base-as-ld-seed-v1', fixture=True)
+        descriptor['driver_binding'] = binding
+        plan = copy.deepcopy(self.plan)
+        plan['purpose'] = 'native-c-and-cxx-static-runtime-pilot'
+        plan['host'] = descriptor['host']
+        plan['netbsd_profile'] = bootstrap_pilot.NETBSD_INITIAL_PILOT_PROFILE
+        plan['driver_binding'] = binding
+        commands = dict(self.seed.commands)
+        commands['cc'] = (*commands['cc'], '-specs=/seed/netbsd.specs',
+                           '-static-libstdc++', '-static-libgcc')
+        commands['cxx'] = (*commands['cxx'], '-specs=/seed/netbsd.specs',
+                            '-static-libstdc++', '-static-libgcc')
+        with patch('emberbsd_sdk.bootstrap_pilot.seed_external_tools',
+                   return_value={'as': '/usr/bin/as', 'ld': '/usr/bin/ld'}):
+            plan['commands'] = bootstrap_pilot.pilot_steps(
+                descriptor, commands, descriptor['abi_flags'], str(self.work),
+                static_runtime=True)
+            selected = bootstrap_pilot.validate_pilot_plan(
+                plan, descriptor, commands, descriptor['abi_flags'])
+        self.assertEqual(selected['netbsd_profile'],
+                         bootstrap_pilot.NETBSD_INITIAL_PILOT_PROFILE)
+        for step in selected['commands']:
+            if step['phase'] in ('compile', 'link'):
+                self.assertEqual(step['argv'].count('-flto'), 1)
+            if step['phase'] == 'link':
+                self.assertEqual(step['argv'].count('-static-libstdc++'), 1)
+                self.assertEqual(step['argv'].count('-static-libgcc'), 1)
+        self.assertIn('-static-libstdc++', selected['commands'][1]['argv'])
+        self.assertIn('-static-libgcc', selected['commands'][4]['argv'])
+        plan['driver_binding'] = dict(binding, kind='unrecognized-route')
+        with self.assertRaisesRegex(SDKError, 'exact configured-base driver binding'):
+            bootstrap_pilot.validate_pilot_plan(
+                plan, descriptor, commands, descriptor['abi_flags'])
+
     def test_altered_command_or_resource_refuses_before_child(self):
         for kind in ('command', 'parallel', 'deadline', 'ambient'):
             with self.subTest(kind=kind):
