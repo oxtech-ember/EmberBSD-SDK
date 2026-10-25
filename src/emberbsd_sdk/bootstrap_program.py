@@ -75,6 +75,9 @@ def _native_program_contract(manifest, name):
 
 
 def program_manifest(plan):
+    if plan.get('stage') == 'bsdinstall-bootstrap':
+        from .bootstrap_bsdinstall import bsdinstall_manifest
+        return bsdinstall_manifest(plan)
     if plan.get('stage') in GNU_PROGRAM_STAGES:
         from .bootstrap_gnu_program import gnu_manifest
         return gnu_manifest(plan)
@@ -107,6 +110,9 @@ def program_sources(plan):
 
 
 def program_outputs(plan):
+    if plan.get('stage') == 'bsdinstall-bootstrap':
+        from .bootstrap_bsdinstall import bsdinstall_outputs
+        return bsdinstall_outputs(plan)
     if plan.get('stage') in GNU_PROGRAM_STAGES:
         from .bootstrap_gnu_program import gnu_outputs
         return gnu_outputs(plan)
@@ -116,6 +122,9 @@ def program_outputs(plan):
 
 
 def program_steps(plan, descriptor, commands, flags):
+    if plan.get('stage') == 'bsdinstall-bootstrap':
+        from .bootstrap_bsdinstall import bsdinstall_steps
+        return bsdinstall_steps(plan, descriptor, commands, flags)
     if plan.get('stage') in GNU_PROGRAM_STAGES:
         from .bootstrap_gnu_program import gnu_steps
         return gnu_steps(plan, descriptor, commands, flags)
@@ -155,6 +164,9 @@ def program_steps(plan, descriptor, commands, flags):
 
 def verify_program_step(step, work, plan):
     """Check separate actual streams only after the owned command drains."""
+    if plan.get('stage') == 'bsdinstall-bootstrap':
+        from .bootstrap_bsdinstall import verify_bsdinstall_step
+        return verify_bsdinstall_step(step, work, plan)
     if plan.get('stage') in GNU_PROGRAM_STAGES:
         from .bootstrap_gnu_program import verify_gnu_step
         return verify_gnu_step(step, work, plan)
@@ -187,6 +199,9 @@ def verify_program_step(step, work, plan):
 
 
 def validate_program_plan(plan, descriptor, commands, flags):
+    if plan.get('stage') == 'bsdinstall-bootstrap':
+        from .bootstrap_bsdinstall import validate_bsdinstall_plan
+        return validate_bsdinstall_plan(plan, descriptor, commands, flags)
     if plan.get('stage') in GNU_PROGRAM_STAGES:
         from .bootstrap_gnu_program import validate_gnu_plan
         return validate_gnu_plan(plan, descriptor, commands, flags)

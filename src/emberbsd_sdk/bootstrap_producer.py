@@ -337,7 +337,7 @@ def validate_producer_plan(plan, descriptor, commands, flags):
         from .bootstrap_relocation import validate_relocation_plan
         return validate_relocation_plan(plan, descriptor, commands, flags)
     if plan.get('stage') in ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
-                            'diffutils-bootstrap', 'findutils-bootstrap'):
+                            'diffutils-bootstrap', 'findutils-bootstrap', 'bsdinstall-bootstrap'):
         from .bootstrap_program import validate_program_plan
         return validate_program_plan(plan, descriptor, commands, flags)
     _envelope(plan, PRODUCER_FORMAT, scope='gcc16-bootstrap')
