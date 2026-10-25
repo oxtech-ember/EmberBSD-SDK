@@ -23,7 +23,7 @@ The SDK constructs commands from that data. It does not copy a recipe.
 The plan format is `emberbsd-native-gcc16-producer-plan`, version 1,
 scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`,
 `hostname-bootstrap`, `basename-bootstrap`, `dirname-bootstrap`, `cat-bootstrap`,
-`head-bootstrap`, `uniq-bootstrap`, `wc-bootstrap`, `tr-bootstrap`, and `printf-bootstrap`.
+`head-bootstrap`, `uniq-bootstrap`, `wc-bootstrap`, `tr-bootstrap`, `printf-bootstrap`, and `pwd-bootstrap`.
 Each stage selects one exact source-owner manifest.
 It has exactly `format`, `version`, `scope`, `stage`, `seed_descriptor`, `host`,
 `sources`, `work_root`, `required_roles`, `resources`, `program`, and `commands`.
@@ -290,3 +290,24 @@ SDK validates their structure and pinned bytes; it does not copy their expected 
 No fixture file or shell printf builtin is needed.
 The final runtime observation repeats the first successful argument list.
 There are 27 commands. Native compilation, C analysis and memory acceptance remain separate.
+
+## Fixed pwd profile
+
+The manifest is `tools/pwd/bootstrap.json`. Its SHA256 is
+`598906e66805438e5386f6f12478d69147e36d020849dec655d7a1826026a6bd`.
+The seven source files are the manifest, README, host makefile,
+`tools/Makefile.host`, `tools/compat/bootstrap_cdefs.h`, and
+`bin/pwd/Makefile` with `bin/pwd/pwd.c`.
+
+The profile compiles one unchanged OS C file against the accepted native libc.
+Its ten OS-owned cases cover physical and logical modes, option order and errors.
+Success cases use `stdout_work_root: true` instead of a literal `stdout` field.
+Only this profile accepts that exact boolean, and only for exit zero.
+The verifier compares actual stdout with the canonical controller work root plus one newline.
+It does not use a child-reported expected path or the caller's `PWD` environment.
+Wrong nonempty output fails. The fixed command environment gains no override.
+Error cases retain literal stdout and nonempty stderr checks.
+
+There are 13 commands, including the final default-invocation runtime observation.
+The cases do not cover logical symlink aliases or invalid `PWD` values.
+Native compilation, C analysis and memory acceptance remain separate.

@@ -61,7 +61,7 @@ class NativeProgramTests(unittest.TestCase):
         case.plan['stage'] = name + '-bootstrap'
         relative, _, sources, provenance = program._profile(case.plan)
         case.manifest.update(name=name, canonical_host_recipe='tools/' + name + '/Makefile',
-            source_makefile=(('bin/' if name in ('hostname', 'cat') else 'usr.bin/') + name) + '/Makefile',
+            source_makefile=(('bin/' if name in ('hostname', 'cat', 'pwd') else 'usr.bin/') + name) + '/Makefile',
             sources=list(sources),
             headers=(['usr.bin/' + name + '/extern.h'] if name in ('cmp', 'tr') else []) + [program._BOOTSTRAP_CDEFS],
             include_dirs=['usr.bin/' + name] if name in ('cmp', 'tr') else [],
@@ -88,6 +88,11 @@ class NativeProgramTests(unittest.TestCase):
             case.manifest['runtime_cases'] = [dict(name='case' + str(index), invocation=name,
                 args=['a', 'b'], stdin='synthetic input\n', exit=0, stdout='synthetic result\n', stderr='')
                 for index in range(18)]
+        elif name == 'pwd':
+            case.manifest['runtime_cases'] = [dict(name='case' + str(index), invocation=name,
+                args=[], stdin='', exit=0, stdout_work_root=True, stderr='') for index in range(8)]
+            case.manifest['runtime_cases'] += [dict(name='case' + str(index), invocation=name,
+                args=['-z'], stdin='', exit=1, stdout='', stderr_nonempty=True) for index in range(8, 10)]
         elif name == 'printf':
             case.manifest['runtime_cases'] = [dict(name='case' + str(index), invocation=name,
                 args=['%s', 'synthetic result'], stdin='', exit=0, stdout='synthetic result', stderr='')
