@@ -11,6 +11,9 @@ from .inventory import sha256_file
 from .native_toolset import _json, _require
 from .paths import entry
 
+EFUN_PROGRAMS = ('cut', 'sort')
+EFUN_PROGRAM_STAGES = tuple(name + '-bootstrap' for name in EFUN_PROGRAMS)
+
 MANIFEST_RELATIVE = 'tools/compat/bootstrap-efun.json'
 MANIFEST_SHA256 = '3aa76b9c12fbb0581205ac1477b5d1f11b79cf980acffbc74e2c9972410ac7d1'
 SOURCES = ('lib/libutil/efun.c', 'lib/libc/stdlib/reallocarr.c',

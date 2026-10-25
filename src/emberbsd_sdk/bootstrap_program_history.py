@@ -7,6 +7,7 @@ import hashlib
 import os
 from pathlib import Path
 
+from .bootstrap_compat import EFUN_PROGRAM_STAGES
 from .bootstrap_program_data import decode_data, data_size
 from .errors import SDKError
 from .jsonio import json_bytes
@@ -121,7 +122,7 @@ def _commands(plan, result, manifest):
         link = next(row for row in actual if row['phase'] == 'link')
         _require(link.get('invocation_aliases') == aliases,
                  'historical program invocation aliases differ')
-    if plan['stage'] == 'cut-bootstrap':
+    if plan['stage'] in EFUN_PROGRAM_STAGES:
         from .bootstrap_compat import compat_manifest, configuration_bytes
         contract = compat_manifest(plan, manifest)
         final = next(row for row in actual if row['id'] == 'compat-' + contract['probes'][-1]['name'])

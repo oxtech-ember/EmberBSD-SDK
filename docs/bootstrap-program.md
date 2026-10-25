@@ -425,3 +425,31 @@ Stdin and nonempty-error predicates keep their existing contracts.
 Run `test_bootstrap_program_data` and `test_bootstrap_program_tail` with `EMBERBSD_TEST_OS_SOURCE`.
 Unit checks use synthetic compiler children. Native GCC16 execution, independent output review,
 C analysis and memory validation remain separate gates.
+
+## Fixed sort profile
+
+The OS owns `tools/sort/bootstrap.json`, its 36 semantic cases and all fixture bytes.
+Its SHA256 pin is `37a209d75e79b1eb22a2610e3dc22e13f2bcdb6fa12d81dd2ea73092d3fab22d`.
+The profile retains nine complete sort C files and their three local headers.
+It reuses the same four efun sources, five probes and generated configuration as cut.
+The source proof has 35 members. No previous compatibility archive is required.
+
+A shared finite efun profile set selects probe preparation, execution, outputs and historical checks.
+The source schema still fixes each program's source roster, headers, compiler flags and manifest hash.
+Changed probe bytes, configuration facts or source semantics refuse the route.
+The historical check derives configuration bytes from the original actual observations.
+Current host facts and provisioned headers cannot replace those observations.
+
+The 59 commands include the ABI control, five probes, thirteen program-source compiles,
+one link, 36 semantic cases and one runtime observation.
+The owner cases cover numeric and field ordering, stable keys, character filters, merging,
+order checks, error statuses, NUL data and partial final lines.
+A 131073-record fixture crosses the ordinary record-count limit and exercises temporary merges.
+A separate long-key fixture exercises line-buffer growth beyond 64 KiB.
+The existing bounded decoder creates these fixtures and verifies their exact output bytes.
+`LC_ALL=C` and the owned work directory as `TMPDIR` remain fixed in the common runner.
+
+The initial profile does not qualify `-o`, replacement permissions, non-C locales or long-line `-c` behavior.
+The C implementation retains these operations. Actual compilation, C analysis and memory validation are separate gates.
+Run `test_bootstrap_program_sort`, `test_bootstrap_program_cut` and `test_bootstrap_program_history`
+with `EMBERBSD_TEST_OS_SOURCE` for source and synthetic-runner checks.

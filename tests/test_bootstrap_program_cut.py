@@ -33,18 +33,19 @@ class CutProbeTests(unittest.TestCase):
     def setUp(self):
         from emberbsd_sdk import bootstrap_compat as compat
         self.compat = compat
+        name = getattr(self, 'program_name', 'cut')
         self.case = case = fixtures.ProgramTests(methodName='runTest')
         case.setUp()
         self.addCleanup(case.doCleanups)
         # A separate synthetic source root prevents inherited grep members.
-        case.source = case.base / 'cut-source'
+        case.source = case.base / (name + '-source')
         case.source.mkdir()
         case.inputs['root'] = str(case.source)
-        case.plan.update(stage='cut-bootstrap')
+        case.plan.update(stage=name + '-bootstrap')
         relative, _, sources, provenance = program._profile(case.plan)
         self.contract = dict(format='emberbsd-native-bootstrap-compat', version=1,
             name='efun', origin='Synthetic source contract', source_makefile='tools/compat/Makefile',
-            source_fragment='tools/compat/efun.mk', sources=list(sources[1:]),
+            source_fragment='tools/compat/efun.mk', sources=list(compat.SOURCES),
             headers=['tools/compat/compat_efun.h', 'tools/compat/namespace.h',
                      'common/lib/libc/stdlib/_strtoi.h'], control='tools/compat/probes/efun-control.c',
             probes=[dict(name=name, source='tools/compat/probes/' + name + '.c', kind=kind, macro=macro)
@@ -59,16 +60,18 @@ class CutProbeTests(unittest.TestCase):
         digest = hashlib.sha256(cp.read_bytes()).hexdigest()
         mock = patch.object(compat, 'MANIFEST_SHA256', digest)
         mock.start(); self.addCleanup(mock.stop)
-        case.manifest = dict(format='emberbsd-native-bootstrap-program', version=1, name='cut',
-            origin='Synthetic OS contract', canonical_host_recipe='tools/cut/Makefile',
-            source_makefile='usr.bin/cut/Makefile', compiler=dict(family='gcc',major=16,abi='native'),
-            sources=list(sources), headers=['usr.bin/cut/x_cut.c', 'tools/compat/bootstrap_cdefs.h',
+        case.manifest = dict(format='emberbsd-native-bootstrap-program', version=1, name=name,
+            origin='Synthetic OS contract', canonical_host_recipe='tools/' + name + '/Makefile',
+            source_makefile='usr.bin/' + name + '/Makefile', compiler=dict(family='gcc',major=16,abi='native'),
+            sources=list(sources), headers=[*(['usr.bin/cut/x_cut.c'] if name == 'cut' else
+                        ['usr.bin/sort/' + header for header in ('sort.h', 'fsort.h', 'pathnames.h')]),
+                     'tools/compat/bootstrap_cdefs.h',
                                            *self.contract['headers']],
-            include_dirs=['usr.bin/cut', 'tools/compat', 'common/lib/libc/stdlib'],
+            include_dirs=['usr.bin/' + name, 'tools/compat', 'common/lib/libc/stdlib'],
             cppflags=['-DHAVE_NBTOOL_CONFIG_H=1', '-include', 'nbtool_config.h'],
             cflags=[], link_flags=[], libraries=[], compat=dict(path='tools/compat/bootstrap-efun.json', sha256=digest),
-            invocations=['cut'], files={'input.txt':'a:b\n'}, runtime_cases=[dict(name='case'+str(i),
-                invocation='cut',args=['-b','1','input.txt'],stdin='',exit=0,stdout='a\n',stderr='') for i in range(22)])
+            invocations=[name], files={'input.txt':'a:b\n'}, runtime_cases=[dict(name='case'+str(i),
+                invocation=name,args=['-b','1','input.txt'],stdin='',exit=0,stdout='a\n',stderr='') for i in range(22 if name == 'cut' else 36)])
         for member in [*sources, *case.manifest['headers'], *provenance]:
             if member == 'tools/compat/bootstrap-efun.json':
                 continue
@@ -78,7 +81,7 @@ class CutProbeTests(unittest.TestCase):
         mp.write_text(json.dumps(case.manifest))
         digest = hashlib.sha256(mp.read_bytes()).hexdigest()
         case.plan['program']['manifest'] = dict(path=str(mp), sha256=digest)
-        mock = patch.object(program, 'CUT_MANIFEST_SHA256',digest)
+        mock = patch.object(program, name.upper() + '_MANIFEST_SHA256',digest)
         mock.start(); self.addCleanup(mock.stop)
         case.refresh_source()
         case.plan['commands'] = program.program_steps(case.plan,case.descriptor,case.commands,case.flags)
