@@ -196,9 +196,10 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     make_probe = profile == 'make'
     metadata = profile == 'producer' and plan.get('stage') == 'metadata'
     gnu_program = profile == 'producer' and plan.get('stage') in GNU_PROGRAM_STAGES
+    byacc = profile == 'producer' and plan.get('stage') == 'byacc-bootstrap'
     bsdinstall = profile == 'producer' and plan.get('stage') == 'bsdinstall-bootstrap'
     pkg_install = profile == 'producer' and plan.get('stage') == 'pkg-install-bootstrap'
-    program = profile == 'producer' and (gnu_program or bsdinstall or pkg_install or plan.get('stage') in
+    program = profile == 'producer' and (gnu_program or bsdinstall or pkg_install or byacc or plan.get('stage') in
                                         PROGRAM_STAGES)
     relocation = profile == 'producer' and plan.get('stage') == 'utility-relocation'
     recipe = profile == 'bootstrap'
@@ -221,7 +222,7 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         roots += [plan['metadata']['export']['root'], plan['metadata']['utility_bin']]
     if program:
         roots += [plan['program']['source']['root']]
-        if gnu_program or bsdinstall or pkg_install:
+        if gnu_program or bsdinstall or pkg_install or byacc:
             roots += [plan['program']['owner']['root']]
         if bsdinstall or pkg_install:
             roots += [plan['program']['compat']['root']]
@@ -242,7 +243,7 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         shared.update(_references(_json(plan['metadata']['export']['source_proof'])))
     if program:
         shared.update(_references(_json(plan['program']['source']['source_proof'])))
-        if gnu_program or bsdinstall or pkg_install:
+        if gnu_program or bsdinstall or pkg_install or byacc:
             shared.update(_references(_json(plan['program']['owner']['source_proof'])))
         if pkg_install:
             shared.update(_references(_json(plan['program']['export']['source_proof'])))

@@ -188,6 +188,9 @@ def _native_program_contract(manifest, name):
 
 
 def program_manifest(plan):
+    if plan.get('stage') == 'byacc-bootstrap':
+        from .bootstrap_byacc import byacc_manifest
+        return byacc_manifest(plan)
     if plan.get('stage') == 'pkg-install-bootstrap':
         from .bootstrap_pkg_install import pkg_install_manifest
         return pkg_install_manifest(plan)
@@ -225,6 +228,9 @@ def program_manifest(plan):
 
 
 def program_sources(plan):
+    if plan.get('stage') == 'byacc-bootstrap':
+        from .bootstrap_byacc import byacc_sources
+        return byacc_sources(plan)
     if plan.get('stage') == 'pkg-install-bootstrap':
         from .bootstrap_pkg_install import pkg_install_sources
         return pkg_install_sources(plan)
@@ -237,6 +243,9 @@ def program_sources(plan):
 
 
 def program_outputs(plan):
+    if plan.get('stage') == 'byacc-bootstrap':
+        from .bootstrap_byacc import byacc_outputs
+        return byacc_outputs(plan)
     if plan.get('stage') == 'pkg-install-bootstrap':
         from .bootstrap_pkg_install import pkg_install_outputs
         return pkg_install_outputs(plan)
@@ -256,6 +265,9 @@ def program_outputs(plan):
 
 
 def program_steps(plan, descriptor, commands, flags):
+    if plan.get('stage') == 'byacc-bootstrap':
+        from .bootstrap_byacc import byacc_steps
+        return byacc_steps(plan, descriptor, commands, flags)
     if plan.get('stage') == 'pkg-install-bootstrap':
         from .bootstrap_pkg_install import pkg_install_steps
         return pkg_install_steps(plan, descriptor, commands, flags)
@@ -305,6 +317,9 @@ def program_steps(plan, descriptor, commands, flags):
 
 
 def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
+    if plan.get('stage') == 'byacc-bootstrap':
+        from .bootstrap_byacc import verify_byacc_step
+        return verify_byacc_step(step, work, plan, actual_exit, completed)
     if plan.get('stage') in EFUN_PROGRAM_STAGES:
         from .bootstrap_compat import verify_probe_step
         value = verify_probe_step(step, work, plan, program_manifest(plan), actual_exit, completed)
@@ -355,6 +370,9 @@ def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
 
 
 def validate_program_plan(plan, descriptor, commands, flags):
+    if plan.get('stage') == 'byacc-bootstrap':
+        from .bootstrap_byacc import validate_byacc_plan
+        return validate_byacc_plan(plan, descriptor, commands, flags)
     if plan.get('stage') == 'pkg-install-bootstrap':
         from .bootstrap_pkg_install import validate_pkg_install_plan
         return validate_pkg_install_plan(plan, descriptor, commands, flags)

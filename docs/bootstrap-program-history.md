@@ -122,3 +122,21 @@ separate gates. Record pending checks explicitly in the acceptance limitations.
 
 The verifier runs no compiler, shell, Git command or runtime executable.
 The tests use synthetic children. They do not establish native execution.
+
+## Ports Byacc history
+
+The fixed `byacc-bootstrap` stage also uses this history envelope.
+Its provider binds the original Ports pin, `pkgsrc/devel/byacc/bootstrap.json`,
+and tool version `byacc-20260126`. Only the `yacc` invocation is provisionable.
+`source_archives` contains the original archive URL and file reference.
+`patches` contains both original patch URLs and file references in recipe order.
+Patch URLs use the original Ports repository, commit and recipe paths.
+Use `bootstrap_byacc.history_origins(plan)` to obtain these exact origin fields.
+The acceptance check roster starts with `ports-release-and-patch-membership`.
+The other independent checks and the ordinary-provider exclusion stay unchanged.
+
+Verification checks the complete archive-derived tree and both exact patch outputs.
+It also checks actual capability observations, the generated configuration,
+repeatable parser-generation records, generated source bytes and parser semantics.
+The current host never supplies a replacement configuration or expected parser output.
+No archive, patch or extra history field is accepted for the existing OS profiles.

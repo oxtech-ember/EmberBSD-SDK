@@ -26,7 +26,7 @@ def _original_inputs(record):
     from .bootstrap_binding import seed_commands
     from .bootstrap_program import PROGRAM_STAGES, program_manifest, validate_program_plan
     plan = _json(record['bootstrap_plan'])
-    _require(plan.get('stage') in PROGRAM_STAGES, 'history requires a fixed OS program profile')
+    _require(plan.get('stage') in (*PROGRAM_STAGES, 'byacc-bootstrap'), 'history requires a fixed program profile')
     result = _json(record['producer_result'])
     _envelope(result, 'emberbsd-native-gcc16-producer-result', scope=_SCOPE)
     _require(type(result.get('api')) is int and result['api'] == 1 and
@@ -131,6 +131,9 @@ def _commands(plan, result, manifest):
                  outputs.get('nbtool_config.h') == reference['sha256'] and
                  _bytes(reference) == configuration_bytes(actual, contract),
                  'historical efun configuration differs from its actual observations')
+    if plan['stage'] == 'byacc-bootstrap':
+        from .bootstrap_byacc import verify_byacc_history
+        verify_byacc_history(plan, result)
     image = os.path.join(plan['work_root'], manifest['name'])
     link = next(row for row in actual if row['id'] == 'link-' + manifest['name'])
     _require(link['output'] == dict(path=image, sha256=outputs[manifest['name']]),
@@ -147,7 +150,8 @@ def _acceptance(reference, record, plan, result, image):
         'unsupported independent program output acceptance fields')
     _envelope(accepted, 'emberbsd-bootstrap-program-output-acceptance', scope=_SCOPE)
     _require(accepted['status'] == 'PASS' and accepted['accepted_input_scope'] == 'bootstrap-seed' and
-             accepted['ordinary_provider_qualified'] is False and accepted['checks'] == _CHECKS and
+             accepted['ordinary_provider_qualified'] is False and accepted['checks'] ==
+             (['ports-release-and-patch-membership', *_CHECKS[1:]] if plan['stage'] == 'byacc-bootstrap' else _CHECKS) and
              accepted['bootstrap_plan'] == record['bootstrap_plan'] and
              accepted['producer_result'] == record['producer_result'] and
              accepted['source_proof'] == record['source_proof'] and accepted['artifact'] == image,
@@ -194,18 +198,27 @@ def verify_program_build_history(history, provider_name, descriptor, *, inspect_
     try:
         _require(isinstance(descriptor, dict) and set(history) ==
             {'kind', 'source_archives', 'patches', 'program_build', 'provisioned_members'} and
-            history['kind'] == 'source-build' and history['source_archives'] == [] and history['patches'] == [],
+            history['kind'] == 'source-build',
             'unsupported Git-program source-build history')
         record = _json(history['program_build'])
         _envelope(record, 'emberbsd-bootstrap-program-build-history', scope=_SCOPE)
         _require(set(record) == {'format', 'version', 'scope', 'manifest', 'source_proof',
             'bootstrap_plan', 'producer_result', 'output_acceptance'}, 'unsupported program build history fields')
         plan, result, manifest = _original_inputs(record)
+        byacc = plan['stage'] == 'byacc-bootstrap'
+        if byacc:
+            from .bootstrap_byacc import history_origins
+            archives, patches = history_origins(plan)
+        else:
+            archives, patches = [], []
+        _require(history['source_archives'] == archives and history['patches'] == patches,
+                 'Git-program or Ports archive and patch roster differs')
         provider = descriptor['providers'][provider_name]
         source = plan['program']['source']['source']
         _require(set(provider) == {'origin', 'source', 'recipe', 'recipe_sha256'} and
                  provider['origin'] == 'source-build' and descriptor['sources'][provider['source']] == source and
-                 provider['recipe'] == 'tools/' + manifest['name'] + '/bootstrap.json' and
+                 provider['recipe'] == ('pkgsrc/devel/byacc/bootstrap.json' if byacc else
+                                        'tools/' + manifest['name'] + '/bootstrap.json') and
                  provider['recipe_sha256'] == record['manifest']['sha256'] and descriptor['host'] == plan['host'],
                  'program provider differs from its original OS source and manifest')
         image = _commands(plan, result, manifest)
@@ -225,7 +238,7 @@ def verify_program_build_history(history, provider_name, descriptor, *, inspect_
             _require(selected != root and os.path.commonpath((selected, root)) == root and
                      os.path.basename(selected) == role and member['original_path'] == image['path'] and
                      member['sha256'] == image['sha256'] == row['sha256'] and row['path'] == selected and
-                     row['kind'] == 'native' and row['version'] == 'os-' + source['commit'],
+                     row['kind'] == 'native' and row['version'] == (manifest['release'] if byacc else 'os-' + source['commit']),
                      'provisioned program differs from its accepted image or selected spelling')
             if inspect_inputs:
                 regular_file(selected)

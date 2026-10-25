@@ -14,6 +14,7 @@ from unittest.mock import patch
 import test_bootstrap_program_native as native
 import test_bootstrap_program as programs
 import test_bootstrap_program_cut as cut
+import test_bootstrap_byacc as byacc
 from emberbsd_sdk.bootstrap_seed import _history
 from emberbsd_sdk.darwin_runtime import darwin_runtime_closure
 from emberbsd_sdk.errors import SDKError
@@ -24,15 +25,17 @@ class ProgramHistoryTests(unittest.TestCase):
         self.make_fixture('basename')
 
     def make_fixture(self, name):
-        cls = cut.CutProbeTests if name in ('cut', 'sort') else programs.ProgramTests if name == 'grep' else native.NativeProgramTests
+        cls = byacc.ByaccContractTests if name == 'yacc' else cut.CutProbeTests if name in ('cut', 'sort') else programs.ProgramTests if name == 'grep' else native.NativeProgramTests
         self.fixture = cls(methodName='runTest')
         if name in ('cut', 'sort'):
             self.fixture.program_name = name
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
-        if name not in ('cut', 'sort', 'grep'):
+        if name not in ('cut', 'sort', 'grep', 'yacc'):
             self.fixture.configure(name)
-        self.case = c = self.fixture if name == 'grep' else self.fixture.case
+        self.case = c = self.fixture if name in ('grep', 'yacc') else self.fixture.case
+        if name == 'yacc':
+            c.inputs = c.plan['program']['source']
         c.descriptor['compiler'] = dict(family='gcc', version='16.2.0', triplet='aarch64-apple-darwin25')
         child = self.fixture.fake if name in ('cut', 'sort') else self.fixture.fake_command
         def fake(argv, log, **kwargs):
@@ -72,7 +75,8 @@ class ProgramHistoryTests(unittest.TestCase):
         self.acceptance = dict(format='emberbsd-bootstrap-program-output-acceptance', version=1,
             scope='gcc16-bootstrap', status='PASS', accepted_input_scope='bootstrap-seed',
             ordinary_provider_qualified=False, bootstrap_plan=self.plan_ref,
-            source_proof=c.inputs['source_proof'], checks=['git-source-membership', 'native-compile-link', 'source-semantics',
+            source_proof=c.inputs['source_proof'], checks=[
+                'ports-release-and-patch-membership' if name == 'yacc' else 'git-source-membership', 'native-compile-link', 'source-semantics',
                 'reported-tool-routes', 'darwin-output-runtime'],
             semantic_review=c.f.raw(b'Synthetic independent historical semantic review; no native process ran.'),
             limitations=['Synthetic fixture only. No native process ran.'])
@@ -84,16 +88,20 @@ class ProgramHistoryTests(unittest.TestCase):
         self.selected = self.target / 'bin' / name
         shutil.copyfile(self.image['path'], self.selected)
         self.selected.chmod(0o755)
-        self.provider = dict(origin='source-build', source='os_previous', recipe='tools/' + name + '/bootstrap.json',
+        self.provider = dict(origin='source-build', source='os_previous', recipe='pkgsrc/devel/byacc/bootstrap.json' if name == 'yacc' else 'tools/' + name + '/bootstrap.json',
                              recipe_sha256=c.plan['program']['manifest']['sha256'])
         self.descriptor = dict(bundle_root=str(self.target), host=c.descriptor['host'],
             sources=dict(os_previous=c.inputs['source'], os=dict(repository='https://example.invalid/os', commit='4' * 40)),
             providers={'os-basename': self.provider},
             tools={name: dict(path=str(self.selected), sha256=self.image['sha256'],
-                                   kind='native', provider='os-basename', version='os-' + '3' * 40)})
+                                   kind='native', provider='os-basename', version='byacc-20260126' if name == 'yacc' else 'os-' + '3' * 40)})
         self.history = dict(kind='source-build', source_archives=[], patches=[],
             provisioned_members=[dict(invocation=name, original_path=self.image['path'],
                                      selected_path=str(self.selected), sha256=self.image['sha256'])])
+
+        if name == 'yacc':
+            from emberbsd_sdk.bootstrap_byacc import history_origins
+            self.history['source_archives'], self.history['patches'] = history_origins(c.plan)
 
     def seal(self):
         f = self.case.f
@@ -351,6 +359,23 @@ class ProgramHistoryTests(unittest.TestCase):
         with self.assertRaises(SDKError): _history({'legacy': old}, {'legacy': dict(origin='source-build')})
         old['source_archives'] = [dict(url='https://example.invalid/source.tar', file=f.raw(b'archive'))]
         self.assertEqual(_history({'legacy': old}, {'legacy': dict(origin='source-build')}), {'legacy': []})
+
+    def test_byacc_history_binds_archive_patches_and_generated_parser(self):
+        self.make_fixture('yacc')
+        with patch('subprocess.Popen', side_effect=AssertionError('history starts no native child')):
+            self.assertEqual(self.verify(), {'os-basename': []})
+        self.history['patches'].pop()
+        with self.assertRaisesRegex(SDKError, 'roster'): self.verify()
+
+    def test_byacc_history_rejects_changed_capability_outcome(self):
+        self.make_fixture('yacc')
+        next(row for row in self.result['commands'] if row['id'] == 'capability-run')['actual_exit'] = 1
+        with self.assertRaisesRegex(SDKError, 'permitted actual exit'): self.verify()
+
+    def test_byacc_history_rejects_changed_generated_parser(self):
+        self.make_fixture('yacc')
+        (self.case.work / 'parser.tab.h').write_bytes(b'changed header')
+        with self.assertRaises(SDKError): self.verify()
 
 
 if __name__ == '__main__':

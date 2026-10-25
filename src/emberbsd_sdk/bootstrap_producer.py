@@ -379,7 +379,7 @@ def validate_producer_plan(plan, descriptor, commands, flags):
     from .bootstrap_program import PROGRAM_STAGES, validate_program_plan
     from .bootstrap_gnu_program import GNU_PROGRAM_STAGES
     if plan.get('stage') in (*PROGRAM_STAGES, *GNU_PROGRAM_STAGES,
-                            'bsdinstall-bootstrap', 'pkg-install-bootstrap'):
+                            'bsdinstall-bootstrap', 'pkg-install-bootstrap', 'byacc-bootstrap'):
         return validate_program_plan(plan, descriptor, commands, flags)
     _envelope(plan, PRODUCER_FORMAT, scope='gcc16-bootstrap')
     _require(set(plan) == {'format', 'version', 'scope', 'stage', 'seed_descriptor', 'host', 'sources',
