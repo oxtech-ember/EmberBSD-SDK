@@ -514,9 +514,10 @@ supply bootstrap mk files and Ninja. Use actual named observations to establish
 the complete production graph. The profile does not assert a fixed graph size.
 
 The local-source contract also recognizes `devel/bmake`,
-`pkgtools/bootstrap-mk-files` and `pkgtools/pkg_install`. Bind their complete
+`pkgtools/bootstrap-mk-files`, `pkgtools/pkg_install` and `lang/nawk`. Bind their complete
 exported subtrees and every common patch. Require exact named empty `DISTFILES`
 and `PATCHFILES` observations. Missing, linked or changed source files still fail.
+Nawk keeps its supplied parser and procedure tables. Missing generated source fails.
 The accepted initial mksh activates the canonical final-prefix shell selection
 in bmake, GNU make and Ninja. Check those configure and installed child routes.
 

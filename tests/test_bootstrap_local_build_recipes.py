@@ -17,6 +17,8 @@ from emberbsd_sdk.inventory import snapshot_tree
 
 
 BUILD_LAYOUTS = {
+    'lang/nawk': ('Makefile', 'files/Makefile', 'files/awk.h', 'files/awkgram.tab.c',
+                   'files/awkgram.tab.h', 'files/main.c', 'files/proctab.c', 'files/LICENSE'),
     'devel/bmake': ('Makefile', 'files/configure', 'files/make-bootstrap.sh.in',
                     'files/main.c', 'files/job.c'),
     'pkgtools/bootstrap-mk-files': ('Makefile', 'files/sys.mk', 'files/bsd.prog.mk',
@@ -63,7 +65,7 @@ class LocalBuildRecipeTests(unittest.TestCase):
             'patches/patch-expr.c', 'patches/patch-lalloc.c']
         self.local.refresh_export()
 
-    def test_fifteen_fixed_local_roots_preserve_real_archive_mapping(self):
+    def test_sixteen_fixed_local_roots_preserve_real_archive_mapping(self):
         with patch('subprocess.Popen', side_effect=AssertionError('no native process')):
             self.assertEqual(self.case.validate(), self.plan)
             self.assertEqual(self.case.validate(inspect_inputs=False), self.plan)
@@ -75,7 +77,19 @@ class LocalBuildRecipeTests(unittest.TestCase):
         copied = sorted(str(p.relative_to(self.case.work / 'distfiles'))
                         for p in (self.case.work / 'distfiles').rglob('*') if p.is_file())
         self.assertEqual(copied, sorted(expected))
-        self.assertEqual(len(fixtures.LOCAL_LAYOUTS), 15)
+        self.assertEqual(len(fixtures.LOCAL_LAYOUTS), 16)
+
+    def test_nawk_generated_tables_cannot_be_omitted(self):
+        for relative in ('files/awkgram.tab.c', 'files/awkgram.tab.h', 'files/proctab.c'):
+            path = self.export / 'lang/nawk' / relative
+            original = path.read_bytes()
+            with self.subTest(source=relative):
+                path.unlink()
+                self.local.refresh_export()
+                with self.assertRaisesRegex(SDKError, 'required regular source file'):
+                    self.case.validate()
+                path.write_bytes(original)
+                self.local.refresh_export()
 
     def test_bsd_profile_preserves_legacy_policy_recognition(self):
         self.assertTrue(producer._recognized_profile(producer.BSDINSTALL_PROFILE_SHA256))
@@ -91,7 +105,7 @@ class LocalBuildRecipeTests(unittest.TestCase):
         self.assertFalse(producer._recognized_profile('0' * 64))
 
     def test_foundation_local_roots_need_their_explicit_layout_entries(self):
-        for name in ('devel/bmake', 'pkgtools/bootstrap-mk-files', 'pkgtools/pkg_install'):
+        for name in ('devel/bmake', 'pkgtools/bootstrap-mk-files', 'pkgtools/pkg_install', 'lang/nawk'):
             previous = dict(recipe._LOCAL_SOURCE_FILES)
             del previous[name]
             with self.subTest(recipe=name):
@@ -118,10 +132,12 @@ class LocalBuildRecipeTests(unittest.TestCase):
         for name in BUILD_LAYOUTS:
             row = self.plan['recipes'][name]
             original = row['distfile_metadata']
-            for case in ('missing', 'wrong-recipe', 'distfile', 'patchfile', 'hash'):
+            for case in ('missing', 'empty-log', 'wrong-recipe', 'distfile', 'patchfile', 'hash'):
                 with self.subTest(recipe=name, case=case):
                     if case == 'missing':
                         row.pop('distfile_metadata')
+                    elif case == 'empty-log':
+                        row['distfile_metadata'] = self.f.raw(b'')
                     elif case == 'hash':
                         row['distfile_metadata'] = dict(original, sha256='0' * 64)
                     else:

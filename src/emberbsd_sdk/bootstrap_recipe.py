@@ -112,6 +112,8 @@ def recipe_steps(plan, descriptor, commands, flags):
 
 
 _LOCAL_SOURCE_FILES = {
+    'lang/nawk': ('Makefile', 'files/Makefile', 'files/awk.h', 'files/awkgram.tab.c',
+                   'files/awkgram.tab.h', 'files/main.c', 'files/proctab.c', 'files/LICENSE'),
     'devel/bmake': ('Makefile', 'files/configure', 'files/make-bootstrap.sh.in',
                     'files/main.c', 'files/job.c'),
     'pkgtools/bootstrap-mk-files': ('Makefile', 'files/sys.mk', 'files/bsd.prog.mk',
