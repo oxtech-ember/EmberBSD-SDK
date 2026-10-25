@@ -184,6 +184,7 @@ _LOCAL_SOURCE_FILES = {
     'pkgtools/digest': ('Makefile', 'files/configure', 'files/Makefile.in', 'files/digest.c'),
     'pkgtools/libnbcompat': ('Makefile', 'files/configure', 'files/Makefile.in', 'files/asprintf.c'),
     'pkgtools/mktools': ('Makefile', 'files/Makefile', 'files/mk-buildlink-symlinks.c', 'files/mkpath.c'),
+    'security/mozilla-rootcerts-openssl': ('Makefile', 'DESCR', 'PLIST'),
     'shells/mksh': ('Makefile', 'files/Build.sh', 'files/main.c', 'files/sh.h'),
     'sysutils/bsdinstall': ('Makefile', 'DESCR', 'PLIST', 'files/Makefile',
                           'files/bsdinstall.c', 'files/setmode.c', 'files/bsdinstall.1'),

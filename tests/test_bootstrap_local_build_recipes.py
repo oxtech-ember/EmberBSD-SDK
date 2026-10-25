@@ -33,6 +33,7 @@ BUILD_LAYOUTS = {
     'devel/nbpatch': ('Makefile', 'files/Makefile', 'files/patch.c', 'files/pch.c'),
     'net/fetch': ('Makefile', 'files/configure', 'files/Makefile.in', 'files/fetch.c'),
     'net/libfetch': ('Makefile', 'files/Makefile', 'files/common.c', 'files/fetch.c', 'files/fetch.h'),
+    'security/mozilla-rootcerts-openssl': ('Makefile', 'DESCR', 'PLIST'),
     'shells/mksh': ('Makefile', 'files/Build.sh', 'files/main.c', 'files/sh.h'),
     'sysutils/bsdinstall': ('Makefile', 'DESCR', 'PLIST', 'files/Makefile',
                           'files/bsdinstall.c', 'files/setmode.c', 'files/bsdinstall.1'),
@@ -65,7 +66,7 @@ class LocalBuildRecipeTests(unittest.TestCase):
             'patches/patch-expr.c', 'patches/patch-lalloc.c']
         self.local.refresh_export()
 
-    def test_sixteen_fixed_local_roots_preserve_real_archive_mapping(self):
+    def test_seventeen_fixed_local_roots_preserve_real_archive_mapping(self):
         with patch('subprocess.Popen', side_effect=AssertionError('no native process')):
             self.assertEqual(self.case.validate(), self.plan)
             self.assertEqual(self.case.validate(inspect_inputs=False), self.plan)
@@ -77,7 +78,7 @@ class LocalBuildRecipeTests(unittest.TestCase):
         copied = sorted(str(p.relative_to(self.case.work / 'distfiles'))
                         for p in (self.case.work / 'distfiles').rglob('*') if p.is_file())
         self.assertEqual(copied, sorted(expected))
-        self.assertEqual(len(fixtures.LOCAL_LAYOUTS), 16)
+        self.assertEqual(len(fixtures.LOCAL_LAYOUTS), 17)
 
     def test_nawk_generated_tables_cannot_be_omitted(self):
         for relative in ('files/awkgram.tab.c', 'files/awkgram.tab.h', 'files/proctab.c'):
@@ -90,6 +91,31 @@ class LocalBuildRecipeTests(unittest.TestCase):
                     self.case.validate()
                 path.write_bytes(original)
                 self.local.refresh_export()
+
+    def test_rootcerts_wrapper_requires_each_regular_owner_file(self):
+        name = 'security/mozilla-rootcerts-openssl'
+        self.assertEqual(recipe._LOCAL_SOURCE_FILES[name], ('Makefile', 'DESCR', 'PLIST'))
+        self.assertNotIn('security/mozilla-rootcerts', recipe._LOCAL_SOURCE_FILES)
+        for relative in BUILD_LAYOUTS[name]:
+            path = self.export / name / relative
+            original = path.read_bytes()
+            for symlink in (False, True):
+                with self.subTest(source=relative, symlink=symlink):
+                    path.unlink()
+                    if symlink:
+                        path.symlink_to('files/extra-source.c')
+                    self.local.refresh_export()
+                    with self.assertRaises(SDKError):
+                        self.case.validate()
+                    if symlink:
+                        path.unlink()
+                    path.write_bytes(original)
+                    self.local.refresh_export()
+        previous = dict(recipe._LOCAL_SOURCE_FILES)
+        del previous[name]
+        with patch.dict(recipe._LOCAL_SOURCE_FILES, previous, clear=True):
+            with self.assertRaisesRegex(SDKError, 'recognized local-source'):
+                self.case.validate()
 
     def test_bsd_profile_preserves_legacy_policy_recognition(self):
         self.assertTrue(producer._recognized_profile(producer.BSDINSTALL_PROFILE_SHA256))

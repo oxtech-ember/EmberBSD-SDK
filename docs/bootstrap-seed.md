@@ -532,6 +532,10 @@ The local-source contract also recognizes `devel/bmake`,
 exported subtrees and every common patch. Require exact named empty `DISTFILES`
 and `PATCHFILES` observations. Missing, linked or changed source files still fail.
 Nawk keeps its supplied parser and procedure tables. Missing generated source fails.
+The local `security/mozilla-rootcerts-openssl` wrapper requires its complete
+`Makefile`, `DESCR` and `PLIST` subtree. Its certificate data still comes from
+the archived `security/mozilla-rootcerts` recipe. The parent archive is not a
+local-source exception.
 The accepted initial mksh activates the canonical final-prefix shell selection
 in bmake, GNU make and Ninja. Check those configure and installed child routes.
 
