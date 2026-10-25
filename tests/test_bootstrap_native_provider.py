@@ -209,7 +209,7 @@ class NativeProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'source-built LLVM and LLD'):
             case.validate()
 
-    def test_default_runpath_profile_preserves_provider_routes_and_historical_mapping(self):
+    def test_provider_profile_revisions_preserve_routes_and_historical_mapping(self):
         self.archive_role()
         case = self.case
         for role in ('install_name_tool', 'llvm_readtapi'):
@@ -221,7 +221,8 @@ class NativeProviderTests(unittest.TestCase):
             launcher=dict(path='/selected/sdk/scripts/link-launcher.py', sha256='2' * 64))
         case.plan['metadata']['profile']['sha256'] = producer.NATIVE_PROVIDER_PROFILE_SHA256
         previous = self.values()
-        for digest in (producer.NO_DEFAULT_RPATH_PROFILE_SHA256, producer.UNPRIVILEGED_PROFILE_SHA256):
+        for digest in (producer.NO_DEFAULT_RPATH_PROFILE_SHA256, producer.UNPRIVILEGED_PROFILE_SHA256,
+                       '3366a715faa4c6271d3020f484b969d552164cdfe23bf8dc08e266234d82501f'):
             with self.subTest(profile=digest):
                 case.plan['metadata']['profile']['sha256'] = digest
                 self.assertTrue(producer._recognized_profile(digest))
@@ -231,8 +232,9 @@ class NativeProviderTests(unittest.TestCase):
                 self.assertNotIn('-nodefaultrpaths', self.values()['LDFLAGS'])
                 self.assertFalse(producer._recognized_profile('0' + digest[1:]))
 
-    def test_default_runpath_profile_keeps_metadata_and_full_closure_guards(self):
-        for digest in (producer.NO_DEFAULT_RPATH_PROFILE_SHA256, producer.UNPRIVILEGED_PROFILE_SHA256):
+    def test_provider_profile_revisions_keep_metadata_and_full_closure_guards(self):
+        for digest in (producer.NO_DEFAULT_RPATH_PROFILE_SHA256, producer.UNPRIVILEGED_PROFILE_SHA256,
+                       '3366a715faa4c6271d3020f484b969d552164cdfe23bf8dc08e266234d82501f'):
             with self.subTest(profile=digest):
                 self.case.plan['metadata']['recipes'] = ['lang/gcc16', 'lang/llvm']
                 self.case.plan['metadata']['profile']['sha256'] = digest

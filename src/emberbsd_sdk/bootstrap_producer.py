@@ -38,6 +38,7 @@ HOST_RUBY_PROFILE_SHA256 = '658eda5e9f0718ae8a3ea319ae3adb346f75498911f1afb7ffc7
 MAKE_HANDOFF_PROFILE_SHA256 = '92dc223512de9427030e7a2af85d7673cf658d6f8ba68564a8ca62dd5dfaf4a8'
 SHELL_HANDOFF_PROFILE_SHA256 = 'caef7465f704a40a481eb082d56dc3d5b9434350b9ebd1735c12a4408332f4eb'
 BUILTIN_HELPER_PROFILE_SHA256 = 'd601e1332d820b922c43cbf19b9150ad3527fd00eea6d67615850960ed320833'
+CA_PREFIX_PROFILE_SHA256 = '3366a715faa4c6271d3020f484b969d552164cdfe23bf8dc08e266234d82501f'
 EARLY_TOOLS = tuple('awk basename cat cut date dirname env expr grep head id pwd sed sort tail tr uname uniq wc'.split())
 # Recipe builds run these bare commands, which pkgsrc does not create as tools:
 # ninja-build's bootstrap runs od, and meson's Darwin compiler checks run lipo.
@@ -65,7 +66,7 @@ def _native_provider_profile(digest):
                       UNPRIVILEGED_PROFILE_SHA256, BSDINSTALL_PROFILE_SHA256, FOUNDATION_PROFILE_SHA256,
                       BOOTSTRAP_PKGTOOLS_PROFILE_SHA256, HOST_RUBY_PROFILE_SHA256,
                       MAKE_HANDOFF_PROFILE_SHA256, SHELL_HANDOFF_PROFILE_SHA256,
-                      BUILTIN_HELPER_PROFILE_SHA256)
+                      BUILTIN_HELPER_PROFILE_SHA256, CA_PREFIX_PROFILE_SHA256)
 
 
 def _recognized_profile(digest):
