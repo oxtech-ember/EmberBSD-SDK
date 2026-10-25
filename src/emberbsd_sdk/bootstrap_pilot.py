@@ -10,7 +10,7 @@ import threading
 import time
 
 from .errors import CommandError, ProcessOwnershipError, SDKError
-from .bootstrap_binding import seed_external_tools
+from .bootstrap_binding import NETBSD_CONFIGURED_BASE_SEED, seed_external_tools
 from .inventory import sha256_file, snapshot_tree
 from .jsonio import write_json
 from .native_toolset import (NATIVE_C_PROBE, NATIVE_CXX_PROBE, _absolute,
@@ -41,7 +41,9 @@ def pilot_steps(descriptor, commands, flags, work_root, *, static_runtime=False,
     _require(not linker_trace or (not static_runtime and descriptor['host']['os'] == 'Darwin'),
              'linker-trace pilot needs Darwin and a separate non-static purpose')
     work = _absolute(work_root)
-    external_tools = seed_external_tools(descriptor)
+    binding = descriptor.get('driver_binding')
+    external_tools = (seed_external_tools(descriptor, inspect_inputs=False)
+        if isinstance(binding, dict) and binding.get('kind') == NETBSD_CONFIGURED_BASE_SEED else {})
     directories = sorted({os.path.dirname(words[0]) for role, words in commands.items()
                           if role not in external_tools})
     _require(all(os.pathsep not in path for path in directories),

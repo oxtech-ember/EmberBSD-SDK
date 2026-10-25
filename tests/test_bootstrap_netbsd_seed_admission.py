@@ -403,15 +403,34 @@ class RetainedBaseHistoryTests(unittest.TestCase):
                                    f.descriptor)
         self.assertNotIn('/usr/bin', environment['PATH'].split(os.pathsep))
 
+    def test_metadata_commands_do_not_reopen_retired_seed_runtime_inputs(self):
+        f = self.fixture
+        commands = seed_commands(f.descriptor)
+        binding = f.descriptor['driver_binding']
+        for key in ('template', 'instantiated', 'configured_route_evidence',
+                    'lto_plugin_elf_metadata', 'lto_plugin'):
+            Path(binding[key]['path']).unlink()
+        steps = pilot_steps(f.descriptor, commands, f.descriptor['abi_flags'],
+                            str(f.bundle / 'retired-pilot'), static_runtime=True)
+        self.assertNotIn('/usr/bin', steps[0]['env']['PATH'].split(os.pathsep))
+        shell = str(f.bundle / 'retired-shell')
+        tools = {role: row['path'] for role, row in f.tools.items()}
+        environment = _environment(dict(tools, sh=shell), dict(commands, sh=(shell,)),
+                                   f.descriptor['abi_flags'], f.descriptor)
+        self.assertNotIn('/usr/bin', environment['PATH'].split(os.pathsep))
+        with self.assertRaises((SDKError, OSError)):
+            seed_commands(f.descriptor)
+
     def test_dynamic_closure_requires_runtime_lto_plugin_edge_from_configured_ld(self):
         f = self.fixture
         plugin = f.bundle / 'liblto_plugin.so'
         plugin.write_bytes(b'plugin shared object fixture')
         plugin.chmod(0o755)
         ld = '/usr/bin/ld'
+        ld_sha = f.digest(f.bundle / 'ld')
         graph = {
             str(plugin): {'sha256': f.digest(plugin), 'dependencies': []},
-            ld: {'sha256': hashlib.sha256(Path(ld).read_bytes()).hexdigest(),
+            ld: {'sha256': ld_sha,
                  'dependencies': [],
                  'runtime_loads': [dict(path=str(plugin),
                      basis='gcc-driver--###-plugin-argument')]},
@@ -419,12 +438,15 @@ class RetainedBaseHistoryTests(unittest.TestCase):
         descriptor = dict(
             bundle_root=str(f.bundle), host={'os': 'NetBSD', 'cpu': 'amd64'},
             host_abi={'libraries': []}, tools={'ld': dict(path=ld, kind='native',
-                sha256=hashlib.sha256(Path(ld).read_bytes()).hexdigest())},
+                sha256=ld_sha)},
             driver_binding={'kind': 'netbsd11-configured-base-as-ld-seed-v1',
                             'lto_plugin': dict(path=str(plugin), sha256=f.digest(plugin))})
         missing_edge = {key: dict(row) for key, row in graph.items()}
         missing_edge[ld]['runtime_loads'] = []
-        with patch('emberbsd_sdk.bootstrap_seed._native_image'):
+        with patch('emberbsd_sdk.bootstrap_seed._native_image'), \
+             patch('emberbsd_sdk.bootstrap_seed.canonical_existing', side_effect=lambda path: str(path)), \
+             patch('emberbsd_sdk.bootstrap_seed.sha256_file',
+                   side_effect=lambda path: ld_sha if str(path) == ld else f.digest(path)):
             with self.assertRaisesRegex(SDKError, 'runtime LTO plugin edge'):
                 _dynamic_closure(missing_edge, descriptor,
                                  allowed_external_tools={'ld': ld})

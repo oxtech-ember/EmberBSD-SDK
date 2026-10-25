@@ -11,7 +11,7 @@ import shlex
 from types import MappingProxyType
 
 from .errors import SDKError
-from .bootstrap_binding import (DARWIN_LLVM_MC_LLD_SEED, seed_commands,
+from .bootstrap_binding import (DARWIN_LLVM_MC_LLD_SEED, NETBSD_CONFIGURED_BASE_SEED, seed_commands,
                                 seed_external_tools, seed_reported_tools)
 from .inventory import sha256_file, snapshot_installed_tree, snapshot_tree
 from .native_toolset import (_absolute, _bytes, _driver_queries, _envelope, _file,
@@ -301,7 +301,9 @@ def _dynamic_closure(value, descriptor, *, allowed_external_tools=()):
 
 
 def _environment(tools, commands, flags, descriptor=None):
-    external_tools = seed_external_tools(descriptor) if descriptor is not None else {}
+    binding = descriptor.get('driver_binding') if descriptor is not None else None
+    external_tools = (seed_external_tools(descriptor, inspect_inputs=False)
+        if isinstance(binding, dict) and binding.get('kind') == NETBSD_CONFIGURED_BASE_SEED else {})
     directories = sorted({os.path.dirname(path) for role, path in tools.items()
                           if role not in external_tools})
     _require(all(os.pathsep not in path for path in directories),
