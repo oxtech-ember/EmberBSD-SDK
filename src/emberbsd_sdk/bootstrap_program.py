@@ -12,6 +12,7 @@ import socket
 from .bootstrap_producer import PRODUCER_FORMAT
 from .bootstrap_identity import IDENTITY_OUTPUTS, identity_output
 from .bootstrap_program_data import decode_data, data_size, MAX_FILE_BYTES
+from . import bootstrap_program_fs as filesystem
 from .bootstrap_shell import literal_stdin
 from .bootstrap_gnu_program import GNU_PROGRAM_STAGES
 from .bootstrap_compat import (EFUN_PROGRAMS, EFUN_PROGRAM_STAGES,
@@ -28,7 +29,8 @@ _SOURCES = tuple('usr.bin/grep/' + name + '.c' for name in ('fastgrep', 'file', 
 _PROVENANCE = ('tools/grep/Makefile', 'tools/Makefile.host', 'usr.bin/grep/Makefile', 'tools/grep/README.md')
 PROGRAM_STAGES = ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
                   'basename-bootstrap', 'dirname-bootstrap',
-                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap', 'env-bootstrap', 'uname-bootstrap', 'tail-bootstrap', 'sort-bootstrap', 'date-bootstrap', 'id-bootstrap', 'expr-bootstrap', 'hexdump-bootstrap')
+                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap', 'env-bootstrap', 'uname-bootstrap', 'tail-bootstrap', 'sort-bootstrap', 'date-bootstrap', 'id-bootstrap', 'expr-bootstrap', 'hexdump-bootstrap',
+                  *(name + '-bootstrap' for name in filesystem.PROGRAMS))
 CMP_MANIFEST_SHA256 = 'a3267d3387b08780fb1e372f5a742dccd9faa84568292506d3389f35e869ad56'
 HOSTNAME_MANIFEST_SHA256 = '32450fa3c2d68e63c13f1d32795f4d3e14cab8b5beac909ee27242cef279750d'
 _CMP_SOURCES = tuple('usr.bin/cmp/' + name + '.c' for name in ('cmp', 'misc', 'regular', 'special'))
@@ -53,14 +55,19 @@ ID_MANIFEST_SHA256 = '7184d420bdd70778b1c290f028bc43df9441db16087657d06915c2b9d3
 _ID_GROUP_HEADER = 'common/include/libutil/compat_grouplist.h'
 EXPR_MANIFEST_SHA256 = '505c27cdc0db4b2d22b6f348559e91735bf723b1f47251d6e98fa3d979e71854'
 HEXDUMP_MANIFEST_SHA256 = '9fe663af4124f714bcac65dce3bb7666bef0af2f74a9f97fb638699c8c42d974'
+_FILESYSTEM_MANIFESTS = {
+    'chmod': '0139b41d150bb82e79a99547c4d3a6f5cac975152c32e850922af7bdb269e1ae',
+    'mkdir': '111fe0d327e4ccdc7de008ac3844e49893edfbd43d62400ef2dbc4ceb76c5453',
+    'ln': '3b3fc97c04775eb92f447b3b466b2f2867002fba2736da33971a441d630260e5',
+    'rmdir': '22e24af317a8e1c18559c407f0497a18f24bfb9c88ff8a89b48a9aa09b3ae995'}
 _NBTOOL_CONFIG = 'tools/compat/bootstrap/nbtool_config.h'
 _NATIVE_LOCAL_HEADERS = {'cmp': ('extern.h',), 'tr': ('extern.h',), 'tail': ('extern.h',), 'hexdump': ('hexdump.h',),
                          'date': ('extern.h',), 'cut': ('x_cut.c',), 'sort': ('sort.h', 'fsort.h', 'pathnames.h')}
-_NATIVE_DIRECTORIES = {'hexdump': 'usr.bin/hexdump', 'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
+_NATIVE_DIRECTORIES = {**{name: 'bin/' + name for name in filesystem.PROGRAMS}, 'hexdump': 'usr.bin/hexdump', 'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
                        'basename': 'usr.bin/basename', 'dirname': 'usr.bin/dirname',
                        'cat': 'bin/cat', 'head': 'usr.bin/head', 'uniq': 'usr.bin/uniq',
                        'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut', 'env': 'usr.bin/env', 'uname': 'usr.bin/uname', 'tail': 'usr.bin/tail', 'sort': 'usr.bin/sort', 'date': 'bin/date', 'id': 'usr.bin/id', 'expr': 'bin/expr'}
-_NATIVE_SOURCES = {'hexdump': (*('usr.bin/hexdump/' + name + '.c' for name in
+_NATIVE_SOURCES = {**{name: ('bin/' + name + '/' + name + '.c',) for name in filesystem.PROGRAMS}, 'hexdump': (*('usr.bin/hexdump/' + name + '.c' for name in
                               ('conv', 'display', 'hexdump', 'hexsyntax', 'odsyntax', 'parse')), *_EFUN_SOURCES),
                    'expr': ('bin/expr/expr.y',), 'date': ('bin/date/date.c',), 'sort': (*('usr.bin/sort/' + name + '.c' for name in
                            ('append', 'fields', 'files', 'fsort', 'init', 'msort', 'sort', 'tmp', 'radix_sort')),
@@ -71,7 +78,7 @@ _NATIVE_SOURCES = {'hexdump': (*('usr.bin/hexdump/' + name + '.c' for name in
                    'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'), 'pwd': ('bin/pwd/pwd.c',), 'cut': ('usr.bin/cut/cut.c', *_EFUN_SOURCES),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
                       for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf', 'env', 'uname', 'id')}}
-_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
+_LITERAL_CASE_COUNTS = dict(chmod=12, mkdir=10, ln=12, rmdir=9, basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
 _ALIASES = {'grep': ('egrep', 'fgrep'), 'tail': ('tac',), 'id': ('groups', 'whoami'), 'hexdump': ('od',)}
@@ -100,7 +107,7 @@ def _uname_output(fields):
                      os.fsencode(getattr(current, field)) for field in fields) + b'\n'
 
 
-def _literal_cases(manifest, count, *, work_root_output=False, uname_output=False, identity_oracle=False):
+def _literal_cases(manifest, count, *, work_root_output=False, uname_output=False, identity_oracle=False, filesystem_cases=False):
     """Check finite stream-case structure. The pinned owner supplies semantics."""
     cases = manifest['runtime_cases']
     _require(isinstance(cases, list) and len(cases) == count,
@@ -112,6 +119,8 @@ def _literal_cases(manifest, count, *, work_root_output=False, uname_output=Fals
                       isinstance(case, dict) and 'stdout_uname' in case else 'stdout_identity' if identity_oracle and
                       isinstance(case, dict) and 'stdout_identity' in case else 'stdout')
         base = {'name', 'invocation', 'args', 'stdin', 'exit', output_key}
+        if filesystem_cases:
+            base.add('filesystem')
         _require(isinstance(case, dict) and
                  set(case) in (base | {'stderr'}, base | {'stderr_nonempty'}),
                  'unsupported literal program case fields')
@@ -130,6 +139,9 @@ def _literal_cases(manifest, count, *, work_root_output=False, uname_output=Fals
                  type(case['exit']) is int and 0 <= case['exit'] <= 255 and
                  (isinstance(case['stderr'], str) if 'stderr' in case else case['stderr_nonempty'] is True),
                  'invalid literal program case or output path')
+        if filesystem_cases:
+            _require(case['name'] != 'runtime-observation', 'reserved filesystem case name')
+            filesystem.validate(case['filesystem'])
         names.add(case['name'])
 
 
@@ -140,7 +152,7 @@ def _profile(plan):
         return MANIFEST_RELATIVE, MANIFEST_SHA256, _SOURCES, _PROVENANCE
     name = stage.removesuffix('-bootstrap')
     directory = _NATIVE_DIRECTORIES[name]
-    digest = {'hexdump': HEXDUMP_MANIFEST_SHA256, 'cmp': CMP_MANIFEST_SHA256, 'hostname': HOSTNAME_MANIFEST_SHA256,
+    digest = {**_FILESYSTEM_MANIFESTS, 'hexdump': HEXDUMP_MANIFEST_SHA256, 'cmp': CMP_MANIFEST_SHA256, 'hostname': HOSTNAME_MANIFEST_SHA256,
               'basename': BASENAME_MANIFEST_SHA256, 'dirname': DIRNAME_MANIFEST_SHA256,
               'cat': CAT_MANIFEST_SHA256, 'head': HEAD_MANIFEST_SHA256, 'uniq': UNIQ_MANIFEST_SHA256,
               'wc': WC_MANIFEST_SHA256, 'tr': TR_MANIFEST_SHA256,
@@ -183,7 +195,7 @@ def _native_program_contract(manifest, name):
                  all(case['invocation'] == 'cmp' and 'stdout_nonempty' not in case
                      for case in manifest['runtime_cases']), 'unsupported fixed cmp semantic cases')
     elif name in _LITERAL_CASE_COUNTS:
-        if name in ('basename', 'dirname', 'tr', 'printf', 'pwd', 'env', 'uname', 'date', 'id', 'expr'):
+        if name in ('basename', 'dirname', 'tr', 'printf', 'pwd', 'env', 'uname', 'date', 'id', 'expr', *filesystem.PROGRAMS):
             _require(manifest['files'] == {}, 'this program needs no fixture files')
         else:
             files = manifest['files']
@@ -192,7 +204,7 @@ def _native_program_contract(manifest, name):
                          key != 'missing.txt' for key in files) and
                      sum(data_size(value) for value in files.values()) <= MAX_FILE_BYTES,
                      'filter programs need bounded immutable fixture files')
-        _literal_cases(manifest, _LITERAL_CASE_COUNTS[name], work_root_output=name == 'pwd', uname_output=name == 'uname', identity_oracle=name == 'id')
+        _literal_cases(manifest, _LITERAL_CASE_COUNTS[name], work_root_output=name == 'pwd', uname_output=name == 'uname', identity_oracle=name == 'id', filesystem_cases=name in filesystem.PROGRAMS)
     else:
         # These are the only accepted tails. No hostname operand can reach a child.
         _require(manifest['files'] == {} and manifest['runtime_cases'] == [
@@ -277,6 +289,9 @@ def program_outputs(plan):
     if plan.get('stage') in EFUN_PROGRAM_STAGES:
         from .bootstrap_compat import probe_outputs
         extra = [*program_sources(plan), *probe_outputs(plan, manifest)]
+    if manifest['name'] in filesystem.PROGRAMS:
+        extra.extend(case['name'] + '.filesystem.json' for case in manifest['runtime_cases'])
+        extra.append('runtime-observation.filesystem.json')
     return [*extra, *manifest['files'], *(Path(name).stem + '.o' for name in manifest['sources']), manifest['name'],
             *(case['name'] + suffix for case in manifest['runtime_cases'] for suffix in ('.stdout', '.stderr'))]
 
@@ -336,19 +351,35 @@ def program_steps(plan, descriptor, commands, flags):
         command = literal_stdin(case['stdin']) + ' | ' + command
         command += ' >' + shlex.quote(os.path.join(work, case['name'] + '.stdout'))
         command += ' 2>' + shlex.quote(os.path.join(work, case['name'] + '.stderr'))
-        result.append(dict(id='case-' + case['name'], phase='program-case', cwd=work, env=dict(env),
+        cwd = work
+        if 'filesystem' in case:
+            cwd = str(filesystem.case_directory(work, case['name']))
+            command = 'umask ' + case['filesystem']['umask'] + '; ' + command
+        result.append(dict(id='case-' + case['name'], phase='program-case', cwd=cwd, env=dict(env),
                            expected_exit=case['exit'], argv=[*commands['sh'], '-c', command]))
     observed = dict(env, DYLD_PRINT_LIBRARIES='1')
     tail = (manifest['runtime_cases'][0]['args'] if manifest['name'] in _LITERAL_CASE_COUNTS
             else _RUNTIME_ARGS[manifest['name']])
-    result.append(dict(id='runtime-observation', phase='run', cwd=work, env=observed, expected_exit=0,
-                       argv=[os.path.join(work, manifest['name']), *tail]))
+    runtime_argv = [os.path.join(work, manifest['name']), *tail]
+    runtime_cwd = work
+    if manifest['name'] in filesystem.PROGRAMS:
+        first = manifest['runtime_cases'][0]
+        _require(first['exit'] == 0, 'filesystem runtime observation needs a successful first case')
+        runtime_cwd = str(filesystem.case_directory(work, 'runtime-observation'))
+        runtime_argv = [*commands['sh'], '-c', 'umask ' + first['filesystem']['umask'] +
+                        '; exec ' + shlex.join(runtime_argv)]
+    result.append(dict(id='runtime-observation', phase='run', cwd=runtime_cwd, env=observed, expected_exit=0,
+                       argv=runtime_argv))
     return result
 
 
 def prepare_program_step(step, plan, completed=()):
     from .bootstrap_generated import before_step
     before_step(step, plan, completed)
+    if plan.get('stage') in tuple(name + '-bootstrap' for name in filesystem.PROGRAMS):
+        case = filesystem.step_case(step, program_manifest(plan))
+        if case is not None:
+            filesystem.prepare(plan['work_root'], case, key=filesystem.step_key(step))
 
 
 def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
@@ -384,6 +415,10 @@ def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
             os.symlink(target, os.path.join(work, alias))
         return {'invocation_aliases': aliases} if aliases else {}
     if step['phase'] != 'program-case':
+        if plan.get('stage') in tuple(name + '-bootstrap' for name in filesystem.PROGRAMS):
+            case = filesystem.step_case(step, program_manifest(plan))
+            if case is not None:
+                return {'filesystem': filesystem.observe(work, case, key=filesystem.step_key(step))}
         return {}
     case = next(row for row in program_manifest(plan)['runtime_cases'] if step['id'] == 'case-' + row['name'])
     program = program_manifest(plan)['name']
@@ -411,6 +446,8 @@ def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
         else:
             _require(data == decode_data(case[name]), program + ' case actual ' + name + ' differs from its source contract')
         streams[name] = reference
+    if 'filesystem' in case:
+        streams['filesystem'] = filesystem.observe(work, case)
     return streams
 
 

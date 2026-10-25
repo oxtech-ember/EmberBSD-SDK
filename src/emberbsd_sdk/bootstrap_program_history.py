@@ -85,6 +85,7 @@ def _streams(actual, case, work, outputs):
 
 
 def _commands(plan, result, manifest):
+    from . import bootstrap_program_fs as filesystem
     from .bootstrap_program import program_outputs, program_sources, program_step_exits
     expected, actual = plan['commands'], result['commands']
     _require(isinstance(actual, list) and len(actual) == len(expected), 'historical command roster is incomplete')
@@ -117,6 +118,16 @@ def _commands(plan, result, manifest):
                      'historical compiler output differs from the recorded SHA256 roster')
         if wanted['id'] in cases:
             _streams(row, cases[wanted['id']], plan['work_root'], outputs)
+        if manifest['name'] in filesystem.PROGRAMS:
+            case = filesystem.step_case(wanted, manifest)
+            if case is not None:
+                key = filesystem.step_key(wanted)
+                reference = row.get('filesystem')
+                _require(isinstance(reference, dict) and reference.get('path') ==
+                         os.path.join(plan['work_root'], key + '.filesystem.json') and
+                         outputs.get(key + '.filesystem.json') == reference.get('sha256'),
+                         'historical filesystem report differs from the output roster')
+                filesystem.verify_report(reference, case, key=key)
     aliases = {name: manifest['name'] for name in manifest['invocations'] if name != manifest['name']}
     if aliases:
         link = next(row for row in actual if row['id'] == 'link-' + manifest['name'])

@@ -25,7 +25,8 @@ scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`,
 `hostname-bootstrap`, `basename-bootstrap`, `dirname-bootstrap`, `cat-bootstrap`,
 `head-bootstrap`, `uniq-bootstrap`, `wc-bootstrap`, `tr-bootstrap`, `printf-bootstrap`,
 `pwd-bootstrap`, `cut-bootstrap`, `env-bootstrap`, `uname-bootstrap`, `tail-bootstrap`,
-`sort-bootstrap`, `date-bootstrap`, `id-bootstrap`, `expr-bootstrap`, and `hexdump-bootstrap`.
+`sort-bootstrap`, `date-bootstrap`, `id-bootstrap`, `expr-bootstrap`, `hexdump-bootstrap`,
+`chmod-bootstrap`, `mkdir-bootstrap`, `ln-bootstrap`, and `rmdir-bootstrap`.
 Each stage selects one exact source-owner manifest.
 It has exactly `format`, `version`, `scope`, `stage`, `seed_descriptor`, `host`,
 `sources`, `work_root`, `required_roles`, `resources`, `program`, and `commands`.
@@ -59,6 +60,63 @@ The resource object uses the finite pilot's exact five fields.
 It requires one CPU job, one linker slot, and an integer runtime observation
 budget from 1 through 120 seconds. Inputs must remain immutable under their
 shared leases. Work must be a fresh real path disjoint from every input.
+
+## Fixed filesystem effects
+
+The `chmod`, `mkdir`, `ln`, and `rmdir` profiles each compile one canonical OS C file.
+They use `tools/<name>/bootstrap.json`, the common annotation header, and the native ABI.
+Their ordinary host recipes retain the normal compatibility library.
+They need no completed libnbcompat component for this finite Darwin route.
+The respective manifest SHA256 values are:
+
+- chmod: `0139b41d150bb82e79a99547c4d3a6f5cac975152c32e850922af7bdb269e1ae`.
+- mkdir: `111fe0d327e4ccdc7de008ac3844e49893edfbd43d62400ef2dbc4ceb76c5453`.
+- ln: `3b3fc97c04775eb92f447b3b466b2f2867002fba2736da33971a441d630260e5`.
+- rmdir: `22e24af317a8e1c18559c407f0497a18f24bfb9c88ff8a89b48a9aa09b3ae995`.
+
+Their 12, 10, 12, and 9 cases retain exact stream and exit checks.
+Each also has `filesystem`, with exactly `umask`, `fixtures`, and `expect`.
+Modes are four-digit octal strings from `0000` through `0777`.
+The selected shell sets the literal umask before the owned child.
+No case contains an executable hook or controller expression.
+
+Each case uses a fresh `work/cases/<case-name>` directory.
+Fixture paths are bounded relative names with explicit directory ancestors.
+Absolute paths, dot components, case-folding collisions, and symlink ancestors are refused.
+The limit is 64 entries, eight path components, and 1 MiB of file data per case.
+This limit does not change the existing stream-fixture limits.
+
+Fixtures have one of these exact forms:
+
+- File: `type`, `mode`, and `data`, using the shared byte-data decoder.
+- Directory: `type` and `mode`.
+- Symlink: `type` and a contained relative `target`.
+- Hard link: `type` and a declared regular-file fixture `target`.
+
+Every fixture path must appear in `expect`, including paths removed by the child.
+Expected files require exact data and mode. Expected directories require mode.
+Expected symlinks require their target and may specify mode.
+Expected absence has only `type: absent`.
+Files and symlinks may declare `same_inode_as` for another same-type expected entry.
+This relation compares device/inode without following either entry.
+Reports retain the verified relation, not portable expectations for raw inode numbers.
+
+After child drainage, SDK Python checks the bounded tree with no-follow directory descriptors.
+It rejects unexpected entries, special files, changed types, wrong modes, and differing bytes or links.
+It creates a flat `<case-name>.filesystem.json` observation in the finite output roster.
+Historical validation checks that hash-bound report with the same source-owned contract.
+Independent output review must inspect actual filesystem effects before acceptance.
+A zero child exit or a self-consistent report is not independent acceptance.
+
+The runtime observation repeats the first successful case in its own fresh directory.
+It uses the selected shell's fixed umask and `exec` builtin, with DYLD diagnostics enabled.
+Its filesystem report is also retained and checked. It never reuses mutated semantic fixtures.
+Native Darwin behavior, ordinary cross-host operation, and C memory analysis remain separate checks.
+
+Several independent programs may share one immutable seed and physical input guard.
+Each still requires its own exact-plan input receipt and output acceptance.
+Run the existing producers sequentially, then review one combined provision plan.
+Do not change the seed between programs or reuse one plan receipt for another plan.
 
 ## Fixed commands and results
 
