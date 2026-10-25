@@ -3,6 +3,7 @@
 # Developed with AI assistance. Fixtures do not qualify a real native toolset.
 
 import copy
+from contextlib import ExitStack
 import hashlib
 import json
 from pathlib import Path
@@ -386,6 +387,57 @@ class DarwinRuntimeTests(unittest.TestCase):
             self.refresh_observation(f)
             with self.assertRaisesRegex(SDKError, 'byte limit'):
                 self.output_capture(f)
+
+    def test_shared_roots_are_listed_once_but_both_traces_keep_uuid_checks(self):
+        from emberbsd_sdk.darwin_runtime import _output_inputs, _output_traces, _verify_output_traces
+        f = self.output_fixture()
+        names = [f'/usr/lib/libfixture{index}.dylib' for index in range(35)]
+        uuids = {name: index + 10 for index, name in enumerate(names)}
+        cache = SimpleNamespace(uuid='a' * 32,
+                                lookup=lambda name: names.index(name) if name in names else None)
+        roots = [dict(path=name, uuid=uuids[name].to_bytes(16, 'little').hex()) for name in names]
+        nodes = {name: dict(kind='cache-image', index=index, image=dict(uuid=roots[index]['uuid']))
+                 for index, name in enumerate(names)}
+        outputs, rows = [], []
+        for index in range(2):
+            image = f.output_root / f'image{index}'
+            image.write_bytes(b'synthetic data; never executed')
+            output = dict(path=str(image), sha256=hashlib.sha256(image.read_bytes()).hexdigest())
+            outputs.append(output)
+            uuid = 100 + index
+            nodes[str(image)] = dict(kind='output-executable', image=dict(uuid=uuid.to_bytes(16, 'little').hex()))
+            trace = f.root / f'trace{index}.log'
+            trace.write_text(f.trace_line(image, uuid) + ''.join(f.trace_line(name, uuids[name]) for name in names))
+            rows.append(dict(output=output, trace=dict(path=str(trace),
+                sha256=hashlib.sha256(trace.read_bytes()).hexdigest()), roots=copy.deepcopy(roots) if index == 0 else []))
+
+        def context(observations):
+            reference = f.reference(f.observation_path, dict(format='emberbsd-darwin-observed-cache-roots',
+                version=1, scope='producer-output', cache_uuid=cache.uuid, observations=observations))
+            return _output_inputs([str(f.bundle)], outputs, str(f.output_root), reference)
+
+        selected = context(rows)
+        with ExitStack() as stack:
+            traces, found = _output_traces(selected, cache, stack)
+            self.assertEqual(len(traces), 2)
+            self.assertEqual(found, set(names))
+            _verify_output_traces(selected, traces, nodes, cache)
+
+        repeated = copy.deepcopy(rows)
+        repeated[1]['roots'] = copy.deepcopy(roots)
+        with self.assertRaisesRegex(SDKError, 'roots exceed'):
+            context(repeated)
+
+        # Entry-point deduplication must not discard the second full trace.
+        trace = Path(rows[1]['trace']['path'])
+        trace.write_text(trace.read_text().replace(f.trace_line(names[0], uuids[names[0]]),
+                                                 f.trace_line(names[0], 999)))
+        rows[1]['trace']['sha256'] = hashlib.sha256(trace.read_bytes()).hexdigest()
+        selected = context(rows)
+        with ExitStack() as stack:
+            traces, _ = _output_traces(selected, cache, stack)
+            with self.assertRaisesRegex(SDKError, 'absent or differs from the audited graph'):
+                _verify_output_traces(selected, traces, nodes, cache)
 
     def test_output_rpath_absence_trace_and_observation_races_are_refused(self):
         for case in ('rpath', 'trace', 'observation'):

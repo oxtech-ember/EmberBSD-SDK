@@ -244,6 +244,11 @@ Ordinary validation without those arguments refuses this different audit.
 The bootstrap consumer and ordinary native-toolset schema do not change.
 
 This interface supports at most 64 outputs and 64 named roots across observations.
+The root limit counts declared entries, including repeated entries in separate observations.
+Declare a shared cache root once. All outputs use the same audited graph.
+For example, two outputs can share 35 roots declared in the first observation.
+The second observation can have an empty `roots` list.
+Keep both complete, distinct traces. Every image UUID in each trace is still checked.
 All traces together can contain at most 16 MiB and 16384 lines.
 Each line can contain at most 8192 Unicode characters.
 Trace readers remain open through final cache, output, and observation checks.
