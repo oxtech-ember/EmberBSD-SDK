@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-# Origin: EmberBSD (AI-assisted). No compiler or make command is executed.
+# Origin: EmberBSD (AI-assisted). No C/C++ compiler is executed.
 """Check fixed fixtures with a selected mksh and no external utilities."""
 
 import copy
