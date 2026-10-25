@@ -72,11 +72,16 @@ They need no completed libnbcompat component for this finite Darwin route.
 The respective manifest SHA256 values are:
 
 - chmod: `0139b41d150bb82e79a99547c4d3a6f5cac975152c32e850922af7bdb269e1ae`.
-- mkdir: `111fe0d327e4ccdc7de008ac3844e49893edfbd43d62400ef2dbc4ceb76c5453`.
+- mkdir: `6d52c3dd9fe813f652e7d98110f56af8078b9617d6d1f3ca0b3b08edf73936a9`.
 - ln: `3b3fc97c04775eb92f447b3b466b2f2867002fba2736da33971a441d630260e5`.
 - rmdir: `22e24af317a8e1c18559c407f0497a18f24bfb9c88ff8a89b48a9aa09b3ae995`.
 
-Their 12, 10, 12, and 9 cases retain exact stream and exit checks.
+Their 12, 11, 12, and 9 cases retain exact stream and exit checks.
+The current mkdir contract checks its exact invalid-mode diagnostic and unchanged empty filesystem.
+Retained mkdir plans may select the exact legacy digest
+`111fe0d327e4ccdc7de008ac3844e49893edfbd43d62400ef2dbc4ceb76c5453` with its original ten cases.
+The bound manifest selects that finite digest/count pair. Unknown digests and cross-paired counts refuse.
+New unbound profile selection uses the current eleven-case contract.
 Each also has `filesystem`, with exactly `umask`, `fixtures`, and `expect`.
 Modes are four-digit octal strings from `0000` through `0777`.
 The selected shell sets the literal umask before the owned child.
