@@ -489,3 +489,18 @@ A finite pilot plan cannot graduate a provider or replace the recipe plan.
 Preserve original descriptors, plan, inventories, acceptances, command logs, and comparison evidence.
 Ordinary use does not reselect or require the historical seed payload.
 Current ordinary bundle, ABI inputs, and final probes remain verified live.
+
+### Completed BSD installer provider
+
+The current Darwin profile adds common `sysutils/bsdinstall` to the first GCC16
+recipe closure. It waits for `PKGPATH` before adding the root policy edge. The
+installer package uses the final common mksh and LLVM strip outputs for child
+operations. The fixed local-source contract binds its complete exported subtree
+and all seven canonical owner files. Named observations must still report empty
+`DISTFILES` and `PATCHFILES`.
+
+The initial `bsdinstall-bootstrap` program stays initial-only. Only the package
+built in the accepted complete recipe plan can use that plan's graduation route.
+The ordinary qualification gate must select the BSD package for role `install`
+and check its actual `-U` and child-tool behavior. Generic native header/hash
+validation alone does not qualify GNU install as a BSD installer.

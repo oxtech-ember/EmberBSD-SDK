@@ -25,6 +25,8 @@ BUILD_LAYOUTS = {
     'net/fetch': ('Makefile', 'files/configure', 'files/Makefile.in', 'files/fetch.c'),
     'net/libfetch': ('Makefile', 'files/Makefile', 'files/common.c', 'files/fetch.c', 'files/fetch.h'),
     'shells/mksh': ('Makefile', 'files/Build.sh', 'files/main.c', 'files/sh.h'),
+    'sysutils/bsdinstall': ('Makefile', 'DESCR', 'PLIST', 'files/Makefile',
+                          'files/bsdinstall.c', 'files/setmode.c', 'files/bsdinstall.1'),
 }
 
 
@@ -54,7 +56,7 @@ class LocalBuildRecipeTests(unittest.TestCase):
             'patches/patch-expr.c', 'patches/patch-lalloc.c']
         self.local.refresh_export()
 
-    def test_eleven_fixed_local_roots_preserve_real_archive_mapping(self):
+    def test_twelve_fixed_local_roots_preserve_real_archive_mapping(self):
         with patch('subprocess.Popen', side_effect=AssertionError('no native process')):
             self.assertEqual(self.case.validate(), self.plan)
             self.assertEqual(self.case.validate(inspect_inputs=False), self.plan)
@@ -66,7 +68,32 @@ class LocalBuildRecipeTests(unittest.TestCase):
         copied = sorted(str(p.relative_to(self.case.work / 'distfiles'))
                         for p in (self.case.work / 'distfiles').rglob('*') if p.is_file())
         self.assertEqual(copied, sorted(expected))
-        self.assertEqual(len(fixtures.LOCAL_LAYOUTS), 11)
+        self.assertEqual(len(fixtures.LOCAL_LAYOUTS), 12)
+
+    def test_bsd_profile_preserves_legacy_policy_recognition(self):
+        self.assertTrue(producer._recognized_profile(producer.BSDINSTALL_PROFILE_SHA256))
+        self.assertTrue(producer._parallel_profile(producer.BSDINSTALL_PROFILE_SHA256))
+        self.assertTrue(producer._native_provider_profile(producer.BSDINSTALL_PROFILE_SHA256))
+        for digest in (producer.NATIVE_PROVIDER_PROFILE_SHA256,
+                       producer.NO_DEFAULT_RPATH_PROFILE_SHA256,
+                       producer.UNPRIVILEGED_PROFILE_SHA256):
+            self.assertTrue(producer._native_provider_profile(digest))
+        self.assertFalse(producer._recognized_profile('0' * 64))
+
+    def test_bsd_output_provider_is_reachable_without_a_dependency_cycle(self):
+        plan = {'recipes': {
+            'lang/gcc16': {'dependencies': ['sysutils/bsdinstall']},
+            'sysutils/bsdinstall': {'dependencies': ['lang/llvm', 'shells/mksh', 'pkgtools/libnbcompat']},
+            'lang/llvm': {'dependencies': ['pkgtools/libnbcompat']},
+            'shells/mksh': {'dependencies': ['pkgtools/libnbcompat']},
+            'pkgtools/libnbcompat': {'dependencies': []}}}
+        order = recipe.recipe_order(plan)
+        self.assertLess(order.index('lang/llvm'), order.index('sysutils/bsdinstall'))
+        self.assertLess(order.index('shells/mksh'), order.index('sysutils/bsdinstall'))
+        self.assertLess(order.index('sysutils/bsdinstall'), order.index('lang/gcc16'))
+        plan['recipes']['pkgtools/libnbcompat']['dependencies'].append('sysutils/bsdinstall')
+        with self.assertRaisesRegex(SDKError, 'dependency graph'):
+            recipe.recipe_order(plan)
 
     def test_each_additional_root_requires_bound_exact_empty_observations(self):
         for name in BUILD_LAYOUTS:
