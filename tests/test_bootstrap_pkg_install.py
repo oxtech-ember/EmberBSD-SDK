@@ -354,6 +354,7 @@ class PkgInstallTests(unittest.TestCase):
         self.assertTrue(producer._native_provider_profile(producer.HOST_RUBY_PROFILE_SHA256))
         self.assertTrue(producer._native_provider_profile(producer.MAKE_HANDOFF_PROFILE_SHA256))
         self.assertTrue(producer._native_provider_profile(producer.SHELL_HANDOFF_PROFILE_SHA256))
+        self.assertTrue(producer._native_provider_profile(producer.BUILTIN_HELPER_PROFILE_SHA256))
         self.assertTrue(producer._native_provider_profile(producer.FOUNDATION_PROFILE_SHA256))
         self.assertTrue(producer._native_provider_profile(producer.BSDINSTALL_PROFILE_SHA256))
         self.assertTrue(producer._recognized_profile(producer.PROFILE_SHA256))

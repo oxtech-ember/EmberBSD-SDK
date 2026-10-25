@@ -53,6 +53,7 @@ The recognized SHA256 values are:
 - Darwin libtool route with the selected ranlib in configure: `5b48cba0ea1bd64b883631028d94db1aca574d87f235299a3fc9e768253907db`.
 - Ports bmake for every recipe outside the `devel/bmake` closure: `92dc223512de9427030e7a2af85d7673cf658d6f8ba68564a8ca62dd5dfaf4a8`.
 - Ports bmake and Ports mksh for every recipe outside that closure: `caef7465f704a40a481eb082d56dc3d5b9434350b9ebd1735c12a4408332f4eb`.
+- Builtin helper from `${LOCALBASE}/libexec`, installed by `pkgtools/bootstrap-mk-files`, for those recipes: `d601e1332d820b922c43cbf19b9150ad3527fd00eea6d67615850960ed320833`.
 
 `bootstrap_producer.py` lists the native-provider revisions between these two.
 
