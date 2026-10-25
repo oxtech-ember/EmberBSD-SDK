@@ -177,7 +177,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
          bootstrap_plan, required_roles, profile):
     from .bootstrap_make import MAKE_PROBE_FORMAT, make_probe_sources, verify_make_step
     from .bootstrap_producer import PRODUCER_FORMAT, metadata_paths
-    from .bootstrap_program import PROGRAM_STAGES, program_outputs, program_sources, verify_program_step
+    from .bootstrap_program import (PROGRAM_STAGES, program_outputs, program_sources,
+                                    verify_program_step, program_step_exits)
     from .bootstrap_gnu_program import GNU_PROGRAM_STAGES, prepare_gnu_work
     from .bootstrap_bsdinstall import prepare_bsdinstall_work
     from .bootstrap_pkg_install import prepare_pkg_install_work
@@ -317,10 +318,12 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
             for step in plan['commands']:
                 log = os.path.join(work, step['id'] + '.log')
                 actual = dict(step)
+                expected_exits = (program_step_exits(step, plan) if program else
+                                  (step['expected_exit'],) if make_probe else (0,))
                 try:
                     if step['phase'] == 'run':
                         _native_image(step['argv'][0], descriptor['host'])
-                    heavy = ((recipe and 'link_control' not in plan) or step['phase'] == 'link' or
+                    heavy = ((recipe and 'link_control' not in plan) or step['phase'] in ('link', 'compat-probe-link') or
                              gnu_program and step['phase'] in ('gnu-configure', 'gnu-build', 'gnu-bootstrap') or
                              pkg_install and step['phase'] in ('pkg-configure', 'pkg-build'))
                     context = [resources['heavy_link_context']] if heavy else []
@@ -342,20 +345,23 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                                 _hold()
                         except CommandError as exc:
                             actual['actual_exit'] = exc.returncode
-                            if not (make_probe or program) or exc.returncode != step['expected_exit']:
+                            if not (make_probe or program) or exc.returncode not in expected_exits:
                                 raise
                         else:
                             actual['actual_exit'] = returned.returncode
-                        _require(actual['actual_exit'] == (step['expected_exit'] if make_probe or program else 0),
+                        _require(actual['actual_exit'] in expected_exits,
                                  'finite command exit differs from its expected observation')
                         if make_probe:
                             verify_make_step(step, log, work, descriptor)
-                        if step['phase'] in ('compile', 'link'):
+                        if (step['phase'] in ('compile', 'link', 'compat-probe-compile', 'compat-probe-link') and
+                                actual['actual_exit'] == 0):
                             artifact = step['argv'][-1]
-                            _native_image(artifact, descriptor['host'], object_file=step['phase'] == 'compile')
+                            _native_image(artifact, descriptor['host'],
+                                          object_file=step['phase'] in ('compile', 'compat-probe-compile'))
                             actual['output'] = dict(path=artifact, sha256=sha256_file(artifact))
                         if program:
-                            actual.update(verify_program_step(step, work, plan))
+                            actual.update(verify_program_step(step, work, plan, actual_exit=actual['actual_exit'],
+                                                              completed=result['commands']))
                         if relocation:
                             actual['output'] = verify_relocation_step(plan, descriptor, selected.commands, step)
                 except BaseException as exc:

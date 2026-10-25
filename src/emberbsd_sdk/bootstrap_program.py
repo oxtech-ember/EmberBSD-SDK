@@ -12,6 +12,8 @@ import socket
 from .bootstrap_producer import PRODUCER_FORMAT
 from .bootstrap_shell import literal_stdin
 from .bootstrap_gnu_program import GNU_PROGRAM_STAGES
+from .bootstrap_compat import (SOURCES as _EFUN_SOURCES, HEADERS as _EFUN_HEADERS,
+                               PROVENANCE as _EFUN_PROVENANCE)
 from .inventory import sha256_file, snapshot_tree
 from .native_toolset import _absolute, _bytes, _envelope, _json, _require, _source
 from .paths import canonical_existing, entry
@@ -23,7 +25,7 @@ _SOURCES = tuple('usr.bin/grep/' + name + '.c' for name in ('fastgrep', 'file', 
 _PROVENANCE = ('tools/grep/Makefile', 'tools/Makefile.host', 'usr.bin/grep/Makefile', 'tools/grep/README.md')
 PROGRAM_STAGES = ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
                   'basename-bootstrap', 'dirname-bootstrap',
-                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap')
+                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap')
 CMP_MANIFEST_SHA256 = 'a3267d3387b08780fb1e372f5a742dccd9faa84568292506d3389f35e869ad56'
 HOSTNAME_MANIFEST_SHA256 = '32450fa3c2d68e63c13f1d32795f4d3e14cab8b5beac909ee27242cef279750d'
 _CMP_SOURCES = tuple('usr.bin/cmp/' + name + '.c' for name in ('cmp', 'misc', 'regular', 'special'))
@@ -37,16 +39,17 @@ UNIQ_MANIFEST_SHA256 = '88376a81e9c96b455840a0fb636912442cba7325cee89fbbe9df8eb4
 WC_MANIFEST_SHA256 = '38e7672e67b4b423062596252fde87ad4b09ee4977d61f53526214d0e8d6ae88'
 TR_MANIFEST_SHA256 = '88114937d4d600fd4c228836657f03c296ffca4badb5dea446cc67768ac6c05b'
 PRINTF_MANIFEST_SHA256 = 'f21cac7215af7aeaf2a57e0eacc78dadc67c63d934e14bf1cf6f521a02da4282'
+CUT_MANIFEST_SHA256 = '169b46d73ce9b36094bd5589bc6def4a061f78fe5d9d3c2579641d41f5c181dc'
 PWD_MANIFEST_SHA256 = '598906e66805438e5386f6f12478d69147e36d020849dec655d7a1826026a6bd'
 _NATIVE_DIRECTORIES = {'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
                        'basename': 'usr.bin/basename', 'dirname': 'usr.bin/dirname',
                        'cat': 'bin/cat', 'head': 'usr.bin/head', 'uniq': 'usr.bin/uniq',
-                       'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd'}
+                       'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut'}
 _NATIVE_SOURCES = {'cmp': _CMP_SOURCES, 'hostname': _HOSTNAME_SOURCES, 'cat': ('bin/cat/cat.c',),
-                   'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'), 'pwd': ('bin/pwd/pwd.c',),
+                   'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'), 'pwd': ('bin/pwd/pwd.c',), 'cut': ('usr.bin/cut/cut.c', *_EFUN_SOURCES),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
                       for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf')}}
-_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10)
+_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22)
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
 
@@ -88,27 +91,29 @@ def _profile(plan):
               'basename': BASENAME_MANIFEST_SHA256, 'dirname': DIRNAME_MANIFEST_SHA256,
               'cat': CAT_MANIFEST_SHA256, 'head': HEAD_MANIFEST_SHA256, 'uniq': UNIQ_MANIFEST_SHA256,
               'wc': WC_MANIFEST_SHA256, 'tr': TR_MANIFEST_SHA256,
-              'printf': PRINTF_MANIFEST_SHA256, 'pwd': PWD_MANIFEST_SHA256}[name]
+              'printf': PRINTF_MANIFEST_SHA256, 'pwd': PWD_MANIFEST_SHA256, 'cut': CUT_MANIFEST_SHA256}[name]
     return ('tools/' + name + '/bootstrap.json',
             digest, _NATIVE_SOURCES[name],
             ('tools/' + name + '/Makefile', 'tools/Makefile.host', directory + '/Makefile',
-             'tools/' + name + '/README.md'))
+             'tools/' + name + '/README.md', *(_EFUN_PROVENANCE if name == 'cut' else ())))
 
 
 def _native_program_contract(manifest, name):
     cmp = name == 'cmp'
+    cut = name == 'cut'
     directory = _NATIVE_DIRECTORIES[name]
     _require(set(manifest) == {'format', 'version', 'name', 'origin', 'canonical_host_recipe', 'source_makefile',
         'compiler', 'sources', 'headers', 'include_dirs', 'cppflags', 'cflags', 'link_flags', 'libraries',
-        'invocations', 'files', 'runtime_cases'} and manifest['format'] == 'emberbsd-native-bootstrap-program' and
+        'invocations', 'files', 'runtime_cases'} | ({'compat'} if cut else set()) and
+        manifest['format'] == 'emberbsd-native-bootstrap-program' and
         type(manifest['version']) is int and manifest['version'] == 1 and manifest['name'] == name and
         manifest['canonical_host_recipe'] == 'tools/' + name + '/Makefile' and
         manifest['source_makefile'] == directory + '/Makefile' and
         manifest['compiler'] == dict(family='gcc', major=16, abi='native') and
         manifest['sources'] == list(_NATIVE_SOURCES[name]) and
-        manifest['headers'] == ([directory + '/extern.h', _BOOTSTRAP_CDEFS] if name in ('cmp', 'tr') else [_BOOTSTRAP_CDEFS]) and
-        manifest['include_dirs'] == ([directory] if name in ('cmp', 'tr') else []) and
-        manifest['cppflags'] == ['-include', _BOOTSTRAP_CDEFS] and
+        manifest['headers'] == ([directory + '/x_cut.c', _BOOTSTRAP_CDEFS, *_EFUN_HEADERS] if cut else [directory + '/extern.h', _BOOTSTRAP_CDEFS] if name in ('cmp', 'tr') else [_BOOTSTRAP_CDEFS]) and
+        manifest['include_dirs'] == ([directory, 'tools/compat', 'common/lib/libc/stdlib'] if cut else [directory] if name in ('cmp', 'tr') else []) and
+        manifest['cppflags'] == (['-DHAVE_NBTOOL_CONFIG_H=1', '-include', 'nbtool_config.h'] if cut else ['-include', _BOOTSTRAP_CDEFS]) and
         all(manifest[key] == [] for key in ('cflags', 'link_flags', 'libraries')) and
         manifest['invocations'] == [name], 'unsupported direct-source ' + name + ' contract')
     if cmp:
@@ -155,6 +160,9 @@ def program_manifest(plan):
     manifest = _json(reference)
     if plan['stage'] != 'grep-bootstrap':
         _native_program_contract(manifest, plan['stage'].removesuffix('-bootstrap'))
+        if plan['stage'] == 'cut-bootstrap':
+            from .bootstrap_compat import compat_manifest
+            compat_manifest(plan, manifest)
         return manifest
     _require(set(manifest) == {'format', 'version', 'name', 'origin', 'canonical_host_recipe', 'source_makefile',
         'compiler', 'sources', 'headers', 'include_dirs', 'cppflags', 'cflags', 'link_flags', 'libraries',
@@ -176,7 +184,12 @@ def program_sources(plan):
     if plan.get('stage') == 'pkg-install-bootstrap':
         from .bootstrap_pkg_install import pkg_install_sources
         return pkg_install_sources(plan)
-    return {name: value.encode('utf-8') for name, value in program_manifest(plan)['files'].items()}
+    manifest = program_manifest(plan)
+    result = {name: value.encode('utf-8') for name, value in manifest['files'].items()}
+    if plan.get('stage') == 'cut-bootstrap':
+        from .bootstrap_compat import probe_sources
+        result.update(probe_sources(plan, manifest))
+    return result
 
 
 def program_outputs(plan):
@@ -190,7 +203,11 @@ def program_outputs(plan):
         from .bootstrap_gnu_program import gnu_outputs
         return gnu_outputs(plan)
     manifest = program_manifest(plan)
-    return [*manifest['files'], *(Path(name).stem + '.o' for name in manifest['sources']), manifest['name'],
+    extra = []
+    if plan.get('stage') == 'cut-bootstrap':
+        from .bootstrap_compat import probe_outputs
+        extra = [*program_sources(plan), *probe_outputs(plan, manifest)]
+    return [*extra, *manifest['files'], *(Path(name).stem + '.o' for name in manifest['sources']), manifest['name'],
             *(case['name'] + suffix for case in manifest['runtime_cases'] for suffix in ('.stdout', '.stderr'))]
 
 
@@ -212,6 +229,10 @@ def program_steps(plan, descriptor, commands, flags):
     driver = [*commands['cc']]
     result, objects = [], []
     cppflags = manifest['cppflags'] if manifest['name'] == 'grep' else ['-include', os.path.join(source, _BOOTSTRAP_CDEFS)]
+    if manifest['name'] == 'cut':
+        from .bootstrap_compat import probe_steps
+        result.extend(probe_steps(plan, manifest, commands, flags, env))
+        cppflags = ['-DHAVE_NBTOOL_CONFIG_H=1', '-include', os.path.join(work, 'nbtool_config.h'), '-I', work]
     includes = [word for directory in manifest['include_dirs'] for word in ('-I', os.path.join(source, directory))]
     for relative in manifest['sources']:
         name = Path(relative).stem
@@ -239,7 +260,12 @@ def program_steps(plan, descriptor, commands, flags):
     return result
 
 
-def verify_program_step(step, work, plan):
+def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
+    if plan.get('stage') == 'cut-bootstrap':
+        from .bootstrap_compat import verify_probe_step
+        value = verify_probe_step(step, work, plan, program_manifest(plan), actual_exit, completed)
+        if step['phase'].startswith('compat-probe-'):
+            return value
     if plan.get('stage') == 'pkg-install-bootstrap':
         from .bootstrap_pkg_install import verify_pkg_install_step
         return verify_pkg_install_step(step, work, plan)
@@ -331,9 +357,17 @@ def validate_program_plan(plan, descriptor, commands, flags):
         blob = hashlib.sha1(b'blob ' + str(len(raw)).encode('ascii') + b'\0' + raw).hexdigest()
         _require(set(row) == {'git_blob', 'sha256'} and row['git_blob'] == blob and
                  row['sha256'] == inventory[relative]['sha256'], 'bootstrap program Git blob or content differs')
-    if manifest['name'] in ('grep', 'cmp', 'cat', 'head', 'uniq', 'wc'):
+    if manifest['name'] in ('grep', 'cmp', 'cat', 'head', 'uniq', 'wc', 'cut'):
         _require(entry(os.path.join(plan['work_root'], 'missing.txt')) is None,
                  manifest['name'] + ' missing-file control already exists')
     _require(plan['commands'] == program_steps(plan, descriptor, commands, flags),
              'program command differs from the source-owned finite route')
     return plan
+
+
+def program_step_exits(step, plan):
+    if plan.get('stage') == 'cut-bootstrap' and step['phase'] in ('compat-probe-compile', 'compat-probe-link'):
+        _require(step['expected_exit'] == [0, 1], 'unsupported efun probe exit observations')
+        return (0, 1)
+    _require(type(step['expected_exit']) is int, 'program command needs one fixed exit')
+    return (step['expected_exit'],)

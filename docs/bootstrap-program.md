@@ -23,7 +23,7 @@ The SDK constructs commands from that data. It does not copy a recipe.
 The plan format is `emberbsd-native-gcc16-producer-plan`, version 1,
 scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`,
 `hostname-bootstrap`, `basename-bootstrap`, `dirname-bootstrap`, `cat-bootstrap`,
-`head-bootstrap`, `uniq-bootstrap`, `wc-bootstrap`, `tr-bootstrap`, `printf-bootstrap`, and `pwd-bootstrap`.
+`head-bootstrap`, `uniq-bootstrap`, `wc-bootstrap`, `tr-bootstrap`, `printf-bootstrap`, `pwd-bootstrap`, and `cut-bootstrap`.
 Each stage selects one exact source-owner manifest.
 It has exactly `format`, `version`, `scope`, `stage`, `seed_descriptor`, `host`,
 `sources`, `work_root`, `required_roles`, `resources`, `program`, and `commands`.
@@ -311,3 +311,44 @@ Error cases retain literal stdout and nonempty stderr checks.
 There are 13 commands, including the final default-invocation runtime observation.
 The cases do not cover logical symlink aliases or invalid `PWD` values.
 Native compilation, C analysis and memory acceptance remain separate.
+
+## Fixed cut and common efun probes
+
+The cut profile pins `tools/cut/bootstrap.json` at
+`169b46d73ce9b36094bd5589bc6def4a061f78fe5d9d3c2579641d41f5c181dc`.
+Its `compat` reference selects `tools/compat/bootstrap-efun.json` at
+`3aa76b9c12fbb0581205ac1477b5d1f11b79cf980acffbc74e2c9972410ac7d1`.
+These are OS-owned contracts. SDK does not copy C probe bodies or semantic cases.
+The full source proof includes the common recipe, source fragment, declarations,
+namespace header, conversion template, control C file and all five probe C files.
+It also includes the unchanged cut C source and its included `x_cut.c` template.
+
+A positive native control compiles, links and runs before any capability probe.
+The three declaration probes compile with the selected GCC16 and native ABI.
+The two function probes compile and link with the same tuple and explicit linker flags.
+Their only permitted exits are 0 and 1, encoded as `expected_exit: [0, 1]`.
+Only these exact reconstructed cut steps accept two outcomes.
+Other commands retain their single fixed exit requirement.
+A zero observation requires an actual native object or executable before recording availability.
+A one observation records unavailability for that exact invocation and preserves its diagnostics.
+Unexpected exits, a failed control, or incomplete results stop the route.
+Review negative diagnostics; an exit alone does not identify the cause of a compiler failure.
+
+After all five drained observations, SDK writes the initial-only `nbtool_config.h`.
+Its five `HAVE_*` values come from actual results, not the plan or an ABI preset.
+It includes the OS shared annotation and efun declaration headers.
+Later steps recheck its bytes. It is not a full OS configure result.
+The OS normal compatibility library uses the same declaration header and source fragment.
+
+The next commands compile five complete C files: cut, efun, reallocarr, strtoi and strtou.
+They link directly; no previous compatibility archive or package graph is required.
+The unchanged allocator and conversion implementations retain their original BSD notices.
+All links keep the pilot heavy-link lease. The same source leases and drain gates apply.
+The 22 owner cases exercise byte, character and field selection, errors and allocation growth.
+The final observation reads the fixed input file with DYLD library diagnostics.
+There are 37 commands. Configuration observations, output hashes and raw logs remain separate.
+The result is pending independent review and never qualifies an ordinary provider.
+
+Run `test_bootstrap_program_cut` with `EMBERBSD_TEST_OS_SOURCE` for source consistency.
+Its compiler children are synthetic. Real compiler probes, C analysis and memory validation
+must run separately with the independently accepted exact source and seed plan.
