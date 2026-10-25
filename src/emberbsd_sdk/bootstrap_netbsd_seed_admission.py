@@ -26,7 +26,32 @@ _BASE_TOOL_PATHS = {
     'xz': '/usr/bin/xz', 'xzcat': '/usr/bin/xzcat',
     'pkg_info': '/usr/sbin/pkg_info', 'pkg_admin': '/usr/sbin/pkg_admin',
     'pkg_add': '/usr/sbin/pkg_add', 'pkg_create': '/usr/sbin/pkg_create',
+    'pkg_delete': '/usr/sbin/pkg_delete',
 }
+# Exact NetBSD 11 amd64 utility paths requested by the current 51-recipe
+# pkgsrc bootstrap metadata DAG. These paths authorize only named, copied
+# members; they do not authorize a system PATH or ambient command lookup.
+_BASE_TOOL_PATHS.update({
+    'basename': '/usr/bin/basename', 'bsdtar': '/bin/tar',
+    'bzcat': '/usr/bin/bzcat', 'cat': '/bin/cat', 'chgrp': '/usr/bin/chgrp',
+    'chmod': '/bin/chmod', 'chown': '/usr/sbin/chown',
+    'cmp': '/usr/bin/cmp', 'cp': '/bin/cp',
+    'cut': '/usr/bin/cut', 'date': '/bin/date', 'diff': '/usr/bin/diff',
+    'dirname': '/usr/bin/dirname', 'egrep': '/usr/bin/egrep',
+    'env': '/usr/bin/env', 'expr': '/bin/expr', 'fgrep': '/usr/bin/fgrep',
+    'find': '/usr/bin/find', 'flex': '/usr/bin/lex', 'ftp': '/usr/bin/ftp',
+    'gettext': '/usr/bin/gettext', 'ggrep': '/usr/bin/grep',
+    'head': '/usr/bin/head', 'hostname': '/bin/hostname', 'id': '/usr/bin/id',
+    'install': '/usr/bin/install', 'install-info': '/usr/bin/install-info',
+    'ln': '/bin/ln', 'ls': '/bin/ls', 'mkdir': '/bin/mkdir',
+    'msgfmt': '/usr/bin/msgfmt', 'msgmerge': '/usr/bin/msgmerge',
+    'mv': '/bin/mv', 'patch': '/usr/bin/patch', 'printf': '/usr/bin/printf',
+    'pwd': '/bin/pwd', 'readelf': '/usr/bin/readelf', 'rm': '/bin/rm',
+    'rmdir': '/bin/rmdir', 'sleep': '/bin/sleep', 'sort': '/usr/bin/sort',
+    'tail': '/usr/bin/tail', 'tar': '/bin/tar', 'touch': '/usr/bin/touch',
+    'tr': '/usr/bin/tr', 'uname': '/usr/bin/uname', 'wc': '/usr/bin/wc',
+    'xargs': '/usr/bin/xargs', 'xgettext': '/usr/bin/xgettext',
+})
 _R13_DIGEST_GOLDEN_FIXTURE_SHA256 = '39f4f0f48162c272a826d628eb22d134a91061e3d75c3736ef691c1ad0447d79'
 _R13_DIGEST_GOLDENS = {
     'sha256': '39f4f0f48162c272a826d628eb22d134a91061e3d75c3736ef691c1ad0447d79',
