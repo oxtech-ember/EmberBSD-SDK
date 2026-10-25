@@ -29,23 +29,17 @@ class EnvUnameProgramTests(unittest.TestCase):
             self.assertEqual(program._uname_output(['version', 'machine_arch']), b'version with\nnewline processor\n')
             self.assertEqual(program._uname_output(['sysname']), b'system\n')
 
-    def test_sysctl_oracle_has_no_command_fallback(self):
-        self.assertTrue(hasattr(program, '_machine_arch'))
-        def query(mib, count, output, size, new, length):
-            self.assertEqual(list(mib), [6, 12])
-            self.assertEqual(count, 2)
-            self.assertIsNone(new)
-            self.assertEqual(length, 0)
-            size._obj.value = 10
-            if output is not None:
-                ctypes.memmove(output, b'test-arch\0', 10)
-            return 0
-        with patch('ctypes.CDLL') as library, patch('subprocess.Popen', side_effect=AssertionError('no command')):
-            library.return_value.sysctl.side_effect = query
-            self.assertEqual(program._machine_arch(), b'test-arch')
-            library.return_value.sysctl.side_effect = lambda *args: -1
-            with self.assertRaises(SDKError):
-                program._machine_arch()
+    def test_darwin_processor_family_uses_kernel_architecture_without_fallback(self):
+        families = [('arm64', b'arm'), ('aarch64', b'arm'), ('arm', b'arm'),
+                    ('x86_64', b'i386'), ('amd64', b'i386'), ('i386', b'i386'),
+                    ('powerpc', b'powerpc'), ('powerpc64', b'powerpc'),
+                    ('ppc', b'powerpc'), ('ppc64', b'powerpc')]
+        for machine, expected in families:
+            with self.subTest(machine=machine), patch.object(program.os, 'uname',
+                    return_value=os.uname_result(('Darwin', 'node', 'release', 'version', machine))), patch.object(
+                    ctypes, 'CDLL', side_effect=AssertionError('no FFI')), patch(
+                    'subprocess.Popen', side_effect=AssertionError('no command')):
+                self.assertEqual(program._machine_arch(), expected)
 
     def fixture(self, name):
         native = fixtures.NativeProgramTests(methodName='runTest')
@@ -135,17 +129,18 @@ class EnvUnameProgramTests(unittest.TestCase):
         with self.assertRaises(SDKError):
             program._literal_cases(base, 15)
 
-    def test_sysctl_oracle_rejects_invalid_lengths_and_strings(self):
-        for size, payload in ((0, b''), (65537, b''), (3, b'bad'), (4, b'a\0b\0')):
-            def query(mib, count, output, length, new, new_length):
-                length._obj.value = size
-                if output is not None:
-                    ctypes.memmove(output, payload, len(payload))
-                return 0
-            with self.subTest(size=size, payload=payload), patch('ctypes.CDLL') as library:
-                library.return_value.sysctl.side_effect = query
+    def test_processor_family_refuses_unknown_host_and_failed_api(self):
+        for system, machine in [('Darwin', 'unknown'), ('Darwin', 'arm64-other'),
+                                ('Linux', 'aarch64'), ('Darwin', '')]:
+            with self.subTest(system=system, machine=machine), patch.object(program.os, 'uname',
+                    return_value=os.uname_result((system, 'node', 'release', 'version', machine))), patch.object(
+                    ctypes, 'CDLL', side_effect=AssertionError('no FFI')):
                 with self.assertRaises(SDKError):
                     program._machine_arch()
+        with patch.object(program.os, 'uname', side_effect=OSError('query failed')), patch.object(
+                ctypes, 'CDLL', side_effect=AssertionError('no FFI')):
+            with self.assertRaises(SDKError):
+                program._machine_arch()
 
     @unittest.skipUnless(os.environ.get('EMBERBSD_TEST_OS_SOURCE'), 'set EMBERBSD_TEST_OS_SOURCE')
     def test_actual_owned_manifests_and_sources(self):

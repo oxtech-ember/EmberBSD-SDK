@@ -58,28 +58,18 @@ _UNAME_FIELDS = ('sysname', 'nodename', 'release', 'version', 'machine', 'machin
 
 
 def _machine_arch():
-    """Read Darwin CTL_HW/HW_MACHINE_ARCH. Never discover an external command."""
-    import ctypes
+    """Map the admitted Darwin native machine to Apple's processor-family spelling."""
     try:
-        query = ctypes.CDLL(None, use_errno=True).sysctl
-        query.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_uint, ctypes.c_void_p,
-                          ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t]
-        query.restype = ctypes.c_int
-        mib = (ctypes.c_int * 2)(6, 12)
-        size = ctypes.c_size_t()
-        _require(query(mib, 2, None, ctypes.byref(size), None, 0) == 0,
-                 'controller machine architecture size query failed')
-        _require(1 < size.value <= 65536, 'controller machine architecture size is invalid')
-        output = ctypes.create_string_buffer(size.value)
-        _require(query(mib, 2, output, ctypes.byref(size), None, 0) == 0,
-                 'controller machine architecture query failed')
-        _require(1 < size.value <= len(output), 'controller machine architecture length is invalid')
-        raw = output.raw[:size.value]
-        _require(raw[-1:] == b'\0' and b'\0' not in raw[:-1],
-                 'controller machine architecture is not one terminated string')
-        return raw[:-1]
-    except (AttributeError, OSError, ImportError) as exc:
-        _require(False, 'controller machine architecture API unavailable: ' + str(exc))
+        current = os.uname()
+    except OSError as exc:
+        _require(False, 'controller machine architecture API failed: ' + str(exc))
+    _require(current.sysname == 'Darwin', 'processor-family oracle requires Darwin')
+    families = {'arm': b'arm', 'arm64': b'arm', 'aarch64': b'arm',
+                'i386': b'i386', 'x86_64': b'i386', 'amd64': b'i386',
+                'ppc': b'powerpc', 'ppc64': b'powerpc',
+                'powerpc': b'powerpc', 'powerpc64': b'powerpc'}
+    _require(current.machine in families, 'unsupported Darwin processor architecture')
+    return families[current.machine]
 
 
 def _uname_output(fields):

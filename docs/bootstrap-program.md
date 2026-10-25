@@ -381,10 +381,14 @@ The finite names are `sysname`, `nodename`, `release`, `version`, `machine`, and
 Only uname accepts this field, only with exit zero, and never alongside literal stdout.
 The OS manifest owns field order and option semantics, including the distinction between `-a` and `-ap`.
 SDK reads the five standard fields with `os.uname()`.
-For machine architecture, the Darwin controller calls `sysctl` through standard-library `ctypes`.
-The fixed read-only MIB is `CTL_HW/HW_MACHINE_ARCH` (6, 12) in the admitted Darwin ABI.
-It checks query status, bounded returned lengths and exactly one terminal NUL.
-Missing APIs and malformed data fail verification without an external-command fallback.
+For machine architecture, the Darwin controller maps `os.uname().machine` to a known processor family.
+The native-host, compiler and Mach-O ABI checks must agree before this oracle runs.
+The C program independently selects the compiler's family, as in Apple's native uname.
+ARM maps to `arm`, x86 to `i386`, and PowerPC to `powerpc`.
+Unknown machines and failed API calls fail verification without fallback.
+No foreign-function call or external command is needed.
+Darwin declares `HW_MACHINE_ARCH`, but current kernels can reject that MIB with `ENOENT`.
+The non-Apple C implementation keeps its existing sysctl route.
 The verifier joins exact field bytes with spaces and appends one newline.
 Embedded version whitespace remains unchanged. Child output never supplies expected values.
 
