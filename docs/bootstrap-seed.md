@@ -11,6 +11,10 @@ The [finite first C/C++ pilot](bootstrap-pilot.md) can run before the full
 recipe closure is available. It needs independent input and route acceptance.
 The separate [finite make and shell probe](bootstrap-make.md) checks the accepted
 make binding before package metadata or recipe execution.
+The fixed [NetBSD 11 first-native GCC16 route](bootstrap-netbsd-gcc16.md) uses
+the same plan and graduation envelope with independently accepted pkgsrc tools
+and a target-side source-transfer receipt. A `bmake-bootstrap` compiler record
+is not a complete GCC16 seed and cannot be relabeled for this route.
 The [stage-aware metadata producer](bootstrap-producer.md) can then query a
 prepared canonical export. It needs no future build output or accepted DAG.
 The [direct-source grep profile](bootstrap-program.md) can provide the missing

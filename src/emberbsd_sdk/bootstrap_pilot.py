@@ -183,6 +183,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     from .bootstrap_bsdinstall import prepare_bsdinstall_work
     from .bootstrap_pkg_install import prepare_pkg_install_work
     from .bootstrap_recipe import BOOTSTRAP_FORMAT, prepare_recipe_work, validate_link_control
+    from .bootstrap_netbsd_recipe import (PROFILE as NETBSD_RECIPE_PROFILE,
+        prepare_netbsd_recipe_work)
     from .bootstrap_seed import load_bootstrap_seed
     from .native_toolset import _json
     _require(threading.current_thread() is threading.main_thread(),
@@ -203,6 +205,7 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                                         PROGRAM_STAGES)
     relocation = profile == 'producer' and plan.get('stage') == 'utility-relocation'
     recipe = profile == 'bootstrap'
+    netbsd_recipe = recipe and plan.get('netbsd_profile') == NETBSD_RECIPE_PROFILE
     if relocation:
         from .bootstrap_relocation import (prepare_relocation_work, relocation_read_roots,
             relocation_work_outputs, verify_relocation_outputs, verify_relocation_step)
@@ -210,16 +213,21 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                                     'producer': PRODUCER_FORMAT, 'bootstrap': BOOTSTRAP_FORMAT}[profile],
              'the runner requires its exact finite plan format')
     if recipe:
-        _require(descriptor.get('make_binding') is not None,
-                 'the full recipe controller requires the fixed make binding')
+        _require((descriptor.get('make_binding') is not None and not netbsd_recipe) or
+                 (netbsd_recipe and descriptor['host'] == {'os': 'NetBSD', 'cpu': 'amd64'}),
+                 'the full recipe controller requires a fixed supported host binding')
     resources = plan['resources']
     root = canonical_existing(resources['lock_root'])
     work = _absolute(plan['work_root'])
     _require(canonical_new(work) == work, 'pilot work has aliased ancestors')
     roots = [descriptor['bundle_root']] + [row['root']
               for kind in ('headers', 'libraries') for row in descriptor['host_abi'][kind]]
-    if metadata or recipe:
+    if metadata or (recipe and not netbsd_recipe):
         roots += [plan['metadata']['export']['root'], plan['metadata']['utility_bin']]
+    if netbsd_recipe:
+        roots = [descriptor['bundle_root']] + [row['root'] for kind in ('headers', 'libraries')
+            for row in descriptor['host_abi'][kind]]
+        roots += [plan['ports_export']['root'], plan['netbsd']['makeconf']['path']]
     if program:
         roots += [plan['program']['source']['root']]
         if gnu_program or bsdinstall or pkg_install or byacc:
@@ -239,8 +247,12 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                          *list(_references(descriptor)), *list(_references(accepted_seed_receipt)),
                          *list(_references(acceptance)), *list(_references(bootstrap_plan)),
                          *list(_references(plan))])
-    if metadata or recipe:
+    if metadata or (recipe and not netbsd_recipe):
         shared.update(_references(_json(plan['metadata']['export']['source_proof'])))
+    if netbsd_recipe:
+        shared.update(_references(plan['netbsd']))
+        shared.update(_references(_json(plan['netbsd']['source_export_acceptance'])))
+        shared.update(_references(_json(plan['netbsd']['source_transfer_acceptance'])))
     if program:
         shared.update(_references(_json(plan['program']['source']['source_proof'])))
         if gnu_program or bsdinstall or pkg_install or byacc:
@@ -288,7 +300,10 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         if relocation:
             prepare_relocation_work(plan)
         if recipe:
-            prepare_recipe_work(plan)
+            if netbsd_recipe:
+                prepare_netbsd_recipe_work(plan)
+            else:
+                prepare_recipe_work(plan)
         if gnu_program:
             prepare_gnu_work(plan, descriptor, selected.commands)
         if pkg_install:

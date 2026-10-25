@@ -24,6 +24,8 @@ Keep native OS tool build rules in the OS repository.
 SDK selects and records these producers; it must not copy their recipes.
 Use the [first-native GCC16 bootstrap contract](bootstrap-seed.md) when no qualified
 native GCC16 exists. That scoped seed cannot be used as an ordinary provider.
+For NetBSD 11 amd64, the first-native route and its seed admission boundary are
+specified in [bootstrap-netbsd-gcc16.md](bootstrap-netbsd-gcc16.md).
 When an accepted native GCC16 compiler exists but the first `bmake` is missing,
 use only the [first bmake bootstrap producer](bootstrap-bmake-seed.md). That
 producer requires a separately issued narrow compiler-seed acceptance receipt,
