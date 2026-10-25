@@ -238,3 +238,10 @@ for installation. SDK command construction and native-provider guards stay the
 same. The earlier native-provider and default-runpath profile hashes remain valid
 for their pinned historical inputs.
 Native execution, source-built provider receipts and full graduation remain required.
+
+The source-gzip handoff profile also recognizes
+`39f572f94655383e3a4041e41d51477dc6cd2dbf10861c811274964a4d98c58a`. Ports defines the exact
+bmake/gzip prerequisite seed and the later source-tool paths. Metadata inputs
+must declare future `gzip`, `gunzip` and `gzcat` source roles when they have no
+accepted native provider. The fixed query roster and command construction do
+not change. The earlier gzip-handoff profile remains valid for historical inputs.
