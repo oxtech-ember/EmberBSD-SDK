@@ -88,6 +88,10 @@ class NativeProgramTests(unittest.TestCase):
             case.manifest['runtime_cases'] = [dict(name='case' + str(index), invocation=name,
                 args=['a', 'b'], stdin='synthetic input\n', exit=0, stdout='synthetic result\n', stderr='')
                 for index in range(18)]
+        elif name == 'printf':
+            case.manifest['runtime_cases'] = [dict(name='case' + str(index), invocation=name,
+                args=['%s', 'synthetic result'], stdin='', exit=0, stdout='synthetic result', stderr='')
+                for index in range(24)]
         elif name in ('basename', 'dirname'):
             case.manifest['runtime_cases'] = path_cases(name)
         else:

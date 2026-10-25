@@ -23,7 +23,7 @@ The SDK constructs commands from that data. It does not copy a recipe.
 The plan format is `emberbsd-native-gcc16-producer-plan`, version 1,
 scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`,
 `hostname-bootstrap`, `basename-bootstrap`, `dirname-bootstrap`, `cat-bootstrap`,
-`head-bootstrap`, `uniq-bootstrap`, `wc-bootstrap`, and `tr-bootstrap`.
+`head-bootstrap`, `uniq-bootstrap`, `wc-bootstrap`, `tr-bootstrap`, and `printf-bootstrap`.
 Each stage selects one exact source-owner manifest.
 It has exactly `format`, `version`, `scope`, `stage`, `seed_descriptor`, `host`,
 `sources`, `work_root`, `required_roles`, `resources`, `program`, and `commands`.
@@ -274,3 +274,19 @@ Completion is `COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW`, and
 `ordinary_provider_qualified` remains false. A failure is retained without retry.
 Accept the actual source, compiler/linker routes, semantic results, and runtime
 evidence separately before provisioning this output as a later bootstrap input.
+
+## Fixed printf profile
+
+The manifest is `tools/printf/bootstrap.json`. Its SHA256 is
+`f21cac7215af7aeaf2a57e0eacc78dadc67c63d934e14bf1cf6f521a02da4282`.
+The seven source files are the manifest, README, host makefile,
+`tools/Makefile.host`, `tools/compat/bootstrap_cdefs.h`, and
+`usr.bin/printf/Makefile` with `usr.bin/printf/printf.c`.
+
+The profile compiles one unchanged OS C file against the accepted native libc.
+It adds only the shared source-header forced include, then links that object.
+The 24 OS-owned literal cases cover formatting, conversions, escapes and errors.
+SDK validates their structure and pinned bytes; it does not copy their expected outputs.
+No fixture file or shell printf builtin is needed.
+The final runtime observation repeats the first successful argument list.
+There are 27 commands. Native compilation, C analysis and memory acceptance remain separate.

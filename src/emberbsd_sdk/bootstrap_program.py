@@ -23,7 +23,7 @@ _SOURCES = tuple('usr.bin/grep/' + name + '.c' for name in ('fastgrep', 'file', 
 _PROVENANCE = ('tools/grep/Makefile', 'tools/Makefile.host', 'usr.bin/grep/Makefile', 'tools/grep/README.md')
 PROGRAM_STAGES = ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
                   'basename-bootstrap', 'dirname-bootstrap',
-                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap')
+                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap')
 CMP_MANIFEST_SHA256 = 'a3267d3387b08780fb1e372f5a742dccd9faa84568292506d3389f35e869ad56'
 HOSTNAME_MANIFEST_SHA256 = '32450fa3c2d68e63c13f1d32795f4d3e14cab8b5beac909ee27242cef279750d'
 _CMP_SOURCES = tuple('usr.bin/cmp/' + name + '.c' for name in ('cmp', 'misc', 'regular', 'special'))
@@ -36,15 +36,16 @@ HEAD_MANIFEST_SHA256 = '34f117e1bbcc6801597c85c682b5252075b939815527b9c47b2a04e7
 UNIQ_MANIFEST_SHA256 = '88376a81e9c96b455840a0fb636912442cba7325cee89fbbe9df8eb43401236e'
 WC_MANIFEST_SHA256 = '38e7672e67b4b423062596252fde87ad4b09ee4977d61f53526214d0e8d6ae88'
 TR_MANIFEST_SHA256 = '88114937d4d600fd4c228836657f03c296ffca4badb5dea446cc67768ac6c05b'
+PRINTF_MANIFEST_SHA256 = 'f21cac7215af7aeaf2a57e0eacc78dadc67c63d934e14bf1cf6f521a02da4282'
 _NATIVE_DIRECTORIES = {'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
                        'basename': 'usr.bin/basename', 'dirname': 'usr.bin/dirname',
                        'cat': 'bin/cat', 'head': 'usr.bin/head', 'uniq': 'usr.bin/uniq',
-                       'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr'}
+                       'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf'}
 _NATIVE_SOURCES = {'cmp': _CMP_SOURCES, 'hostname': _HOSTNAME_SOURCES, 'cat': ('bin/cat/cat.c',),
                    'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
-                      for name in ('basename', 'dirname', 'head', 'uniq', 'wc')}}
-_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18)
+                      for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf')}}
+_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24)
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
 
@@ -81,7 +82,8 @@ def _profile(plan):
     digest = {'cmp': CMP_MANIFEST_SHA256, 'hostname': HOSTNAME_MANIFEST_SHA256,
               'basename': BASENAME_MANIFEST_SHA256, 'dirname': DIRNAME_MANIFEST_SHA256,
               'cat': CAT_MANIFEST_SHA256, 'head': HEAD_MANIFEST_SHA256, 'uniq': UNIQ_MANIFEST_SHA256,
-              'wc': WC_MANIFEST_SHA256, 'tr': TR_MANIFEST_SHA256}[name]
+              'wc': WC_MANIFEST_SHA256, 'tr': TR_MANIFEST_SHA256,
+              'printf': PRINTF_MANIFEST_SHA256}[name]
     return ('tools/' + name + '/bootstrap.json',
             digest, _NATIVE_SOURCES[name],
             ('tools/' + name + '/Makefile', 'tools/Makefile.host', directory + '/Makefile',
@@ -111,7 +113,7 @@ def _native_program_contract(manifest, name):
                  all(case['invocation'] == 'cmp' and 'stdout_nonempty' not in case
                      for case in manifest['runtime_cases']), 'unsupported fixed cmp semantic cases')
     elif name in _LITERAL_CASE_COUNTS:
-        if name in ('basename', 'dirname', 'tr'):
+        if name in ('basename', 'dirname', 'tr', 'printf'):
             _require(manifest['files'] == {}, 'this program needs no fixture files')
         else:
             files = manifest['files']
