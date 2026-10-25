@@ -17,7 +17,10 @@ object retains the accepted initial libnbcompat headers, static library, actual
 component commands, independent review, and historical compiler and ABI pins.
 
 The stage copies source files with their recorded mtimes into fresh owned work.
-It runs two configure/build pairs. Libarchive is static and has no programs,
+It applies the common recipe `CONFIG_GUESS_OVERRIDE` and `CONFIG_SUB_OVERRIDE`
+from pinned `mk/gnu-config/config.guess` and `config.sub` to the four libarchive
+and pkg_install paths. Each copy preserves the canonical bytes, mode, and mtime.
+Their four work hashes remain in the result. It runs two configure/build pairs. Libarchive is static and has no programs,
 compression libraries, or crypto providers. The package tools use
 `--enable-bootstrap` and that libarchive plus the retained libnbcompat. This mode
 excludes `pkg_delete` and normal signature and vulnerability facilities. The

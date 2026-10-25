@@ -23,6 +23,13 @@ MANIFEST_RELATIVE = 'profiles/common-build-tools/bootstrap/pkg-install.json'
 MANIFEST_SHA256 = '9a0d854e0b476e6b0d308cc5dee5e1b86dc69431e4c290f3192cb2030ef0608a'
 _PATCH = 'profiles/common-build-tools/patches/pkgsrc-pkg-install-dyld-cache.patch'
 _PREFIXES = ('archivers/libarchive/', 'pkgtools/pkg_install/')
+# The common pkg_install recipe CONFIG_GUESS_OVERRIDE/CONFIG_SUB_OVERRIDE paths.
+_GNU_CONFIG_OVERRIDES = {
+    'libarchive/build/autoconf/config.guess': 'mk/gnu-config/config.guess',
+    'libarchive/build/autoconf/config.sub': 'mk/gnu-config/config.sub',
+    'pkg_install/config.guess': 'mk/gnu-config/config.guess',
+    'pkg_install/config.sub': 'mk/gnu-config/config.sub',
+}
 # libarchive configure compares its grep capability outputs with this tool.
 _CONFIGURE_UTILITIES = {'diff'}
 _DRIVERS = {'cc', 'cxx', 'cpp', 'as', 'ld', 'ar', 'ranlib', 'nm', 'strip', 'make'}
@@ -117,7 +124,7 @@ def pkg_install_steps(plan, descriptor, commands, flags):
 
 def pkg_install_outputs(plan):
     manifest = pkg_install_manifest(plan)
-    return [*manifest['files'], 'libarchive-private.mk',
+    return [*manifest['files'], *('source/' + name for name in _GNU_CONFIG_OVERRIDES), 'libarchive-private.mk',
         'source/libarchive/build/pkgconfig/libarchive.pc', 'source/libarchive/.libs/libarchive.a',
         *('source/' + p for p in manifest['output_programs'].values()),
         *(case['name'] + suffix for case in manifest['runtime_cases'] for suffix in ('.stdout', '.stderr'))]
@@ -138,6 +145,15 @@ def prepare_pkg_install_work(plan, commands):
         expected = {n: dict(r, mode=r['mode'] | (0o700 if r['kind'] == 'directory' else 0o200))
                     for n, r in before.items()}
         _require(snapshot_tree(str(destination)) == expected, 'staged pkg_install source differs')
+    for relative, common in _GNU_CONFIG_OVERRIDES.items():
+        source = Path(plan['program']['source']['root'], common)
+        destination = Path(work, 'source', relative)
+        _require(destination.is_file() and not destination.is_symlink(), 'missing canonical GNU config target')
+        shutil.copy2(source, destination)
+        expected, observed = source.stat(), destination.stat()
+        _require(sha256_file(str(destination)) == sha256_file(str(source)) and
+                 stat.S_IMODE(observed.st_mode) == stat.S_IMODE(expected.st_mode) and
+                 observed.st_mtime_ns == expected.st_mtime_ns, 'common GNU config copy differs')
     os.mkdir(work + '/bin')
     for role in sorted((set(manifest['required_tool_roles']) | _CONFIGURE_UTILITIES) - _DRIVERS):
         os.symlink(commands[role][0], work + '/bin/' + role)
@@ -239,7 +255,8 @@ def validate_pkg_install_plan(plan, descriptor, commands, flags):
     _bytes(value['profile'])
     exported = _inventory(value['export']['inventory'])
     _export_proof(value, descriptor, exported)
-    wanted = {name for name in exported if name == 'bootstrap/bootstrap' or name.startswith(_PREFIXES)}
+    wanted = {name for name in exported if name == 'bootstrap/bootstrap' or
+              name in _GNU_CONFIG_OVERRIDES.values() or name.startswith(_PREFIXES)}
     wanted |= {str(parent) for name in tuple(wanted) for parent in Path(name).parents if str(parent) != '.'}
     _require(set(source) == wanted, 'initial pkg_install source subset omits or adds canonical members')
     for name, row in source.items():

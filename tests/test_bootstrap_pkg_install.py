@@ -46,6 +46,13 @@ class PkgInstallTests(unittest.TestCase):
             ('pkgtools/pkg_install/files/configure', b'synthetic configure\n'),
             ('bootstrap/bootstrap', b'--enable-static \\\n --disable-shared --enable-bootstrap STATIC_LIBARCHIVE=fixture\n')):
             self.old.put(self.source / relative, raw)
+        for relative in pkg._GNU_CONFIG_OVERRIDES.values():
+            self.old.put(self.source / relative, ('canonical current ' + relative + '\n').encode())
+            os.utime(self.source / relative, ns=(1700000000123456789, 1700000000123456789))
+        for relative in pkg._GNU_CONFIG_OVERRIDES:
+            component, name = relative.split('/', 1)
+            directory = 'archivers/libarchive/files' if component == 'libarchive' else 'pkgtools/pkg_install/files'
+            self.old.put(self.source / directory / name, b'old config rejects aarch64-apple-darwin25\n')
         self.old.readonly(self.source)
         self.old.put(self.owner / pkg._PATCH, b'synthetic canonical patch\n')
         self.old.put(self.owner / 'pkgsrc/export.conf', b'synthetic canonical order\n')
@@ -129,6 +136,36 @@ class PkgInstallTests(unittest.TestCase):
         self.descriptor['compiler']['triplet'] += '-changed'
         with self.assertRaises(SDKError):
             self.validate()
+
+    def test_common_gnu_configs_replace_all_four_old_files_exactly(self):
+        self.work.mkdir()
+        pkg.prepare_pkg_install_work(self.plan, self.commands)
+        for relative, common in pkg._GNU_CONFIG_OVERRIDES.items():
+            with self.subTest(relative=relative):
+                target, canonical = self.work / 'source' / relative, self.source / common
+                component, name = relative.split('/', 1)
+                original = self.source / ('archivers/libarchive/files' if component == 'libarchive'
+                                          else 'pkgtools/pkg_install/files') / name
+                self.assertNotEqual(original.read_bytes(), canonical.read_bytes())
+                self.assertEqual(target.read_bytes(), canonical.read_bytes())
+                self.assertEqual(target.stat().st_mode & 0o7777, canonical.stat().st_mode & 0o7777)
+                self.assertEqual(target.stat().st_mtime_ns, canonical.stat().st_mtime_ns)
+                self.assertIn('source/' + relative, program.program_outputs(self.plan))
+
+    def test_common_gnu_config_source_members_cannot_be_missing_or_replaced(self):
+        for mutation in ('missing', 'changed'):
+            with self.subTest(mutation=mutation):
+                value = self.plan['program']['export']
+                saved = value['inventory']
+                inventory = snapshot_tree(str(self.source))
+                if mutation == 'missing':
+                    del inventory['mk/gnu-config/config.sub']
+                else:
+                    inventory['mk/gnu-config/config.sub']['sha256'] = '0' * 64
+                value['inventory'] = self.f.document(inventory)
+                with self.assertRaises(SDKError):
+                    self.validate()
+                value['inventory'] = saved
 
     def test_configure_diff_is_required_native_and_exact_alias(self):
         # The source-owner manifest is a minimum; configure needs selected diff too.
