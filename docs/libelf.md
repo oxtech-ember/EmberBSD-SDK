@@ -12,6 +12,7 @@ Select a new output path with an existing parent:
 python3 scripts/prepare-libelf.py \
   --ports /absolute/EmberBSD-Ports \
   --archive /absolute/elftoolchain-0.7.1.tar.bz2 \
+  --patch-tool /absolute/accepted-sdk/bin/nbpatch \
   --output /absolute/prepared-libelf
 python3 scripts/prepare-libelf.py \
   --validate /absolute/prepared-libelf \
@@ -21,8 +22,17 @@ python3 scripts/prepare-libelf.py \
 `--ports` is optional for validation of a prepared root. Without it, validation
 checks the portable receipt and source bytes. With it, validation also requires
 the selected clean Ports commit, recipe, manifest, distinfo and patch set to
-match. Preparation requires Git and `patch` on `PATH`. Python uses only its
-standard library. This source operation does not compile or install software.
+match. Preparation requires Git. Select the accepted patch executable with
+`--patch-tool`. The path must be absolute and name an existing executable file.
+Its name can be `nbpatch`; no `patch` symlink is required. An invalid explicit
+selection fails without a `PATH` fallback. The selector applies only to preparation.
+Python uses only its standard library. This operation does not compile or install software.
+
+Omitting the selector retains the existing `patch` lookup on `PATH` for caller
+compatibility. Production invocations must select their accepted tool explicitly.
+Record the command, tool hash and producer provenance in the producer evidence.
+The portable source receipt and API version remain unchanged. They bind source
+bytes and do not qualify the host tool. No host tool path is added to the snapshot.
 
 The preparer checks the archive's SHA256, SHA512, BLAKE2s and size against the
 recipe manifest and `distinfo`. It checks every patch SHA1 with pkgsrc's RCS
@@ -53,8 +63,10 @@ receipt modes and still checks the receipt data, source bytes, source modes,
 inventory and tree hash. Read-only permissions prevent accidental edits; they
 are not a signature.
 
-Python callers use `emberbsd_sdk.libelf.prepare_source(ports, archive, output)`
+Python callers use
+`emberbsd_sdk.libelf.prepare_source(ports, archive, output, patch_tool=tool)`
 and `validate_source(root, ports=ports)`. Both return the portable receipt.
+The keyword-only `patch_tool` is optional and defaults to the compatibility lookup.
 `LIBELF_SOURCE_API` is 1. `validate_identity(receipt)` checks the receipt schema
 without accessing the original host.
 

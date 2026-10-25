@@ -399,7 +399,7 @@ def validate_source(root, *, ports=None):
     return record
 
 
-def prepare_source(ports, archive, output):
+def prepare_source(ports, archive, output, *, patch_tool=None):
     """Verify, patch and publish a new common/libelf root without replacement."""
     require_directory_publication()
     source, metadata, entries, distinfo, expected = _recipe(ports)
@@ -418,8 +418,22 @@ def prepare_source(ports, archive, output):
     _require(not os.path.lexists(output), 'libelf output already exists')
     paths.reject_overlap(str(output), source['path'])
     paths.reject_overlap(str(output), archive_path)
-    patch_tool = shutil.which('patch')
-    _require(patch_tool is not None, 'libelf preparation requires patch')
+    if patch_tool is None:
+        patch_tool = shutil.which('patch')
+        _require(patch_tool is not None, 'libelf preparation requires patch')
+    else:
+        try:
+            selected = os.fspath(patch_tool)
+        except TypeError as exc:
+            raise SDKError('libelf patch tool must be an absolute executable path') from exc
+        _require(isinstance(selected, str) and os.path.isabs(selected),
+                 'libelf patch tool must be an absolute executable path')
+        try:
+            patch_tool = paths.canonical_existing(selected)
+            paths.regular_file(patch_tool)
+        except SDKError as exc:
+            raise SDKError(f'invalid libelf patch tool: {exc}') from exc
+        _require(os.access(patch_tool, os.X_OK), 'libelf patch tool is not executable')
     with tempfile.TemporaryDirectory(prefix='.libelf-', dir=output.parent) as temporary:
         temporary = Path(temporary)
         staged_archive = temporary / 'source.tar.bz2'

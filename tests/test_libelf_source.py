@@ -8,7 +8,9 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
+from unittest.mock import patch
 
 from test_core import TemporaryCase
 from libelf_fixture import RECIPE, recipe_fixture
@@ -56,6 +58,64 @@ class LibelfSourceTests(TemporaryCase):
         self.assertEqual((self.output / RECEIPT).stat().st_mode & 0o777, 0o444)
         with self.assertRaisesRegex(SDKError, 'already exists'):
             self.prepare()
+
+    def selected_patch(self):
+        directory = self.root / 'selected tools'; directory.mkdir()
+        selected = directory / 'nbpatch'
+        selected.write_bytes(Path(shutil.which('patch')).read_bytes())
+        selected.chmod(0o755)
+        return selected
+
+    def test_explicit_patch_tool_does_not_search_path_or_change_receipt(self):
+        selected = self.selected_patch()
+        with patch('emberbsd_sdk.libelf.shutil.which',
+                   side_effect=AssertionError('explicit selection searched PATH')):
+            record = prepare_source(self.ports, self.archive, self.output,
+                                    patch_tool=selected)
+        self.assertEqual(record, validate_source(self.output, ports=self.ports))
+        self.assertEqual(set(record),
+                         {'format', 'version', 'recipe', 'archive', 'files', 'tree_sha256'})
+        self.assertNotIn(str(self.root), json.dumps(record))
+
+    def test_explicit_patch_tool_refuses_invalid_paths_without_fallback(self):
+        nonexecutable = self.write('not-executable', 'not a tool\n', mode=0o644)
+        for selected, error in (
+                ('nbpatch', 'absolute executable'),
+                (self.root / 'missing-nbpatch', 'invalid libelf patch tool'),
+                (nonexecutable, 'not executable'),
+                (self.root, 'regular file')):
+            with self.subTest(selected=str(selected)):
+                with patch('emberbsd_sdk.libelf.shutil.which',
+                           side_effect=AssertionError('invalid selection fell back to PATH')):
+                    with self.assertRaisesRegex(SDKError, error):
+                        prepare_source(self.ports, self.archive, self.output,
+                                       patch_tool=selected)
+                self.assertFalse(self.output.exists())
+                self.assertEqual(list(self.root.glob('.libelf-*')), [])
+
+    def test_cli_explicit_patch_tool_and_refusals(self):
+        selected = self.selected_patch()
+        script = Path(__file__).resolve().parents[1] / 'scripts/prepare-libelf.py'
+        command = [sys.executable, '-B', '-I', '-S', str(script),
+                   '--ports', str(self.ports), '--archive', str(self.archive)]
+        good = subprocess.run(command + ['--output', str(self.output),
+                                         '--patch-tool', str(selected)], capture_output=True)
+        self.assertEqual(good.returncode, 0, good.stderr)
+        self.assertEqual(json.loads(good.stdout), validate_source(self.output))
+        for name, tool, error in (
+                ('relative', 'nbpatch', b'absolute executable'),
+                ('missing', str(self.root / 'missing-nbpatch'), b'invalid libelf patch tool')):
+            output = self.root / name
+            result = subprocess.run(command + ['--output', str(output),
+                                               '--patch-tool', tool], capture_output=True)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn(error, result.stderr)
+            self.assertFalse(output.exists())
+        validate = subprocess.run([sys.executable, '-B', '-I', '-S', str(script),
+                                   '--validate', str(self.output),
+                                   '--patch-tool', str(selected)], capture_output=True)
+        self.assertEqual(validate.returncode, 2)
+        self.assertIn(b'select --validate', validate.stderr)
 
     def test_git_archive_and_checkout_preserve_valid_source_receipt(self):
         record = self.prepare()
