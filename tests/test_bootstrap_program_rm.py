@@ -15,6 +15,7 @@ import test_bootstrap_program as fixtures
 from emberbsd_sdk import bootstrap_program as program, bootstrap_program_fs as fs
 from emberbsd_sdk.bootstrap_program_data import decode_data
 from emberbsd_sdk.bootstrap_program_history import _commands
+from emberbsd_sdk.bootstrap_seed import _plan
 from emberbsd_sdk.errors import SDKError
 
 
@@ -62,6 +63,8 @@ class RmProfileTests(unittest.TestCase):
         case = self.fixture()
         with patch('subprocess.Popen', side_effect=AssertionError('no child')):
             self.assertIs(case.validate(), case.plan)
+            self.assertEqual(_plan(case.f.document(case.plan), case.descriptor,
+                                   case.commands, case.flags), case.plan)
         steps = case.plan['commands']
         self.assertEqual(len(steps), 28)
         self.assertEqual([row['phase'] for row in steps[:2]], ['compile', 'link'])
