@@ -57,6 +57,7 @@ The recognized SHA256 values are:
 - Native trust store from the common CA package under `${LOCALBASE}/etc`, with the same native-provider routes: `3366a715faa4c6271d3020f484b969d552164cdfe23bf8dc08e266234d82501f`.
 
 - Metadata keeps the initial tools; full builds reapply the Ports handoff on each MAKECONF read: `87b856b28ff8757bd9c3c62cefaeb032d95be12da79e4fff7415b6b7b8a4a9b9`.
+- The same metadata/full handoff with the native CA store under `${LOCALBASE}/etc`: `06009d0687d0553bcb2de546415caf185b9bdff372006df9147b1e92bc8a9052`.
 
 `bootstrap_producer.py` lists the native-provider revisions between these two.
 
