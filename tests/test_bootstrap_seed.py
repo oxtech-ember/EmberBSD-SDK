@@ -6,6 +6,7 @@ import copy
 import contextlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -205,6 +206,58 @@ class BootstrapSeedTests(unittest.TestCase):
         first = selected.as_dict()
         first['commands']['cc'].append('-specs=bad')
         self.assertEqual(len(selected.command('cc')), 2)
+
+    def test_netbsd_first_native_plan_uses_input_route_audit_until_execution(self):
+        self.seed.plan['netbsd_profile'] = 'netbsd11-amd64-pkgsrc-native-gcc16-v1'
+        pkgsrc_receipt = self.seed.native.raw(b'independent pkgsrc tools receipt')
+        self.seed.plan['netbsd'] = {'pkgsrc_tools_acceptance': pkgsrc_receipt}
+        self.seed.plan['required_roles'] = sorted(set(self.seed.descriptor['tools']) |
+                                                  {'make', 'gmake', 'sh'})
+        self.seed.seal()
+        route_plan = copy.deepcopy(self.seed.plan)
+        acceptance = self.seed.acceptance
+        acceptance.pop('execution_audit')
+        acceptance['evidence_level'] = 'input-and-route-only'
+        acceptance['input_route_audit'] = self.seed.native.document(dict(
+            format='emberbsd-bootstrap-seed-input-route-audit', version=1,
+            scope='gcc16-bootstrap', status='PASS',
+            descriptor_sha256=self.seed.descriptor_ref['sha256'],
+            bootstrap_plan=self.seed.plan_ref, tools=self.seed.descriptor['tools'],
+            dynamic_dependencies=self.seed.descriptor['dynamic_dependencies'],
+            expected_commands=route_plan['commands'], execution_observed=False,
+            unresolved_tool_routes=[], unresolved_abi_inputs=[], unresolved_dsos=[]))
+        self.seed.acceptance_ref = self.seed.native.document(acceptance)
+
+        class PkgsrcTools:
+            def command(self, role):
+                return ('/accepted/pkgsrc/bin/' + {'make': 'bmake', 'gmake': 'gmake',
+                                                   'sh': 'mksh'}[role],)
+
+        from emberbsd_sdk import bootstrap_seed
+        with patch('emberbsd_sdk.bootstrap_seed._plan', return_value=route_plan), \
+             patch('emberbsd_sdk.bootstrap_netbsd_gcc16.load_pkgsrc_bootstrap_tools',
+                   return_value=PkgsrcTools()):
+            selected = self.seed.load(required_roles=tuple(self.seed.plan['required_roles']))
+        self.assertEqual(selected.command('make'), ('/accepted/pkgsrc/bin/bmake',))
+        self.assertNotIn('execution_audit', acceptance)
+
+        audit = json.loads(Path(acceptance['input_route_audit']['path']).read_text(encoding='utf-8'))
+        audit['execution_observed'] = True
+        acceptance['input_route_audit'] = self.seed.native.document(audit)
+        self.seed.acceptance_ref = self.seed.native.document(acceptance)
+        with patch('emberbsd_sdk.bootstrap_seed._plan', return_value=route_plan), \
+             patch('emberbsd_sdk.bootstrap_netbsd_gcc16.load_pkgsrc_bootstrap_tools',
+                   return_value=PkgsrcTools()):
+            self.refuse('input routes were not independently accepted')
+
+        audit['execution_observed'] = False
+        audit['expected_commands'] = []
+        acceptance['input_route_audit'] = self.seed.native.document(audit)
+        self.seed.acceptance_ref = self.seed.native.document(acceptance)
+        with patch('emberbsd_sdk.bootstrap_seed._plan', return_value=route_plan), \
+             patch('emberbsd_sdk.bootstrap_netbsd_gcc16.load_pkgsrc_bootstrap_tools',
+                   return_value=PkgsrcTools()):
+            self.refuse('input routes were not independently accepted')
 
     def test_seed_cannot_be_used_as_ordinary_toolset(self):
         with self.assertRaises(SDKError):

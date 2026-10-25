@@ -352,3 +352,9 @@ class PkgsrcExportSourceTests(SourceFixture):
         with self.assertRaisesRegex(SDKError, 'inventory|transfer|target'):
             validate_export_transfer_acceptance(str(receipt_path), sha256_file(str(receipt_path)),
                                                 export_acceptance_ref=acceptance_ref)
+        output.rename(self.root / 'target/pkgsrc-retired')
+        source_inventory.rename(self.root / 'source/inventory-retired.json')
+        _, offline = validate_export_transfer_acceptance(
+            str(receipt_path), sha256_file(str(receipt_path)),
+            export_acceptance_ref=acceptance_ref, inspect_inputs=False)
+        self.assertEqual(offline['output_root'], str(output))

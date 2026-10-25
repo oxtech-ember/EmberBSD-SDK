@@ -320,6 +320,17 @@ def _plan(reference, descriptor, commands=None, flags=None, *, inspect_inputs=Tr
         commands = _seed_commands(descriptor, inspect_inputs=inspect_inputs) if commands is None else commands
         return validate_producer_plan(plan, descriptor, commands,
                                       descriptor['abi_flags'] if flags is None else flags)
+    if plan.get('netbsd_profile') == 'netbsd11-amd64-pkgsrc-native-gcc16-v1':
+        from .bootstrap_netbsd_recipe import validate_netbsd_recipe_plan
+        if commands is None:
+            commands = _seed_commands(descriptor, inspect_inputs=inspect_inputs)
+            from .bootstrap_netbsd_gcc16 import load_pkgsrc_bootstrap_tools
+            reference = plan['netbsd']['pkgsrc_tools_acceptance']
+            selected_tools = load_pkgsrc_bootstrap_tools(reference['path'],
+                acceptance_sha256=reference['sha256'], inspect_inputs=inspect_inputs)
+            commands.update({role: selected_tools.command(role) for role in ('make', 'gmake', 'sh')})
+        return validate_netbsd_recipe_plan(plan, descriptor, commands,
+            descriptor['abi_flags'] if flags is None else flags, inspect_inputs=inspect_inputs)
     _envelope(plan, 'emberbsd-native-gcc16-bootstrap-plan', scope=_SCOPE)
     bound = descriptor.get('make_binding') is not None
     _require(plan.get('purpose') == 'first-native-gcc16' and
@@ -562,7 +573,10 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
                                             'emberbsd-bootstrap-make-probe-plan',
                                             'emberbsd-native-gcc16-producer-plan')
     roles = set(required_roles) | set(plan_header['required_roles']) | (set() if is_pilot else {'sh'})
-    root, inventory, tools, records, abi_inventories, flags = _payload(descriptor, roles)
+    netbsd_recipe = plan_header.get('netbsd_profile') == \
+        'netbsd11-amd64-pkgsrc-native-gcc16-v1'
+    seed_roles = roles - ({'make', 'gmake', 'sh'} if netbsd_recipe else set())
+    root, inventory, tools, records, abi_inventories, flags = _payload(descriptor, seed_roles)
     prefix = _absolute(descriptor['driver_prefix'])
     _require(inside(prefix, root) and canonical_existing(prefix) == prefix and os.path.isdir(prefix),
              'GCC driver prefix must be a real in-bundle directory')
@@ -572,6 +586,13 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
                  for role in descriptor['driver_components'].values()),
              'GCC driver components must use the explicit prefix')
     commands = _seed_commands(descriptor)
+    if netbsd_recipe:
+        from .bootstrap_netbsd_gcc16 import load_pkgsrc_bootstrap_tools
+        netbsd = plan_header['netbsd']
+        pkgsrc_ref = netbsd['pkgsrc_tools_acceptance']
+        selected_pkgsrc = load_pkgsrc_bootstrap_tools(pkgsrc_ref['path'],
+            acceptance_sha256=pkgsrc_ref['sha256'])
+        commands.update({role: selected_pkgsrc.command(role) for role in ('make', 'gmake', 'sh')})
     plan = _plan(plan_ref, descriptor, commands, flags)
     _dynamic_closure(descriptor['dynamic_dependencies'], descriptor)
     for key in ('host', 'compiler', 'sources', 'providers', 'host_abi', 'abi_flags',
@@ -582,7 +603,7 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
     _require(acceptance.get('make_binding') == descriptor.get('make_binding'),
              'seed acceptance make binding mismatch')
     _driver_queries(descriptor, acceptance['checks'], seed_reported_tools(descriptor, tools), commands)
-    if is_pilot or descriptor.get('make_binding') is not None:
+    if is_pilot or netbsd_recipe or descriptor.get('make_binding') is not None:
         _require(acceptance.get('evidence_level') == 'input-and-route-only',
                  'bootstrap route requires explicit input-and-route-only acceptance')
         audit = _json(acceptance['input_route_audit'])

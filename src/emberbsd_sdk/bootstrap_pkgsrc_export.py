@@ -37,8 +37,9 @@ _SDK_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 _EXPORTER = 'scripts/prepare-pkgsrc.py'
 _CONFIG = 'pkgsrc/export.conf'
 _SDK_MODULES = ('bootstrap_pilot.py', 'bootstrap_pkgsrc_export.py', 'elf.py', 'errors.py',
-                'inventory.py', 'jsonio.py', 'native_toolset.py', 'paths.py',
-                'process.py', 'provenance.py')
+                'bootstrap_netbsd_gcc16.py', 'bootstrap_netbsd_recipe.py',
+                'bootstrap_pkgsrc_provider.py', 'inventory.py', 'jsonio.py',
+                'native_toolset.py', 'paths.py', 'process.py', 'provenance.py')
 _FORBIDDEN_TOOLS = {'cc', 'c++', 'gcc', 'g++', 'clang', 'clang++', 'make', 'bmake', 'gmake'}
 
 
@@ -724,7 +725,8 @@ def validate_export_acceptance(receipt, receipt_sha256, *, result_ref, plan_ref,
     return receipt_ref, value
 
 
-def validate_export_transfer_acceptance(receipt, receipt_sha256, *, export_acceptance_ref):
+def validate_export_transfer_acceptance(receipt, receipt_sha256, *, export_acceptance_ref,
+                                        inspect_inputs=True):
     """Validate a gate-issued source transfer after target-side full revalidation.
 
     The original source-export receipt names the exporter host's path, which is
@@ -772,19 +774,21 @@ def validate_export_transfer_acceptance(receipt, receipt_sha256, *, export_accep
     source_inventory_ref = _hash_ref(value['source_inventory'], 'transferred source inventory')
     accepted_inventory = _hash_ref(accepted['output_inventory'], 'accepted source inventory')
     _require(source_inventory_ref['sha256'] == accepted_inventory['sha256'] and
-             sha256_file(source_inventory_ref['path']) == source_inventory_ref['sha256'],
+             (not inspect_inputs or sha256_file(source_inventory_ref['path']) == source_inventory_ref['sha256']),
              'transferred inventory bytes differ from the independently accepted export inventory')
     output_inventory_ref = _hash_ref(value['output_inventory'], 'target source inventory')
-    _require(sha256_file(output_inventory_ref['path']) == output_inventory_ref['sha256'] and
+    _require((not inspect_inputs or sha256_file(output_inventory_ref['path']) == output_inventory_ref['sha256']) and
              value['normalization_policy'] == TRANSFER_NORMALIZATION,
              'target inventory or transfer normalization policy changed')
-    source_inventory = read_json(source_inventory_ref['path'], max_bytes=MANIFEST_LIMIT)
     output_inventory = read_json(output_inventory_ref['path'], max_bytes=MANIFEST_LIMIT)
+    if inspect_inputs:
+        source_inventory = read_json(source_inventory_ref['path'], max_bytes=MANIFEST_LIMIT)
     output_root = _absolute(value['output_root'])
-    _require(canonical_existing(output_root) == output_root and
-             snapshot_tree(output_root) == output_inventory and
-             transfer_inventory_equal(source_inventory, output_inventory),
-             'target pkgsrc tree differs from the complete accepted transfer inventory')
+    if inspect_inputs:
+        _require(canonical_existing(output_root) == output_root and
+                 snapshot_tree(output_root) == output_inventory and
+                 transfer_inventory_equal(source_inventory, output_inventory),
+                 'target pkgsrc tree differs from the complete accepted transfer inventory')
     report_ref = _hash_ref(value['transfer_report'], 'source transfer report')
     _require(sha256_file(report_ref['path']) == report_ref['sha256'],
              'source transfer report changed')

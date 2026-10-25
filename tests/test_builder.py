@@ -457,7 +457,10 @@ class BuilderTests(TemporaryCase):
         self.refusal_unchanged('incompatible object context', destination=self.options['sdk'] + '/next')
 
     def test_non_ancestor_os_source(self):
-        self.run_builder(); git(self.options['os'], 'checkout', '--orphan', 'other'); commit(self.options['os'])
+        self.run_builder(); git(self.options['os'], 'checkout', '--orphan', 'other')
+        # An identical root tree/message/timestamp can recreate the original commit.
+        write(Path(self.options['os']) / 'unrelated-root', 'independent history\n')
+        commit(self.options['os'])
         self.refusal_unchanged('command failed', destination=self.options['sdk'] + '/next')
 
     def test_output_alias_escape_and_overlap_refused(self):

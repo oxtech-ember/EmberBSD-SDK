@@ -18,16 +18,18 @@ def main():
     parser.add_argument('--ports')
     parser.add_argument('--archive')
     parser.add_argument('--output')
+    parser.add_argument('--patch-tool', help='absolute patch executable for preparation')
     parser.add_argument('--validate')
     args = parser.parse_args()
     if args.validate is not None:
-        if args.archive is not None or args.output is not None:
+        if args.archive is not None or args.output is not None or args.patch_tool is not None:
             parser.error('select --validate ROOT or both --archive FILE and --output NEW_ROOT')
     elif args.ports is None or args.archive is None or args.output is None:
         parser.error('preparation requires --ports, --archive FILE and --output NEW_ROOT')
     try:
         result = (validate_source(args.validate, ports=args.ports)
-                  if args.validate else prepare_source(args.ports, args.archive, args.output))
+                  if args.validate else prepare_source(
+                      args.ports, args.archive, args.output, patch_tool=args.patch_tool))
         print(json.dumps(result, indent=2))
         return 0
     except (SDKError, OSError, ValueError, UnicodeError) as exc:

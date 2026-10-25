@@ -15,6 +15,9 @@ from emberbsd_sdk.bootstrap_pkgsrc_export import (
     create_export_plan, describe_export_source, export_source_manifest,
     run_export, validate_export_acceptance, validate_export_transfer_acceptance,
 )
+from emberbsd_sdk.bootstrap_pkgsrc_provider import (
+    create_bootstrap_plan, run_bootstrap,
+)
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.inventory import sha256_file
 from emberbsd_sdk.jsonio import json_bytes, read_json, write_json
@@ -53,6 +56,17 @@ def _parser():
     transfer = subparsers.add_parser('check-transfer-acceptance')
     for name in ('receipt', 'receipt-sha256', 'export-acceptance', 'export-acceptance-sha256'):
         transfer.add_argument('--' + name, required=True)
+    provider_plan = subparsers.add_parser('make-provider-plan')
+    for name in ('transfer-acceptance', 'transfer-acceptance-sha256',
+                 'export-acceptance', 'export-acceptance-sha256',
+                 'compiler-seed', 'compiler-seed-sha256', 'host-tools',
+                 'work-root', 'lock-root', 'output'):
+        provider_plan.add_argument('--' + name, required=True)
+    provider_plan.add_argument('--cpu-jobs', type=int, default=1)
+    provider_plan.add_argument('--runtime-seconds', type=int, default=3600)
+    provider = subparsers.add_parser('run-provider')
+    provider.add_argument('--plan', required=True)
+    provider.add_argument('--plan-sha256', required=True)
     return parser
 
 
@@ -89,14 +103,33 @@ def main(argv=None):
                 plan_ref=dict(path=args.plan, sha256=args.plan_sha256),
                 source_ref=dict(path=args.source_descriptor, sha256=args.source_descriptor_sha256))
             result = dict(receipt=receipt_ref, scope=receipt['scope'], status=receipt['status'])
-        else:
+        elif args.action == 'check-transfer-acceptance':
             receipt_ref, receipt = validate_export_transfer_acceptance(
                 args.receipt, args.receipt_sha256,
                 export_acceptance_ref=dict(path=args.export_acceptance,
                                            sha256=args.export_acceptance_sha256))
             result = dict(receipt=receipt_ref, scope=receipt['scope'], status=receipt['status'],
                           output_root=receipt['output_root'], output_inventory=receipt['output_inventory'])
+        elif args.action == 'make-provider-plan':
+            host_tools = read_json(args.host_tools)
+            plan = create_bootstrap_plan(
+                dict(path=args.transfer_acceptance,
+                     sha256=args.transfer_acceptance_sha256),
+                dict(path=args.export_acceptance,
+                     sha256=args.export_acceptance_sha256),
+                dict(path=args.compiler_seed, sha256=args.compiler_seed_sha256),
+                args.work_root, args.lock_root, host_tools,
+                plan_path=os.path.abspath(args.output), cpu_jobs=args.cpu_jobs,
+                runtime_seconds=args.runtime_seconds)
+            result = dict(path=args.output, sha256=sha256_file(args.output),
+                          scope=plan['scope'], commands=[step['id'] for step in plan['commands']])
+        else:
+            result = run_bootstrap(dict(path=args.plan, sha256=args.plan_sha256))
         sys.stdout.buffer.write(json_bytes(result))
+        if args.action == 'run-provider':
+            return 0 if result.get('status') == 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW' else 1
+        if args.action == 'run-export':
+            return 0 if result.get('status') == 'EXPORT_COMPLETED_PENDING_INDEPENDENT_REVIEW' else 1
         return 0
     except (SDKError, OSError, ValueError, KeyError, TypeError) as exc:
         print(f'bootstrap-pkgsrc: {exc}', file=sys.stderr)
