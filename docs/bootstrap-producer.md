@@ -253,3 +253,10 @@ The eleven gzip prerequisites include `archivers/pax`, `net/fetch` and
 They do not depend on gzip. The earlier source-gzip profile remains valid for
 its historical inputs. The fixed metadata queries and tool declarations do not
 change. Re-query the dependency graph before a full build.
+
+The runtime-options reapply profile recognizes `15793fddb726c8fdd56c41b5000e414060e67f9e0991fe09622e3cbdece1f17d`.
+It restores the existing static GCC runtime and no-default-rpath link options
+after each MAKECONF assignment of the accepted ABI flags. The earlier
+profile identities remain valid for their historical inputs. The producer
+interface, fixed metadata query roster and native ABI flags do not change.
+New output libraries still require complete runtime-closure review.

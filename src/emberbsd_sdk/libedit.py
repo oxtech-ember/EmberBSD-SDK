@@ -7,10 +7,9 @@ import os
 from pathlib import Path
 import re
 import shutil
-import tarfile
 import tempfile
 
-from . import elf, inventory, jsonio, paths, process, provenance
+from . import elf, inventory, jsonio, paths, process, provenance, sourceprep
 from .errors import SDKError
 from .publication import publish_directory_noreplace, require_directory_publication
 
@@ -113,29 +112,6 @@ def _recipe(ports):
     return source, metadata, entries, distinfo
 
 
-def _extract(archive, destination, distname):
-    """Extract only unique regular files and directories below one archive root."""
-    seen = set()
-    with tarfile.open(archive, 'r:gz') as packed:
-        for member in packed:
-            name = member.name.rstrip('/')
-            parts = name.split('/')
-            _require(parts[0] == distname and all(p not in ('', '.', '..') for p in parts) and
-                     not any(ord(c) < 32 or ord(c) == 127 for c in name), 'unsafe libedit archive path')
-            _require(name not in seen, 'duplicate libedit archive member')
-            seen.add(name)
-            _require(member.isdir() or member.isreg(), 'libedit archive contains a link or special file')
-            path = destination.joinpath(*parts)
-            if member.isdir():
-                path.mkdir(parents=True, exist_ok=True)
-                path.chmod(0o755)
-            else:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                with packed.extractfile(member) as source, path.open('xb') as output:
-                    shutil.copyfileobj(source, output)
-                path.chmod(0o755 if member.mode & 0o111 else 0o644)
-
-
 def validate_identity(record):
     """Check the portable receipt schema without accessing its original host."""
     _require(isinstance(record, dict) and set(record) == {'format', 'version', 'recipe', 'archive', 'tree_sha256'},
@@ -198,8 +174,7 @@ def prepare_source(ports, archive, output):
     archive = paths.canonical_existing(archive)
     name = metadata['distname'] + '.tar.gz'
     data = _read(archive)
-    hashes = dict(sha256=_digest(data), sha512=hashlib.sha512(data).hexdigest(),
-                  blake2s=hashlib.blake2s(data).hexdigest(), size=len(data))
+    hashes = sourceprep.archive_hashes(data)
     _require(hashes['sha512'] == entries['SHA512', name] and hashes['blake2s'] == entries['BLAKE2s', name] and
              str(hashes['size']) == entries['Size', name], 'libedit archive checksum mismatch')
     output = Path(paths.path_string(output))
@@ -213,22 +188,18 @@ def prepare_source(ports, archive, output):
         # Extract the verified bytes, not a reopened mutable input archive.
         copied = temporary / 'source.tar.gz'
         copied.write_bytes(data)
-        _extract(copied, temporary, metadata['distname'])
+        sourceprep.extract_archive(copied, temporary, metadata['distname'], 'libedit')
         root = temporary / metadata['distname']
         for row in metadata['patches']:
             patch = Path(source['path'], RECIPE, 'patches', row['name'])
             patch_data = _read(patch)
             _require(_digest(patch_data) == row['sha256'], 'libedit patch changed before application')
-            # Never let patch write outside the extracted root, even for a bad recipe.
-            headers = re.findall(rb'^(?:---|\+\+\+) ([^\t\n ]+)', patch_data, re.M)
-            _require(headers, 'libedit patch has no unified diff headers')
-            for header in headers:
-                _require(not header.startswith(b'/') and all(p not in (b'', b'.', b'..') for p in header.split(b'/')),
-                         'unsafe libedit patch path')
             staged_patch = temporary / row['name']
             staged_patch.write_bytes(patch_data)
-            process.capture([patch_tool, '-p0', '-F0', '--posix', '--batch', '--forward', '--no-backup-if-mismatch', '-i', str(staged_patch)],
-                            cwd=str(root), env=process.sanitized_environment())
+            sourceprep.apply_patch(
+                patch_tool, staged_patch, patch_data, root, 'libedit',
+                patch_args=('-p0', '-F0', '--posix', '--batch', '--forward',
+                            '--no-backup-if-mismatch'))
         _require(not any(p.name.endswith(('.orig', '.rej')) for p in root.rglob('*')), 'libedit patch left backup or reject files')
         (root / 'ports.distinfo').write_bytes(distinfo)
         record = dict(format='emberbsd-libedit-source', version=1, recipe=metadata,

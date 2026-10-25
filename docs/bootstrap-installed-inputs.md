@@ -52,6 +52,7 @@ This finite variant supports only these package paths and tool roles:
 | `lang/nawk` | `awk` |
 | `textproc/grep` | `grep` |
 | `textproc/gsed` | `sed` |
+| `textproc/nbsed` | `sed` |
 | `sysutils/coreutils` | `basename`, `cat`, `cut`, `date`, `dirname`, `env`, `expr`, `head`, `id`, `od`, `pwd`, `sort`, `tail`, `tr`, `uname`, `uniq`, `wc` |
 | `pkgtools/pkg_install` | `pkg_info`, `pkg_admin` |
 
@@ -66,6 +67,16 @@ This table does not permit DSO relocation or a changed installed-member hash.
 The separate [finite relocation contract](bootstrap-relocation.md) retains
 original provenance in the bootstrap-only `installed-package-derived` kind.
 The ordinary provider contract remains unchanged.
+
+An existing SDK `nbsed` can supply a temporary bootstrap `sed` input.
+Keep its original `textproc/nbsed` identity, package metadata, member hashes,
+historical tool routes, and unknowns. Do not relabel it as `textproc/gsed`.
+Its admission still requires independent review of the exact provisioned bytes,
+current runtime closure, and consumer plan. This mapping does not accept a payload.
+Use that input to build the current common Ports `textproc/gsed` recipe with
+all common patches and its selected dependencies. Replace the temporary input
+after the new GNU sed output passes its required checks.
+This route does not qualify an ordinary provider or the canonical OS sed build.
 
 ## Preserve and correlate members
 
