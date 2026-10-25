@@ -378,7 +378,26 @@ def _driver_queries(descriptor, checks, tools, commands):
         _require(query.get('argv') == [*commands[driver], '-print-prog-name=' + component],
                  'driver component query mismatch')
         output = _command(query, tools[driver]).decode('utf-8', 'strict').strip()
-        _require(output == tools[role], f'driver selected an undeclared or implicit member: {component}')
+        selected = tools[role]
+        matched = output == selected
+        binding = descriptor.get('driver_binding')
+        if (not matched and isinstance(binding, dict) and
+                binding.get('kind') == 'netbsd11-configured-base-as-ld-seed-v1' and
+                component not in ('as', 'ld')):
+            try:
+                _text(output, 'reported NetBSD GCC driver member')
+                reported_path = os.path.normpath(output) if os.path.isabs(output) else ''
+                root = _absolute(descriptor['bundle_root'])
+                if reported_path:
+                    # Resolve the raw driver output before normalization. A symlink
+                    # followed by '..' can otherwise turn an escaping path into an
+                    # apparently in-bundle lexical spelling.
+                    resolved = canonical_existing(output)
+                    matched = (inside(reported_path, root) and
+                               resolved == canonical_existing(selected) and inside(resolved, root))
+            except (SDKError, OSError, ValueError):
+                matched = False
+        _require(matched, f'driver selected an undeclared or implicit member: {component}')
 
 
 @dataclass(frozen=True)

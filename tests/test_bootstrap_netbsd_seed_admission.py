@@ -20,6 +20,7 @@ from emberbsd_sdk.bootstrap_seed import _dynamic_closure, _environment, load_boo
 from emberbsd_sdk import bootstrap_seed
 from emberbsd_sdk.bootstrap_pilot import pilot_steps
 from emberbsd_sdk.errors import SDKError
+from emberbsd_sdk.native_toolset import _driver_queries
 from test_bootstrap_seed import SeedFixture
 
 
@@ -619,6 +620,80 @@ class RetainedR13DigestHistoryTests(unittest.TestCase):
             self.validate()
 
 class NetBSDAdmissionBoundaryTests(unittest.TestCase):
+    def test_configured_netbsd_driver_query_accepts_only_an_in_bundle_path_alias(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            seed = SeedFixture(temporary)
+            descriptor = seed.descriptor
+            descriptor['host'] = {'os': 'NetBSD', 'cpu': 'amd64'}
+            descriptor['admission'] = 'netbsd11-amd64-first-native-v1'
+            descriptor['driver_binding'] = {
+                'kind': 'netbsd11-configured-base-as-ld-seed-v1'}
+            # The host GCC reports this lexical shape for a member under libexec.
+            prefix = Path(descriptor['driver_prefix'])
+            alias = str(prefix / 'bin' / '..' / 'cc1')
+            (prefix / 'bin').mkdir()
+            checks = json.loads(json.dumps(seed.acceptance['checks']))
+            checks['driver_components']['cc1']['stdout'] = seed.native.raw(
+                (alias + '\n').encode())
+            selected = {role: row['path'] for role, row in descriptor['tools'].items()}
+
+            _driver_queries(descriptor, checks, selected, seed.commands)
+
+            checks['driver_components']['cc1']['stdout'] = seed.native.raw(
+                b'/tmp/unlisted-cc1\n')
+            with self.assertRaisesRegex(SDKError, 'undeclared or implicit member'):
+                _driver_queries(descriptor, checks, selected, seed.commands)
+
+    def test_configured_netbsd_driver_alias_cannot_follow_a_symlink_out_of_bundle(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            seed = SeedFixture(temporary)
+            descriptor = seed.descriptor
+            descriptor['host'] = {'os': 'NetBSD', 'cpu': 'amd64'}
+            descriptor['admission'] = 'netbsd11-amd64-first-native-v1'
+            descriptor['driver_binding'] = {
+                'kind': 'netbsd11-configured-base-as-ld-seed-v1'}
+            prefix = Path(descriptor['driver_prefix'])
+            outside = Path(temporary) / 'outside'
+            (outside / 'childdir').mkdir(parents=True)
+            (outside / 'cc1').write_bytes(b'outside driver')
+            (prefix / 'bin').symlink_to(outside / 'childdir', target_is_directory=True)
+            alias = str(prefix / 'bin' / '..' / 'cc1')
+            checks = json.loads(json.dumps(seed.acceptance['checks']))
+            checks['driver_components']['cc1']['stdout'] = seed.native.raw(
+                (alias + '\n').encode())
+            selected = {role: row['path'] for role, row in descriptor['tools'].items()}
+
+            with self.assertRaisesRegex(SDKError, 'undeclared or implicit member'):
+                _driver_queries(descriptor, checks, selected, seed.commands)
+
+    def test_driver_alias_exception_does_not_apply_to_ordinary_or_external_roles(self):
+        for role, binding in (
+                ('cc1', None),
+                ('as', {'kind': 'netbsd11-configured-base-as-ld-seed-v1'}),
+                ('ld', {'kind': 'netbsd11-configured-base-as-ld-seed-v1'})):
+            with self.subTest(role=role):
+                with tempfile.TemporaryDirectory() as temporary:
+                    seed = SeedFixture(temporary)
+                    descriptor = seed.descriptor
+                    if binding is not None:
+                        descriptor['host'] = {'os': 'NetBSD', 'cpu': 'amd64'}
+                        descriptor['admission'] = 'netbsd11-amd64-first-native-v1'
+                        descriptor['driver_binding'] = binding
+                    if role in ('as', 'ld'):
+                        descriptor['tools'][role]['path'] = '/usr/bin/' + role
+                        alias = '/usr/bin/../bin/' + role
+                    else:
+                        prefix = Path(descriptor['driver_prefix'])
+                        (prefix / 'bin').mkdir()
+                        alias = str(prefix / 'bin' / '..' / role)
+                    checks = json.loads(json.dumps(seed.acceptance['checks']))
+                    checks['driver_components'][role]['stdout'] = seed.native.raw(
+                        (alias + '\n').encode())
+                    selected = {name: row['path'] for name, row in descriptor['tools'].items()}
+
+                    with self.assertRaisesRegex(SDKError, 'undeclared or implicit member'):
+                        _driver_queries(descriptor, checks, selected, seed.commands)
+
     def test_configured_base_drivers_are_the_only_prefix_exceptions(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
