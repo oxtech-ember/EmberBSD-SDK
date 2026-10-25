@@ -23,7 +23,7 @@ The SDK constructs commands from that data. It does not copy a recipe.
 The plan format is `emberbsd-native-gcc16-producer-plan`, version 1,
 scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`,
 `hostname-bootstrap`, `basename-bootstrap`, `dirname-bootstrap`, `cat-bootstrap`,
-`head-bootstrap`, and `uniq-bootstrap`.
+`head-bootstrap`, `uniq-bootstrap`, `wc-bootstrap`, and `tr-bootstrap`.
 Each stage selects one exact source-owner manifest.
 It has exactly `format`, `version`, `scope`, `stage`, `seed_descriptor`, `host`,
 `sources`, `work_root`, `required_roles`, `resources`, `program`, and `commands`.
@@ -222,6 +222,35 @@ All source proof, selected-tool, argv, stream and drain checks remain shared.
 Use `test_bootstrap_program_filters.py` with `EMBERBSD_TEST_OS_SOURCE` to check
 real source contracts and rejection of changed manifests before a child starts.
 These checks do not establish native compilation, C analysis or runtime acceptance.
+
+## Fixed wc and tr profiles
+
+These profiles reuse the OS implementations and the same direct-source runner.
+The OS owns every semantic argument and expected stream in `tools/<name>/bootstrap.json`.
+The pinned manifest digests are:
+
+- wc: `38e7672e67b4b423062596252fde87ad4b09ee4977d61f53526214d0e8d6ae88`.
+- tr: `88114937d4d600fd4c228836657f03c296ffca4badb5dea446cc67768ac6c05b`.
+
+Wc compiles `usr.bin/wc/wc.c`. Its 18 cases cover counts, longest lines,
+stdin, files, totals, empty input and errors. It uses the shared absent-file gate.
+The first case reads `input.txt` for the direct runtime observation.
+There are 21 commands, including one compile and one link.
+The unchanged source derives stack buffers from native `MAXBSIZE`; check the host stack budget.
+
+Tr compiles `usr.bin/tr/str.c` and `usr.bin/tr/tr.c`, with its `extern.h`.
+Its 18 stdin cases cover translation, character classes, deletion, squeezing,
+complements, ranges, repetition, equivalence, escapes and errors.
+It has no file operands or source fixture files.
+The direct runtime observation uses valid operands and EOF; semantic cases supply nonempty stdin separately.
+There are 22 commands, including two compiles and one link.
+
+The common OS annotation header supplies guarded `__arraycount` for tr's class table.
+Its array-size division preserves the element type and any existing host definition.
+The full OS compatibility header is unchanged. SDK contains no macro or libc substitute.
+Use `test_bootstrap_program_filters.py` and `test_bootstrap_program_tr.py` with
+`EMBERBSD_TEST_OS_SOURCE` for source and metadata checks.
+Native GCC16 compilation, C analysis, runtime and memory acceptance remain separate.
 
 ## Common execution and evidence
 

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-"""Initial cat/head/uniq contracts. Native children remain synthetic fixtures."""
+"""Initial cat/head/uniq/wc contracts. Native children remain synthetic fixtures."""
 
 import copy
 import hashlib
@@ -25,7 +25,7 @@ class FilterProgramTests(unittest.TestCase):
         self.case = self.native.case
 
     def test_fixed_profiles_use_shared_sources_commands_and_runner(self):
-        for name, count in (('cat', 18), ('head', 16), ('uniq', 16)):
+        for name, count in (('cat', 18), ('head', 16), ('uniq', 16), ('wc', 18)):
             with self.subTest(name=name):
                 self.assertIn(name + '-bootstrap', program.PROGRAM_STAGES)
                 self.native.configure(name)
@@ -58,7 +58,7 @@ class FilterProgramTests(unittest.TestCase):
                 case.plan['work_root'] = str(case.work)
 
     def test_source_and_route_changes_refuse_before_a_child(self):
-        for name in ('cat', 'head', 'uniq'):
+        for name in ('cat', 'head', 'uniq', 'wc'):
             self.native.configure(name)
             case = self.case
             original = copy.deepcopy(case.plan)
@@ -83,7 +83,7 @@ class FilterProgramTests(unittest.TestCase):
                     case.inputs = case.plan['program']['source']
 
     def test_missing_file_control_rejects_existing_files_and_links(self):
-        for name in ('cat', 'head', 'uniq'):
+        for name in ('cat', 'head', 'uniq', 'wc'):
             self.native.configure(name)
             self.case.work.mkdir(exist_ok=True)
             path = self.case.work / 'missing.txt'
@@ -97,7 +97,7 @@ class FilterProgramTests(unittest.TestCase):
                 path.unlink()
 
     def test_fixture_paths_and_payloads_use_the_shared_bounded_schema(self):
-        for name in ('cat', 'head', 'uniq'):
+        for name in ('cat', 'head', 'uniq', 'wc'):
             self.native.configure(name)
             for key, value in [('../outside.txt', ''), ('/absolute.txt', ''), ('result.json', ''),
                                ('missing.txt', ''), ('input.txt', None), ('case0.stdout', '')]:
@@ -115,7 +115,7 @@ class FilterProgramTests(unittest.TestCase):
                          'set EMBERBSD_TEST_OS_SOURCE for actual source-owner contracts')
     def test_actual_os_manifests_sources_links_and_digest_negatives(self):
         root = Path(os.environ['EMBERBSD_TEST_OS_SOURCE']).resolve(strict=True)
-        for name, count in (('cat', 18), ('head', 16), ('uniq', 16)):
+        for name, count in (('cat', 18), ('head', 16), ('uniq', 16), ('wc', 18)):
             relative, digest, sources, provenance = program._profile({'stage': name + '-bootstrap'})
             raw = (root / relative).read_bytes()
             self.assertEqual(hashlib.sha256(raw).hexdigest(), digest)
