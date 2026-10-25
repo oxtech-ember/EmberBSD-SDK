@@ -17,6 +17,13 @@ from emberbsd_sdk.inventory import snapshot_tree
 
 
 BUILD_LAYOUTS = {
+    'devel/bmake': ('Makefile', 'files/configure', 'files/make-bootstrap.sh.in',
+                    'files/main.c', 'files/job.c'),
+    'pkgtools/bootstrap-mk-files': ('Makefile', 'files/sys.mk', 'files/bsd.prog.mk',
+                                   'files/mods/bsd.own.mk.in'),
+    'pkgtools/pkg_install': ('Makefile', 'files/configure', 'files/Makefile.in',
+                            'files/lib/version.h', 'files/add/main.c', 'files/create/main.c',
+                            'files/admin/main.c', 'files/info/main.c'),
     'archivers/bzip2': ('Makefile', 'files/Makefile', 'files/bzip2.c', 'files/bzlib.c'),
     'archivers/libarchive': ('Makefile', 'Makefile.common', 'files/configure', 'files/Makefile.in',
                            'files/libarchive/archive_read.c', 'files/libarchive/archive.h'),
@@ -56,7 +63,7 @@ class LocalBuildRecipeTests(unittest.TestCase):
             'patches/patch-expr.c', 'patches/patch-lalloc.c']
         self.local.refresh_export()
 
-    def test_twelve_fixed_local_roots_preserve_real_archive_mapping(self):
+    def test_fifteen_fixed_local_roots_preserve_real_archive_mapping(self):
         with patch('subprocess.Popen', side_effect=AssertionError('no native process')):
             self.assertEqual(self.case.validate(), self.plan)
             self.assertEqual(self.case.validate(inspect_inputs=False), self.plan)
@@ -68,7 +75,7 @@ class LocalBuildRecipeTests(unittest.TestCase):
         copied = sorted(str(p.relative_to(self.case.work / 'distfiles'))
                         for p in (self.case.work / 'distfiles').rglob('*') if p.is_file())
         self.assertEqual(copied, sorted(expected))
-        self.assertEqual(len(fixtures.LOCAL_LAYOUTS), 12)
+        self.assertEqual(len(fixtures.LOCAL_LAYOUTS), 15)
 
     def test_bsd_profile_preserves_legacy_policy_recognition(self):
         self.assertTrue(producer._recognized_profile(producer.BSDINSTALL_PROFILE_SHA256))
@@ -78,7 +85,19 @@ class LocalBuildRecipeTests(unittest.TestCase):
                        producer.NO_DEFAULT_RPATH_PROFILE_SHA256,
                        producer.UNPRIVILEGED_PROFILE_SHA256):
             self.assertTrue(producer._native_provider_profile(digest))
+        self.assertTrue(producer._recognized_profile(producer.FOUNDATION_PROFILE_SHA256))
+        self.assertTrue(producer._parallel_profile(producer.FOUNDATION_PROFILE_SHA256))
+        self.assertTrue(producer._native_provider_profile(producer.FOUNDATION_PROFILE_SHA256))
         self.assertFalse(producer._recognized_profile('0' * 64))
+
+    def test_foundation_local_roots_need_their_explicit_layout_entries(self):
+        for name in ('devel/bmake', 'pkgtools/bootstrap-mk-files', 'pkgtools/pkg_install'):
+            previous = dict(recipe._LOCAL_SOURCE_FILES)
+            del previous[name]
+            with self.subTest(recipe=name):
+                with patch.dict(recipe._LOCAL_SOURCE_FILES, previous, clear=True):
+                    with self.assertRaisesRegex(SDKError, 'recognized local-source'):
+                        self.case.validate()
 
     def test_bsd_output_provider_is_reachable_without_a_dependency_cycle(self):
         plan = {'recipes': {

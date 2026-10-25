@@ -504,3 +504,23 @@ built in the accepted complete recipe plan can use that plan's graduation route.
 The ordinary qualification gate must select the BSD package for role `install`
 and check its actual `-U` and child-tool behavior. Generic native header/hash
 validation alone does not qualify GNU install as a BSD installer.
+
+### First ordinary foundation
+
+The foundation profile preserves the earlier BSD installer profile identity.
+It adds common bmake, GNU make, coreutils, findutils, grep, sed, awk, package
+tools, diffutils and Meson providers at the GCC16 root. Their normal dependencies
+supply bootstrap mk files and Ninja. Use actual named observations to establish
+the complete production graph. The profile does not assert a fixed graph size.
+
+The local-source contract also recognizes `devel/bmake`,
+`pkgtools/bootstrap-mk-files` and `pkgtools/pkg_install`. Bind their complete
+exported subtrees and every common patch. Require exact named empty `DISTFILES`
+and `PATCHFILES` observations. Missing, linked or changed source files still fail.
+The accepted initial mksh activates the canonical final-prefix shell selection
+in bmake, GNU make and Ninja. Check those configure and installed child routes.
+
+Output graduation still covers only providers built by the accepted full plan.
+Initial tools and finite program results remain scoped bootstrap inputs.
+Keep ordinary `install` on the completed BSD installer. A later hostname build
+can use the qualified compiler and the existing OS-owned source contract.

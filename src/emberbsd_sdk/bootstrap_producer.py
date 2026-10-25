@@ -32,6 +32,7 @@ NATIVE_PROVIDER_PROFILE_SHA256 = '9fe8cf29f9d8a5dfb92f3a7f8bc44d0c9f6bcbb584f376
 NO_DEFAULT_RPATH_PROFILE_SHA256 = '8ddcfcc680622d9990289c51e9d44a476397a09999e1609c20e7051b0844e417'
 UNPRIVILEGED_PROFILE_SHA256 = '34648560a0c6fd66f74b134d6a832ff28a7a1bc74ba06cf554a18bbf6203a8a8'
 BSDINSTALL_PROFILE_SHA256 = 'ccc42348223b31cc62ff90588104dc616c46947576e2b0569b9f427448e3012b'
+FOUNDATION_PROFILE_SHA256 = 'f96b910712f3a3bf15365704805d8101563398b757389cbf337e8351564990f5'
 EARLY_TOOLS = tuple('awk basename cat cut date dirname env expr grep head id pwd sed sort tail tr uname uniq wc'.split())
 _DARWIN_CMAKE_TOOLS = (('LIBTOOL', 'libtool_darwin'), ('INSTALL_NAME_TOOL', 'install_name_tool'),
                        ('TAPI', 'llvm_readtapi'))
@@ -53,7 +54,7 @@ def _parallel_profile(digest):
 
 def _native_provider_profile(digest):
     return digest in (NATIVE_PROVIDER_PROFILE_SHA256, NO_DEFAULT_RPATH_PROFILE_SHA256,
-                      UNPRIVILEGED_PROFILE_SHA256, BSDINSTALL_PROFILE_SHA256)
+                      UNPRIVILEGED_PROFILE_SHA256, BSDINSTALL_PROFILE_SHA256, FOUNDATION_PROFILE_SHA256)
 
 
 def _recognized_profile(digest):

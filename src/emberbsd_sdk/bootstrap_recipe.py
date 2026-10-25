@@ -112,6 +112,13 @@ def recipe_steps(plan, descriptor, commands, flags):
 
 
 _LOCAL_SOURCE_FILES = {
+    'devel/bmake': ('Makefile', 'files/configure', 'files/make-bootstrap.sh.in',
+                    'files/main.c', 'files/job.c'),
+    'pkgtools/bootstrap-mk-files': ('Makefile', 'files/sys.mk', 'files/bsd.prog.mk',
+                                   'files/mods/bsd.own.mk.in'),
+    'pkgtools/pkg_install': ('Makefile', 'files/configure', 'files/Makefile.in',
+                            'files/lib/version.h', 'files/add/main.c', 'files/create/main.c',
+                            'files/admin/main.c', 'files/info/main.c'),
     'archivers/bzip2': ('Makefile', 'files/Makefile', 'files/bzip2.c', 'files/bzlib.c'),
     'archivers/libarchive': ('Makefile', 'Makefile.common', 'files/configure', 'files/Makefile.in',
                            'files/libarchive/archive_read.c', 'files/libarchive/archive.h'),
