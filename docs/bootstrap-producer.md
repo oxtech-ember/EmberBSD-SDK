@@ -114,6 +114,10 @@ Each invocation is the exact selected file or a relative in-bundle link to its
 selected spelling. Extra PATH entries and members are refused.
 Compiler and make tuples cannot be replaced by raw utility aliases.
 Native and source tool selections cannot overlap.
+The GCC configure diagnostic selector `EMBERBSD_GCC16_UNAME` uses that same
+selected native `uname` role. It accepts one executable path without arguments.
+The common Ports recipe forwards it to its explicit SDK diagnostic mode.
+The full-plan environment retains that mode for direct make-driven reconfiguration.
 A named source provider adds no runnable binary or qualification claim.
 Missing active utilities or runtime dependencies still refuse the dependent step.
 Some recipe builds run a bare command that pkgsrc does not create as a tool.

@@ -139,6 +139,53 @@ class MetadataTests(unittest.TestCase):
         self.assertNotIn('show-vars-eval', argv)
         self.assertEqual(argv.count('BOOTSTRAP_DEPENDS=${BOOTSTRAP_DEPENDS}'), 1)
 
+    def test_gcc_configure_uname_is_the_declared_native_utility(self):
+        raw = producer.metadata_makeconf(self.plan, self.descriptor, self.commands,
+                                         self.descriptor['abi_flags'])
+        expected = ('EMBERBSD_GCC16_UNAME= ' + self.commands['uname'][0] + '\n').encode()
+        self.assertEqual(raw.count(expected), 1)
+        self.assertLess(raw.index(expected), raw.index(b'.include '))
+        self.assertIn('uname', self.plan['metadata']['native_tools'])
+        self.assertIs(self.validate(), self.plan)
+
+    def test_full_recipe_environment_keeps_sdk_diagnostics_for_reconfigure(self):
+        plan = copy.deepcopy(self.plan)
+        plan.update(format='emberbsd-native-gcc16-bootstrap-plan', output_bundle_root=str(self.work / 'prefix'))
+        env = producer.metadata_environment(plan, self.commands)
+        self.assertEqual(env['GCC_CONFIGURE_SDK'], 'yes')
+        self.assertEqual(env['GCC_CONFIGURE_UNAME'], self.commands['uname'][0])
+        self.assertNotIn('GCC_CONFIGURE_SDK', producer.metadata_environment(self.plan, self.commands))
+
+    def test_outside_uname_still_refuses_after_recomputed_makeconf(self):
+        self.commands['uname'] = ('/usr/bin/uname',)
+        raw = producer.metadata_makeconf(self.plan, self.descriptor, self.commands,
+                                         self.descriptor['abi_flags'])
+        conf = self.plan['metadata']['makeconf']
+        Path(conf['path']).write_bytes(raw)
+        conf['sha256'] = hashlib.sha256(raw).hexdigest()
+        with patch('emberbsd_sdk.bootstrap_pilot.run_logged') as child:
+            with self.assertRaisesRegex(SDKError, 'exact selected spelling'):
+                self.invoke()
+        child.assert_not_called()
+        self.assertFalse(self.work.exists())
+
+    def test_gcc_configure_uname_missing_tail_or_outside_refuses_before_children(self):
+        for change in ('missing', 'tail', 'outside'):
+            with self.subTest(change=change):
+                original = self.commands['uname']
+                if change == 'missing':
+                    del self.commands['uname']
+                elif change == 'tail':
+                    self.commands['uname'] = (*original, '-s')
+                else:
+                    self.commands['uname'] = ('/usr/bin/uname',)
+                with patch('emberbsd_sdk.bootstrap_pilot.run_logged') as child:
+                    with self.assertRaises(SDKError):
+                        self.invoke()
+                child.assert_not_called()
+                self.assertFalse(self.work.exists())
+                self.commands['uname'] = original
+
     def test_metadata_phase_is_explicit_before_profile_include(self):
         values = producer.metadata_assignments(self.plan, self.descriptor, self.commands,
                                               self.descriptor['abi_flags'])

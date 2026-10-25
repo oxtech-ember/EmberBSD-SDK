@@ -148,7 +148,8 @@ def metadata_assignments(plan, descriptor, commands, flags):
         words = [*commands[role], *flags['cppflags'], *(flags[language] if language else ())]
         variables['EMBERBSD_GCC16_SEED_' + role.upper()] = shlex.join([_word(word) for word in words])
     for key, role in [('LLVM_MC', 'as'), ('LD64_LLD', 'ld'), ('DSYMUTIL', 'dsymutil'),
-                      ('AR', 'ar'), ('RANLIB', 'ranlib'), ('NM', 'nm'), ('STRIP', 'strip')]:
+                      ('AR', 'ar'), ('RANLIB', 'ranlib'), ('NM', 'nm'), ('STRIP', 'strip'),
+                      ('UNAME', 'uname')]:
         _require(len(commands[role]) == 1, 'metadata utility must have one selected invocation')
         variables['EMBERBSD_GCC16_' + key] = _safe_path(commands[role][0])
     if _native_provider_profile(data['profile']['sha256']):
@@ -220,6 +221,10 @@ def metadata_environment(plan, commands):
     if plan['format'] == 'emberbsd-native-gcc16-bootstrap-plan':
         _require(len(commands.get('strip', ())) == 1,
                  'GCC comparison needs one selected strip invocation')
+        _require(len(commands.get('uname', ())) == 1,
+                 'GCC diagnostics need one selected uname invocation')
+        result['GCC_CONFIGURE_SDK'] = 'yes'
+        result['GCC_CONFIGURE_UNAME'] = _safe_path(commands['uname'][0])
         result['GCC_COMPARE_DEBUG_STRIP'] = _safe_path(commands['strip'][0])
         prefix = _safe_path(plan['output_bundle_root'])
         result['GCC_COMPARE_DEBUG_OBJDUMP'] = os.path.join(prefix, 'bin', 'llvm-objdump')
