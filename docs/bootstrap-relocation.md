@@ -40,6 +40,19 @@ The `install-info` role selects `bin/pkg_install-info` without an alias.
 An unrelated `bin/install-info` file is outside this profile.
 Earlier profiles and their completed results remain unchanged.
 
+The separate fixed
+[`darwin-installed-od-v1.json`](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/common-build-tools/bootstrap/darwin-installed-od-v1.json)
+profile has SHA256
+`fde7ae2925def243dac8e23982a42649bf5b2c0fb7cad37b5ccbcf342c6b25e3`.
+It names only `coreutils-9.11` member `bin/god` and the same libintl DSO.
+The original invocation is `gnu/bin/od`. The selected invocation is the
+relative alias `bin/od`. It uses four operations in two complete runs.
+The old libintl load is required before transformation. All existing native,
+signature, section, load metadata and two-run checks remain required.
+Keep original installed history and derived hashes separate. Compare libintl
+with the accepted library before provisioning. Do not replace that library.
+Earlier profiles and their completed results remain unchanged.
+
 ## Fixed plan
 
 Use the existing `emberbsd-native-gcc16-producer-plan`, version 1,

@@ -20,6 +20,8 @@ PRINTF_PROFILE_RELATIVE = 'profiles/common-build-tools/bootstrap/darwin-installe
 PRINTF_PROFILE_SHA256 = '48927c02453841feaafaaba0c617e3c702821a39cd572d0a1a84822fdca281b7'
 BUILD_UTILITIES_PROFILE_RELATIVE = 'profiles/common-build-tools/bootstrap/darwin-installed-build-utilities-v1.json'
 BUILD_UTILITIES_PROFILE_SHA256 = 'a8144875daad5ce2f796ba7891a0ac915144fc179c17fc62ca3278b59cbe7d2e'
+OD_PROFILE_RELATIVE = 'profiles/common-build-tools/bootstrap/darwin-installed-od-v1.json'
+OD_PROFILE_SHA256 = 'fde7ae2925def243dac8e23982a42649bf5b2c0fb7cad37b5ccbcf342c6b25e3'
 _LIMIT = 16 * 1024 * 1024
 _RUNS = ('run-a', 'run-b')
 # LLVM can relayout segments and LINKEDIT offsets. Preserve all other raw
@@ -32,7 +34,7 @@ _EDITED_COMMANDS = {0x19, 0x1d, 0xc, 0x80000018, 0x8000001f, 0x20,
 def _profile(reference):
     reference = _reference(reference)
     _require(reference['sha256'] in (PROFILE_SHA256, PRINTF_PROFILE_SHA256,
-                                     BUILD_UTILITIES_PROFILE_SHA256),
+                                     BUILD_UTILITIES_PROFILE_SHA256, OD_PROFILE_SHA256),
              'unsupported utility relocation profile')
     return _json(reference)
 
