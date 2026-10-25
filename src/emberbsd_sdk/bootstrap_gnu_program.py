@@ -23,7 +23,7 @@ MANIFESTS = {
         '7da6d3dd3c973e9e9550f88266d8dc3b612c6319ef9b33b1d09828d56cfb0f50',
         ('patch-configure', 'patch-po_Makefile.in.in', 'patch-src_Makefile.in')),
     'gmake-bootstrap': ('gmake', 'devel/gmake', '4.4.1',
-        '111fe6fbec75de0facb45c6559f31d44bd5f7e535fd47bb6a6fc6f21498b6cec',
+        'ee9023e1490f02569e796bd1cd4144b3e8692078bb3d55b13783a5c955108867',
         ('patch-af', 'patch-lib_fnmatch.c', 'patch-src_getopt.c', 'patch-src_getopt.h',
          'patch-src_hash.c', 'patch-src_job.c')),
     'findutils-bootstrap': ('findutils', 'sysutils/findutils', '4.11.0',
@@ -57,7 +57,7 @@ def gnu_manifest(plan):
         manifest['format'] == 'emberbsd-native-bootstrap-program' and type(manifest['version']) is int and
         manifest['version'] == 1 and manifest['name'] == name and manifest['initial_only'] is True and
         manifest['build_system'] == ('gnu-configure-bootstrap' if bootstrap else 'gnu-configure') and
-        manifest['configure_args'] == (['--disable-nls', '--without-guile'] if bootstrap else ['--disable-nls']) and
+        manifest['configure_args'] == (['--disable-nls', '--without-guile', '--disable-dependency-tracking'] if bootstrap else ['--disable-nls']) and
         manifest['compiler'] == dict(family='gcc', major=16, abi='native') and
         manifest['canonical_host_recipe'] == ('upstream/pkgsrc/' if bootstrap else 'pkgsrc/') + recipe + '/Makefile' and
         len(manifest['runtime_cases']) == (8 if bootstrap else 7 if name == 'diffutils' else 15) and

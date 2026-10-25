@@ -56,7 +56,7 @@ class GmakeBootstrapTests(unittest.TestCase):
             origin='Synthetic source fixture. No release program is executed.',
             compiler=dict(family='gcc', major=16, abi='native'), initial_only=True,
             name='gmake', build_system='gnu-configure-bootstrap',
-            configure_args=['--disable-nls', '--without-guile'],
+            configure_args=['--disable-nls', '--without-guile', '--disable-dependency-tracking'],
             canonical_host_recipe='upstream/pkgsrc/' + recipe + '/Makefile',
             source_makefile='Makefile.in', required_tool_roles=roles, make_targets=[],
             output_programs=dict(gmake='make'), invocations=['gmake'],
@@ -118,6 +118,24 @@ class GmakeBootstrapTests(unittest.TestCase):
         self.assertEqual(steps[1]['phase'], 'gnu-bootstrap')
         self.assertFalse(any(step['argv'][0].endswith(('bmake', 'gmake')) for step in steps))
         self.assertEqual([step['expected_exit'] for step in steps[2:-1]], [0, 0, 0, 0, 0, 1, 2, 2])
+
+    def test_make_free_configure_requires_dependency_tracking_disabled(self):
+        expected = ['--disable-nls', '--without-guile', '--disable-dependency-tracking']
+        self.assertEqual(self.case.plan['commands'][0]['argv'][-3:], expected)
+        for replacement in (None, '--enable-dependency-tracking'):
+            bad = copy.deepcopy(self.manifest)
+            bad['configure_args'].remove('--disable-dependency-tracking')
+            if replacement:
+                bad['configure_args'].append(replacement)
+            reference = self.case.plan['program']['manifest']
+            Path(reference['path']).write_text(json.dumps(bad))
+            digest = hashlib.sha256(Path(reference['path']).read_bytes()).hexdigest()
+            reference['sha256'] = digest
+            row = gnu.MANIFESTS['gmake-bootstrap']
+            with patch.dict(gnu.MANIFESTS, {'gmake-bootstrap': (*row[:3], digest, row[4])}):
+                with self.assertRaisesRegex(SDKError, 'unsupported fixed GNU program contract'):
+                    gnu.gnu_manifest(self.case.plan)
+
 
     def test_selected_driver_ABI_and_compiled_default_shell_are_exact(self):
         env = self.case.plan['commands'][0]['env']

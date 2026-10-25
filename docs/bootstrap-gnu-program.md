@@ -15,7 +15,7 @@ The exact Ports specifications are:
 | --- | --- | --- |
 | `diffutils-bootstrap` | `profiles/common-build-tools/bootstrap/gnu-diffutils.json` | `7da6d3dd3c973e9e9550f88266d8dc3b612c6319ef9b33b1d09828d56cfb0f50` |
 | `findutils-bootstrap` | `profiles/common-build-tools/bootstrap/gnu-findutils.json` | `dca85a054a5a4af27925eba8b78abc2f3ec093e5e874c2b70b7321169dba27b7` |
-| `gmake-bootstrap` | `profiles/common-build-tools/bootstrap/gnu-gmake.json` | `111fe6fbec75de0facb45c6559f31d44bd5f7e535fd47bb6a6fc6f21498b6cec` |
+| `gmake-bootstrap` | `profiles/common-build-tools/bootstrap/gnu-gmake.json` | `ee9023e1490f02569e796bd1cd4144b3e8692078bb3d55b13783a5c955108867` |
 
 The specification retains the canonical recipe, configure arguments, make
 targets, output paths, required roles, literal fixtures, and semantic cases.
@@ -88,6 +88,11 @@ Configure uses explicit equal build and host triplets from the accepted compiler
 `CONFIG_SITE=/dev/null` prevents an ambient site file. No cached capability result
 is supplied. Each make target uses the complete accepted GNU make tuple,
 including its selected `SHELL` argument, and `-j1`.
+
+GNU make configures with `--disable-dependency-tracking`.
+This avoids a `config.status` call to the make that this stage must build.
+The release `build.sh` compiles every object directly without dependency files.
+Other GNU stages and the ordinary Ports recipe keep their dependency tracking.
 
 GNU make uses `gnu-configure-bootstrap`. It requires no `make` or `gmake` input
 role, command variable, or utility alias. After configure, the selected shell
