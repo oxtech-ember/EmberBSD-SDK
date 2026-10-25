@@ -187,7 +187,7 @@ class NativeProgramTests(unittest.TestCase):
                 self.assertEqual(hashlib.sha256(raw).hexdigest(), digest)
                 manifest = json.loads(raw)
                 program._native_program_contract(manifest, name)
-                self.assertEqual(manifest['runtime_cases'], path_cases(name))
+                self.assertEqual(len(manifest['runtime_cases']), 14 if name == 'basename' else 11)
                 for member in (*sources, *manifest['headers'], *provenance):
                     self.assertTrue((root / member).is_file(), member)
                     self.assertFalse((root / member).is_symlink(), member)
@@ -224,6 +224,22 @@ class NativeProgramTests(unittest.TestCase):
                 case.work = case.base / (name + '-next-work')
                 case.plan['work_root'] = str(case.work)
 
+    def test_path_schema_leaves_semantic_policy_to_the_pinned_manifest(self):
+        for name in ('basename', 'dirname'):
+            self.configure(name)
+            manifest = copy.deepcopy(self.case.manifest)
+            manifest['runtime_cases'][0].update(args=['source-owned-operand'], stdout='source-owned-output\n')
+            # Schema validation does not admit these changed bytes. The exact
+            # source-owner digest check must reject them before this stage.
+            try:
+                program._native_program_contract(manifest, name)
+            except SDKError as exc:
+                self.fail('Schema duplicates semantic policy: ' + str(exc))
+            self.case.manifest = manifest
+            self.refresh_manifest(name)
+            self.assertEqual(self.case.plan['commands'][-1]['argv'],
+                             [str(self.case.work / name), 'source-owned-operand'])
+
     def test_path_program_contract_and_output_changes_refuse(self):
         for name in ('basename', 'dirname'):
             self.configure(name)
@@ -242,8 +258,15 @@ class NativeProgramTests(unittest.TestCase):
                         self.case.manifest['sources'] += ['unowned.c']
                     else:
                         self.case.manifest['files'] = {'unneeded': 'data'}
-                    with self.assertRaises(SDKError):
-                        self.refresh_manifest(name)
+                    if field in ('args', 'stdout', 'exit', 'cases'):
+                        # Preserve the admitted digest when changing owner bytes.
+                        path = Path(self.case.plan['program']['manifest']['path'])
+                        path.write_text(json.dumps(self.case.manifest))
+                        with self.assertRaises(SDKError):
+                            program.program_manifest(self.case.plan)
+                    else:
+                        with self.assertRaises(SDKError):
+                            self.refresh_manifest(name)
             self.case.manifest = copy.deepcopy(original)
             self.refresh_manifest(name)
             self.case.work.mkdir(exist_ok=True)
@@ -253,6 +276,55 @@ class NativeProgramTests(unittest.TestCase):
             (self.case.work / (row['name'] + '.stderr')).write_text('')
             with self.assertRaisesRegex(SDKError, 'actual stdout'):
                 program.verify_program_step(step, str(self.case.work), self.case.plan)
+
+    def test_path_case_schema_rejects_unsafe_fields_and_output_paths(self):
+        for name in ('basename', 'dirname'):
+            self.configure(name)
+            for field, value in [('name', '../escape'), ('name', '/absolute'),
+                                 ('invocation', 'other-program'), ('args', ['bad\0arg']),
+                                 ('args', 'not-an-array'), ('stdout_nonempty', True),
+                                 ('exit', True), ('stderr', None)]:
+                with self.subTest(name=name, field=field, value=value):
+                    manifest = copy.deepcopy(self.case.manifest)
+                    manifest['runtime_cases'][0][field] = value
+                    with self.assertRaises(SDKError):
+                        program._native_program_contract(manifest, name)
+            for change in ('count', 'duplicate'):
+                manifest = copy.deepcopy(self.case.manifest)
+                if change == 'count':
+                    manifest['runtime_cases'].pop()
+                else:
+                    manifest['runtime_cases'][1]['name'] = manifest['runtime_cases'][0]['name']
+                with self.assertRaises(SDKError):
+                    program._native_program_contract(manifest, name)
+
+    @unittest.skipUnless(os.environ.get('EMBERBSD_TEST_OS_SOURCE'),
+                         'set EMBERBSD_TEST_OS_SOURCE for actual pinned manifest negatives')
+    def test_path_owner_case_changes_cannot_repin_the_actual_manifest(self):
+        root = Path(os.environ['EMBERBSD_TEST_OS_SOURCE']).resolve(strict=True)
+        for name in ('basename', 'dirname'):
+            relative, digest, _, _ = program._profile({'stage': name + '-bootstrap'})
+            raw = (root / relative).read_bytes()
+            source = self.case.base / (name + '-actual-owner')
+            path = source / relative
+            path.parent.mkdir(parents=True)
+            path.write_bytes(raw)
+            reference = dict(path=str(path), sha256=digest)
+            plan = dict(stage=name + '-bootstrap',
+                        program=dict(source=dict(root=str(source)), manifest=reference))
+            program.program_manifest(plan)
+            for field, value in [('args', ['changed']), ('stdout', 'changed\n'),
+                                 ('exit', 1), ('name', 'new-case')]:
+                with self.subTest(name=name, field=field):
+                    manifest = json.loads(raw)
+                    manifest['runtime_cases'][0][field] = value
+                    path.write_text(json.dumps(manifest))
+                    reference['sha256'] = digest
+                    with self.assertRaises(SDKError):
+                        program.program_manifest(plan)
+                    reference['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+                    with self.assertRaisesRegex(SDKError, 'source-owner bootstrap program manifest'):
+                        program.program_manifest(plan)
 
     def test_path_source_and_route_changes_refuse_before_child(self):
         for name in ('basename', 'dirname'):

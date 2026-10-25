@@ -5,6 +5,7 @@
 import hashlib
 import os
 from pathlib import Path
+import re
 import shlex
 import socket
 
@@ -34,30 +35,29 @@ _NATIVE_SOURCES = {'cmp': _CMP_SOURCES, 'hostname': _HOSTNAME_SOURCES,
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
                       for name in ('basename', 'dirname')}}
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
-                 'hostname': (), 'basename': ('/usr/file',), 'dirname': ('/usr/file',)}
+                 'hostname': ()}
 
 
-def _path_cases(name):
-    """Recognize the fixed source-owner path cases without running a utility."""
-    basename = name == 'basename'
-    rows = [('normal', ['/usr/file'], 'file' if basename else '/usr'),
-            ('empty', [''], '' if basename else '.'),
-            ('root', ['/'], '/'), ('slashes', ['///'], '/'),
-            ('trailing-slash', ['/usr/bin/'], 'bin' if basename else '/usr'),
-            ('no-directory', ['file'], 'file' if basename else '.'),
-            ('option-terminator', ['--', '-file'], '-file' if basename else '.')]
-    rows += ([('suffix', ['/usr/file.txt', '.txt'], 'file'),
-              ('other-suffix', ['file.txt', '.c'], 'file.txt'),
-              ('whole-suffix', ['file', 'file'], 'file'),
-              ('empty-suffix', ['file', ''], 'file')] if basename else [('dot', ['.'], '.')])
-    cases = [dict(name=case, invocation=name, args=args, stdin='', exit=0, stdout=out + '\n', stderr='')
-             for case, args, out in rows]
-    cases += [dict(name=case, invocation=name, args=args, stdin='', exit=1,
-                   stdout='', stderr_nonempty=True)
-              for case, args in [('missing-operand', []),
-                ('extra-operands', ['one', 'two', 'three'] if basename else ['one', 'two']),
-                ('invalid-option', ['-z'])]]
-    return cases
+def _literal_cases(manifest, count):
+    """Check finite stream-case structure. The pinned owner supplies semantics."""
+    cases = manifest['runtime_cases']
+    _require(isinstance(cases, list) and len(cases) == count,
+             'unsupported fixed program case count')
+    names = set()
+    for case in cases:
+        base = {'name', 'invocation', 'args', 'stdin', 'exit', 'stdout'}
+        _require(isinstance(case, dict) and
+                 set(case) in (base | {'stderr'}, base | {'stderr_nonempty'}),
+                 'unsupported literal program case fields')
+        _require(isinstance(case['name'], str) and re.fullmatch(r'[a-z][a-z0-9-]*', case['name']) and
+                 case['name'] not in names and case['invocation'] == manifest['name'] and
+                 isinstance(case['args'], list) and
+                 all(isinstance(word, str) and '\0' not in word for word in case['args']) and
+                 isinstance(case['stdin'], str) and isinstance(case['stdout'], str) and
+                 type(case['exit']) is int and 0 <= case['exit'] <= 255 and
+                 (isinstance(case['stderr'], str) if 'stderr' in case else case['stderr_nonempty'] is True),
+                 'invalid literal program case or output path')
+        names.add(case['name'])
 
 
 def _profile(plan):
@@ -98,8 +98,8 @@ def _native_program_contract(manifest, name):
                  all(case['invocation'] == 'cmp' and 'stdout_nonempty' not in case
                      for case in manifest['runtime_cases']), 'unsupported fixed cmp semantic cases')
     elif name in ('basename', 'dirname'):
-        _require(manifest['files'] == {} and manifest['runtime_cases'] == _path_cases(name),
-                 'unsupported fixed ' + name + ' semantic cases')
+        _require(manifest['files'] == {}, 'path programs need no fixture files')
+        _literal_cases(manifest, 14 if name == 'basename' else 11)
     else:
         # These are the only accepted tails. No hostname operand can reach a child.
         _require(manifest['files'] == {} and manifest['runtime_cases'] == [
@@ -204,7 +204,8 @@ def program_steps(plan, descriptor, commands, flags):
         result.append(dict(id='case-' + case['name'], phase='program-case', cwd=work, env=dict(env),
                            expected_exit=case['exit'], argv=[*commands['sh'], '-c', command]))
     observed = dict(env, DYLD_PRINT_LIBRARIES='1')
-    tail = _RUNTIME_ARGS[manifest['name']]
+    tail = (manifest['runtime_cases'][0]['args'] if manifest['name'] in ('basename', 'dirname')
+            else _RUNTIME_ARGS[manifest['name']])
     result.append(dict(id='runtime-observation', phase='run', cwd=work, env=observed, expected_exit=0,
                        argv=[os.path.join(work, manifest['name']), *tail]))
     return result

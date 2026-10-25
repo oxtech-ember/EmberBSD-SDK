@@ -2,8 +2,8 @@
 
 These finite profiles build initial grep, cmp, hostname, basename and dirname from OS-owned contracts.
 They admit only an independently accepted seed and exact plan.
-It does not qualify a provider or bypass ordinary NativeToolset admission.
-It needs no completed package dependency graph or future build output.
+They do not qualify a provider or bypass ordinary NativeToolset admission.
+They need no completed package dependency graph or future build output.
 Origin: EmberBSD (AI-assisted). The OS retains its source licenses and authors.
 
 Use `BOOTSTRAP_PROGRAM_API = 1` from `emberbsd_sdk.bootstrap_program`.
@@ -159,8 +159,11 @@ option termination, missing operands, excess operands and invalid options.
 Basename also checks matching, absent, complete-name and empty suffixes.
 Dirname checks the dot path. Outputs and exits come from the fixed source contract.
 A system utility never computes the expected output.
+The SDK pins the owner manifest digest and checks the case schema and count.
+It does not maintain a second table of semantic arguments or expected output.
 
-The final runtime observation passes `/usr/file` to the owned program.
+The final runtime observation uses the first pinned semantic case's arguments.
+Both source manifests select `/usr/file`.
 This is a path string; the program does not open it.
 The resulting plans have 17 and 14 commands, respectively.
 The source, argv, environment, separate streams and pending-qualification checks
