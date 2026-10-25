@@ -56,11 +56,13 @@ The recognized SHA256 values are:
 - Builtin helper from `${LOCALBASE}/libexec`, installed by `pkgtools/bootstrap-mk-files`, for those recipes: `d601e1332d820b922c43cbf19b9150ad3527fd00eea6d67615850960ed320833`.
 - Native trust store from the common CA package under `${LOCALBASE}/etc`, with the same native-provider routes: `3366a715faa4c6271d3020f484b969d552164cdfe23bf8dc08e266234d82501f`.
 
+- Metadata keeps the initial tools; full builds reapply the Ports handoff on each MAKECONF read: `87b856b28ff8757bd9c3c62cefaeb032d95be12da79e4fff7415b6b7b8a4a9b9`.
+
 `bootstrap_producer.py` lists the native-provider revisions between these two.
 
 The exported profile and accepted Ports source manifest must match the same revision.
 All parallel revisions receive the CPU budget and launcher assignments.
-The original serial revision keeps its configuration bytes.
+Job and linker assignments remain scoped to parallel profiles.
 All declared sources repeat the seed's exact source pins.
 
 `source_proof` references a data-only JSON object with exactly `format`, `version`,
@@ -165,7 +167,16 @@ admit an old live query or relabel old observations as a complete build graph.
 Each recognized parallel Ports profile also needs `EMBERBSD_DARWIN_CPU_BUDGET`.
 SDK sets it to the accepted job count. Metadata with that profile uses one job
 and an empty linker prefix. A parallel recipe build needs the separate full-plan
-`link_control` service. The original profile's MAKECONF bytes stay unchanged.
+`link_control` service.
+Metadata MAKECONF sets `EMBERBSD_DARWIN_METADATA=yes` before the Ports profile include.
+The flag marks graph observation before the final prefix exists.
+SDK emits it only for the producer format with `stage: metadata`.
+Full bootstrap plans and other stages omit it.
+Older recognized profiles may ignore the phase flag.
+The existing command-line `MAKE` and post-profile `MAKE`/`_MAKE` bindings remain.
+The Ports metadata policy must preserve source-owned dependency edges.
+It must keep the selected initial make, shell and helpers during observation.
+This flag does not admit a build or qualify a provider.
 Each command starts with the complete selected bmake tuple.
 Each read-only metadata query also sets command-line `MAKE` to that full tuple.
 Nested `show-var` queries must use the initial make before the recipe closure exists.

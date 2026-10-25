@@ -139,6 +139,47 @@ class MetadataTests(unittest.TestCase):
         self.assertNotIn('show-vars-eval', argv)
         self.assertEqual(argv.count('BOOTSTRAP_DEPENDS=${BOOTSTRAP_DEPENDS}'), 1)
 
+    def test_metadata_phase_is_explicit_before_profile_include(self):
+        values = producer.metadata_assignments(self.plan, self.descriptor, self.commands,
+                                              self.descriptor['abi_flags'])
+        self.assertEqual(values['EMBERBSD_DARWIN_METADATA'], 'yes')
+        raw = producer.metadata_makeconf(self.plan, self.descriptor, self.commands,
+                                         self.descriptor['abi_flags'])
+        self.assertEqual(raw.splitlines().count(b'EMBERBSD_DARWIN_METADATA= yes'), 1)
+        self.assertLess(raw.index(b'EMBERBSD_DARWIN_METADATA= yes\n'), raw.index(b'.include '))
+
+    def test_metadata_phase_requires_producer_format(self):
+        commands = dict(self.commands, pkg_add=('/selected/pkg_add',),
+                        pkg_create=('/selected/pkg_create',))
+        for kind in ('emberbsd-native-gcc16-bootstrap-plan', 'other-format', None):
+            with self.subTest(format=kind):
+                plan = copy.deepcopy(self.plan)
+                if kind is None:
+                    del plan['format']
+                else:
+                    plan['format'] = kind
+                values = producer.metadata_assignments(plan, self.descriptor, commands,
+                                                      self.descriptor['abi_flags'])
+                self.assertNotIn('EMBERBSD_DARWIN_METADATA', values)
+                raw = producer.metadata_makeconf(plan, self.descriptor, commands,
+                                                 self.descriptor['abi_flags'])
+                self.assertNotIn(b'EMBERBSD_DARWIN_METADATA=', raw)
+
+    def test_metadata_phase_requires_metadata_stage(self):
+        for stage in ('utility-relocation', 'bsdinstall-bootstrap', None):
+            with self.subTest(stage=stage):
+                plan = copy.deepcopy(self.plan)
+                if stage is None:
+                    del plan['stage']
+                else:
+                    plan['stage'] = stage
+                values = producer.metadata_assignments(plan, self.descriptor, self.commands,
+                                                      self.descriptor['abi_flags'])
+                self.assertNotIn('EMBERBSD_DARWIN_METADATA', values)
+                raw = producer.metadata_makeconf(plan, self.descriptor, self.commands,
+                                                 self.descriptor['abi_flags'])
+                self.assertNotIn(b'EMBERBSD_DARWIN_METADATA=', raw)
+
     def test_metadata_makeconf_restores_both_make_values_after_profile(self):
         raw = producer.metadata_makeconf(self.plan, self.descriptor, self.commands,
                                          self.descriptor['abi_flags'])
