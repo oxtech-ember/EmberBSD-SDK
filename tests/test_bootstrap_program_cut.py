@@ -63,15 +63,18 @@ class CutProbeTests(unittest.TestCase):
         case.manifest = dict(format='emberbsd-native-bootstrap-program', version=1, name=name,
             origin='Synthetic OS contract', canonical_host_recipe='tools/' + name + '/Makefile',
             source_makefile='usr.bin/' + name + '/Makefile', compiler=dict(family='gcc',major=16,abi='native'),
-            sources=list(sources), headers=[*(['usr.bin/cut/x_cut.c'] if name == 'cut' else
-                        ['usr.bin/sort/' + header for header in ('sort.h', 'fsort.h', 'pathnames.h')]),
+            sources=list(sources), headers=[*({'cut': ['usr.bin/cut/x_cut.c'],
+                        'sort': ['usr.bin/sort/' + header for header in ('sort.h', 'fsort.h', 'pathnames.h')],
+                        'hexdump': ['usr.bin/hexdump/hexdump.h']}[name]),
                      'tools/compat/bootstrap_cdefs.h',
                                            *self.contract['headers']],
             include_dirs=['usr.bin/' + name, 'tools/compat', 'common/lib/libc/stdlib'],
             cppflags=['-DHAVE_NBTOOL_CONFIG_H=1', '-include', 'nbtool_config.h'],
             cflags=[], link_flags=[], libraries=[], compat=dict(path='tools/compat/bootstrap-efun.json', sha256=digest),
-            invocations=[name], files={'input.txt':'a:b\n'}, runtime_cases=[dict(name='case'+str(i),
-                invocation=name,args=['-b','1','input.txt'],stdin='',exit=0,stdout='a\n',stderr='') for i in range(22 if name == 'cut' else 36)])
+            invocations=[name, *(['od'] if name == 'hexdump' else [])],
+            files={'input.txt':'a:b\n'}, runtime_cases=[dict(name='case'+str(i),
+                invocation=name,args=['-b','1','input.txt'],stdin='',exit=0,stdout='a\n',stderr='')
+                for i in range({'cut': 22, 'sort': 36, 'hexdump': 37}[name])])
         for member in [*sources, *case.manifest['headers'], *provenance]:
             if member == 'tools/compat/bootstrap-efun.json':
                 continue

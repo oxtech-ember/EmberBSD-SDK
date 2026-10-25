@@ -119,7 +119,7 @@ def _commands(plan, result, manifest):
             _streams(row, cases[wanted['id']], plan['work_root'], outputs)
     aliases = {name: manifest['name'] for name in manifest['invocations'] if name != manifest['name']}
     if aliases:
-        link = next(row for row in actual if row['phase'] == 'link')
+        link = next(row for row in actual if row['id'] == 'link-' + manifest['name'])
         _require(link.get('invocation_aliases') == aliases,
                  'historical program invocation aliases differ')
     if plan['stage'] in EFUN_PROGRAM_STAGES:

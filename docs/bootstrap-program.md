@@ -25,7 +25,7 @@ scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`,
 `hostname-bootstrap`, `basename-bootstrap`, `dirname-bootstrap`, `cat-bootstrap`,
 `head-bootstrap`, `uniq-bootstrap`, `wc-bootstrap`, `tr-bootstrap`, `printf-bootstrap`,
 `pwd-bootstrap`, `cut-bootstrap`, `env-bootstrap`, `uname-bootstrap`, `tail-bootstrap`,
-`sort-bootstrap`, `date-bootstrap`, `id-bootstrap`, and `expr-bootstrap`.
+`sort-bootstrap`, `date-bootstrap`, `id-bootstrap`, `expr-bootstrap`, and `hexdump-bootstrap`.
 Each stage selects one exact source-owner manifest.
 It has exactly `format`, `version`, `scope`, `stage`, `seed_descriptor`, `host`,
 `sources`, `work_root`, `required_roles`, `resources`, `program`, and `commands`.
@@ -456,6 +456,28 @@ The initial profile does not qualify `-o`, replacement permissions, non-C locale
 The C implementation retains these operations. Actual compilation, C analysis and memory validation are separate gates.
 Run `test_bootstrap_program_sort`, `test_bootstrap_program_cut` and `test_bootstrap_program_history`
 with `EMBERBSD_TEST_OS_SOURCE` for source and synthetic-runner checks.
+
+## Fixed hexdump and od profile
+
+The OS owns `tools/hexdump/bootstrap.json` and its 37 exact semantic cases.
+Its SHA256 pin is `9fe663af4124f714bcac65dce3bb7666bef0af2f74a9f97fb638699c8c42d974`.
+The 30-member source proof retains six complete hexdump C files and the local header.
+It reuses the four common efun sources, control program, five probes and generated configuration.
+No previous compatibility archive or new compatibility implementation is required.
+
+The 57 commands include the control, five probes, ten source compiles, one program link,
+37 cases and one runtime observation. The first case also supplies the hexdump runtime arguments.
+The program link creates the existing `od` invocation. Control links create no program aliases.
+Historical checks bind aliases to that exact program link and preserve its observed configuration.
+Provisioning can select the `od` role from this accepted image through the existing history API.
+The normal OS host recipe retains full compatibility and installs its prefixed od symlink.
+
+The owner cases cover Ninja's exact `od -t x1 -A n -v`, row padding, duplicate suppression,
+ELF first-four-byte inspection, file/stdin input, skip/length and both invocation names.
+The existing UTF-8 fixture schema carries NUL and high bytes in files, not shell stdin.
+No new data decoder or executor is introduced. Every owner case must construct `program_steps`.
+Actual GCC16 execution, full locale coverage, C analysis, memory checks and Ninja remain separate gates.
+Run `test_bootstrap_program_hexdump` with `EMBERBSD_TEST_HEXDUMP_SOURCE` for the exact owner consistency check.
 
 ## Fixed native date tool mode
 

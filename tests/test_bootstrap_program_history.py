@@ -25,19 +25,19 @@ class ProgramHistoryTests(unittest.TestCase):
         self.make_fixture('basename')
 
     def make_fixture(self, name):
-        cls = byacc.ByaccContractTests if name == 'yacc' else cut.CutProbeTests if name in ('cut', 'sort') else programs.ProgramTests if name == 'grep' else native.NativeProgramTests
+        cls = byacc.ByaccContractTests if name == 'yacc' else cut.CutProbeTests if name in ('cut', 'sort', 'hexdump') else programs.ProgramTests if name == 'grep' else native.NativeProgramTests
         self.fixture = cls(methodName='runTest')
-        if name in ('cut', 'sort'):
+        if name in ('cut', 'sort', 'hexdump'):
             self.fixture.program_name = name
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
-        if name not in ('cut', 'sort', 'grep', 'yacc'):
+        if name not in ('cut', 'sort', 'hexdump', 'grep', 'yacc'):
             self.fixture.configure(name)
         self.case = c = self.fixture if name in ('grep', 'yacc') else self.fixture.case
         if name == 'yacc':
             c.inputs = c.plan['program']['source']
         c.descriptor['compiler'] = dict(family='gcc', version='16.2.0', triplet='aarch64-apple-darwin25')
-        child = self.fixture.fake if name in ('cut', 'sort') else self.fixture.fake_command
+        child = self.fixture.fake if name in ('cut', 'sort', 'hexdump') else self.fixture.fake_command
         def fake(argv, log, **kwargs):
             returned = child(argv, log, **kwargs)
             if name == 'pwd' and Path(log).stem.startswith('case-'):
@@ -368,6 +368,33 @@ class ProgramHistoryTests(unittest.TestCase):
         link = next(row for row in self.result['commands'] if row['phase'] == 'link')
         link['invocation_aliases'] = {'tac': 'other'}
         with self.assertRaises(SDKError):
+            self.verify()
+
+    def test_od_history_uses_program_aliases_after_the_shared_control_link(self):
+        self.make_fixture('hexdump')
+        self.selected = self.selected.rename(self.target / 'bin' / 'od')
+        selected = self.descriptor['tools'].pop('hexdump')
+        selected['path'] = str(self.selected)
+        self.descriptor['tools']['od'] = selected
+        member = self.history['provisioned_members'][0]
+        member.update(invocation='od', selected_path=str(self.selected))
+        self.assertEqual(self.verify(), {'os-basename': []})
+        link = next(row for row in self.result['commands'] if row['id'] == 'link-hexdump')
+        control = next(row for row in self.result['commands'] if row['id'] == 'compat-control-link')
+        self.assertNotIn('invocation_aliases', control)
+        # A valid-looking alias on the control image cannot replace the program link.
+        control['invocation_aliases'] = link.pop('invocation_aliases')
+        with self.assertRaisesRegex(SDKError, 'historical program invocation aliases differ'):
+            self.verify()
+        link['invocation_aliases'] = control.pop('invocation_aliases')
+        self.assertEqual(self.verify(), {'os-basename': []})
+        last = next(row for row in self.result['commands'] if row['id'] == 'compat-func-reallocarr')
+        header = last['configuration_header']
+        changed = Path(header['path']).read_bytes().replace(b'HAVE_REALLOCARR 0', b'HAVE_REALLOCARR 1')
+        Path(header['path']).write_bytes(changed)
+        header['sha256'] = hashlib.sha256(changed).hexdigest()
+        self.result['outputs']['nbtool_config.h'] = header['sha256']
+        with self.assertRaisesRegex(SDKError, 'historical efun configuration differs'):
             self.verify()
 
     def test_id_history_keeps_its_observed_identity_without_current_oracles(self):

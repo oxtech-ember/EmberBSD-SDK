@@ -28,7 +28,7 @@ _SOURCES = tuple('usr.bin/grep/' + name + '.c' for name in ('fastgrep', 'file', 
 _PROVENANCE = ('tools/grep/Makefile', 'tools/Makefile.host', 'usr.bin/grep/Makefile', 'tools/grep/README.md')
 PROGRAM_STAGES = ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
                   'basename-bootstrap', 'dirname-bootstrap',
-                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap', 'env-bootstrap', 'uname-bootstrap', 'tail-bootstrap', 'sort-bootstrap', 'date-bootstrap', 'id-bootstrap', 'expr-bootstrap')
+                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap', 'env-bootstrap', 'uname-bootstrap', 'tail-bootstrap', 'sort-bootstrap', 'date-bootstrap', 'id-bootstrap', 'expr-bootstrap', 'hexdump-bootstrap')
 CMP_MANIFEST_SHA256 = 'a3267d3387b08780fb1e372f5a742dccd9faa84568292506d3389f35e869ad56'
 HOSTNAME_MANIFEST_SHA256 = '32450fa3c2d68e63c13f1d32795f4d3e14cab8b5beac909ee27242cef279750d'
 _CMP_SOURCES = tuple('usr.bin/cmp/' + name + '.c' for name in ('cmp', 'misc', 'regular', 'special'))
@@ -52,14 +52,17 @@ DATE_MANIFEST_SHA256 = '51840761173803ca69439053d8ee5fa72c4b331d7cb6ddf729f54c9e
 ID_MANIFEST_SHA256 = '7184d420bdd70778b1c290f028bc43df9441db16087657d06915c2b9d3fc2e55'
 _ID_GROUP_HEADER = 'common/include/libutil/compat_grouplist.h'
 EXPR_MANIFEST_SHA256 = '505c27cdc0db4b2d22b6f348559e91735bf723b1f47251d6e98fa3d979e71854'
+HEXDUMP_MANIFEST_SHA256 = '9fe663af4124f714bcac65dce3bb7666bef0af2f74a9f97fb638699c8c42d974'
 _NBTOOL_CONFIG = 'tools/compat/bootstrap/nbtool_config.h'
-_NATIVE_LOCAL_HEADERS = {'cmp': ('extern.h',), 'tr': ('extern.h',), 'tail': ('extern.h',),
+_NATIVE_LOCAL_HEADERS = {'cmp': ('extern.h',), 'tr': ('extern.h',), 'tail': ('extern.h',), 'hexdump': ('hexdump.h',),
                          'date': ('extern.h',), 'cut': ('x_cut.c',), 'sort': ('sort.h', 'fsort.h', 'pathnames.h')}
-_NATIVE_DIRECTORIES = {'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
+_NATIVE_DIRECTORIES = {'hexdump': 'usr.bin/hexdump', 'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
                        'basename': 'usr.bin/basename', 'dirname': 'usr.bin/dirname',
                        'cat': 'bin/cat', 'head': 'usr.bin/head', 'uniq': 'usr.bin/uniq',
                        'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut', 'env': 'usr.bin/env', 'uname': 'usr.bin/uname', 'tail': 'usr.bin/tail', 'sort': 'usr.bin/sort', 'date': 'bin/date', 'id': 'usr.bin/id', 'expr': 'bin/expr'}
-_NATIVE_SOURCES = {'expr': ('bin/expr/expr.y',), 'date': ('bin/date/date.c',), 'sort': (*('usr.bin/sort/' + name + '.c' for name in
+_NATIVE_SOURCES = {'hexdump': (*('usr.bin/hexdump/' + name + '.c' for name in
+                              ('conv', 'display', 'hexdump', 'hexsyntax', 'odsyntax', 'parse')), *_EFUN_SOURCES),
+                   'expr': ('bin/expr/expr.y',), 'date': ('bin/date/date.c',), 'sort': (*('usr.bin/sort/' + name + '.c' for name in
                            ('append', 'fields', 'files', 'fsort', 'init', 'msort', 'sort', 'tmp', 'radix_sort')),
                            *_EFUN_SOURCES),
                    'tail': tuple('usr.bin/tail/' + name + '.c' for name in
@@ -68,10 +71,10 @@ _NATIVE_SOURCES = {'expr': ('bin/expr/expr.y',), 'date': ('bin/date/date.c',), '
                    'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'), 'pwd': ('bin/pwd/pwd.c',), 'cut': ('usr.bin/cut/cut.c', *_EFUN_SOURCES),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
                       for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf', 'env', 'uname', 'id')}}
-_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52)
+_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
-_ALIASES = {'grep': ('egrep', 'fgrep'), 'tail': ('tac',), 'id': ('groups', 'whoami')}
+_ALIASES = {'grep': ('egrep', 'fgrep'), 'tail': ('tac',), 'id': ('groups', 'whoami'), 'hexdump': ('od',)}
 _UNAME_FIELDS = ('sysname', 'nodename', 'release', 'version', 'machine', 'machine_arch')
 
 
@@ -137,7 +140,7 @@ def _profile(plan):
         return MANIFEST_RELATIVE, MANIFEST_SHA256, _SOURCES, _PROVENANCE
     name = stage.removesuffix('-bootstrap')
     directory = _NATIVE_DIRECTORIES[name]
-    digest = {'cmp': CMP_MANIFEST_SHA256, 'hostname': HOSTNAME_MANIFEST_SHA256,
+    digest = {'hexdump': HEXDUMP_MANIFEST_SHA256, 'cmp': CMP_MANIFEST_SHA256, 'hostname': HOSTNAME_MANIFEST_SHA256,
               'basename': BASENAME_MANIFEST_SHA256, 'dirname': DIRNAME_MANIFEST_SHA256,
               'cat': CAT_MANIFEST_SHA256, 'head': HEAD_MANIFEST_SHA256, 'uniq': UNIQ_MANIFEST_SHA256,
               'wc': WC_MANIFEST_SHA256, 'tr': TR_MANIFEST_SHA256,
@@ -374,6 +377,8 @@ def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
             return generated
     if step['phase'] == 'link':
         name = program_manifest(plan)['name']
+        if step['id'] != 'link-' + name:
+            return {}
         aliases = {alias: name for alias in _ALIASES.get(name, ())}
         for alias, target in aliases.items():
             os.symlink(target, os.path.join(work, alias))

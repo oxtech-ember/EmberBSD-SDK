@@ -11,7 +11,7 @@ from .inventory import sha256_file
 from .native_toolset import _json, _require
 from .paths import entry
 
-EFUN_PROGRAMS = ('cut', 'sort')
+EFUN_PROGRAMS = ('cut', 'sort', 'hexdump')
 EFUN_PROGRAM_STAGES = tuple(name + '-bootstrap' for name in EFUN_PROGRAMS)
 
 MANIFEST_RELATIVE = 'tools/compat/bootstrap-efun.json'
