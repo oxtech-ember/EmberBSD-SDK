@@ -9,7 +9,7 @@ import stat
 
 from .errors import SDKError
 from .native_toolset import _absolute, _json, _require, _sha, _text
-from .paths import inside, open_regular, verify_stable
+from .paths import canonical_existing, inside, open_regular, verify_stable
 
 
 _ADMISSION = 'netbsd11-amd64-first-native-v1'
@@ -323,20 +323,26 @@ def validate_retained_base_history(value, name, descriptor, file, *, inspect_inp
     mapped = {}
     root = _absolute(descriptor['bundle_root'])
     for row in members:
-        _require(isinstance(row, dict) and set(row) == {'role', 'original_path', 'selected_path', 'sha256'},
+        _require(isinstance(row, dict) and set(row) in (
+                 {'role', 'original_path', 'selected_path', 'sha256'},
+                 {'role', 'original_path', 'resolved_original_path', 'selected_path', 'sha256'}),
                  'invalid NetBSD base tool mapping')
         role = _text(row['role'], 'NetBSD base tool role')
         selected_path = _absolute(row['selected_path'])
         sha = _sha(row['sha256'])
         original = _absolute(row['original_path'])
+        resolved_original = _absolute(row.get('resolved_original_path', original))
         external_driver = role in _EXTERNAL_BASE_DRIVERS
         path_policy = (selected_path == original == _EXTERNAL_BASE_DRIVERS[role] and
                        descriptor.get('driver_binding', {}).get('kind') ==
                        _NETBSD_EXTERNAL_DRIVER_BINDING) if external_driver else (
                        selected_path != root and inside(selected_path, root))
         _require(role in selected and role not in mapped and path_policy and
-                 _BASE_TOOL_PATHS.get(role) == original,
-                 'NetBSD base member escapes its exact release-tool route or repeats its bundle')
+                 _BASE_TOOL_PATHS.get(role) == original and
+                 any(inside(resolved_original, base_root) for base_root in
+                     ('/bin', '/usr/bin', '/usr/sbin', '/sbin')) and
+                 (not external_driver or resolved_original == original),
+                 'NetBSD base member escapes its exact release-tool route or fixed base executable roots')
         _require(PurePosixPath(selected_path).name == role,
                  'selected NetBSD base alias must preserve its argv0 basename')
         tool = selected[role]
@@ -348,7 +354,10 @@ def validate_retained_base_history(value, name, descriptor, file, *, inspect_inp
                      legacy_row.get('sha256') == sha,
                      'NetBSD base assembler/linker differs from the original seed binding')
         if inspect_inputs:
-            file(dict(path=original, sha256=sha))
+            observed_original = canonical_existing(original)
+            _require(observed_original == resolved_original,
+                     'NetBSD base alias target differs from its pinned canonical target')
+            file(dict(path=resolved_original, sha256=sha))
             file(dict(path=selected_path, sha256=sha))
         mapped[role] = original
     _require(set(mapped) == set(selected),
