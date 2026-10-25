@@ -84,7 +84,11 @@ compiler. All seven driver components are required, including `lto1` and
 `lto-wrapper`.
 
 The base-tools history binds each copied tool's original path, selected bundle
-path, and SHA256. GCC's retained `--with-as=/usr/bin/as` and
+path, and SHA256. A source symlink also pins `resolved_original_path` inside
+the fixed NetBSD base executable roots. Live admission checks that target and
+its bytes. Existing four-field records remain valid for original regular files.
+Historical checks do not resolve retired source aliases.
+GCC's retained `--with-as=/usr/bin/as` and
 `--with-ld=/usr/bin/ld` settings make `-B` unable to redirect its configured
 assembler and linker. The fixed `netbsd11-configured-base-as-ld-seed-v1`
 binding records those nominal query results and a hashed read-only compiler

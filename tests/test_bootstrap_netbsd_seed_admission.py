@@ -230,6 +230,7 @@ class RetainedBaseHistoryTests(unittest.TestCase):
             legacy_seed=f.history['legacy_seed'],
             release_identity='NetBSD 11.0 amd64',
             tool_members=[dict(role=role, original_path='/usr/bin/' + role,
+                               resolved_original_path='/usr/bin/' + role,
                                selected_path=f.tools[role]['path'],
                                sha256=f.tools[role]['sha256']) for role in ('as', 'ld')],
             unknowns=['base-build-record', 'base-source-commit', 'base-source-signature'])
@@ -264,12 +265,59 @@ class RetainedBaseHistoryTests(unittest.TestCase):
                 filename='liblto_plugin-readelf-d.txt'))
 
     def validate(self):
-        return validate_retained_base_history(
-            self.history, 'base', self.fixture.descriptor,
-            self.fixture.file, inspect_inputs=True)
+        targets = {row['original_path']: row.get('resolved_original_path', row['original_path'])
+                   for row in self.history['tool_members']}
+        with patch('emberbsd_sdk.bootstrap_netbsd_seed_admission.canonical_existing',
+                   side_effect=lambda path: targets.get(path, path)):
+            return validate_retained_base_history(
+                self.history, 'base', self.fixture.descriptor,
+                self.fixture.file, inspect_inputs=True)
 
     def test_accepts_finite_base_tool_mapping_with_disclosed_source_unknowns(self):
         self.assertEqual(self.validate(), self.history['unknowns'])
+
+    def test_keeps_accepted_regular_four_field_base_mappings_compatible(self):
+        for row in self.history['tool_members']:
+            row.pop('resolved_original_path')
+        with patch('emberbsd_sdk.bootstrap_netbsd_seed_admission.canonical_existing') as resolver:
+            self.assertEqual(validate_retained_base_history(
+                self.history, 'base', self.fixture.descriptor,
+                self.fixture.file, inspect_inputs=False), self.history['unknowns'])
+            resolver.assert_not_called()
+
+    def test_keeps_accepted_regular_four_field_non_driver_member_compatible(self):
+        f = self.fixture
+        selected = f.bundle / 'cat'
+        selected.write_bytes(b'retained regular NetBSD cat\n')
+        selected.chmod(0o755)
+        digest = f.digest(selected)
+        f.base_original_hashes['/bin/cat'] = digest
+        f.tools['cat'] = dict(path=str(selected), sha256=digest, provider='base')
+        self.history['tool_members'].append(dict(role='cat', original_path='/bin/cat',
+            selected_path=str(selected), sha256=digest))
+
+        with patch('emberbsd_sdk.bootstrap_netbsd_seed_admission.canonical_existing',
+                   side_effect=lambda path: path):
+            self.assertEqual(validate_retained_base_history(
+                self.history, 'base', f.descriptor, f.file, inspect_inputs=True),
+                self.history['unknowns'])
+
+    def test_refuses_live_retarget_of_legacy_four_field_non_driver_member(self):
+        f = self.fixture
+        original = '/bin/cat'
+        selected = f.bundle / 'cat'
+        selected.write_bytes(b'retained regular NetBSD cat\n')
+        selected.chmod(0o755)
+        digest = f.digest(selected)
+        f.tools['cat'] = dict(path=str(selected), sha256=digest, provider='base')
+        self.history['tool_members'].append(dict(role='cat', original_path=original,
+            selected_path=str(selected), sha256=digest))
+
+        with patch('emberbsd_sdk.bootstrap_netbsd_seed_admission.canonical_existing',
+                   side_effect=lambda path: '/usr/bin/cat' if path == original else path), \
+             self.assertRaisesRegex(SDKError, 'pinned canonical target'):
+            validate_retained_base_history(self.history, 'base', f.descriptor,
+                                           f.file, inspect_inputs=True)
 
     def test_refuses_a_copied_base_tool_with_different_bytes(self):
         self.history['tool_members'][0]['sha256'] = 'f' * 64
@@ -293,7 +341,8 @@ class RetainedBaseHistoryTests(unittest.TestCase):
             f.base_original_hashes[original] = digest
             f.tools[role] = dict(path=str(selected), sha256=digest, provider='base')
             self.history['tool_members'].append(dict(
-                role=role, original_path=original, selected_path=str(selected), sha256=digest))
+                role=role, original_path=original, resolved_original_path=original,
+                selected_path=str(selected), sha256=digest))
 
         self.assertEqual(self.validate(), self.history['unknowns'])
 
@@ -312,10 +361,83 @@ class RetainedBaseHistoryTests(unittest.TestCase):
             f.base_original_hashes[original] = digest
             f.tools[role] = dict(path=str(selected), sha256=digest, provider='base')
             self.history['tool_members'].append(dict(
-                role=role, original_path=original, selected_path=str(selected),
+                role=role, original_path=original, resolved_original_path=original,
+                selected_path=str(selected),
                 sha256=digest))
 
         self.assertEqual(self.validate(), self.history['unknowns'])
+
+    def test_accepts_measured_base_command_when_fixed_alias_resolves_to_regular_executable(self):
+        f = self.fixture
+        role = 'chgrp'
+        selected = f.bundle / role
+        selected.write_bytes(b'retained NetBSD chgrp bytes\n')
+        selected.chmod(0o755)
+        digest = f.digest(selected)
+        original = '/usr/bin/chgrp'
+        resolved = '/usr/sbin/chown'
+        f.base_original_hashes[resolved] = digest
+        f.tools[role] = dict(path=str(selected), sha256=digest, provider='base')
+        self.history['tool_members'].append(dict(
+            role=role, original_path=original, resolved_original_path=resolved,
+            selected_path=str(selected), sha256=digest))
+
+        def file(reference):
+            if reference['path'] == original:
+                raise SDKError('expected a regular file: ' + original)
+            return f.file(reference)
+
+        with patch('emberbsd_sdk.bootstrap_netbsd_seed_admission.canonical_existing',
+                   side_effect=lambda path: resolved if path == original else path):
+            self.assertEqual(validate_retained_base_history(
+                self.history, 'base', f.descriptor, file, inspect_inputs=True),
+                self.history['unknowns'])
+
+    def test_refuses_a_fixed_alias_retargeted_after_its_canonical_target_was_pinned(self):
+        f = self.fixture
+        original = '/usr/bin/chgrp'
+        pinned = '/usr/sbin/chown'
+        selected = f.bundle / 'chgrp'
+        selected.write_bytes(b'retained NetBSD chgrp bytes\n')
+        selected.chmod(0o755)
+        digest = f.digest(selected)
+        f.tools['chgrp'] = dict(path=str(selected), sha256=digest, provider='base')
+        self.history['tool_members'].append(dict(role='chgrp', original_path=original,
+            resolved_original_path=pinned, selected_path=str(selected), sha256=digest))
+        with patch('emberbsd_sdk.bootstrap_netbsd_seed_admission.canonical_existing',
+                   side_effect=lambda path: '/usr/bin/chgrp' if path == original else path), \
+             self.assertRaisesRegex(SDKError, 'pinned canonical target'):
+            validate_retained_base_history(self.history, 'base', f.descriptor,
+                                           f.file, inspect_inputs=True)
+
+    def test_refuses_a_pinned_canonical_target_outside_fixed_base_roots(self):
+        self.history['tool_members'][0]['resolved_original_path'] = '/tmp/forged/as'
+        with self.assertRaisesRegex(SDKError, 'fixed base executable roots'):
+            validate_retained_base_history(self.history, 'base', self.fixture.descriptor,
+                self.fixture.file, inspect_inputs=False)
+
+    def test_refuses_missing_or_changed_pinned_canonical_target_bytes(self):
+        f = self.fixture
+        original = '/usr/bin/chgrp'
+        resolved = '/usr/sbin/chown'
+        selected = f.bundle / 'chgrp'
+        selected.write_bytes(b'retained NetBSD chgrp bytes\n')
+        selected.chmod(0o755)
+        digest = f.digest(selected)
+        f.tools['chgrp'] = dict(path=str(selected), sha256=digest, provider='base')
+        self.history['tool_members'].append(dict(role='chgrp', original_path=original,
+            resolved_original_path=resolved, selected_path=str(selected), sha256=digest))
+        for message in ('expected a regular file', 'referenced input changed'):
+            def file(reference, expected=message):
+                if reference['path'] == resolved:
+                    raise SDKError(expected + ': ' + resolved)
+                return f.file(reference)
+            with self.subTest(target_error=message), \
+                 patch('emberbsd_sdk.bootstrap_netbsd_seed_admission.canonical_existing',
+                       side_effect=lambda path: resolved if path == original else path), \
+                 self.assertRaisesRegex(SDKError, message):
+                validate_retained_base_history(self.history, 'base', f.descriptor,
+                                               file, inspect_inputs=True)
 
     def test_named_pkgsrc_utility_rejects_an_unrecorded_host_path(self):
         f = self.fixture
@@ -325,7 +447,8 @@ class RetainedBaseHistoryTests(unittest.TestCase):
         digest = f.digest(selected)
         f.tools['cat'] = dict(path=str(selected), sha256=digest, provider='base')
         self.history['tool_members'].append(dict(
-            role='cat', original_path='/usr/local/bin/cat', selected_path=str(selected),
+            role='cat', original_path='/usr/local/bin/cat',
+            resolved_original_path='/usr/local/bin/cat', selected_path=str(selected),
             sha256=digest))
         f.base_original_hashes['/usr/local/bin/cat'] = digest
 
@@ -341,7 +464,8 @@ class RetainedBaseHistoryTests(unittest.TestCase):
         f.base_original_hashes['/usr/bin/gunzip'] = digest
         f.tools['gunzip'] = dict(path=str(selected), sha256=digest, provider='base')
         self.history['tool_members'].append(dict(
-            role='gunzip', original_path='/usr/bin/gunzip', selected_path=str(selected),
+            role='gunzip', original_path='/usr/bin/gunzip',
+            resolved_original_path='/usr/bin/gunzip', selected_path=str(selected),
             sha256=digest))
         with self.assertRaisesRegex(SDKError, 'argv0 basename'):
             self.validate()
