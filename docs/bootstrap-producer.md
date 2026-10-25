@@ -245,3 +245,11 @@ bmake/gzip prerequisite seed and the later source-tool paths. Metadata inputs
 must declare future `gzip`, `gunzip` and `gzcat` source roles when they have no
 accepted native provider. The fixed query roster and command construction do
 not change. The earlier gzip-handoff profile remains valid for historical inputs.
+
+The split make/gzip profile recognizes `c707c392394e9765fe48ce3cc10e13bb924b1c731d529e35e89736813a214169`.
+Only the eight `devel/bmake` prerequisites use the initial make tuple.
+The eleven gzip prerequisites include `archivers/pax`, `net/fetch` and
+`net/libfetch`. These three use the installed Ports bmake and Darwin mk files.
+They do not depend on gzip. The earlier source-gzip profile remains valid for
+its historical inputs. The fixed metadata queries and tool declarations do not
+change. Re-query the dependency graph before a full build.

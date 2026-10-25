@@ -104,13 +104,13 @@ def _ports_prefix(plan, recipe):
 def recipe_make(plan, commands, recipe):
     """Select the make and shell for one recipe from its bound dependency edge.
 
-    The Ports profile owns the handoff. It gives every recipe outside its
-    seed set, the devel/bmake closure and the dependencies of archivers/gzip,
-    a direct devel/bmake edge; shells/mksh is in that closure. Those recipes
-    start with the installed Ports bmake, its own share/mk and the installed
-    Ports mksh. Only the remaining recipes use the bound initial make, its -m
-    tree and the initial shell, because -m reaches child makes through
-    MAKEFLAGS and SHELL= on the command line overrides the profile.
+    The Ports profile owns the handoff. Every recipe outside the eight-recipe
+    devel/bmake closure gets a direct devel/bmake edge. That closure includes
+    shells/mksh. Other recipes use the installed Ports bmake, its own share/mk
+    and the installed Ports mksh. The initial tuple retains its -m tree and
+    shell only for the make closure, because MAKEFLAGS carries -m and a
+    command-line SHELL overrides the profile. Gzip's extra prerequisites use
+    the installed Darwin mk files without a reverse dependency on gzip.
     """
     initial = tuple(commands['make'])
     _require(len(initial) == 5 and initial[1] == '-m',
