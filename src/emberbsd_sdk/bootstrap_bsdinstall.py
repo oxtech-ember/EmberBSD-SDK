@@ -79,10 +79,17 @@ def _compat(value, descriptor):
     historical_ref = preparation['source_seed_descriptor']
     historical = _json(historical_ref)
     roles = {'cc', *descriptor['driver_components'].values()}
+    old_binding, new_binding = historical.get('driver_binding'), descriptor.get('driver_binding')
+    same_binding = old_binding is None and new_binding is None
+    if isinstance(old_binding, dict) and isinstance(new_binding, dict):
+        same_binding = (old_binding.get('ports_source') == historical['sources']['ports'] and
+            new_binding.get('ports_source') == descriptor['sources']['ports'] and
+            {key: val for key, val in old_binding.items() if key != 'ports_source'} ==
+            {key: val for key, val in new_binding.items() if key != 'ports_source'})
     _require(historical_ref == result['seed_descriptor'] == plan['seed_descriptor'] and
              all(historical[key] == descriptor[key] for key in
                  ('host', 'compiler', 'host_abi', 'abi_flags', 'driver_components', 'driver_prefix')) and
-             historical.get('driver_binding') == descriptor.get('driver_binding') and
+             same_binding and
              all(historical['tools'][role] == descriptor['tools'][role] for role in roles),
              'initial libnbcompat compiler or host ABI differs from its actual producer')
     _require(result['status'] in ('FAILED', 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW') and

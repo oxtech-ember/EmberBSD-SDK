@@ -238,6 +238,43 @@ class BSDInstallTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'source tree changed'):
             self.validate()
 
+    def test_binding_source_provenance_can_advance_but_specs_cannot(self):
+        historical = copy.deepcopy(self.descriptor)
+        historical['driver_binding'] = dict(ports_source=copy.deepcopy(historical['sources']['ports']),
+            instantiated=self.f.raw(b'synthetic unchanged accepted specs'), deployment='26.0')
+        reference = self.f.document(historical)
+        self.old_plan['seed_descriptor'] = self.old_result['seed_descriptor'] = reference
+        self.preparation['source_seed_descriptor'] = reference
+        self.seal_compat()
+        current = copy.deepcopy(historical)
+        current['sources']['ports']['commit'] = '2' * 40
+        current['driver_binding']['ports_source'] = copy.deepcopy(current['sources']['ports'])
+        value = self.plan['program']['compat']
+        bsd._compat(value, current)
+        for kind in ('specs', 'old-source', 'new-source'):
+            with self.subTest(kind=kind):
+                mutant = copy.deepcopy(current)
+                if kind == 'specs':
+                    mutant['driver_binding']['instantiated'] = self.f.raw(b'different specs')
+                elif kind == 'new-source':
+                    mutant['driver_binding']['ports_source'] = historical['sources']['ports']
+                else:
+                    wrong = copy.deepcopy(historical)
+                    wrong['driver_binding']['ports_source'] = current['sources']['ports']
+                    reference = self.f.document(wrong)
+                    self.old_plan['seed_descriptor'] = self.old_result['seed_descriptor'] = reference
+                    self.preparation['source_seed_descriptor'] = reference
+                    self.seal_compat()
+                    value = self.plan['program']['compat']
+                with self.assertRaisesRegex(SDKError, 'compiler or host ABI'):
+                    bsd._compat(value, mutant)
+                if kind == 'old-source':
+                    reference = self.f.document(historical)
+                    self.old_plan['seed_descriptor'] = self.old_result['seed_descriptor'] = reference
+                    self.preparation['source_seed_descriptor'] = reference
+                    self.seal_compat()
+                    value = self.plan['program']['compat']
+
     def test_owner_git_proof_and_static_component_admission_are_required(self):
         source = self.plan['program']['owner']
         proof = json.loads(Path(source['source_proof']['path']).read_text())
