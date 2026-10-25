@@ -54,6 +54,7 @@ The recognized SHA256 values are:
 - Ports bmake for every recipe outside the `devel/bmake` closure: `92dc223512de9427030e7a2af85d7673cf658d6f8ba68564a8ca62dd5dfaf4a8`.
 - Ports bmake and Ports mksh for every recipe outside that closure: `caef7465f704a40a481eb082d56dc3d5b9434350b9ebd1735c12a4408332f4eb`.
 - Builtin helper from `${LOCALBASE}/libexec`, installed by `pkgtools/bootstrap-mk-files`, for those recipes: `d601e1332d820b922c43cbf19b9150ad3527fd00eea6d67615850960ed320833`.
+- Native trust store from the common CA package under `${LOCALBASE}/etc`, with the same native-provider routes: `3366a715faa4c6271d3020f484b969d552164cdfe23bf8dc08e266234d82501f`.
 
 `bootstrap_producer.py` lists the native-provider revisions between these two.
 
