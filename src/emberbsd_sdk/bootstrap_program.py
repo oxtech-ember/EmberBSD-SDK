@@ -25,7 +25,7 @@ _SOURCES = tuple('usr.bin/grep/' + name + '.c' for name in ('fastgrep', 'file', 
 _PROVENANCE = ('tools/grep/Makefile', 'tools/Makefile.host', 'usr.bin/grep/Makefile', 'tools/grep/README.md')
 PROGRAM_STAGES = ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
                   'basename-bootstrap', 'dirname-bootstrap',
-                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap')
+                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap', 'env-bootstrap', 'uname-bootstrap')
 CMP_MANIFEST_SHA256 = 'a3267d3387b08780fb1e372f5a742dccd9faa84568292506d3389f35e869ad56'
 HOSTNAME_MANIFEST_SHA256 = '32450fa3c2d68e63c13f1d32795f4d3e14cab8b5beac909ee27242cef279750d'
 _CMP_SOURCES = tuple('usr.bin/cmp/' + name + '.c' for name in ('cmp', 'misc', 'regular', 'special'))
@@ -41,20 +41,45 @@ TR_MANIFEST_SHA256 = '88114937d4d600fd4c228836657f03c296ffca4badb5dea446cc67768a
 PRINTF_MANIFEST_SHA256 = 'f21cac7215af7aeaf2a57e0eacc78dadc67c63d934e14bf1cf6f521a02da4282'
 CUT_MANIFEST_SHA256 = '169b46d73ce9b36094bd5589bc6def4a061f78fe5d9d3c2579641d41f5c181dc'
 PWD_MANIFEST_SHA256 = '598906e66805438e5386f6f12478d69147e36d020849dec655d7a1826026a6bd'
+ENV_MANIFEST_SHA256 = 'b16ad21f0c3b820ba1345c40606f42ee379eb92c3d098448e0e61b5c83b39846'
+UNAME_MANIFEST_SHA256 = '668f39859e9bcf7995f9402e046bf1598527f2db294515a40dceb895ca97148d'
 _NATIVE_DIRECTORIES = {'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
                        'basename': 'usr.bin/basename', 'dirname': 'usr.bin/dirname',
                        'cat': 'bin/cat', 'head': 'usr.bin/head', 'uniq': 'usr.bin/uniq',
-                       'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut'}
+                       'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut', 'env': 'usr.bin/env', 'uname': 'usr.bin/uname'}
 _NATIVE_SOURCES = {'cmp': _CMP_SOURCES, 'hostname': _HOSTNAME_SOURCES, 'cat': ('bin/cat/cat.c',),
                    'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'), 'pwd': ('bin/pwd/pwd.c',), 'cut': ('usr.bin/cut/cut.c', *_EFUN_SOURCES),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
-                      for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf')}}
-_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22)
+                      for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf', 'env', 'uname')}}
+_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15)
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
+_UNAME_FIELDS = ('sysname', 'nodename', 'release', 'version', 'machine', 'machine_arch')
 
 
-def _literal_cases(manifest, count, *, work_root_output=False):
+def _machine_arch():
+    """Map the admitted Darwin native machine to Apple's processor-family spelling."""
+    try:
+        current = os.uname()
+    except OSError as exc:
+        _require(False, 'controller machine architecture API failed: ' + str(exc))
+    _require(current.sysname == 'Darwin', 'processor-family oracle requires Darwin')
+    families = {'arm': b'arm', 'arm64': b'arm', 'aarch64': b'arm',
+                'i386': b'i386', 'x86_64': b'i386', 'amd64': b'i386',
+                'ppc': b'powerpc', 'ppc64': b'powerpc',
+                'powerpc': b'powerpc', 'powerpc64': b'powerpc'}
+    _require(current.machine in families, 'unsupported Darwin processor architecture')
+    return families[current.machine]
+
+
+def _uname_output(fields):
+    """Keep the source-owned field order and exact native bytes, including whitespace."""
+    current = os.uname()
+    return b' '.join(_machine_arch() if field == 'machine_arch' else
+                     os.fsencode(getattr(current, field)) for field in fields) + b'\n'
+
+
+def _literal_cases(manifest, count, *, work_root_output=False, uname_output=False):
     """Check finite stream-case structure. The pinned owner supplies semantics."""
     cases = manifest['runtime_cases']
     _require(isinstance(cases, list) and len(cases) == count,
@@ -62,7 +87,8 @@ def _literal_cases(manifest, count, *, work_root_output=False):
     names = set()
     for case in cases:
         output_key = ('stdout_work_root' if work_root_output and isinstance(case, dict) and
-                      'stdout_work_root' in case else 'stdout')
+                      'stdout_work_root' in case else 'stdout_uname' if uname_output and
+                      isinstance(case, dict) and 'stdout_uname' in case else 'stdout')
         base = {'name', 'invocation', 'args', 'stdin', 'exit', output_key}
         _require(isinstance(case, dict) and
                  set(case) in (base | {'stderr'}, base | {'stderr_nonempty'}),
@@ -73,7 +99,10 @@ def _literal_cases(manifest, count, *, work_root_output=False):
                  all(isinstance(word, str) and '\0' not in word for word in case['args']) and
                  isinstance(case['stdin'], str) and
                  (isinstance(case['stdout'], str) if output_key == 'stdout' else
-                  case['stdout_work_root'] is True and case['exit'] == 0) and
+                  case['stdout_work_root'] is True and case['exit'] == 0 if output_key == 'stdout_work_root' else
+                  isinstance(case['stdout_uname'], list) and bool(case['stdout_uname']) and
+                  all(field in _UNAME_FIELDS for field in case['stdout_uname']) and
+                  len(set(case['stdout_uname'])) == len(case['stdout_uname']) and case['exit'] == 0) and
                  type(case['exit']) is int and 0 <= case['exit'] <= 255 and
                  (isinstance(case['stderr'], str) if 'stderr' in case else case['stderr_nonempty'] is True),
                  'invalid literal program case or output path')
@@ -91,7 +120,8 @@ def _profile(plan):
               'basename': BASENAME_MANIFEST_SHA256, 'dirname': DIRNAME_MANIFEST_SHA256,
               'cat': CAT_MANIFEST_SHA256, 'head': HEAD_MANIFEST_SHA256, 'uniq': UNIQ_MANIFEST_SHA256,
               'wc': WC_MANIFEST_SHA256, 'tr': TR_MANIFEST_SHA256,
-              'printf': PRINTF_MANIFEST_SHA256, 'pwd': PWD_MANIFEST_SHA256, 'cut': CUT_MANIFEST_SHA256}[name]
+              'printf': PRINTF_MANIFEST_SHA256, 'pwd': PWD_MANIFEST_SHA256, 'cut': CUT_MANIFEST_SHA256,
+              'env': ENV_MANIFEST_SHA256, 'uname': UNAME_MANIFEST_SHA256}[name]
     return ('tools/' + name + '/bootstrap.json',
             digest, _NATIVE_SOURCES[name],
             ('tools/' + name + '/Makefile', 'tools/Makefile.host', directory + '/Makefile',
@@ -123,7 +153,7 @@ def _native_program_contract(manifest, name):
                  all(case['invocation'] == 'cmp' and 'stdout_nonempty' not in case
                      for case in manifest['runtime_cases']), 'unsupported fixed cmp semantic cases')
     elif name in _LITERAL_CASE_COUNTS:
-        if name in ('basename', 'dirname', 'tr', 'printf', 'pwd'):
+        if name in ('basename', 'dirname', 'tr', 'printf', 'pwd', 'env', 'uname'):
             _require(manifest['files'] == {}, 'this program needs no fixture files')
         else:
             files = manifest['files']
@@ -131,7 +161,7 @@ def _native_program_contract(manifest, name):
                      all(isinstance(key, str) and re.fullmatch(r'[a-z][a-z0-9-]*\.txt', key) and
                          key != 'missing.txt' and isinstance(value, str) for key, value in files.items()),
                      'filter programs need bounded immutable fixture files')
-        _literal_cases(manifest, _LITERAL_CASE_COUNTS[name], work_root_output=name == 'pwd')
+        _literal_cases(manifest, _LITERAL_CASE_COUNTS[name], work_root_output=name == 'pwd', uname_output=name == 'uname')
     else:
         # These are the only accepted tails. No hostname operand can reach a child.
         _require(manifest['files'] == {} and manifest['runtime_cases'] == [
@@ -299,6 +329,9 @@ def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
         elif name == 'stdout' and program == 'pwd' and case.get('stdout_work_root') is True:
             expected = os.fsencode(canonical_existing(work)) + b'\n'
             _require(data == expected, 'pwd actual stdout differs from the controller work root')
+        elif name == 'stdout' and program == 'uname' and 'stdout_uname' in case:
+            _require(data == _uname_output(case['stdout_uname']),
+                     'uname actual stdout differs from the read-only controller APIs')
         elif name == 'stderr' and case.get('stderr_nonempty') is True:
             _require(bool(data), program + ' error case did not produce actual stderr')
         else:
@@ -357,7 +390,7 @@ def validate_program_plan(plan, descriptor, commands, flags):
         blob = hashlib.sha1(b'blob ' + str(len(raw)).encode('ascii') + b'\0' + raw).hexdigest()
         _require(set(row) == {'git_blob', 'sha256'} and row['git_blob'] == blob and
                  row['sha256'] == inventory[relative]['sha256'], 'bootstrap program Git blob or content differs')
-    if manifest['name'] in ('grep', 'cmp', 'cat', 'head', 'uniq', 'wc', 'cut'):
+    if manifest['name'] in ('grep', 'cmp', 'cat', 'head', 'uniq', 'wc', 'cut', 'env'):
         _require(entry(os.path.join(plan['work_root'], 'missing.txt')) is None,
                  manifest['name'] + ' missing-file control already exists')
     _require(plan['commands'] == program_steps(plan, descriptor, commands, flags),

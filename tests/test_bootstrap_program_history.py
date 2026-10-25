@@ -4,6 +4,7 @@
 """Historical Git-program receipts use synthetic children, never a compiler."""
 
 import copy
+import os
 from pathlib import Path
 import shutil
 import unittest
@@ -35,9 +36,13 @@ class ProgramHistoryTests(unittest.TestCase):
             returned = child(argv, log, **kwargs)
             if name == 'pwd' and Path(log).stem.startswith('case-'):
                 (c.work / (Path(log).stem.removeprefix('case-') + '.stdout')).write_text(str(c.work) + '\n')
+            if name == 'uname' and Path(log).stem.startswith('case-'):
+                (c.work / (Path(log).stem.removeprefix('case-') + '.stdout')).write_bytes(b'Darwin\n')
             return returned
         with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=fake), \
-             patch('emberbsd_sdk.bootstrap_program.socket.gethostname', return_value='test.host.example'):
+             patch('emberbsd_sdk.bootstrap_program.socket.gethostname', return_value='test.host.example'), \
+             patch('emberbsd_sdk.bootstrap_program.os.uname', return_value=os.uname_result(
+                 ('Darwin', 'historical.node', 'historical-release', 'historical-version', 'arm64'))):
             self.result = c.invoke()
         self.assertEqual(self.result['status'], 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW')
         self.old_seed = self.result['seed_descriptor']
@@ -274,14 +279,26 @@ class ProgramHistoryTests(unittest.TestCase):
         self.assertEqual(self.verify(inspect_inputs=False), {'os-basename': []})
         with self.assertRaises(SDKError): self.verify()
 
-    def test_all_thirteen_existing_os_profiles_have_a_historical_route(self):
+    def test_all_fifteen_existing_os_profiles_have_a_historical_route(self):
         for name in ('grep', 'cmp', 'hostname', 'basename', 'dirname', 'cat', 'head',
-                     'uniq', 'wc', 'tr', 'printf', 'pwd', 'cut'):
+                     'uniq', 'wc', 'tr', 'printf', 'pwd', 'cut', 'env', 'uname'):
             with self.subTest(name=name):
                 self.make_fixture(name)
                 with patch('socket.gethostname', side_effect=AssertionError('no current hostname oracle')), \
                      patch('os.uname', side_effect=AssertionError('no current kernel oracle')):
                     self.assertEqual(self.verify(), {'os-basename': []})
+
+    def test_uname_history_keeps_the_accepted_stream_without_current_oracles(self):
+        self.make_fixture('uname')
+        with patch('socket.gethostname', side_effect=AssertionError('no current hostname oracle')), \
+             patch('os.uname', side_effect=AssertionError('no current kernel oracle')), \
+             patch('emberbsd_sdk.bootstrap_program._uname_output',
+                   side_effect=AssertionError('no repeated uname semantics')):
+            self.assertEqual(self.verify(), {'os-basename': []})
+        stream = self.result['commands'][2]['stdout']
+        Path(stream['path']).write_bytes(b'changed historical observation\n')
+        with self.assertRaises(SDKError):
+            self.verify()
 
     def test_only_manifest_declared_grep_names_can_use_its_accepted_image(self):
         self.make_fixture('grep')
