@@ -107,6 +107,26 @@ class RecipeTests(unittest.TestCase):
                 self.assertIn('-j1', step['argv'])
         self.assertEqual(self.plan['commands'][3]['argv'][-1], 'compare')
 
+    def test_recipes_with_the_ports_bmake_edge_start_the_ports_bmake(self):
+        recipes = self.plan['recipes']
+        recipes['devel/bmake'] = dict(copy.deepcopy(recipes['devel/gmp']), dependencies=[])
+        recipes['devel/gmp']['dependencies'] = [*recipes['devel/gmp']['dependencies'], 'devel/bmake']
+        initial = list(self.commands['make'])
+        self.assertEqual(initial[1], '-m')
+        steps = recipe.recipe_steps(self.plan, self.descriptor, self.commands, self.descriptor['abi_flags'])
+        starts = {(step['recipe'], step['phase']): step['argv'] for step in steps if step['role'] == 'make'}
+        final = [str(self.work / 'prefix/bin/bmake'), *initial[3:]]
+        self.assertEqual(starts[('devel/bmake', 'build')][:5], initial)
+        self.assertEqual(starts[('lang/gcc16', 'build')][:5], initial)
+        for phase in ('build', 'install'):
+            argv = starts[('devel/gmp', phase)]
+            self.assertEqual(argv[:3], final)
+            self.assertNotIn('-m', argv)
+            self.assertEqual(argv[3:], ['EMBERBSD_DARWIN_BOOTSTRAP=yes', '-C',
+                                        self.plan['ports_export']['root'] + '/devel/gmp', phase])
+        with self.assertRaisesRegex(SDKError, 'bound initial make'):
+            recipe.recipe_make(self.plan, dict(self.commands, make=tuple(initial[:1])), 'devel/gmp')
+
     def test_wrong_tail_bare_tuple_and_route_overrides_fail_before_child(self):
         for kind in ('bare', 'tail', 'assignment', 'env', 'compare', 'ordering'):
             with self.subTest(kind=kind):

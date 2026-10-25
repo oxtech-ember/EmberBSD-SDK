@@ -51,6 +51,9 @@ The recognized SHA256 values are:
 - Parallel link route with selected-shell builtins: `73209380dcfeeb36abe13f0637a87bc1fd441817c98458ffb92751605c7b543b`.
 - Selected-shell route with Darwin libtool linker classification: `ec0354fe315fb02605be2e08299b7495590fc1086d511f67093f4fbb8f4775e0`.
 - Darwin libtool route with the selected ranlib in configure: `5b48cba0ea1bd64b883631028d94db1aca574d87f235299a3fc9e768253907db`.
+- Ports bmake for every recipe outside the `devel/bmake` closure: `92dc223512de9427030e7a2af85d7673cf658d6f8ba68564a8ca62dd5dfaf4a8`.
+
+`bootstrap_producer.py` lists the native-provider revisions between these two.
 
 The exported profile and accepted Ports source manifest must match the same revision.
 All parallel revisions receive the CPU budget and launcher assignments.

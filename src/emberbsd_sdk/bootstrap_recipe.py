@@ -19,6 +19,8 @@ from .native_toolset import _file, _json, _require, _sha
 from .paths import canonical_existing, canonical_new, reject_overlap
 
 BOOTSTRAP_FORMAT = 'emberbsd-native-gcc16-bootstrap-plan'
+# The Ports Darwin profile's make handoff edge. See recipe_make().
+MAKE_PROVIDER = 'devel/bmake'
 
 
 def _recipe_linker_words(plan):
@@ -92,6 +94,23 @@ def recipe_order(plan):
     return result
 
 
+def recipe_make(plan, commands, recipe):
+    """Select the make for one recipe from its bound dependency edge.
+
+    The Ports profile owns the handoff. It gives every recipe outside the
+    devel/bmake closure a direct devel/bmake edge. Those recipes start with the
+    installed Ports bmake and its own share/mk. Only the remaining recipes use
+    the bound initial make and its -m tree, because -m reaches child makes
+    through MAKEFLAGS.
+    """
+    initial = tuple(commands['make'])
+    _require(len(initial) == 5 and initial[1] == '-m',
+             'bound recipe steps need the bound initial make tuple')
+    if MAKE_PROVIDER not in plan['recipes'][recipe]['dependencies']:
+        return initial
+    return (os.path.join(_safe_path(plan['output_bundle_root']), 'bin/bmake'), *initial[3:])
+
+
 def recipe_steps(plan, descriptor, commands, flags):
     """Construct complete selected tuples and fixed targets. No caller tail."""
     work = _safe_path(plan['work_root'])
@@ -100,13 +119,14 @@ def recipe_steps(plan, descriptor, commands, flags):
     jobs = '-j' + str(plan['resources']['cpu_jobs'])
     result = []
     for number, recipe in enumerate(recipe_order(plan)):
+        make = recipe_make(plan, commands, recipe)
         for phase in ('build', 'install'):
             if recipe == 'lang/gcc16' and phase == 'install':
                 result.append(dict(id='gcc16-compare', recipe=recipe, phase='compare', role='gmake',
                     cwd=work, env=dict(env), argv=[*commands['gmake'], '--no-print-directory', jobs,
                         '-C', _safe_path(plan['recipes'][recipe]['object_directory']), 'compare']))
             result.append(dict(id=f'r{number:03d}-' + phase, recipe=recipe, phase=phase, role='make',
-                cwd=work, env=dict(env), argv=[*commands['make'], 'EMBERBSD_DARWIN_BOOTSTRAP=yes',
+                cwd=work, env=dict(env), argv=[*make, 'EMBERBSD_DARWIN_BOOTSTRAP=yes',
                     '-C', os.path.join(export, recipe), phase]))
     return result
 
