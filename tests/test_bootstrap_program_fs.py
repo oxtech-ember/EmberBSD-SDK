@@ -122,6 +122,56 @@ class FilesystemCases(unittest.TestCase):
         with self.assertRaises(SDKError):
             fs.observe(self.work, self.case)
 
+    def test_lazy_directory_enumeration_stops_at_remaining_node_budget(self):
+        from contextlib import contextmanager
+        from types import SimpleNamespace
+        real_scandir = os.scandir
+        for nested in (False, True):
+            with self.subTest(nested=nested):
+                fixtures = {'dir': dict(type='directory', mode='0700')} if nested else {}
+                case = dict(name='nested' if nested else 'flat', filesystem=dict(
+                    umask='0022', fixtures=fixtures, expect=copy.deepcopy(fixtures)))
+                root = fs.prepare(self.work, case)
+                target_inode = (root / 'dir' if nested else root).stat().st_ino
+                consumed, closed = [], []
+                @contextmanager
+                def large_iterator(fd):
+                    if os.fstat(fd).st_ino != target_inode:
+                        with real_scandir(fd) as iterator:
+                            yield iterator
+                        return
+                    def entries():
+                        for index in range(1000000):
+                            consumed.append(index)
+                            if len(consumed) > fs.MAX_NODES + 1 - int(nested):
+                                self.fail('enumeration consumed more than the remaining node budget')
+                            yield SimpleNamespace(name='item' + str(index))
+                    try:
+                        yield entries()
+                    finally:
+                        closed.append(True)
+                with patch.object(fs.os, 'scandir', side_effect=large_iterator):
+                    with self.assertRaises(SDKError):
+                        fs.observe(self.work, case)
+                self.assertGreater(len(consumed), 0)
+                self.assertLessEqual(len(consumed), fs.MAX_NODES + 1 - int(nested))
+                self.assertEqual(closed, [True])
+
+    def test_nested_hardlink_target_is_relative_to_fixture_root(self):
+        fixtures = {}
+        for parts in ('one/two/three/four/five', 'src/a/b/c'):
+            components = parts.split('/')
+            for count in range(1, len(components) + 1):
+                fixtures['/'.join(components[:count])] = dict(type='directory', mode='0700')
+        fixtures['src/a/b/c/file'] = regular()
+        peer = 'one/two/three/four/five/peer'
+        fixtures[peer] = dict(type='hardlink', target='src/a/b/c/file')
+        expected = copy.deepcopy(fixtures)
+        expected[peer] = dict(regular(), same_inode_as='src/a/b/c/file')
+        case = dict(name='nested-hardlink', filesystem=dict(umask='0022', fixtures=fixtures, expect=expected))
+        fs.prepare(self.work, case)
+        fs.verify_report(fs.observe(self.work, case), case)
+
 class FileUtilityProfiles(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('EMBERBSD_TEST_FILEUTILS_SOURCE'), 'set EMBERBSD_TEST_FILEUTILS_SOURCE')
     def test_all_real_owner_cases_build_exact_program_steps(self):

@@ -90,8 +90,8 @@ Fixtures have one of these exact forms:
 
 - File: `type`, `mode`, and `data`, using the shared byte-data decoder.
 - Directory: `type` and `mode`.
-- Symlink: `type` and a contained relative `target`.
-- Hard link: `type` and a declared regular-file fixture `target`.
+- Symlink: `type` and a contained `target` relative to the link's parent.
+- Hard link: `type` and a declared regular-file fixture `target` relative to the case root.
 
 Every fixture path must appear in `expect`, including paths removed by the child.
 Expected files require exact data and mode. Expected directories require mode.
@@ -102,6 +102,7 @@ This relation compares device/inode without following either entry.
 Reports retain the verified relation, not portable expectations for raw inode numbers.
 
 After child drainage, SDK Python checks the bounded tree with no-follow directory descriptors.
+Directory enumeration streams at most the remaining node budget plus one refusal entry before sorting.
 It rejects unexpected entries, special files, changed types, wrong modes, and differing bytes or links.
 It creates a flat `<case-name>.filesystem.json` observation in the finite output roster.
 Historical validation checks that hash-bound report with the same source-owned contract.

@@ -83,8 +83,10 @@ def validate(value):
                 total += data_size(row['data'])
             if 'target' in row:
                 target = _path(row['target'])
-                # Targets are relative to the link's parent. Dot-dot is never needed.
-                _path('/'.join([*name.split('/')[:-1], target]))
+                if kind == 'symlink':
+                    # Symlink targets are relative to the link's parent.
+                    _path('/'.join([*name.split('/')[:-1], target]))
+                # Hardlink targets use the fixture root, as in prepare().
             if 'same_inode_as' in row:
                 peer = _path(row['same_inode_as'])
                 _require(peer != name and peer in expected and
@@ -219,7 +221,14 @@ def observe(work, case, *, key=None):
 
     def walk(fd, prefix=''):
         nonlocal total
-        for leaf in sorted(os.listdir(fd)):
+        names = []
+        remaining = MAX_NODES - len(entries)
+        with os.scandir(fd) as iterator:
+            for item in iterator:
+                _require(len(names) < remaining,
+                         'filesystem directory exceeds the remaining node budget')
+                names.append(item.name)
+        for leaf in sorted(names):
             name = prefix + leaf
             _path(name)
             _require(name in value['expect'] and len(entries) < MAX_NODES,
