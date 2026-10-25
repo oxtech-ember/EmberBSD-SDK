@@ -59,6 +59,8 @@ identities. It checks the original manifest pin, source proof and seed selection
 Every finite command must retain its exact argv, environment, phase and expected
 exit. Actual exits, raw combined logs, compiler output hashes and semantic streams
 must agree with that plan and its final output roster.
+Created fixture and probe-copy hashes must match the source-owner bytes.
+This comparison does not reopen the retired copies in the old work directory.
 For cut, the retained configuration must equal the five actual probe results.
 Only the final linked cut image can be provisioned, never its control executable.
 
@@ -66,6 +68,7 @@ Historical dynamic oracles retain their independent semantic decision and exact
 stream references. The verifier never recomputes hostname, uname or work-root
 facts on the current host. Literal streams still match the source-owner contract.
 The result retains the exact original seed and accepted receipt references.
+Offline history validation checks their complete, exact unknown map.
 Their historical unknowns stay unchanged. An empty unknown list for this new
 source build means its own build history is complete; it does not qualify the
 historical binary origins in that seed.

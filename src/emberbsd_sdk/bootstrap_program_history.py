@@ -3,6 +3,7 @@
 # Origin: EmberBSD (AI-assisted).
 """Read-only provenance for copied, independently accepted OS bootstrap images."""
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -46,6 +47,10 @@ def _original_inputs(record):
     for key in ('host', 'compiler', 'sources', 'providers', 'host_abi', 'abi_flags',
                 'history', 'dynamic_dependencies', 'driver_prefix', 'driver_binding', 'make_binding'):
         _require(accepted.get(key) == seed.get(key), 'historical seed acceptance differs: ' + key)
+    from .bootstrap_seed import _history
+    unknowns = _history(seed['history'], seed['providers'], descriptor=seed, inspect_inputs=False)
+    _require(accepted.get('accepted_history_unknowns') == unknowns,
+             'original seed acceptance differs from its complete historical unknowns')
     # Do not load the old seed, its inventory, executables or current ABI roots.
     # These APIs reconstruct tuples and check the retained source snapshot only.
     root = _absolute(seed['bundle_root'])
@@ -77,7 +82,7 @@ def _streams(actual, case, work, outputs):
 
 
 def _commands(plan, result, manifest):
-    from .bootstrap_program import program_outputs, program_step_exits
+    from .bootstrap_program import program_outputs, program_sources, program_step_exits
     expected, actual = plan['commands'], result['commands']
     _require(isinstance(actual, list) and len(actual) == len(expected), 'historical command roster is incomplete')
     outputs = result['outputs']
@@ -86,6 +91,9 @@ def _commands(plan, result, manifest):
     for name, sha in outputs.items():
         _require(isinstance(name, str) and Path(name).name == name, 'invalid historical output name')
         _sha(sha)
+    for name, raw in program_sources(plan).items():
+        _require(outputs.get(name) == hashlib.sha256(raw).hexdigest(),
+                 'historical created source or fixture differs from its owner bytes')
     cases = {'case-' + case['name']: case for case in manifest['runtime_cases']}
     for wanted, row in zip(expected, actual):
         _require(json_bytes({key: row.get(key) for key in wanted}) == json_bytes(wanted),

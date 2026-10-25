@@ -48,6 +48,8 @@ class ProgramHistoryTests(unittest.TestCase):
         for key in ('host', 'compiler', 'sources', 'providers', 'host_abi', 'abi_flags',
                     'history', 'dynamic_dependencies', 'driver_prefix', 'driver_binding', 'make_binding'):
             accepted[key] = copy.deepcopy(c.descriptor.get(key))
+        accepted['accepted_history_unknowns'] = _history(c.descriptor['history'], c.descriptor['providers'],
+                                                        descriptor=c.descriptor, inspect_inputs=False)
         self.result['accepted_seed_receipt'] = c.f.document(accepted)
         self.image = copy.deepcopy(next(row['output'] for row in self.result['commands'] if row['id'] == 'link-' + name))
         self.audit = dict(format='emberbsd-darwin-output-runtime-audit', version=1,
@@ -110,6 +112,45 @@ class ProgramHistoryTests(unittest.TestCase):
         shutil.rmtree(self.case.f.bundle)
         Path(self.image['path']).unlink()
         Path(self.result['commands'][0]['output']['path']).unlink()
+        self.assertEqual(self.verify(), {'os-basename': []})
+
+    def test_original_seed_unknowns_cannot_be_omitted_or_changed(self):
+        from emberbsd_sdk.native_toolset import _json
+        original = _json(self.result['accepted_seed_receipt'])
+        for value in (None, {}, {'ports': ['invented-unknown']}, {'wrong-provider': []}):
+            accepted = copy.deepcopy(original)
+            if value is None:
+                del accepted['accepted_history_unknowns']
+            else:
+                accepted['accepted_history_unknowns'] = value
+            self.result['accepted_seed_receipt'] = self.case.f.document(accepted)
+            with self.subTest(value=value), self.assertRaisesRegex(SDKError, 'historical unknowns'):
+                self.verify()
+
+    def test_created_fixture_and_probe_copy_hashes_are_mandatory(self):
+        for name, filename in (('grep', 'input.txt'), ('cut', 'input.txt'), ('cut', 'compat-decl-strtoi.c')):
+            self.make_fixture(name)
+            self.assertEqual(self.verify(), {'os-basename': []})
+            sha = self.result['outputs'][filename]
+            for mutation in ('missing', 'changed'):
+                if mutation == 'missing':
+                    del self.result['outputs'][filename]
+                else:
+                    self.result['outputs'][filename] = 'f' * 64
+                with self.subTest(name=name, filename=filename, mutation=mutation), \
+                     self.assertRaisesRegex(SDKError, 'created source or fixture'):
+                    self.verify()
+                self.result['outputs'][filename] = sha
+
+    def test_retired_cut_fixture_copies_objects_and_executables_need_no_reopen(self):
+        from emberbsd_sdk.bootstrap_program import program_sources
+        self.make_fixture('cut')
+        for name in program_sources(self.case.plan):
+            (self.case.work / name).unlink()
+        for row in self.result['commands']:
+            if 'output' in row:
+                Path(row['output']['path']).unlink()
+        shutil.rmtree(self.case.f.bundle)
         self.assertEqual(self.verify(), {'os-basename': []})
 
     def test_missing_or_unqualified_output_acceptance_refuses(self):
