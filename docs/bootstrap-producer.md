@@ -60,6 +60,7 @@ The recognized SHA256 values are:
 
 - Metadata keeps the initial tools; full builds reapply the Ports handoff on each MAKECONF read: `87b856b28ff8757bd9c3c62cefaeb032d95be12da79e4fff7415b6b7b8a4a9b9`.
 - The same metadata/full handoff with the native CA store under `${LOCALBASE}/etc`: `06009d0687d0553bcb2de546415caf185b9bdff372006df9147b1e92bc8a9052`.
+- Ports gzip for every recipe after `archivers/gzip`; the seed set adds `pkgtools/pkg_install-info`: `75f3fa97e7e346f7abded91fef0f52e802af481f480f4474ef78ec9a4e47804b`.
 
 `bootstrap_producer.py` lists the native-provider revisions between these two.
 
@@ -127,6 +128,9 @@ role, because meson's Darwin compiler checks run `lipo -info`. Select the
 in-bundle coreutils `od` and LLVM `llvm-lipo`. Each role must be in
 `native_tools`, `required_roles` and the descriptor; otherwise the plan is
 refused before any child runs. `RECIPE_UTILITIES` exports this map.
+Keep the native `gzip`, `gunzip` and `gzcat` roles: the seed recipes and
+`archivers/gzip` run them. The Ports profile maps later recipes to the Ports
+gzip, and their tools directory shadows the native commands in the utility PATH.
 
 The metadata stage has fresh work children `obj`, `distfiles`, `packages`,
 `prefix`, and `pkgdb`. The configuration binds its isolated local prefix and

@@ -223,7 +223,8 @@ class NativeProviderTests(unittest.TestCase):
         previous = self.values()
         for digest in (producer.NO_DEFAULT_RPATH_PROFILE_SHA256, producer.UNPRIVILEGED_PROFILE_SHA256,
                        '3366a715faa4c6271d3020f484b969d552164cdfe23bf8dc08e266234d82501f',
-                       '06009d0687d0553bcb2de546415caf185b9bdff372006df9147b1e92bc8a9052'):
+                       '06009d0687d0553bcb2de546415caf185b9bdff372006df9147b1e92bc8a9052',
+                       producer.GZIP_HANDOFF_PROFILE_SHA256):
             with self.subTest(profile=digest):
                 case.plan['metadata']['profile']['sha256'] = digest
                 self.assertTrue(producer._recognized_profile(digest))
@@ -237,7 +238,8 @@ class NativeProviderTests(unittest.TestCase):
     def test_provider_profile_revisions_keep_metadata_and_full_closure_guards(self):
         for digest in (producer.NO_DEFAULT_RPATH_PROFILE_SHA256, producer.UNPRIVILEGED_PROFILE_SHA256,
                        '3366a715faa4c6271d3020f484b969d552164cdfe23bf8dc08e266234d82501f',
-                       '06009d0687d0553bcb2de546415caf185b9bdff372006df9147b1e92bc8a9052'):
+                       '06009d0687d0553bcb2de546415caf185b9bdff372006df9147b1e92bc8a9052',
+                       producer.GZIP_HANDOFF_PROFILE_SHA256):
             with self.subTest(profile=digest):
                 self.case.plan['metadata']['recipes'] = ['lang/gcc16', 'lang/llvm']
                 self.case.plan['metadata']['profile']['sha256'] = digest
