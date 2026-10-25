@@ -12,6 +12,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 import test_bootstrap_program_native as fixtures
+import test_bootstrap_program as runner_fixtures
 from emberbsd_sdk import bootstrap_program as program
 from emberbsd_sdk.errors import SDKError
 
@@ -119,7 +120,7 @@ class IdProgramTests(unittest.TestCase):
             program.verify_program_step(case.plan['commands'][2], str(case.work), case.plan)
 
     @unittest.skipUnless(os.environ.get('EMBERBSD_TEST_OS_SOURCE'), 'set EMBERBSD_TEST_OS_SOURCE')
-    def test_complete_real_owner_contract(self):
+    def test_complete_real_owner_contract_builds_every_step(self):
         root = Path(os.environ['EMBERBSD_TEST_OS_SOURCE'])
         relative, digest, sources, provenance = program._profile({'stage':'id-bootstrap'})
         raw = (root / relative).read_bytes()
@@ -132,6 +133,18 @@ class IdProgramTests(unittest.TestCase):
             self.assertTrue((root / member).is_file(), member)
             self.assertFalse((root / member).is_symlink(), member)
         self.assertEqual(manifest['invocations'], ['id','groups','whoami'])
+        runner = runner_fixtures.ProgramTests(methodName='runTest')
+        runner.setUp()
+        self.addCleanup(runner.doCleanups)
+        plan = dict(runner.plan, stage='id-bootstrap', program=dict(source=dict(root=str(root)),
+            manifest=dict(path=str(root / relative), sha256=digest)))
+        with patch('subprocess.Popen', side_effect=AssertionError('no native child')):
+            steps = program.program_steps(plan, runner.descriptor, runner.commands, runner.flags)
+        self.assertEqual(len(steps), 34)
+        self.assertEqual([row['id'] for row in steps if row['phase'] == 'program-case'],
+                         ['case-' + case['name'] for case in manifest['runtime_cases']])
+        self.assertTrue(all('\0' not in word for row in steps for word in row['argv']))
+        self.assertIn(str(root / 'common/include'), steps[0]['argv'])
 
 
 if __name__ == '__main__':
