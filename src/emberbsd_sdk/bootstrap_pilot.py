@@ -25,15 +25,19 @@ STATIC_RUNTIME_CXX_PROBE = (b'#include <iostream>\n'
     b'int main() { try { throw 16; } catch (int value) { if (value != 16) return 1; '
     b'std::cout << "emberbsd-native-cxx-v1" << std::endl; return !std::cout; } return 1; }\n')
 _STATIC_RUNTIME_PURPOSE = 'native-c-and-cxx-static-runtime-pilot'
+_LINKER_TRACE_PURPOSE = 'native-c-and-cxx-linker-trace-pilot'
 
 
 def _pilot_sources(static_runtime):
     return {**_SOURCE, 'cxx': ('native.cc', STATIC_RUNTIME_CXX_PROBE)} if static_runtime else _SOURCE
 
 
-def pilot_steps(descriptor, commands, flags, work_root, *, static_runtime=False):
+def pilot_steps(descriptor, commands, flags, work_root, *, static_runtime=False, linker_trace=False):
     """Construct the complete supported argv and environment. Do not run it."""
     _require(type(static_runtime) is bool, 'pilot static-runtime selector must be a boolean')
+    _require(type(linker_trace) is bool, 'pilot linker-trace selector must be a boolean')
+    _require(not linker_trace or (not static_runtime and descriptor['host']['os'] == 'Darwin'),
+             'linker-trace pilot needs Darwin and a separate non-static purpose')
     work = _absolute(work_root)
     directories = sorted({os.path.dirname(words[0]) for words in commands.values()})
     _require(all(os.pathsep not in path for path in directories),
@@ -53,6 +57,8 @@ def pilot_steps(descriptor, commands, flags, work_root, *, static_runtime=False)
         link_flags = ['-Wl,--threads=1'] if descriptor['host']['os'] == 'Darwin' else []
         if static_runtime:
             link_flags += ['-static-libstdc++', '-static-libgcc']
+        if linker_trace:
+            link_flags += ['-Wl,-v']
         steps.append(dict(id=language + '-link', phase='link', cwd=work,
                           argv=[*base, obj, *flags['ldflags'], *link_flags, '-o', artifact],
                           env=dict(environment)))
@@ -70,7 +76,7 @@ def validate_pilot_plan(plan, descriptor, commands, flags):
     _require(set(plan) == {'format', 'version', 'scope', 'purpose', 'seed_descriptor',
                           'host', 'sources', 'work_root', 'required_roles', 'resources', 'commands'},
              'unsupported pilot plan fields')
-    _require(plan['purpose'] in ('native-c-and-cxx-pilot', _STATIC_RUNTIME_PURPOSE) and
+    _require(plan['purpose'] in ('native-c-and-cxx-pilot', _STATIC_RUNTIME_PURPOSE, _LINKER_TRACE_PURPOSE) and
              plan['host'] == descriptor['host'] and plan['sources'] == descriptor['sources'],
              'pilot source or host pins mismatch')
     for source in plan['sources'].values():
@@ -82,7 +88,8 @@ def validate_pilot_plan(plan, descriptor, commands, flags):
              set(plan['required_roles']) <= set(commands), 'pilot native roles are incomplete')
     _validate_resources(plan['resources'])
     _require(plan['commands'] == pilot_steps(descriptor, commands, flags, work,
-             static_runtime=plan['purpose'] == _STATIC_RUNTIME_PURPOSE),
+             static_runtime=plan['purpose'] == _STATIC_RUNTIME_PURPOSE,
+             linker_trace=plan['purpose'] == _LINKER_TRACE_PURPOSE),
              'pilot commands differ from the source-owned finite route')
     return plan
 

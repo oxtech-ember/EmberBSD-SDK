@@ -19,7 +19,7 @@ scope `gcc16-bootstrap`. It has exactly these fields:
 
 | Field | Value |
 | --- | --- |
-| `purpose` | `native-c-and-cxx-pilot` or `native-c-and-cxx-static-runtime-pilot` |
+| `purpose` | `native-c-and-cxx-pilot`, `native-c-and-cxx-static-runtime-pilot`, or `native-c-and-cxx-linker-trace-pilot` |
 | `seed_descriptor` | Exact `{path, sha256}` reference |
 | `host`, `sources` | Exact descriptor values |
 | `work_root` | Fresh absolute output directory with real ancestors |
@@ -61,6 +61,19 @@ The C source and its expected output remain unchanged.
 The old purpose, command construction, and `NATIVE_CXX_PROBE` remain unchanged.
 No plan field accepts a replacement source or arbitrary link arguments.
 Neither static selector enters the ordinary ABI flag grammar.
+
+Use `linker_trace=True` on `pilot_steps` only with
+`purpose: native-c-and-cxx-linker-trace-pilot` and a Darwin descriptor.
+It adds exactly `-Wl,-v` to the two link commands. The selected linker reports
+its version and search paths while linking. This requests a linker diagnostic
+that GCC's driver `-v` need not pass through collect2.
+The six-command order, source bytes, compile/run commands and environments stay unchanged.
+Ordinary and static-runtime purposes retain their exact routes.
+Combining `static_runtime=True` with `linker_trace=True` is unsupported and refused.
+No arbitrary driver arguments or ordinary ABI flag extension is accepted.
+These are command-reported diagnostics, not kernel execution tracing.
+Inspect the actual collect2 and Mach-O `ld64.lld` route before acceptance.
+The new purpose requires its own exact accepted plan and receipt.
 
 The accepted seed receipt must add `evidence_level: input-and-route-only` and
 `input_route_audit`, an exact reference to independently accepted metadata.
