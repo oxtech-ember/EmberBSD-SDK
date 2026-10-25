@@ -8,7 +8,7 @@ import hashlib
 import os
 from pathlib import Path
 import subprocess
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from emberbsd_sdk import bootstrap_program as program
 from emberbsd_sdk import bootstrap_compat_component as component
@@ -233,8 +233,127 @@ class FiletimeComponentTests(unittest.TestCase):
         for name, data in component.sources(c.plan).items():
             (c.work / name).write_bytes(data)
         (c.source / 'lib/libc/gen/namespace.h').write_text('unexpected source header')
-        with self.assertRaisesRegex(SDKError, 'source tree changed'):
+        with self.assertRaisesRegex(SDKError, 'source changed'):
             component.prepare(c.plan['commands'][0], c.plan, [])
+
+    def test_extra_work_headers_refuse_before_each_dependent_compile(self):
+        c = self.case
+        actual = self.run_fixture()['commands']
+        for step_index in (5, 8):
+            for name in ('fcntl.h', 'sys'):
+                with self.subTest(step=step_index, name=name):
+                    path = c.work / name
+                    if name == 'sys':
+                        path.mkdir()
+                        (path / 'stat.h').write_text('unexpected nested header')
+                    else:
+                        path.write_text('unexpected header')
+                    try:
+                        with self.assertRaisesRegex(SDKError, 'work roster'):
+                            component.prepare(c.plan['commands'][step_index], c.plan,
+                                              actual[:step_index])
+                    finally:
+                        if path.is_dir():
+                            (path / 'stat.h').unlink()
+                            path.rmdir()
+                        else:
+                            path.unlink()
+
+    def test_work_roster_enumeration_is_bounded_and_does_not_follow_links(self):
+        c = self.case
+        c.work.mkdir()
+        for name, data in component.sources(c.plan).items():
+            (c.work / name).write_bytes(data)
+        path = c.work / 'namespace.h'
+        path.unlink()
+        path.symlink_to(c.source / 'tools/compat/namespace.h')
+        with self.assertRaisesRegex(SDKError, 'work roster'):
+            component._work_inputs(c.plan)
+        count = 0
+        limit = len({*component.outputs(c.plan), 'result.json',
+                     *(row['id'] + '.log' for row in c.plan['commands'])})
+        def entries():
+            nonlocal count
+            while count <= limit + 1:
+                count += 1
+                item = Mock()
+                item.name = 'result.json'
+                item.is_file.return_value = True
+                yield item
+        class Scan:
+            def __enter__(self):
+                return entries()
+            def __exit__(self, *args):
+                return False
+        with patch.object(component.os, 'scandir', return_value=Scan()):
+            with self.assertRaisesRegex(SDKError, 'work roster'):
+                component._work_inputs(c.plan)
+        self.assertEqual(count, limit + 1)
+
+    def test_extra_work_header_between_steps_never_reaches_compiler(self):
+        calls = []
+        original = component.verify
+        def verify(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if args[0]['id'] == component.PROBES[-1]:
+                (self.case.work / 'fcntl.h').write_text('unexpected header')
+            return result
+        def observe(argv, log, **kwargs):
+            calls.append(Path(log).stem)
+            return self.fake(argv, log, **kwargs)
+        with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=observe), \
+             patch.object(component, 'verify', side_effect=verify):
+            result = self.case.invoke()
+        self.assertEqual(result['status'], 'FAILED')
+        self.assertIn('work roster', result['error'])
+        self.assertEqual(calls, [row['id'] for row in self.case.plan['commands'][:5]])
+
+    def test_extra_work_header_after_prepare_refuses_at_drain(self):
+        def inject(argv, log, **kwargs):
+            if Path(log).stem == 'compile-utimens':
+                (self.case.work / 'fcntl.h').write_text('unexpected header')
+            return self.fake(argv, log, **kwargs)
+        with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=inject):
+            result = self.case.invoke()
+        self.assertEqual(result['status'], 'FAILED')
+        self.assertIn('work roster', result['error'])
+        self.assertFalse((self.case.work / 'libnbcompat.a').exists())
+
+    def test_retained_evidence_is_required_for_candidate_and_input(self):
+        c = self.case
+        result = self.run_fixture()
+        result_ref = c.f.document(result)
+        candidate = component.candidate(result['bootstrap_plan'], result_ref)
+        candidate_ref = c.f.document(candidate)
+        review = c.f.document(dict(status='REVIEWED_INITIAL_OS_COMPAT_COMPONENT',
+            candidate=candidate_ref, findings=[], all_leases_closed=True,
+            ordinary_provider_qualified=False))
+        receipt = c.f.document(dict(format='emberbsd-os-compat-component-acceptance', version=1,
+            scope='gcc16-bootstrap', status='ACCEPTED_INITIAL_OS_COMPAT_COMPONENT',
+            component='filetime', candidate=candidate_ref, independent_review=review,
+            initial_only=True, ordinary_provider_qualified=False))
+        for ref in candidate['exports'].values():
+            Path(ref['path']).chmod(0o444)
+        self.assertEqual(component.validate_input(receipt, c.descriptor), candidate['exports'])
+        refs = [c.inputs['source_proof'], c.inputs['inventory'], c.proof['members'],
+                c.plan['program']['manifest']]
+        for ref in refs:
+            path = Path(ref['path'])
+            raw = path.read_bytes()
+            for change in ('missing', 'changed'):
+                with self.subTest(evidence=path.name, change=change):
+                    if change == 'missing':
+                        path.unlink()
+                    else:
+                        path.write_bytes(raw + b' ')
+                    try:
+                        with self.assertRaises(SDKError):
+                            component.candidate(result['bootstrap_plan'], result_ref)
+                        with self.assertRaises(SDKError):
+                            component.validate_input(receipt, c.descriptor)
+                    finally:
+                        path.write_bytes(raw)
+        self.assertEqual(component.validate_input(receipt, c.descriptor), candidate['exports'])
 
     def test_normal_and_finite_source_selection_and_function_checks_agree(self):
         root = self.owner

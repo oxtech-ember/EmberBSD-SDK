@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import stat
 
-from .inventory import sha256_file, snapshot_tree
+from .inventory import sha256_file
 from .native_toolset import _bytes, _envelope, _json, _require
 from .paths import entry
 
@@ -169,17 +169,33 @@ def _dependencies(completed):
         _require(_regular(ref['path']) == ref, 'component dependency changed before child')
 
 
+def _work_inputs(plan):
+    """Bound the flat compiler search directory; reject every undeclared entry."""
+    work = plan['work_root']
+    allowed = {*outputs(plan), 'result.json',
+               *(step['id'] + '.log' for step in plan['commands'])}
+    with os.scandir(work) as entries:
+        for count, item in enumerate(entries, 1):
+            _require(count <= len(allowed) and item.name in allowed and
+                     item.is_file(follow_symlinks=False),
+                     'component work roster contains an unexpected entry')
+    for name, data in sources(plan).items():
+        ref = _regular(Path(work, name))
+        _require(_bytes(ref) == data, 'component work source changed before child')
+
+
+def _source_inputs(plan):
+    from .bootstrap_program import validate_program_source
+    validate_program_source(plan, plan['sources'].get('os'))
+
+
 def prepare(step, plan, completed):
     manifest(plan)
     _require(len(completed) < len(plan['commands']) and step in plan['commands'] and [r['id'] for r in completed] ==
              [r['id'] for r in plan['commands'][:len(completed)]] and
              step == plan['commands'][len(completed)], 'component step order changed')
-    for name, data in sources(plan).items():
-        ref = _regular(Path(plan['work_root'], name))
-        _require(_bytes(ref) == data, 'component work source changed before child')
-    root = plan['program']['source']['root']
-    _require(snapshot_tree(root) == _json(plan['program']['source']['inventory']),
-             'component source tree changed before child')
+    _work_inputs(plan)
+    _source_inputs(plan)
     _dependencies(completed)
     if any(row['id'] == PROBES[-1] for row in completed):
         _require(_bytes(_regular(Path(plan['work_root'], 'nbtool_config.h'))) ==
@@ -195,6 +211,8 @@ def prepare(step, plan, completed):
 
 def verify(step, work, plan, actual_exit, completed):
     value = manifest(plan)
+    _work_inputs(plan)
+    _source_inputs(plan)
     result = {}
     if step['id'] in PROBES:
         probe = value['probes'][PROBES.index(step['id'])]
@@ -222,6 +240,8 @@ def candidate(plan_ref, result_ref):
     _envelope(plan, 'emberbsd-native-gcc16-producer-plan', scope='gcc16-bootstrap')
     _envelope(result, 'emberbsd-native-gcc16-producer-result', scope='gcc16-bootstrap')
     manifest(plan)
+    _source_inputs(plan)
+    _work_inputs(plan)
     _require(plan['stage'] == STAGE and result['format'] == 'emberbsd-native-gcc16-producer-result' and
              result['bootstrap_plan'] == plan_ref and
              result['seed_descriptor'] == plan['seed_descriptor'] and

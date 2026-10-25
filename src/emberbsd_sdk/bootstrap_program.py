@@ -469,6 +469,38 @@ def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
     return streams
 
 
+def validate_program_source(plan, source_pin):
+    """Re-read the complete pinned source and provenance chain without children."""
+    value = plan['program']
+    _require(set(value) == {'source', 'manifest'}, 'unsupported program input fields')
+    source = value['source']
+    _require(set(source) == {'root', 'source', 'inventory', 'source_proof'} and
+             source['source'] == source_pin, 'bootstrap program OS source pin mismatch')
+    _source(source['source'])
+    root = _absolute(source['root'])
+    inventory = _json(source['inventory'])
+    _require(canonical_existing(root) == root and snapshot_tree(root) == inventory, 'bootstrap program source changed')
+    manifest = program_manifest(plan)
+    proof = _json(source['source_proof'])
+    _require(set(proof) == {'format', 'version', 'source', 'inventory', 'members'} and
+        proof['format'] == 'emberbsd-bootstrap-program-source' and type(proof['version']) is int and
+        proof['version'] == 1 and proof['source'] == source['source'] and proof['inventory'] == source['inventory'],
+        'bootstrap program source proof mismatch')
+    members = _json(proof['members'])
+    files = {name for name, row in inventory.items() if row.get('kind') == 'file'}
+    relative, _, sources, provenance = _profile(plan)
+    expected = {*sources, *manifest['headers'], relative, *provenance}
+    _require(files == set(members) == expected and
+             all(row.get('kind') in ('file', 'directory') for row in inventory.values()),
+             'bootstrap program needs its exact complete source roster without links')
+    for relative, row in members.items():
+        raw = _bytes(dict(path=os.path.join(root, relative), sha256=inventory[relative]['sha256']))
+        blob = hashlib.sha1(b'blob ' + str(len(raw)).encode('ascii') + b'\0' + raw).hexdigest()
+        _require(set(row) == {'git_blob', 'sha256'} and row['git_blob'] == blob and
+                 row['sha256'] == inventory[relative]['sha256'], 'bootstrap program Git blob or content differs')
+    return manifest
+
+
 def validate_program_plan(plan, descriptor, commands, flags):
     if plan.get('stage') == 'byacc-bootstrap':
         from .bootstrap_byacc import validate_byacc_plan
@@ -499,33 +531,7 @@ def validate_program_plan(plan, descriptor, commands, flags):
     _require(isinstance(plan['required_roles'], list) and
              len(plan['required_roles']) == len(set(plan['required_roles'])) and
              required <= set(plan['required_roles']) <= set(commands), 'program input roles are incomplete')
-    value = plan['program']
-    _require(set(value) == {'source', 'manifest'}, 'unsupported program input fields')
-    source = value['source']
-    _require(set(source) == {'root', 'source', 'inventory', 'source_proof'} and
-             source['source'] == descriptor['sources'].get('os'), 'bootstrap program OS source pin mismatch')
-    _source(source['source'])
-    root = _absolute(source['root'])
-    inventory = _json(source['inventory'])
-    _require(canonical_existing(root) == root and snapshot_tree(root) == inventory, 'bootstrap program source changed')
-    manifest = program_manifest(plan)
-    proof = _json(source['source_proof'])
-    _require(set(proof) == {'format', 'version', 'source', 'inventory', 'members'} and
-        proof['format'] == 'emberbsd-bootstrap-program-source' and type(proof['version']) is int and
-        proof['version'] == 1 and proof['source'] == source['source'] and proof['inventory'] == source['inventory'],
-        'bootstrap program source proof mismatch')
-    members = _json(proof['members'])
-    files = {name for name, row in inventory.items() if row.get('kind') == 'file'}
-    relative, _, sources, provenance = _profile(plan)
-    expected = {*sources, *manifest['headers'], relative, *provenance}
-    _require(files == set(members) == expected and
-             all(row.get('kind') in ('file', 'directory') for row in inventory.values()),
-             'bootstrap program needs its exact complete source roster without links')
-    for relative, row in members.items():
-        raw = _bytes(dict(path=os.path.join(root, relative), sha256=inventory[relative]['sha256']))
-        blob = hashlib.sha1(b'blob ' + str(len(raw)).encode('ascii') + b'\0' + raw).hexdigest()
-        _require(set(row) == {'git_blob', 'sha256'} and row['git_blob'] == blob and
-                 row['sha256'] == inventory[relative]['sha256'], 'bootstrap program Git blob or content differs')
+    manifest = validate_program_source(plan, descriptor['sources'].get('os'))
     if manifest['name'] in ('grep', 'cmp', 'cat', 'head', 'uniq', 'wc', 'cut', 'env', 'tail', 'sort'):
         _require(entry(os.path.join(plan['work_root'], 'missing.txt')) is None,
                  manifest['name'] + ' missing-file control already exists')

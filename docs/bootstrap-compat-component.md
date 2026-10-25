@@ -39,7 +39,10 @@ HAVE_UTIMENS and HAVE_LUTIMENS derive from the actual link results.
 This header does not claim that full OS configure completed.
 
 Before each child, the controller verifies source bytes, generated configuration,
-command order and all preceding artifact hashes. The archive must contain exactly
+command order and all preceding artifact hashes. A bounded work-directory scan
+rejects every unknown file, directory and symlink. It protects the compiler's
+work include path, including nested header names. These checks repeat after drainage.
+The archive must contain exactly
 the recorded canonical object and optional standard symbol indexes.
 The controller refuses extra archive members and pre-existing outputs.
 
@@ -56,6 +59,9 @@ Its status is `PENDING_INDEPENDENT_COMPONENT_REVIEW`.
 It binds the exact plan, drained producer result, seed, OS source and four exports:
 `libnbcompat.a`, `nbtool_config.h`, `compat_filetime.h` and `bootstrap_cdefs.h`.
 It verifies command exits, retained logs, artifacts and the archive contents.
+It re-reads the common source proof, member list, inventory and pinned manifest.
+Missing or changed provenance fails before the candidate returns any exports.
+Input validation repeats this check; it does not reuse an earlier successful read.
 It does not issue acceptance.
 
 `validate_input(receipt_ref, descriptor)` consumes a separate version 1
