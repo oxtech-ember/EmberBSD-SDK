@@ -224,7 +224,7 @@ def _command(value, executable):
     return stdout
 
 
-def _flags(value, allowed_roots=None):
+def _flags(value, allowed_roots=None, *, host=None):
     _require(isinstance(value, dict) and set(value) == set(_ABI_FLAGS),
              'expected separate native ABI flag arrays')
     result = {}
@@ -250,6 +250,13 @@ def _flags(value, allowed_roots=None):
                 path = _absolute(word[2:])
             elif word.startswith('--sysroot='):
                 path = _absolute(word.split('=', 1)[1])
+            elif word.startswith('-mmacosx-version-min='):
+                # This deployment option selects no tools or search directories.
+                component = r'(?:0|[1-9][0-9]{0,2})'
+                version = r'[1-9][0-9]{0,2}(?:\.' + component + r'){0,2}'
+                _require(isinstance(host, dict) and host.get('os') == 'Darwin' and
+                         re.fullmatch(r'-mmacosx-version-min=' + version, word),
+                         f'unsupported native Darwin deployment flag: {word}')
             else:
                 _require(plain.fullmatch(word), f'unsupported native ABI flag: {word}')
             if path is not None and allowed_roots is not None:
@@ -328,7 +335,7 @@ def _payload(descriptor, required_roles):
                      f'native ABI {kind} inventory changed')
             roots.append(abi_root)
             abi_inventories.append((abi_root, abi_inventory))
-    flags = _flags(descriptor['abi_flags'], roots)
+    flags = _flags(descriptor['abi_flags'], roots, host=host)
     return root, inventory, tools, records, abi_inventories, flags
 
 
@@ -407,7 +414,7 @@ def validate_selection(value, *, required_roles):
             _require(os.path.commonpath((root, path)) == root and path != root, 'recorded tool escapes native bundle')
         # Reuse the live flag grammar. Portable verification cannot repeat
         # filesystem containment checks against the original ABI directories.
-        _flags(value['abi_flags'])
+        _flags(value['abi_flags'], host=host)
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise SDKError('invalid saved native selection') from exc
 

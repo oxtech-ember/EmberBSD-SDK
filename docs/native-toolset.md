@@ -143,6 +143,13 @@ joined `-I/path` and `-L/path`, and `--sysroot=/path`.
 Search paths must resolve inside the bundle or an explicit native ABI input root.
 API 1 also accepts `-O[0-3sg]`, `-g[0-3]?`, `-fPIC`, `-fPIE`, `-fno-common`,
 `-pthread`, `-std=...`, `-D...`, `-U...`, `-Wall`, `-Wextra`, `-Werror`, and `-Wno-...`.
+For a Darwin host, `-mmacosx-version-min=MAJOR[.MINOR[.PATCH]]` is also accepted.
+Each numeric component has one to three decimal digits. The major component is
+positive. A component has no leading zero unless it is zero. For example,
+`-mmacosx-version-min=26.0` preserves the qualified deployment minimum in both
+compile and link arguments. The same flag is refused for other host OS values.
+Live payload checks and saved selection checks use the same host-aware grammar.
+This option does not select another compiler, linker, sysroot or search path.
 Other arguments fail closed. Response files and driver override flags are refused.
 Qualify a contract extension before adding an unsupported flag.
 Do not use native ABI roots to authorize a system build tool or target input.
