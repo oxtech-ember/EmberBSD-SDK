@@ -61,12 +61,20 @@ class NativeProgramTests(unittest.TestCase):
         case.plan['stage'] = name + '-bootstrap'
         relative, _, sources, provenance = program._profile(case.plan)
         case.manifest.update(name=name, canonical_host_recipe='tools/' + name + '/Makefile',
-            source_makefile=(('bin/' if name in ('hostname', 'cat', 'pwd') else 'usr.bin/') + name) + '/Makefile',
+            source_makefile=(('bin/' if name in ('hostname', 'cat', 'pwd', 'date') else 'usr.bin/') + name) + '/Makefile',
             sources=list(sources),
             headers=(['usr.bin/' + name + '/extern.h'] if name in ('cmp', 'tr', 'tail') else []) + [program._BOOTSTRAP_CDEFS],
             include_dirs=['usr.bin/' + name] if name in ('cmp', 'tr', 'tail') else [],
             cppflags=['-include', program._BOOTSTRAP_CDEFS], invocations=[name, 'tac'] if name == 'tail' else [name], files={}, runtime_cases=[])
-        if name == 'cmp':
+        if name == 'date':
+            case.manifest.update(headers=['bin/date/extern.h', program._BOOTSTRAP_CDEFS,
+                                          'tools/compat/bootstrap/nbtool_config.h'],
+                include_dirs=['bin/date', 'tools/compat/bootstrap'],
+                cppflags=['-DHAVE_NBTOOL_CONFIG_H=1', '-include', program._BOOTSTRAP_CDEFS],
+                runtime_cases=[dict(name='case' + str(index), invocation=name,
+                    args=['-u', '-r', '0', '+%Y'], stdin='', exit=0, stdout='1970\n', stderr='')
+                    for index in range(41)])
+        elif name == 'cmp':
             # Empty literal data is intentional. No real cmp binary is run.
             case.manifest['files'] = dict.fromkeys(
                 ('same.txt', 'different.txt', 'short.txt', 'skip-left.txt', 'skip-right.txt'), '')

@@ -27,7 +27,7 @@ _SOURCES = tuple('usr.bin/grep/' + name + '.c' for name in ('fastgrep', 'file', 
 _PROVENANCE = ('tools/grep/Makefile', 'tools/Makefile.host', 'usr.bin/grep/Makefile', 'tools/grep/README.md')
 PROGRAM_STAGES = ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
                   'basename-bootstrap', 'dirname-bootstrap',
-                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap', 'env-bootstrap', 'uname-bootstrap', 'tail-bootstrap', 'sort-bootstrap')
+                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap', 'env-bootstrap', 'uname-bootstrap', 'tail-bootstrap', 'sort-bootstrap', 'date-bootstrap')
 CMP_MANIFEST_SHA256 = 'a3267d3387b08780fb1e372f5a742dccd9faa84568292506d3389f35e869ad56'
 HOSTNAME_MANIFEST_SHA256 = '32450fa3c2d68e63c13f1d32795f4d3e14cab8b5beac909ee27242cef279750d'
 _CMP_SOURCES = tuple('usr.bin/cmp/' + name + '.c' for name in ('cmp', 'misc', 'regular', 'special'))
@@ -47,13 +47,15 @@ ENV_MANIFEST_SHA256 = 'b16ad21f0c3b820ba1345c40606f42ee379eb92c3d098448e0e61b5c8
 UNAME_MANIFEST_SHA256 = '668f39859e9bcf7995f9402e046bf1598527f2db294515a40dceb895ca97148d'
 TAIL_MANIFEST_SHA256 = '15ab76bc438699a789dc94351e71151301b2560072345243040aa446028f34c8'
 SORT_MANIFEST_SHA256 = 'ed61a6a5caae08acd3334bf5769f22df82930cc2a7fd4ae8cdfcf4abffdfd2db'
+DATE_MANIFEST_SHA256 = '51840761173803ca69439053d8ee5fa72c4b331d7cb6ddf729f54c9eb4cfd8c8'
+_NBTOOL_CONFIG = 'tools/compat/bootstrap/nbtool_config.h'
 _NATIVE_LOCAL_HEADERS = {'cmp': ('extern.h',), 'tr': ('extern.h',), 'tail': ('extern.h',),
-                         'cut': ('x_cut.c',), 'sort': ('sort.h', 'fsort.h', 'pathnames.h')}
+                         'date': ('extern.h',), 'cut': ('x_cut.c',), 'sort': ('sort.h', 'fsort.h', 'pathnames.h')}
 _NATIVE_DIRECTORIES = {'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
                        'basename': 'usr.bin/basename', 'dirname': 'usr.bin/dirname',
                        'cat': 'bin/cat', 'head': 'usr.bin/head', 'uniq': 'usr.bin/uniq',
-                       'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut', 'env': 'usr.bin/env', 'uname': 'usr.bin/uname', 'tail': 'usr.bin/tail', 'sort': 'usr.bin/sort'}
-_NATIVE_SOURCES = {'sort': (*('usr.bin/sort/' + name + '.c' for name in
+                       'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut', 'env': 'usr.bin/env', 'uname': 'usr.bin/uname', 'tail': 'usr.bin/tail', 'sort': 'usr.bin/sort', 'date': 'bin/date'}
+_NATIVE_SOURCES = {'date': ('bin/date/date.c',), 'sort': (*('usr.bin/sort/' + name + '.c' for name in
                            ('append', 'fields', 'files', 'fsort', 'init', 'msort', 'sort', 'tmp', 'radix_sort')),
                            *_EFUN_SOURCES),
                    'tail': tuple('usr.bin/tail/' + name + '.c' for name in
@@ -62,7 +64,7 @@ _NATIVE_SOURCES = {'sort': (*('usr.bin/sort/' + name + '.c' for name in
                    'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'), 'pwd': ('bin/pwd/pwd.c',), 'cut': ('usr.bin/cut/cut.c', *_EFUN_SOURCES),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
                       for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf', 'env', 'uname')}}
-_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36)
+_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41)
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
 _ALIASES = {'grep': ('egrep', 'fgrep'), 'tail': ('tac',)}
@@ -133,7 +135,7 @@ def _profile(plan):
               'cat': CAT_MANIFEST_SHA256, 'head': HEAD_MANIFEST_SHA256, 'uniq': UNIQ_MANIFEST_SHA256,
               'wc': WC_MANIFEST_SHA256, 'tr': TR_MANIFEST_SHA256,
               'printf': PRINTF_MANIFEST_SHA256, 'pwd': PWD_MANIFEST_SHA256, 'cut': CUT_MANIFEST_SHA256,
-              'env': ENV_MANIFEST_SHA256, 'uname': UNAME_MANIFEST_SHA256, 'tail': TAIL_MANIFEST_SHA256, 'sort': SORT_MANIFEST_SHA256}[name]
+              'env': ENV_MANIFEST_SHA256, 'uname': UNAME_MANIFEST_SHA256, 'tail': TAIL_MANIFEST_SHA256, 'sort': SORT_MANIFEST_SHA256, 'date': DATE_MANIFEST_SHA256}[name]
     return ('tools/' + name + '/bootstrap.json',
             digest, _NATIVE_SOURCES[name],
             ('tools/' + name + '/Makefile', 'tools/Makefile.host', directory + '/Makefile',
@@ -143,6 +145,7 @@ def _profile(plan):
 def _native_program_contract(manifest, name):
     cmp = name == 'cmp'
     efun = name in EFUN_PROGRAMS
+    nbtool = name == 'date'
     directory = _NATIVE_DIRECTORIES[name]
     _require(set(manifest) == {'format', 'version', 'name', 'origin', 'canonical_host_recipe', 'source_makefile',
         'compiler', 'sources', 'headers', 'include_dirs', 'cppflags', 'cflags', 'link_flags', 'libraries',
@@ -154,9 +157,9 @@ def _native_program_contract(manifest, name):
         manifest['compiler'] == dict(family='gcc', major=16, abi='native') and
         manifest['sources'] == list(_NATIVE_SOURCES[name]) and
         manifest['headers'] == [*(directory + '/' + header for header in _NATIVE_LOCAL_HEADERS.get(name, ())),
-                                _BOOTSTRAP_CDEFS, *(_EFUN_HEADERS if efun else ())] and
-        manifest['include_dirs'] == ([directory, 'tools/compat', 'common/lib/libc/stdlib'] if efun else [directory] if name in _NATIVE_LOCAL_HEADERS else []) and
-        manifest['cppflags'] == (['-DHAVE_NBTOOL_CONFIG_H=1', '-include', 'nbtool_config.h'] if efun else ['-include', _BOOTSTRAP_CDEFS]) and
+                                _BOOTSTRAP_CDEFS, *(_EFUN_HEADERS if efun else (_NBTOOL_CONFIG,) if nbtool else ())] and
+        manifest['include_dirs'] == ([directory, 'tools/compat', 'common/lib/libc/stdlib'] if efun else [directory, 'tools/compat/bootstrap'] if nbtool else [directory] if name in _NATIVE_LOCAL_HEADERS else []) and
+        manifest['cppflags'] == (['-DHAVE_NBTOOL_CONFIG_H=1', '-include', 'nbtool_config.h'] if efun else (['-DHAVE_NBTOOL_CONFIG_H=1'] if nbtool else []) + ['-include', _BOOTSTRAP_CDEFS]) and
         all(manifest[key] == [] for key in ('cflags', 'link_flags', 'libraries')) and
         manifest['invocations'] == [name, *_ALIASES.get(name, ())], 'unsupported direct-source ' + name + ' contract')
     if cmp:
@@ -166,7 +169,7 @@ def _native_program_contract(manifest, name):
                  all(case['invocation'] == 'cmp' and 'stdout_nonempty' not in case
                      for case in manifest['runtime_cases']), 'unsupported fixed cmp semantic cases')
     elif name in _LITERAL_CASE_COUNTS:
-        if name in ('basename', 'dirname', 'tr', 'printf', 'pwd', 'env', 'uname'):
+        if name in ('basename', 'dirname', 'tr', 'printf', 'pwd', 'env', 'uname', 'date'):
             _require(manifest['files'] == {}, 'this program needs no fixture files')
         else:
             files = manifest['files']
@@ -277,6 +280,8 @@ def program_steps(plan, descriptor, commands, flags):
         from .bootstrap_compat import probe_steps
         result.extend(probe_steps(plan, manifest, commands, flags, env))
         cppflags = ['-DHAVE_NBTOOL_CONFIG_H=1', '-include', os.path.join(work, 'nbtool_config.h'), '-I', work]
+    elif manifest['name'] == 'date':
+        cppflags = ['-DHAVE_NBTOOL_CONFIG_H=1', *cppflags]
     includes = [word for directory in manifest['include_dirs'] for word in ('-I', os.path.join(source, directory))]
     for relative in manifest['sources']:
         name = Path(relative).stem
