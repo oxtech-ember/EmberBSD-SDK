@@ -25,6 +25,17 @@ from emberbsd_sdk.inventory import snapshot_tree
 
 class PkgInstallTests(unittest.TestCase):
     def setUp(self):
+        # Synthetic Darwin inputs must not read the test host's OS service data.
+        self.real_host_facts = producer._current_host_facts
+        host_file = patch.object(producer, 'open', create=True,
+            side_effect=AssertionError('synthetic fixture attempted a real host-service read'))
+        self.host_file_read = host_file.start()
+        self.addCleanup(host_file.stop)
+        facts = patch.object(producer, '_current_host_facts', return_value=dict(
+            os='Darwin', cpu='aarch64', kernel_version='25.0.0',
+            product_version='26.0', pkgsrc_opsys_version='260000'))
+        self.host_fact_provider = facts.start()
+        self.addCleanup(facts.stop)
         self.old = bsd_tests.BSDInstallTests()
         self.old.setUp()
         self.addCleanup(self.old.doCleanups)
@@ -89,6 +100,27 @@ class PkgInstallTests(unittest.TestCase):
         # The unchanged export proof validator is covered by metadata tests.
         with patch.object(producer, '_export_proof'), patch('subprocess.Popen', side_effect=AssertionError('no child')):
             return producer.validate_producer_plan(self.plan, self.descriptor, self.commands, self.flags)
+
+    def test_fixture_uses_explicit_facts_without_real_host_files(self):
+        with patch.object(producer.platform, 'system', return_value='Linux'), \
+             patch.object(producer.platform, 'machine', return_value='x86_64'):
+            self.assertEqual(pkg._token('OS_VERSION=@HOST_KERNEL_VERSION@', str(self.work)),
+                             'OS_VERSION=25.0.0')
+            self.assertEqual(program.program_steps(self.plan, self.descriptor, self.commands, self.flags),
+                             self.plan['commands'])
+            self.assertIs(self.validate(), self.plan)
+        self.host_fact_provider.assert_called()
+        self.host_file_read.assert_not_called()
+        # Without the fixture substitution, the same generation reaches the guard.
+        with patch.object(producer, '_current_host_facts', self.real_host_facts):
+            with self.assertRaisesRegex(AssertionError, 'real host-service read'):
+                program.program_steps(self.plan, self.descriptor, self.commands, self.flags)
+
+    def test_fixture_preserves_production_host_refusal(self):
+        self.plan['host'] = dict(os='Linux', cpu='x86_64')
+        with self.assertRaisesRegex(SDKError, 'unsupported fixed initial pkg_install plan'):
+            self.validate()
+        self.host_file_read.assert_not_called()
 
     def test_fixed_commands_preserve_bound_make_driver_abi_and_serial_cases(self):
         self.assertIs(self.validate(), self.plan)
