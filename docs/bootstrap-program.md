@@ -407,7 +407,7 @@ The shared runner creates only manifest-declared aliases after the link check.
 There are 31 cases and 38 commands. Eight files exercise ordinary and large inputs.
 Cases cover line and byte counts, reverse output, headers, stdin, errors and the existing alias.
 Large regular files exercise the 10 MiB mapping boundary and a nonaligned final window.
-The initial profile keeps the existing C source unchanged for a native failing regression run.
+The same owner cases cover the repaired page-aligned mapping and exact window boundaries.
 Follow and kqueue code remain unchanged. Real append, rotation and truncation coverage remains pending.
 The pipe `-f` case checks the existing pipe behavior only.
 
