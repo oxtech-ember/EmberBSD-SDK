@@ -156,7 +156,8 @@ def recipe_steps(plan, descriptor, commands, flags):
             if recipe == 'lang/gcc16' and phase == 'install':
                 result.append(dict(id='gcc16-compare', recipe=recipe, phase='compare', role='gmake',
                     cwd=work, env=dict(env), argv=[*recipe_gmake(plan, commands, recipe), '--no-print-directory', jobs,
-                        '-C', _safe_path(plan['recipes'][recipe]['object_directory']), 'compare']))
+                        '-C', _safe_path(plan['recipes'][recipe]['object_directory']),
+                        '--eval=.PHONY: compare', 'compare']))
             result.append(dict(id=f'r{number:03d}-' + phase, recipe=recipe, phase=phase, role='make',
                 cwd=work, env=dict(env), argv=[*make, 'EMBERBSD_DARWIN_BOOTSTRAP=yes',
                     '-C', os.path.join(export, recipe), phase]))
