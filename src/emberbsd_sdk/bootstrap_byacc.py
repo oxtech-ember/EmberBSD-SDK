@@ -246,6 +246,6 @@ def history_origins(plan):
     source = plan['program']['owner']['source']
     archives = [dict(url='https://invisible-island.net/archives/byacc/' + manifest['release'] + '.tgz',
                      file=plan['program']['archive'])]
-    patches = [dict(url=source['repository'] + '/blob/' + source['commit'] + '/' + RECIPE +
+    patches = [dict(url=source['repository'].removesuffix('.git') + '/blob/' + source['commit'] + '/' + RECIPE +
                        '/patches/' + Path(row['path']).name, file=row) for row in plan['program']['patches']]
     return archives, patches

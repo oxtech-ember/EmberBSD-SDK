@@ -95,6 +95,20 @@ class ByaccContractTests(fixtures.ProgramTests):
         self.assertNotIn('#define HAVE_FCNTL_H', template)
         self.assertEqual((root / 'VERSION').read_text().strip(), '20260126')
 
+    def test_history_patch_urls_use_canonical_github_pages(self):
+        for repository in ('https://github.com/oxtech-ember/EmberBSD-Ports.git',
+                           'https://github.com/oxtech-ember/EmberBSD-Ports'):
+            self.plan['program']['owner']['source'] = dict(repository=repository, commit='5' * 40)
+            archives, patches = byacc.history_origins(self.plan)
+            self.assertEqual([row['url'] for row in patches], [
+                'https://github.com/oxtech-ember/EmberBSD-Ports/blob/' + '5' * 40 +
+                '/pkgsrc/devel/byacc/patches/patch-aclocal.m4',
+                'https://github.com/oxtech-ember/EmberBSD-Ports/blob/' + '5' * 40 +
+                '/pkgsrc/devel/byacc/patches/patch-configure'])
+            self.assertEqual([row['file'] for row in patches], self.plan['program']['patches'])
+            self.assertEqual(archives[0]['url'],
+                             'https://invisible-island.net/archives/byacc/byacc-20260126.tgz')
+
     def test_changed_owner_manifest_refuses_without_child(self):
         ref = self.plan['program']['manifest']
         Path(ref['path']).write_text(Path(ref['path']).read_text().replace('14\\n', '13\\n'))
