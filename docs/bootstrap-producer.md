@@ -260,3 +260,10 @@ after each MAKECONF assignment of the accepted ABI flags. The earlier
 profile identities remain valid for their historical inputs. The producer
 interface, fixed metadata query roster and native ABI flags do not change.
 New output libraries still require complete runtime-closure review.
+
+The native runtime-shell profile recognizes `42772112699331e4c091eec7d7cad0a5ce04461e7db3c807497673b69046681c`.
+It adds explicit runtime shells and normal mksh dependencies to M4 and Perl.
+Perl's early build shell and real cat shebang probe follow accepted host tools.
+Metadata keeps its accepted initial command routes. Embedded runtime shells
+name the final prefix; they are not executed during metadata queries.
+The earlier profile identities and fixed query roster remain unchanged.
