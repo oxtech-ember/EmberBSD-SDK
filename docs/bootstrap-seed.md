@@ -336,12 +336,21 @@ the evaluated `WRKDIR`, `WRKSRC` and `OBJDIR` metadata. It must be below
 `recipe_steps(plan, descriptor, commands, flags)` constructs all commands:
 
 1. Visit dependencies in sorted order, then visit each consumer.
-2. Run the complete selected `make` tuple, `EMBERBSD_DARWIN_BOOTSTRAP=yes`,
-   `-C`, the common recipe directory, and `build`.
+2. Run the recipe's make tuple, `EMBERBSD_DARWIN_BOOTSTRAP=yes`, `-C`, the
+   common recipe directory, and `build`.
 3. Install each dependency with the same tuple and the `install` target.
 4. After the GCC build, run the complete selected `gmake` tuple,
    `--no-print-directory -j1 -C object_directory compare`.
 5. Install GCC. `comparison_command` is exactly `gcc16-compare`.
+
+`recipe_make()` selects the recipe's make tuple from the bound dependency edge.
+The Ports profile owns the
+[make handoff](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/common-build-tools/bootstrap/README.md#make-handoff).
+It gives every recipe outside the `devel/bmake` closure a direct `devel/bmake` edge.
+Such a recipe starts with `output_bundle_root/bin/bmake` and the bound `SHELL` and
+`MAKECONF` words. It does not use `-m`, so the Ports bmake reads its own `share/mk`.
+The other recipes, `devel/bmake` included, keep the complete bound initial tuple.
+The SDK keeps no recipe list. bmake passes `-m` to child makes through `MAKEFLAGS`.
 
 The complete `argv`, `cwd`, `env`, role, ID and order must equal this construction.
 Extra targets, assignments, environment entries and replaced tuple tails fail.

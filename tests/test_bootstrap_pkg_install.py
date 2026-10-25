@@ -320,6 +320,7 @@ class PkgInstallTests(unittest.TestCase):
     def test_profile_addition_retains_legacy_classes(self):
         self.assertTrue(producer._native_provider_profile(producer.BOOTSTRAP_PKGTOOLS_PROFILE_SHA256))
         self.assertTrue(producer._native_provider_profile(producer.HOST_RUBY_PROFILE_SHA256))
+        self.assertTrue(producer._native_provider_profile(producer.MAKE_HANDOFF_PROFILE_SHA256))
         self.assertTrue(producer._native_provider_profile(producer.FOUNDATION_PROFILE_SHA256))
         self.assertTrue(producer._native_provider_profile(producer.BSDINSTALL_PROFILE_SHA256))
         self.assertTrue(producer._recognized_profile(producer.PROFILE_SHA256))
