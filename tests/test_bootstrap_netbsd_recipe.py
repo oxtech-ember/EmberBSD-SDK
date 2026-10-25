@@ -75,10 +75,73 @@ class NetBSDRecipeStepTests(unittest.TestCase):
         self.assertIn('LD=' + str(self.localbase / 'bin/gld'), gcc_build['argv'])
         self.assertEqual(steps[0]['argv'][0], str(self.pkgtools / 'bmake'))
         self.assertEqual(steps[0]['argv'][1:3], ['-m', str(self.pkgtools / 'share/mk')])
+        self.assertEqual(steps[0]['env']['PATH'],
+                         str(self.utility_bin) + ':' + str(self.localbase / 'bin'))
         self.assertNotIn('-j1', steps[0]['argv'])
         self.assertEqual(steps[0]['env']['MAKE_JOBS'], '1')
         self.assertEqual(steps[3]['argv'][0], str(self.pkgtools / 'gmake'))
         self.assertTrue(all(row['env']['SHELL'] == str(self.pkgtools / 'mksh') for row in steps))
+
+    def test_makeconf_renders_fixed_netbsd_specs_compiler_arguments(self):
+        specs = str(self.seed / 'seed-specs' / 'netbsd11-configured-base-seed.specs')
+        self.commands['cc'] = (str(self.seed / 'bin/gcc'), '-specs=' + specs,
+                               '-static-libstdc++', '-static-libgcc')
+        self.commands['cxx'] = (str(self.seed / 'bin/g++'), '-specs=' + specs,
+                                '-static-libstdc++', '-static-libgcc')
+        self.commands['cpp'] = (str(self.seed / 'bin/gcc'), '-E', '-specs=' + specs)
+        self.plan['netbsd'].update(
+            pkgsrc_tools_acceptance={'path': str(self.root / 'tools.json'), 'sha256': 'a' * 64},
+            source_export_acceptance={'path': str(self.root / 'export.json'), 'sha256': 'b' * 64},
+            source_transfer_acceptance={'path': str(self.root / 'transfer.json'), 'sha256': 'c' * 64},
+            source_inventory={'path': str(self.root / 'inventory.json'), 'sha256': 'd' * 64},
+            ports_export_root=str(self.export), ports_source={},
+            profile={'path': str(self.export / 'profile.mk'), 'sha256': 'e' * 64},
+            host_facts={'os': 'NetBSD', 'cpu': 'x86_64', 'kernel_version': '11.0',
+                        'pkgsrc_opsys_version': 110000},
+            utility_tools={role: {'path': str(self.utility_bin / role), 'sha256': 'f' * 64}
+                           for role in ('awk', 'pkg_add', 'pkg_admin', 'pkg_create',
+                                        'pkg_delete', 'pkg_info')})
+
+        makeconf = bootstrap_netbsd_recipe.render_netbsd_makeconf(
+            self.plan, self.descriptor, self.commands).decode('ascii')
+
+        self.assertIn('EMBERBSD_GCC16_SEED_CC=' + self.commands['cc'][0] +
+                      ' -specs=' + specs + ' -static-libstdc++ -static-libgcc', makeconf)
+        self.assertIn('EMBERBSD_GCC16_SEED_CXX=' + self.commands['cxx'][0] +
+                      ' -specs=' + specs + ' -static-libstdc++ -static-libgcc', makeconf)
+        self.assertIn('EMBERBSD_GCC16_SEED_CPP=' + self.commands['cpp'][0] +
+                      ' -E -specs=' + specs, makeconf)
+        self.assertIn('PKG_REGISTER_SHELLS=no', makeconf)
+        for role in ('pkg_add', 'pkg_admin', 'pkg_create', 'pkg_delete', 'pkg_info'):
+            variable = 'NATIVE_PKG_' + role.removeprefix('pkg_').upper() + '_CMD='
+            self.assertIn(variable + str(self.utility_bin / role), makeconf)
+            self.assertIn('\nPKG_' + role.removeprefix('pkg_').upper() + '_CMD=' +
+                          str(self.utility_bin / role), makeconf)
+
+        for injection in ('\nINJECT=1', ';touch /tmp/injected', ' # INJECT=1', '$(touch /tmp/injected)'):
+            with self.subTest(injection=injection):
+                self.commands['cc'] = (str(self.seed / 'bin/gcc'), '-specs=' + specs + injection)
+                with self.assertRaisesRegex(SDKError, 'unsafe NetBSD make configuration value'):
+                    bootstrap_netbsd_recipe.render_netbsd_makeconf(
+                        self.plan, self.descriptor, self.commands)
+
+    def test_makeconf_refuses_missing_pkgsrc_package_command(self):
+        self.plan['netbsd'].update(
+            pkgsrc_tools_acceptance={'path': str(self.root / 'tools.json'), 'sha256': 'a' * 64},
+            source_export_acceptance={'path': str(self.root / 'export.json'), 'sha256': 'b' * 64},
+            source_transfer_acceptance={'path': str(self.root / 'transfer.json'), 'sha256': 'c' * 64},
+            source_inventory={'path': str(self.root / 'inventory.json'), 'sha256': 'd' * 64},
+            ports_export_root=str(self.export), ports_source={},
+            profile={'path': str(self.export / 'profile.mk'), 'sha256': 'e' * 64},
+            host_facts={'os': 'NetBSD', 'cpu': 'x86_64', 'kernel_version': '11.0',
+                        'pkgsrc_opsys_version': 110000},
+            utility_tools={role: {'path': str(self.utility_bin / role), 'sha256': 'f' * 64}
+                           for role in ('pkg_add', 'pkg_admin', 'pkg_create', 'pkg_delete', 'pkg_info')})
+        self.plan['netbsd']['utility_tools'].pop('pkg_delete')
+
+        with self.assertRaisesRegex(SDKError, 'package command pkg_delete is missing'):
+            bootstrap_netbsd_recipe.render_netbsd_makeconf(
+                self.plan, self.descriptor, self.commands)
 
     def test_gcc_refuses_seed_assembler_paths_and_unsatisfied_binutils_edge(self):
         with patch('emberbsd_sdk.bootstrap_recipe.recipe_order',
@@ -186,6 +249,12 @@ class NetBSDRecipeStepTests(unittest.TestCase):
         utility = utility_bin / 'awk'
         utility.write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
         utility.chmod(0o755)
+        utility_tools = {'awk': dict(path=str(utility), sha256=sha256_file(str(utility)))}
+        for role in ('pkg_add', 'pkg_admin', 'pkg_create', 'pkg_delete', 'pkg_info'):
+            selected = utility_bin / role
+            selected.write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
+            selected.chmod(0o755)
+            utility_tools[role] = dict(path=str(selected), sha256=sha256_file(str(selected)))
         pkgtools = dict(make=str(self.pkgtools / 'bmake'), gmake=str(self.pkgtools / 'gmake'),
                         sh=str(self.pkgtools / 'mksh'))
         sources = {
@@ -203,7 +272,7 @@ class NetBSDRecipeStepTests(unittest.TestCase):
             driver_prefix=str(compiler_prefix / 'libexec/gcc16'),
             abi_flags={'cppflags': [], 'cflags': [], 'cxxflags': [], 'ldflags': []},
             make_binding=None)
-        descriptor['tools']['awk'] = dict(path=str(utility), sha256=sha256_file(str(utility)))
+        descriptor['tools'].update(utility_tools)
         commands = {role: (str(self.seed / ('bin/' + name)),) for role, name in {
             'cc':'gcc', 'cxx':'g++', 'cpp':'cpp', 'as':'as', 'ld':'ld', 'ar':'ar',
             'ranlib':'ranlib', 'nm':'nm', 'strip':'strip', 'python':'python3', 'sh':'sh'}.items()}
@@ -235,7 +304,7 @@ class NetBSDRecipeStepTests(unittest.TestCase):
                 host_facts=dict(os='NetBSD', cpu='x86_64', kernel_version='11.0',
                                 pkgsrc_opsys_version=110000),
                 utility_bin=str(utility_bin),
-                utility_tools={'awk': dict(path=str(utility), sha256=sha256_file(str(utility)))},
+                utility_tools=utility_tools,
                 makeconf=dict(path=str(makeconf), sha256='f' * 64),
                 pkgsrc_tools=pkgtools, pkgsrc_mk=str(self.root / 'pkgsrc/share/mk'),
                 binutils_as=str(work / 'output/bin/gas'),
@@ -252,14 +321,21 @@ class NetBSDRecipeStepTests(unittest.TestCase):
                 'EMBERBSD_NETBSD_MAKE=' + pkgtools['make'],
                 'EMBERBSD_NETBSD_GMAKE=' + pkgtools['gmake'],
                 'EMBERBSD_NETBSD_UTILITY_BIN=' + str(utility_bin),
-                'EMBERBSD_NETBSD_NATIVE_TOOLS=awk',
+                'EMBERBSD_NETBSD_NATIVE_TOOLS=awk pkg_add pkg_admin pkg_create pkg_delete pkg_info',
                 'EMBERBSD_NETBSD_JOBS=1',
+                'PKG_REGISTER_SHELLS=no',
                 'EMBERBSD_GCC16_SEED_CC=' + commands['cc'][0],
                 'EMBERBSD_GCC16_SEED_CXX=' + commands['cxx'][0],
                 'EMBERBSD_GCC16_SEED_CPP=' + commands['cpp'][0],
                 'EMBERBSD_GCC16_AS=' + commands['as'][0],
                 'EMBERBSD_GCC16_LD=' + commands['ld'][0],
                 'EMBERBSD_NETBSD_TOOL.awk=' + str(utility),
+                *('NATIVE_PKG_' + role.removeprefix('pkg_').upper() + '_CMD=' +
+                  str(utility_bin / role) for role in
+                  ('pkg_add', 'pkg_admin', 'pkg_create', 'pkg_delete', 'pkg_info')),
+                *('\nPKG_' + role.removeprefix('pkg_').upper() + '_CMD=' +
+                  str(utility_bin / role) for role in
+                  ('pkg_add', 'pkg_admin', 'pkg_create', 'pkg_delete', 'pkg_info')),
                 'MAKE_JOBS=1',
                 'PKGSRC_COMPILER=gcc',
                 'GCC_REQD=16',

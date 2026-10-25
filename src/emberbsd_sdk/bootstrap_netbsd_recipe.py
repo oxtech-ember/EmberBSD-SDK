@@ -59,6 +59,7 @@ def render_netbsd_makeconf(plan, descriptor, commands):
     work = _absolute(plan['work_root'])
     localbase = _absolute(plan['output_bundle_root'])
     compiler_prefix = _compiler_prefix(descriptor, commands, inspect_inputs=False)
+    utility_tools = netbsd['utility_tools']
     fields = [
         ('EMBERBSD_NETBSD_BOOTSTRAP', 'yes'),
         ('EMBERBSD_NETBSD_HOST_OS', roots['os']),
@@ -78,16 +79,32 @@ def render_netbsd_makeconf(plan, descriptor, commands):
         ('DISTDIR', os.path.join(work, 'distfiles')),
         ('PKG_DBDIR', os.path.join(work, 'pkgdb')),
         ('PACKAGES', os.path.join(work, 'packages')),
+        # The shells/bash and shells/mksh recipes carry PKG_SHELL metadata.
+        # Never let package-install alter the host chroot's /etc/shells.
+        ('PKG_REGISTER_SHELLS', 'no'),
         ('EMBERBSD_GCC16_SEED_CC', shlex.join(commands['cc'])),
         ('EMBERBSD_GCC16_SEED_CXX', shlex.join(commands['cxx'])),
         ('EMBERBSD_GCC16_SEED_CPP', shlex.join(commands['cpp'])),
     ]
+    # NetBSD's pkgsrc install target includes package-install and package
+    # registration. Pin every package command to its admitted utility member;
+    # the existing PKG_DBDIR binding keeps all registrations in this plan's db.
+    for role, suffix in (('pkg_add', 'ADD'), ('pkg_admin', 'ADMIN'),
+                         ('pkg_create', 'CREATE'), ('pkg_delete', 'DELETE'),
+                         ('pkg_info', 'INFO')):
+        _require(role in utility_tools,
+                 f'NetBSD package command {role} is missing from the utility roster')
+        command = _ref(utility_tools[role], f'NetBSD package command {role}')['path']
+        _require(_SAFE_CONFIG.fullmatch(command),
+                 f'unsafe accepted NetBSD package command for {role}')
+        fields.append(('NATIVE_PKG_' + suffix + '_CMD', command))
+        fields.append(('PKG_' + suffix + '_CMD', command))
     for role in ('as', 'ld', 'ar', 'ranlib', 'nm', 'strip'):
         fields.append(('EMBERBSD_GCC16_' + role.upper(), commands[role][0]))
     lines = []
     for name, value in fields:
         _require(re.fullmatch(r'[A-Za-z0-9_.]+', name) is not None and
-                 re.fullmatch(r'[A-Za-z0-9_./+: -]+', value) is not None,
+                 re.fullmatch(r'[A-Za-z0-9_./+: =-]+', value) is not None,
                  f'unsafe NetBSD make configuration value for {name}')
         lines.append(f'{name}={value}')
     for role in sorted(netbsd['utility_tools']):
@@ -184,7 +201,7 @@ def netbsd_recipe_steps(plan, descriptor, commands, flags):
     compiler_prefix = _compiler_prefix(descriptor, commands, inspect_inputs=False)
     utility_bin = _absolute(netbsd['utility_bin'])
     environment.update(LC_ALL='C', TZ='UTC', TMPDIR=work, HOME=os.path.join(work, 'home'),
-        PATH=os.pathsep.join((utility_bin, os.path.dirname(tools['make']), compiler_prefix + '/bin')),
+        PATH=os.pathsep.join((utility_bin, os.path.join(localbase, 'bin'))),
         SHELL=shell, CONFIG_SHELL=shell, MAKECONF=netbsd['makeconf']['path'],
         PKGSRC_COMPILER='gcc', GCC_REQD='16', GCCBASE=compiler_prefix,
         EMBERBSD_NETBSD_BOOTSTRAP='yes', MAKE_JOBS=str(plan['resources']['cpu_jobs']),

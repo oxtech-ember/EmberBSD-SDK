@@ -297,6 +297,41 @@ class RetainedBaseHistoryTests(unittest.TestCase):
 
         self.assertEqual(self.validate(), self.history['unknowns'])
 
+    def test_accepts_named_pkgsrc_recipe_utilities_from_exact_netbsd_paths(self):
+        f = self.fixture
+        for role in ('cat', 'cp', 'install', 'mkdir', 'rm', 'find', 'bsdtar', 'pkg_delete'):
+            selected = f.bundle / role
+            selected.write_bytes(('retained NetBSD utility: ' + role).encode())
+            selected.chmod(0o755)
+            digest = f.digest(selected)
+            original = {
+                'cat': '/bin/cat', 'cp': '/bin/cp', 'install': '/usr/bin/install',
+                'mkdir': '/bin/mkdir', 'rm': '/bin/rm', 'find': '/usr/bin/find',
+                'bsdtar': '/bin/tar', 'pkg_delete': '/usr/sbin/pkg_delete',
+            }[role]
+            f.base_original_hashes[original] = digest
+            f.tools[role] = dict(path=str(selected), sha256=digest, provider='base')
+            self.history['tool_members'].append(dict(
+                role=role, original_path=original, selected_path=str(selected),
+                sha256=digest))
+
+        self.assertEqual(self.validate(), self.history['unknowns'])
+
+    def test_named_pkgsrc_utility_rejects_an_unrecorded_host_path(self):
+        f = self.fixture
+        selected = f.bundle / 'cat'
+        selected.write_bytes(b'retained NetBSD cat utility\n')
+        selected.chmod(0o755)
+        digest = f.digest(selected)
+        f.tools['cat'] = dict(path=str(selected), sha256=digest, provider='base')
+        self.history['tool_members'].append(dict(
+            role='cat', original_path='/usr/local/bin/cat', selected_path=str(selected),
+            sha256=digest))
+        f.base_original_hashes['/usr/local/bin/cat'] = digest
+
+        with self.assertRaisesRegex(SDKError, 'exact release-tool route'):
+            self.validate()
+
     def test_compression_alias_copy_preserves_argv0_basename(self):
         f = self.fixture
         selected = f.bundle / 'gzip-selected'

@@ -42,6 +42,15 @@ top-level `-j` option. The fixed profile selector
 Ports owns the host/tool routing and confines GCC-specific behavior to
 `PKGPATH == lang/gcc16`.
 
+The utility roster must include `pkg_add`, `pkg_admin`, `pkg_create`,
+`pkg_delete`, and `pkg_info`. pkgsrc's `install` target also creates and
+registers a package. MAKECONF pins both `NATIVE_PKG_*_CMD` and `PKG_*_CMD`
+to these admitted members. Package commands use the isolated `PKG_DBDIR`.
+`PKG_REGISTER_SHELLS=no` prevents SDK packages from changing the host shell list.
+The base PATH contains only `utility_bin` and the current output's `bin` directory.
+Ports may prepend generated wrappers from each owned recipe work directory.
+Absolute seed commands do not expose other programs in their input directories.
+
 The recipe DAG must contain `devel/binutils` before `lang/gcc16`. Only the GCC
 build and install steps select the source-built `LOCALBASE/bin/gas` and
 `LOCALBASE/bin/gld`. The plan keeps a real serial `gmake compare` phase; a
@@ -110,6 +119,9 @@ The finite base-tool roster also admits `/usr/bin/gzip`, `/usr/bin/gunzip`,
 bootstrap graph requests those roles. Their selected copies retain the same
 basename because these NetBSD utilities can select behavior from `argv[0]`.
 The list is role-specific; it does not admit an arbitrary system directory.
+The same rule covers the named base utilities consumed by the recipe graph
+and its package installation steps. `_BASE_TOOL_PATHS` fixes each original
+path; retained history and independent acceptance bind every selected copy.
 
 The GCC prefix's `liblto_plugin.so` is bound separately as a retained shared
 object, using its exact old prefix inventory path and hash. The read-only
