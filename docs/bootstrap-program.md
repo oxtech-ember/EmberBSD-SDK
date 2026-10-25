@@ -429,7 +429,7 @@ C analysis and memory validation remain separate gates.
 ## Fixed sort profile
 
 The OS owns `tools/sort/bootstrap.json`, its 36 semantic cases and all fixture bytes.
-Its SHA256 pin is `37a209d75e79b1eb22a2610e3dc22e13f2bcdb6fa12d81dd2ea73092d3fab22d`.
+Its SHA256 pin is `ed61a6a5caae08acd3334bf5769f22df82930cc2a7fd4ae8cdfcf4abffdfd2db`.
 The profile retains nine complete sort C files and their three local headers.
 It reuses the same four efun sources, five probes and generated configuration as cut.
 The source proof has 35 members. No previous compatibility archive is required.
@@ -447,6 +447,7 @@ order checks, error statuses, NUL data and partial final lines.
 A 131073-record fixture crosses the ordinary record-count limit and exercises temporary merges.
 A separate long-key fixture exercises line-buffer growth beyond 64 KiB.
 The existing bounded decoder creates these fixtures and verifies their exact output bytes.
+The NUL-record case reads an owned file; it does not pass NUL bytes through shell stdin.
 `LC_ALL=C` and the owned work directory as `TMPDIR` remain fixed in the common runner.
 
 The initial profile does not qualify `-o`, replacement permissions, non-C locales or long-line `-c` behavior.

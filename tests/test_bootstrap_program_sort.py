@@ -10,6 +10,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 import test_bootstrap_program_cut as fixtures
+import test_bootstrap_program as runner_fixtures
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk import bootstrap_program as program
 from emberbsd_sdk import bootstrap_compat as compat
@@ -100,6 +101,19 @@ class SortProgramTests(unittest.TestCase):
             self.assertTrue((root / member).is_file(), member)
             self.assertFalse((root / member).is_symlink(), member)
         self.assertTrue(any(isinstance(value, list) for value in manifest['files'].values()))
+        # Use the complete owner manifest, without synthetic semantic replacements.
+        runner = runner_fixtures.ProgramTests(methodName='runTest')
+        runner.setUp()
+        self.addCleanup(runner.doCleanups)
+        plan = dict(runner.plan, stage='sort-bootstrap', program=dict(
+            source=dict(root=str(root)), manifest=dict(path=str(root / relative), sha256=digest)))
+        with patch('subprocess.Popen', side_effect=AssertionError('source check cannot start a child')):
+            steps = program.program_steps(plan, runner.descriptor, runner.commands, runner.flags)
+        self.assertEqual(len(steps), 59)
+        self.assertEqual([row['id'] for row in steps if row['phase'] == 'program-case'],
+                         ['case-' + case['name'] for case in manifest['runtime_cases']])
+        self.assertTrue(all('\0' not in word for row in steps for word in row['argv']))
+
 
 
 if __name__ == '__main__':

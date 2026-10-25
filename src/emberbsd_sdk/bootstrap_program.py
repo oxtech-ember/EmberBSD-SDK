@@ -46,7 +46,7 @@ PWD_MANIFEST_SHA256 = '598906e66805438e5386f6f12478d69147e36d020849dec655d7a1826
 ENV_MANIFEST_SHA256 = 'b16ad21f0c3b820ba1345c40606f42ee379eb92c3d098448e0e61b5c83b39846'
 UNAME_MANIFEST_SHA256 = '668f39859e9bcf7995f9402e046bf1598527f2db294515a40dceb895ca97148d'
 TAIL_MANIFEST_SHA256 = '15ab76bc438699a789dc94351e71151301b2560072345243040aa446028f34c8'
-SORT_MANIFEST_SHA256 = '37a209d75e79b1eb22a2610e3dc22e13f2bcdb6fa12d81dd2ea73092d3fab22d'
+SORT_MANIFEST_SHA256 = 'ed61a6a5caae08acd3334bf5769f22df82930cc2a7fd4ae8cdfcf4abffdfd2db'
 _NATIVE_LOCAL_HEADERS = {'cmp': ('extern.h',), 'tr': ('extern.h',), 'tail': ('extern.h',),
                          'cut': ('x_cut.c',), 'sort': ('sort.h', 'fsort.h', 'pathnames.h')}
 _NATIVE_DIRECTORIES = {'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
