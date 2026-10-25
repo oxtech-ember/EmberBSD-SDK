@@ -87,3 +87,51 @@ This is an OS file-time subset. It is not the complete OS library or the
 separate Ports `pkgtools/libnbcompat` contract.
 The [BSD installer](bootstrap-bsdinstall.md) retains its existing Ports input checks.
 No cp, mv, ls or touch profile is added by this first component.
+
+## Initial parsedate component
+
+The separate `compat-parsedate-bootstrap` profile uses the complete OS
+`lib/libutil/parsedate.y` grammar. The manifest is `tools/compat/bootstrap-parsedate.json`.
+Its SHA256 is `7632e1182ea47ed9a48391c0fd93926416de4c272393441d7271bf5bd8473b0e`.
+The exact 17-member source proof includes the canonical grammar, three headers,
+normal Makefile and source fragment, six provenance files, and four probe/check files.
+The OS owns all probes, parser semantics and feature declarations.
+The filetime manifest, 12 commands, exports and old receipts do not change.
+
+This profile has 13 ordered commands:
+
+1. Compile, link and run the required native timegm control, with loader diagnostics.
+2. Observe both mktime_z and timegm declaration/link probes.
+3. Generate `parsedate.c` with the selected native Byacc and fixed `-p __pd -o` arguments.
+4. Compile that generated source with the actual component configuration.
+5. Archive the single `parsedate.o` member and index the archive.
+6. Compile and link the source-owned semantic check.
+7. Run that check normally, then with loader diagnostics.
+
+The selected `yacc` role must be one native absolute invocation inside the seed bundle.
+The plan requires `cc`, `yacc`, `ar`, `ranlib`, `sh` and the compiler driver roles.
+The feature header precedes native headers in controls, probes and generated configuration.
+It requests declarations; it does not assert a host capability.
+An absent mktime_z can produce a declaration or link failure with exit one.
+That result sets `HAVE_MKTIME_Z=0`. The timegm probe must succeed after the required control.
+The controller never generates configuration from an incomplete or failed mandatory probe sequence.
+
+The shared generated-source guard requires an absent output before Byacc starts.
+After drainage it records the bounded regular file's hash and permission bits.
+It rechecks both before later children, after drainage, and during candidate validation.
+The parsedate result adds `generated_modes` beside the existing `generated` references.
+Older Byacc, expr and filetime result contracts retain their existing fields and checks.
+The bounded work roster, source proof, configuration and artifact hash checks also apply.
+No alternate parser, executable hook or custom compiler flag is accepted.
+
+The five exports are `libnbcompat.a`, `nbtool_config.h`, `compat_parsedate.h`,
+`compat_parsedate_features.h` and `bootstrap_cdefs.h`.
+Candidate and acceptance formats remain version 1, with `component: parsedate`.
+Consumers must call `validate_input(receipt_ref, descriptor, component='parsedate')` explicitly.
+The default remains `filetime`. Receipt, candidate and requested component must agree.
+Independent review, read-only exports, retained source evidence and matching native ABI remain mandatory.
+
+Normal OS routing can bind `yacc` to `HOST_YACC` through the pinned OS contract.
+The [native routing API](native-os-routing.md) still requires an accepted ordinary toolset.
+This finite profile does not grant ordinary tool qualification or run the normal build.
+Actual parser generation, GCC16 probes, semantic execution, C analysis and memory checks remain separate gates.

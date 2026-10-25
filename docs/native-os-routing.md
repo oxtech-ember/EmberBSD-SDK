@@ -26,6 +26,8 @@ The published directory contains the exact regular contract file and symlinks
 to the selected absolute tool spellings. An in-bundle alias remains an alias.
 The emitter does not copy binaries, create wrappers, or canonicalize argv[0].
 It refuses the OS interface's unsupported path characters before publication.
+The fixed binding set includes `HOST_YACC` for an explicitly declared selected `yacc` role.
+An absent generator role fails before publication. The emitter does not search for another yacc.
 An existing destination remains unchanged. Failed publication removes only
 the emitter's exact private stage directory.
 

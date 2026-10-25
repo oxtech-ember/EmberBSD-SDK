@@ -18,7 +18,7 @@ NATIVE_OS_ROUTING_API = 1
 _SAFE_PATH = re.compile(r'/[A-Za-z0-9_./+@%=\-]+\Z')
 _NAME = re.compile(r'[A-Za-z0-9_+][A-Za-z0-9_+.\-]*\Z')
 _BINDINGS = frozenset(('-', 'HOST_AR', 'HOST_CC', 'HOST_CXX', 'HOST_CPP',
-                       'HOST_LD', 'HOST_LN', 'HOST_RANLIB', 'HOST_SH', 'MAKE', 'SED'))
+                       'HOST_LD', 'HOST_LN', 'HOST_RANLIB', 'HOST_SH', 'HOST_YACC', 'MAKE', 'SED'))
 
 
 def read_native_os_contract(path, *, sha256):

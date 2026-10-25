@@ -118,6 +118,27 @@ class NativeOSRoutingTests(unittest.TestCase):
                     read_native_os_contract(self.contract,
                         sha256=hashlib.sha256(data).hexdigest())
 
+    def test_host_yacc_requires_the_exact_selected_generator(self):
+        data = CONTRACT + b'yacc yacc HOST_YACC\n'
+        self.contract.write_bytes(data)
+        self.sha = hashlib.sha256(data).hexdigest()
+        with self.assertRaisesRegex(SDKError, 'not selected'):
+            self.publish()
+        self.assertFalse((self.root / 'routing').exists())
+        member = self.bundle / 'selected-yacc'
+        member.write_bytes(b'Synthetic generator; never executed.\n')
+        member.chmod(0o755)
+        self.toolset.tools['yacc'] = str(member)
+        _, rows, roles = read_native_os_contract(self.contract, sha256=self.sha)
+        self.assertIn(('yacc', 'yacc', 'HOST_YACC'), rows)
+        self.assertIn('yacc', roles)
+        self.publish()
+        self.assertEqual(os.readlink(self.root / 'routing/yacc'), str(member))
+        unknown = data.replace(b'HOST_YACC', b'HOST_ARBITRARY')
+        self.contract.write_bytes(unknown)
+        with self.assertRaisesRegex(SDKError, 'invalid or duplicate'):
+            read_native_os_contract(self.contract, sha256=hashlib.sha256(unknown).hexdigest())
+
 
 if __name__ == '__main__':
     unittest.main()

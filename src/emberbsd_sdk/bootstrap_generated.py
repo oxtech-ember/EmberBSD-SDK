@@ -5,12 +5,24 @@
 
 import os
 from pathlib import Path
+import stat
 
 from .inventory import sha256_file
-from .native_toolset import _bytes, _require
+from .native_toolset import _absolute, _bytes, _require
 from .paths import entry, regular_file
 
 MAX_GENERATED_BYTES = 2 * 1024 * 1024
+
+
+def selected_yacc(descriptor, commands):
+    """Require one exact selected native generator, without ambient discovery."""
+    selected = descriptor['tools'].get('yacc', {})
+    _require(selected.get('kind') == 'native' and
+             tuple(commands.get('yacc', ())) == (selected.get('path'),) and
+             os.path.isabs(selected.get('path', '')) and
+             selected['path'] != descriptor['bundle_root'] and
+             os.path.commonpath((_absolute(selected['path']), _absolute(descriptor['bundle_root']))) ==
+             descriptor['bundle_root'], 'program needs one explicitly selected native yacc invocation')
 
 
 def contract(plan):
@@ -20,6 +32,8 @@ def contract(plan):
         return program_manifest(plan)['generated'], ('generate', 'regenerate')
     if stage == 'expr-bootstrap':
         return [program_manifest(plan)['generation']['output']], ('generate-expr',)
+    if stage == 'compat-parsedate-bootstrap':
+        return [program_manifest(plan)['generator']['output']], ('generate-parsedate',)
     return [], ()
 
 
@@ -48,7 +62,23 @@ def revalidate(work, names, references):
                  'generated source evidence is empty')
 
 
-def before_step(step, plan, completed):
+def _modes(work, names):
+    result = {}
+    for name in names:
+        info = entry(os.path.join(work, name))
+        _require(info is not None and stat.S_ISREG(info.st_mode),
+                 'generated mode evidence needs a regular file')
+        result[name] = stat.S_IMODE(info.st_mode)
+    return result
+
+
+def _revalidate_modes(work, names, expected):
+    _require(isinstance(expected, dict) and set(expected) == set(names) and
+             all(type(mode) is int and 0 <= mode <= 0o7777 for mode in expected.values()) and
+             expected == _modes(work, names), 'generated source mode changed or is missing')
+
+
+def before_step(step, plan, completed, *, track_modes=False):
     names, generators = contract(plan)
     if not generators:
         _require(step['phase'] != 'generator', 'unsupported source generator step')
@@ -70,9 +100,11 @@ def before_step(step, plan, completed):
         _require(False, 'source generator phase differs')
     if previous:
         revalidate(plan['work_root'], names, previous[-1]['generated'])
+        if track_modes:
+            _revalidate_modes(plan['work_root'], names, previous[-1].get('generated_modes'))
 
 
-def after_step(step, plan, actual_exit, completed):
+def after_step(step, plan, actual_exit, completed, *, track_modes=False):
     names, generators = contract(plan)
     if not generators:
         _require(step['phase'] != 'generator', 'unsupported source generator step')
@@ -87,14 +119,22 @@ def after_step(step, plan, actual_exit, completed):
         generated = capture(plan['work_root'], names)
         if previous:
             _require(generated == previous[-1]['generated'], 'generation is not byte reproducible')
-        return dict(generated=generated)
+        result = dict(generated=generated)
+        if track_modes:
+            result['generated_modes'] = _modes(plan['work_root'], names)
+            if previous:
+                _require(result['generated_modes'] == previous[-1].get('generated_modes'),
+                         'generation has different file modes')
+        return result
     previous = [row for row in completed if row['id'] in generators]
     if previous:
         revalidate(plan['work_root'], names, previous[-1]['generated'])
+        if track_modes:
+            _revalidate_modes(plan['work_root'], names, previous[-1].get('generated_modes'))
     return {}
 
 
-def verify_history(plan, result):
+def verify_history(plan, result, *, track_modes=False):
     names, generators = contract(plan)
     if not generators:
         return
@@ -105,4 +145,6 @@ def verify_history(plan, result):
                            sha256=result['outputs'][name]) for name in names}
     for row in rows:
         _require(row.get('generated') == expected, 'historical generated source differs')
+        if track_modes:
+            _revalidate_modes(plan['work_root'], names, row.get('generated_modes'))
     revalidate(plan['work_root'], names, expected)

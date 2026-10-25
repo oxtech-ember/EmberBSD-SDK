@@ -28,7 +28,7 @@ MANIFEST_RELATIVE = 'tools/grep/bootstrap.json'
 MANIFEST_SHA256 = 'cdb8f56fd1107b1cc9ccdbe4cc352599e8575b7984f3c6b6a074426c71e56d3e'
 _SOURCES = tuple('usr.bin/grep/' + name + '.c' for name in ('fastgrep', 'file', 'grep', 'queue', 'util'))
 _PROVENANCE = ('tools/grep/Makefile', 'tools/Makefile.host', 'usr.bin/grep/Makefile', 'tools/grep/README.md')
-PROGRAM_STAGES = (component.STAGE, 'grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
+PROGRAM_STAGES = (*component.STAGES, 'grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
                   'basename-bootstrap', 'dirname-bootstrap',
                   'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap', 'env-bootstrap', 'uname-bootstrap', 'tail-bootstrap', 'sort-bootstrap', 'date-bootstrap', 'id-bootstrap', 'expr-bootstrap', 'hexdump-bootstrap',
                   *(name + '-bootstrap' for name in filesystem.PROGRAMS))
@@ -149,8 +149,9 @@ def _literal_cases(manifest, count, *, work_root_output=False, uname_output=Fals
 
 def _profile(plan):
     stage = plan.get('stage')
-    if stage == component.STAGE:
-        return component.MANIFEST, component.DIGEST, component.SOURCES, component.PROVENANCE
+    if stage in component.STAGES:
+        fixed = component.profile(plan)
+        return fixed['manifest'], fixed['digest'], fixed['sources'], fixed['provenance']
     _require(stage in PROGRAM_STAGES, 'unsupported direct-source bootstrap program stage')
     if stage == 'grep-bootstrap':
         return MANIFEST_RELATIVE, MANIFEST_SHA256, _SOURCES, _PROVENANCE
@@ -222,7 +223,7 @@ def _native_program_contract(manifest, name):
 
 
 def program_manifest(plan):
-    if plan.get('stage') == component.STAGE:
+    if plan.get('stage') in component.STAGES:
         return component.manifest(plan)
     if plan.get('stage') == 'byacc-bootstrap':
         from .bootstrap_byacc import byacc_manifest
@@ -264,7 +265,7 @@ def program_manifest(plan):
 
 
 def program_sources(plan):
-    if plan.get('stage') == component.STAGE:
+    if plan.get('stage') in component.STAGES:
         return component.sources(plan)
     if plan.get('stage') == 'byacc-bootstrap':
         from .bootstrap_byacc import byacc_sources
@@ -281,7 +282,7 @@ def program_sources(plan):
 
 
 def program_outputs(plan):
-    if plan.get('stage') == component.STAGE:
+    if plan.get('stage') in component.STAGES:
         return component.outputs(plan)
     if plan.get('stage') == 'byacc-bootstrap':
         from .bootstrap_byacc import byacc_outputs
@@ -308,7 +309,7 @@ def program_outputs(plan):
 
 
 def program_steps(plan, descriptor, commands, flags):
-    if plan.get('stage') == component.STAGE:
+    if plan.get('stage') in component.STAGES:
         return component.steps(plan, descriptor, commands, flags)
     if plan.get('stage') == 'byacc-bootstrap':
         from .bootstrap_byacc import byacc_steps
@@ -338,14 +339,8 @@ def program_steps(plan, descriptor, commands, flags):
         cppflags = ['-DHAVE_NBTOOL_CONFIG_H=1', *cppflags]
     includes = [word for directory in manifest['include_dirs'] for word in ('-I', os.path.join(source, directory))]
     if manifest['name'] == 'expr':
-        selected = descriptor['tools'].get('yacc', {})
-        _require(selected.get('kind') == 'native' and
-                 tuple(commands.get('yacc', ())) == (selected.get('path'),) and
-                 os.path.isabs(selected.get('path', '')) and
-                 selected['path'] != descriptor['bundle_root'] and
-                 os.path.commonpath((_absolute(selected['path']), _absolute(descriptor['bundle_root']))) ==
-                 descriptor['bundle_root'],
-                 'expr needs one explicitly selected native yacc invocation')
+        from .bootstrap_generated import selected_yacc
+        selected_yacc(descriptor, commands)
         result.append(dict(id='generate-expr', phase='generator', cwd=work, env=dict(env), expected_exit=0,
             argv=[*commands['yacc'], '-o', os.path.join(work, 'expr.c'), os.path.join(source, 'bin/expr/expr.y')]))
     for relative in manifest['sources']:
@@ -388,7 +383,7 @@ def program_steps(plan, descriptor, commands, flags):
 
 
 def prepare_program_step(step, plan, completed=()):
-    if plan.get('stage') == component.STAGE:
+    if plan.get('stage') in component.STAGES:
         return component.prepare(step, plan, completed)
     from .bootstrap_generated import before_step
     before_step(step, plan, completed)
@@ -399,7 +394,7 @@ def prepare_program_step(step, plan, completed=()):
 
 
 def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
-    if plan.get('stage') == component.STAGE:
+    if plan.get('stage') in component.STAGES:
         return component.verify(step, work, plan, actual_exit, completed)
     if plan.get('stage') == 'byacc-bootstrap':
         from .bootstrap_byacc import verify_byacc_step
@@ -524,8 +519,8 @@ def validate_program_plan(plan, descriptor, commands, flags):
     from .bootstrap_pilot import _validate_resources
     _validate_resources(plan['resources'])
     required = {'cc', 'sh', *descriptor['driver_components'].values()}
-    if plan['stage'] == component.STAGE:
-        required.update(('ar', 'ranlib'))
+    if plan['stage'] in component.STAGES:
+        required.update(component.manifest(plan)['required_tool_roles'])
     if plan['stage'] == 'expr-bootstrap':
         required.add('yacc')
     _require(isinstance(plan['required_roles'], list) and
@@ -541,7 +536,7 @@ def validate_program_plan(plan, descriptor, commands, flags):
 
 
 def program_step_exits(step, plan):
-    if plan.get('stage') == component.STAGE and step['id'] in component.PROBES:
+    if plan.get('stage') in component.STAGES and step['id'] in component.profile(plan)['probes']:
         _require(step['expected_exit'] == [0, 1], 'unsupported component probe observations')
         return (0, 1)
     if plan.get('stage') in EFUN_PROGRAM_STAGES and step['phase'] in ('compat-probe-compile', 'compat-probe-link'):

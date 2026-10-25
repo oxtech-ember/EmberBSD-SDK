@@ -24,21 +24,51 @@ PROVENANCE = ('tools/compat/Makefile', 'tools/compat/filetime.mk',
     *(f'tools/compat/probes/{name}.c' for name in
       ('filetime-control', 'filetime-check', *PROBES)))
 EXPORTS = ('libnbcompat.a', 'nbtool_config.h', 'compat_filetime.h', 'bootstrap_cdefs.h')
+PARSEDATE_STAGE = 'compat-parsedate-bootstrap'
+STAGES = (STAGE, PARSEDATE_STAGE)
+_PROFILES = {
+    STAGE: dict(name='filetime', manifest=MANIFEST, digest=DIGEST, sources=SOURCES,
+                headers=HEADERS, probes=PROBES, provenance=PROVENANCE, exports=EXPORTS,
+                object='utimens.o'),
+    PARSEDATE_STAGE: dict(name='parsedate', manifest='tools/compat/bootstrap-parsedate.json',
+        digest='7632e1182ea47ed9a48391c0fd93926416de4c272393441d7271bf5bd8473b0e', sources=('lib/libutil/parsedate.y',),
+        headers=('tools/compat/compat_parsedate.h', 'tools/compat/compat_parsedate_features.h',
+                 'tools/compat/bootstrap_cdefs.h'), probes=('func-mktime_z', 'func-timegm'),
+        provenance=('tools/compat/Makefile', 'tools/compat/parsedate.mk',
+            'tools/compat/configure.ac', 'tools/compat/configure', 'tools/compat/nbtool_config.h.in',
+            'tools/compat/compat_defs.h', 'tools/compat/README.parsedate.md', 'lib/libutil/Makefile',
+            *(f'tools/compat/probes/{name}.c' for name in
+              ('parsedate-control', 'parsedate-check', 'func-mktime_z', 'func-timegm'))),
+        exports=('libnbcompat.a', 'nbtool_config.h', 'compat_parsedate.h',
+                 'compat_parsedate_features.h', 'bootstrap_cdefs.h'), object='parsedate.o'),
+}
+
+
+def profile(plan):
+    value = _PROFILES.get(plan.get('stage'))
+    _require(value is not None, 'unsupported fixed OS component stage')
+    return value
 
 
 def manifest(plan):
+    fixed = profile(plan)
     root = plan['program']['source']['root']
-    ref = dict(path=os.path.join(root, MANIFEST), sha256=DIGEST)
+    ref = dict(path=os.path.join(root, fixed['manifest']), sha256=fixed['digest'])
     _require(plan['program']['manifest'] == ref, 'unsupported OS component manifest')
     value = _json(ref)
     _require(value['format'] == 'emberbsd-native-bootstrap-component' and
              type(value['version']) is int and value['version'] == 1 and
-             value['name'] == 'filetime' and value['initial_only'] is True and
-             value['sources'] == list(SOURCES) and value['headers'] == list(HEADERS) and
+             value['name'] == fixed['name'] and value['initial_only'] is True and
+             value['sources'] == list(fixed['sources']) and value['headers'] == list(fixed['headers']) and
              value['archive'] == 'libnbcompat.a' and
-             value['required_tool_roles'] == ['cc', 'ar', 'ranlib'] and
-             [row['name'] for row in value['probes']] == list(PROBES),
+             value['required_tool_roles'] == (['cc', 'ar', 'ranlib'] if fixed['name'] == 'filetime'
+                                             else ['cc', 'yacc', 'ar', 'ranlib']) and
+             [row['name'] for row in value['probes']] == list(fixed['probes']),
              'unsupported fixed OS component fields')
+    if fixed['name'] == 'parsedate':
+        _require(value['generator'] == dict(role='yacc', arguments=['-p', '__pd', '-o', 'parsedate.c'],
+                 source='lib/libutil/parsedate.y', output='parsedate.c') and
+                 value['required_capabilities'] == ['HAVE_TIMEGM'], 'unsupported parsedate generation contract')
     return value
 
 
@@ -46,19 +76,22 @@ def sources(plan):
     value, root = manifest(plan), Path(plan['program']['source']['root'])
     names = [value['control'], value['check'],
              *(row['source'] for row in value['probes']),
-             *HEADERS]
+             *profile(plan)['headers']]
     return {Path(name).name: (root / name).read_bytes() for name in names}
 
 
 def outputs(plan):
     manifest(plan)
-    return [*sources(plan), *EXPORTS[:2], 'utimens.o', 'filetime-control.o',
-            'filetime-control', 'filetime-check.o', 'filetime-check',
-            *PROBES]
+    fixed = profile(plan)
+    name = fixed['name']
+    return [*sources(plan), *fixed['exports'][:2], fixed['object'], name + '-control.o',
+            name + '-control', name + '-check.o', name + '-check', *fixed['probes'],
+            *(['parsedate.c'] if name == 'parsedate' else [])]
 
 
 def steps(plan, descriptor, commands, flags):
     value, work = manifest(plan), plan['work_root']
+    fixed, name = profile(plan), profile(plan)['name']
     _require(descriptor['host']['os'] == 'Darwin', 'initial OS component requires Darwin')
     _require(all(role in commands for role in value['required_tool_roles']),
              'OS component requires selected compiler, ar and ranlib')
@@ -74,45 +107,58 @@ def steps(plan, descriptor, commands, flags):
         return dict(id=name, phase=phase, cwd=work,
                     env=dict(env, **({'DYLD_PRINT_LIBRARIES': '1'} if runtime else {})),
                     argv=argv, expected_exit=expected)
+    probe_cc = cc
+    if name == 'parsedate':
+        probe_cc = [*cc, '-I', work, '-include', path('compat_parsedate_features.h')]
     result = [
-        row('filetime-control-compile', 'compile',
-            [*cc, '-c', path('filetime-control.c'), '-o', path('filetime-control.o')]),
-        row('filetime-control-link', 'link',
-            [*ld, path('filetime-control.o'), *ldflags, '-o', path('filetime-control')]),
-        row('filetime-control-run', 'run', [path('filetime-control')], runtime=True)]
+        row(name + '-control-compile', 'compile',
+            [*probe_cc, '-c', path(name + '-control.c'), '-o', path(name + '-control.o')]),
+        row(name + '-control-link', 'link',
+            [*ld, path(name + '-control.o'), *ldflags, '-o', path(name + '-control')]),
+        row(name + '-control-run', 'run', [path(name + '-control')], runtime=True)]
     for probe in value['probes']:
         result.append(row(probe['name'], 'compat-probe-link',
-            [*cc, path(probe['name'] + '.c'), *ldflags, '-o', path(probe['name'])], [0, 1]))
+            [*probe_cc, path(probe['name'] + '.c'), *ldflags, '-o', path(probe['name'])], [0, 1]))
     config = ['-include', path('nbtool_config.h'), '-I', work, '-I',
               os.path.join(plan['program']['source']['root'], 'tools/compat')]
+    if name == 'parsedate':
+        from .bootstrap_generated import selected_yacc
+        selected_yacc(descriptor, commands)
+        result.append(row('generate-parsedate', 'generator', [*commands['yacc'], '-p', '__pd',
+            '-o', path('parsedate.c'), os.path.join(plan['program']['source']['root'], fixed['sources'][0])]))
     result.extend([
-        row('compile-utimens', 'compile', [*cc, *config, '-c',
-            os.path.join(plan['program']['source']['root'], SOURCES[0]), '-o', path('utimens.o')]),
-        row('archive-filetime', 'component-archive',
-            [*commands['ar'], 'rc', path('libnbcompat.a'), path('utimens.o')]),
-        row('index-filetime', 'component-index', [*commands['ranlib'], path('libnbcompat.a')]),
-        row('compile-filetime-check', 'compile',
-            [*cc, *config, '-c', path('filetime-check.c'), '-o', path('filetime-check.o')]),
-        row('link-filetime-check', 'link',
-            [*ld, path('filetime-check.o'), path('libnbcompat.a'), *ldflags, '-o', path('filetime-check')]),
-        row('filetime-check', 'run', [path('filetime-check')]),
-        row('runtime-observation', 'run', [path('filetime-check')], runtime=True)])
+        row('compile-' + Path(fixed['object']).stem, 'compile', [*cc, *config, '-c',
+            (path('parsedate.c') if name == 'parsedate' else
+             os.path.join(plan['program']['source']['root'], fixed['sources'][0])), '-o', path(fixed['object'])]),
+        row('archive-' + name, 'component-archive',
+            [*commands['ar'], 'rc', path('libnbcompat.a'), path(fixed['object'])]),
+        row('index-' + name, 'component-index', [*commands['ranlib'], path('libnbcompat.a')]),
+        row('compile-' + name + '-check', 'compile',
+            [*cc, *config, '-c', path(name + '-check.c'), '-o', path(name + '-check.o')]),
+        row('link-' + name + '-check', 'link',
+            [*ld, path(name + '-check.o'), path('libnbcompat.a'), *ldflags, '-o', path(name + '-check')]),
+        row(name + '-check', 'run', [path(name + '-check')]),
+        row('runtime-observation', 'run', [path(name + '-check')], runtime=True)])
     return result
 
 
 def configuration(completed, value):
+    fixed = profile(dict(stage='compat-' + value['name'] + '-bootstrap'))
+    name = fixed['name']
     _require([row['id'] for row in completed[:3]] ==
-             ['filetime-control-compile', 'filetime-control-link', 'filetime-control-run'] and
+             [name + '-control-compile', name + '-control-link', name + '-control-run'] and
              all(type(row.get('actual_exit')) is int and row['actual_exit'] == 0
                  for row in completed[:3]), 'component lacks successful actual control')
     actual = [row for row in completed if row['phase'] == 'compat-probe-link']
-    _require([row['id'] for row in actual] == list(PROBES), 'component needs every ordered probe')
-    definitions = ['#define HAVE_UTIMENSAT 1']
+    _require([row['id'] for row in actual] == list(fixed['probes']), 'component needs every ordered probe')
+    definitions = ['#define HAVE_UTIMENSAT 1'] if name == 'filetime' else []
     for row, probe in zip(actual, value['probes']):
         status = row.get('actual_exit')
         _require(type(status) is int and status in (0, 1) and
                  row.get('configuration_probe') == dict(macro=probe['macro'], available=status == 0),
                  'component lacks an actual drained capability observation')
+        _require(probe['macro'] not in value.get('required_capabilities', []) or status == 0,
+                 'component required capability is unavailable')
         definitions.append('#define ' + probe['macro'] + ' ' + str(int(status == 0)))
     return (value['config_preamble'] + '\n'.join(definitions) + '\n' +
             value['config_postamble']).encode('ascii')
@@ -125,7 +171,7 @@ def _regular(path):
     return dict(path=os.fspath(path), sha256=sha256_file(path))
 
 
-def _archive(work):
+def _archive(work, object_name='utimens.o'):
     """Require one exact canonical object; permit only standard symbol indexes."""
     path = Path(work, 'libnbcompat.a')
     ref = _regular(path)
@@ -158,7 +204,7 @@ def _archive(work):
                          '__.SYMDEF_64', '__.SYMDEF_64 SORTED'):
             members.append((name.rstrip('/'), body))
         offset += 60 + size + size % 2
-    _require(offset == len(data) and members == [('utimens.o', Path(work, 'utimens.o').read_bytes())],
+    _require(offset == len(data) and members == [(object_name, Path(work, object_name).read_bytes())],
              'component archive has missing, changed or extra objects')
     return ref
 
@@ -190,6 +236,7 @@ def _source_inputs(plan):
 
 
 def prepare(step, plan, completed):
+    fixed = profile(plan)
     manifest(plan)
     _require(len(completed) < len(plan['commands']) and step in plan['commands'] and [r['id'] for r in completed] ==
              [r['id'] for r in plan['commands'][:len(completed)]] and
@@ -197,13 +244,15 @@ def prepare(step, plan, completed):
     _work_inputs(plan)
     _source_inputs(plan)
     _dependencies(completed)
-    if any(row['id'] == PROBES[-1] for row in completed):
+    from .bootstrap_generated import before_step
+    before_step(step, plan, completed, track_modes=fixed['name'] == 'parsedate')
+    if any(row['id'] == fixed['probes'][-1] for row in completed):
         _require(_bytes(_regular(Path(plan['work_root'], 'nbtool_config.h'))) ==
                  configuration(completed, manifest(plan)), 'component configuration changed')
-    if step['id'] == 'archive-filetime':
+    if step['id'] == 'archive-' + fixed['name']:
         _require(entry(os.path.join(plan['work_root'], 'libnbcompat.a')) is None,
                  'component archive already exists')
-    if step['id'] in ('filetime-check', 'runtime-observation'):
+    if fixed['name'] == 'filetime' and step['id'] in ('filetime-check', 'runtime-observation'):
         _require(all(entry(os.path.join(plan['work_root'], name)) is None
                      for name in ('filetime-file', 'filetime-link', 'filetime-missing')),
                  'component semantic fixtures already exist')
@@ -211,23 +260,25 @@ def prepare(step, plan, completed):
 
 def verify(step, work, plan, actual_exit, completed):
     value = manifest(plan)
+    fixed = profile(plan)
     _work_inputs(plan)
     _source_inputs(plan)
-    result = {}
-    if step['id'] in PROBES:
-        probe = value['probes'][PROBES.index(step['id'])]
+    from .bootstrap_generated import after_step
+    result = after_step(step, plan, actual_exit, completed, track_modes=fixed['name'] == 'parsedate')
+    if step['id'] in fixed['probes']:
+        probe = value['probes'][fixed['probes'].index(step['id'])]
         _require(type(actual_exit) is int and actual_exit in (0, 1),
                  'unexpected component probe exit')
         result['configuration_probe'] = dict(macro=probe['macro'], available=actual_exit == 0)
-        if step['id'] == PROBES[-1]:
+        if step['id'] == fixed['probes'][-1]:
             data = configuration([*completed, dict(step, actual_exit=actual_exit, **result)], value)
             path = Path(work, 'nbtool_config.h')
             with path.open('xb') as stream:
                 stream.write(data)
             result['configuration_header'] = _regular(path)
     elif step['phase'] in ('component-archive', 'component-index'):
-        result['output'] = _archive(work)
-    elif step['id'] in ('filetime-check', 'runtime-observation'):
+        result['output'] = _archive(work, fixed['object'])
+    elif fixed['name'] == 'filetime' and step['id'] in ('filetime-check', 'runtime-observation'):
         _require(actual_exit == 0 and all(entry(os.path.join(work, name)) is None
                  for name in ('filetime-file', 'filetime-link', 'filetime-missing')),
                  'component semantic test failed or left fixtures')
@@ -240,9 +291,10 @@ def candidate(plan_ref, result_ref):
     _envelope(plan, 'emberbsd-native-gcc16-producer-plan', scope='gcc16-bootstrap')
     _envelope(result, 'emberbsd-native-gcc16-producer-result', scope='gcc16-bootstrap')
     manifest(plan)
+    fixed = profile(plan)
     _source_inputs(plan)
     _work_inputs(plan)
-    _require(plan['stage'] == STAGE and result['format'] == 'emberbsd-native-gcc16-producer-result' and
+    _require(plan['stage'] in STAGES and result['format'] == 'emberbsd-native-gcc16-producer-result' and
              result['bootstrap_plan'] == plan_ref and
              result['seed_descriptor'] == plan['seed_descriptor'] and
              result['status'] == 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW' and
@@ -268,20 +320,23 @@ def candidate(plan_ref, result_ref):
     _dependencies(actual)
     _require(_bytes(_regular(Path(plan['work_root'], 'nbtool_config.h'))) ==
              configuration(actual, manifest(plan)), 'OS component retained configuration differs')
-    _archive(plan['work_root'])
-    exports = {name: _regular(Path(plan['work_root'], name)) for name in EXPORTS}
+    from .bootstrap_generated import verify_history
+    verify_history(plan, result, track_modes=fixed['name'] == 'parsedate')
+    _archive(plan['work_root'], fixed['object'])
+    exports = {name: _regular(Path(plan['work_root'], name)) for name in fixed['exports']}
     _require(all(result['outputs'].get(name) == ref['sha256'] for name, ref in exports.items()),
              'OS component retained output differs from producer')
     return dict(format='emberbsd-os-compat-component-candidate', version=1,
-                status='PENDING_INDEPENDENT_COMPONENT_REVIEW', component='filetime',
+                status='PENDING_INDEPENDENT_COMPONENT_REVIEW', component=fixed['name'],
                 initial_only=True, ordinary_provider_qualified=False,
                 bootstrap_plan=plan_ref, producer_result=result_ref,
                 seed_descriptor=plan['seed_descriptor'], source=plan['program']['source'],
                 exports=exports)
 
 
-def validate_input(reference, descriptor):
+def validate_input(reference, descriptor, *, component='filetime'):
     """Check a separately reviewed initial OS component. Never issue acceptance."""
+    _require(component in ('filetime', 'parsedate'), 'unsupported requested OS component')
     receipt = _json(reference)
     _require(set(receipt) == {'format', 'version', 'scope', 'status', 'component',
         'candidate', 'independent_review', 'initial_only', 'ordinary_provider_qualified'} and
@@ -289,11 +344,12 @@ def validate_input(reference, descriptor):
         type(receipt['version']) is int and receipt['version'] == 1 and
         receipt['scope'] == 'gcc16-bootstrap' and
         receipt['status'] == 'ACCEPTED_INITIAL_OS_COMPAT_COMPONENT' and
-        receipt['component'] == 'filetime' and receipt['initial_only'] is True and
+        receipt['component'] == component and receipt['initial_only'] is True and
         receipt['ordinary_provider_qualified'] is False,
         'unsupported initial OS component acceptance')
     saved = _json(receipt['candidate'])
-    _require(saved == candidate(saved['bootstrap_plan'], saved['producer_result']),
+    _require(saved['component'] == component and
+             saved == candidate(saved['bootstrap_plan'], saved['producer_result']),
              'initial OS component candidate changed')
     review = _json(receipt['independent_review'])
     _require(set(review) == {'status', 'candidate', 'findings', 'all_leases_closed',
