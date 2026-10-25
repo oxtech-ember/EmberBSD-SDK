@@ -25,7 +25,7 @@ scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`,
 `hostname-bootstrap`, `basename-bootstrap`, `dirname-bootstrap`, `cat-bootstrap`,
 `head-bootstrap`, `uniq-bootstrap`, `wc-bootstrap`, `tr-bootstrap`, `printf-bootstrap`,
 `pwd-bootstrap`, `cut-bootstrap`, `env-bootstrap`, `uname-bootstrap`, `tail-bootstrap`,
-`sort-bootstrap`, and `date-bootstrap`.
+`sort-bootstrap`, `date-bootstrap`, and `id-bootstrap`.
 Each stage selects one exact source-owner manifest.
 It has exactly `format`, `version`, `scope`, `stage`, `seed_descriptor`, `host`,
 `sources`, `work_root`, `required_roles`, `resources`, `program`, and `commands`.
@@ -488,3 +488,26 @@ The existing runner, selected tools, source proof and historical acceptance chec
 Changed mode flags, source headers or owner semantics refuse before a child starts.
 `test_bootstrap_program_date` builds every step from the real owner manifest with `EMBERBSD_TEST_OS_SOURCE`.
 Synthetic tests do not establish native execution, C analysis or memory acceptance.
+
+## Fixed ID profile
+
+The OS owns `tools/id/bootstrap.json`, its native recipe and the shared typed
+`common/include/libutil/compat_grouplist.h` adapter. The normal target ID uses
+that same implementation. The profile builds one source and retains `groups`
+and `whoami` as declared aliases. It requires no compatibility library.
+
+Its 31 cases use literal arguments and the fixed `stdout_identity` names.
+SDK observes process IDs, supplementary groups and password/group names through
+independent Python `os`, `pwd` and `grp` APIs. It never runs a host ID command
+or trusts identity environment variables. Only the public `root` and numeric
+`0` subjects occur in the source contract. Personal observations stay local.
+The source pin rejects unknown oracle names or new command operands.
+
+The runner compares exact bytes, including group order and numeric fallbacks.
+History checks the accepted retained streams and independent semantic evidence.
+It does not query the current account or recompute old group membership.
+Current-session pretty login behavior remains a separate normal OS test.
+
+Run `test_bootstrap_program_id` with `EMBERBSD_TEST_OS_SOURCE` for source checks.
+Synthetic children do not establish native ID behavior, typed ABI correctness,
+C analysis or memory acceptance. Those remain separate gates.

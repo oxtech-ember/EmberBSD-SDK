@@ -66,7 +66,17 @@ class NativeProgramTests(unittest.TestCase):
             headers=(['usr.bin/' + name + '/extern.h'] if name in ('cmp', 'tr', 'tail') else []) + [program._BOOTSTRAP_CDEFS],
             include_dirs=['usr.bin/' + name] if name in ('cmp', 'tr', 'tail') else [],
             cppflags=['-include', program._BOOTSTRAP_CDEFS], invocations=[name, 'tac'] if name == 'tail' else [name], files={}, runtime_cases=[])
-        if name == 'date':
+        if name == 'id':
+            case.manifest.update(headers=[program._ID_GROUP_HEADER, program._BOOTSTRAP_CDEFS],
+                include_dirs=['common/include'], invocations=['id', 'groups', 'whoami'],
+                runtime_cases=[dict(name='case' + str(index), invocation='id',
+                    args=['-u'], stdin='', exit=0, stdout='synthetic result\n', stderr='')
+                    for index in range(31)])
+            del case.manifest['runtime_cases'][0]['stdout']
+            case.manifest['runtime_cases'][0]['stdout_identity'] = 'uid'
+            case.manifest['runtime_cases'][-1]['invocation'] = 'whoami'
+            case.manifest['runtime_cases'][-2]['invocation'] = 'groups'
+        elif name == 'date':
             case.manifest.update(headers=['bin/date/extern.h', program._BOOTSTRAP_CDEFS,
                                           'tools/compat/bootstrap/nbtool_config.h'],
                 include_dirs=['bin/date', 'tools/compat/bootstrap'],
@@ -149,6 +159,8 @@ class NativeProgramTests(unittest.TestCase):
     def fake_command(self, argv, log, **kwargs):
         case = self.case
         returned = case.fake_command(argv, log, **kwargs)
+        if case.manifest['name'] == 'id' and Path(log).stem == 'case-case0':
+            (case.work / 'case0.stdout').write_bytes(b'synthetic identity\n')
         if Path(log).stem in ('case-read-hostname', 'case-short-hostname'):
             name = Path(log).stem.removeprefix('case-')
             value = 'test.host.example\n' if name == 'read-hostname' else 'test\n'

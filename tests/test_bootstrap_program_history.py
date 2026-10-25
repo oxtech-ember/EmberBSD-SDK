@@ -44,6 +44,7 @@ class ProgramHistoryTests(unittest.TestCase):
             return returned
         with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=fake), \
              patch('emberbsd_sdk.bootstrap_program.socket.gethostname', return_value='test.host.example'), \
+             patch('emberbsd_sdk.bootstrap_program.identity_output', return_value=b'synthetic identity\n'), \
              patch('emberbsd_sdk.bootstrap_program.os.uname', return_value=os.uname_result(
                  ('Darwin', 'historical.node', 'historical-release', 'historical-version', 'arm64'))):
             self.result = c.invoke()
@@ -341,6 +342,16 @@ class ProgramHistoryTests(unittest.TestCase):
         self.assertEqual(self.verify(), {'os-basename': []})
         link = next(row for row in self.result['commands'] if row['phase'] == 'link')
         link['invocation_aliases'] = {'tac': 'other'}
+        with self.assertRaises(SDKError):
+            self.verify()
+
+    def test_id_history_keeps_its_observed_identity_without_current_oracles(self):
+        self.make_fixture('id')
+        with patch('emberbsd_sdk.bootstrap_program.identity_output',
+                   side_effect=AssertionError('historical identity must not be recomputed')):
+            self.assertEqual(self.verify(), {'os-basename': []})
+        stream = next(row for row in self.result['commands'] if row['id'] == 'case-case0')['stdout']
+        Path(stream['path']).write_bytes(b'changed identity\n')
         with self.assertRaises(SDKError):
             self.verify()
 

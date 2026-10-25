@@ -10,6 +10,7 @@ import shlex
 import socket
 
 from .bootstrap_producer import PRODUCER_FORMAT
+from .bootstrap_identity import IDENTITY_OUTPUTS, identity_output
 from .bootstrap_program_data import decode_data, data_size, MAX_FILE_BYTES
 from .bootstrap_shell import literal_stdin
 from .bootstrap_gnu_program import GNU_PROGRAM_STAGES
@@ -27,7 +28,7 @@ _SOURCES = tuple('usr.bin/grep/' + name + '.c' for name in ('fastgrep', 'file', 
 _PROVENANCE = ('tools/grep/Makefile', 'tools/Makefile.host', 'usr.bin/grep/Makefile', 'tools/grep/README.md')
 PROGRAM_STAGES = ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
                   'basename-bootstrap', 'dirname-bootstrap',
-                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap', 'env-bootstrap', 'uname-bootstrap', 'tail-bootstrap', 'sort-bootstrap', 'date-bootstrap')
+                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap', 'env-bootstrap', 'uname-bootstrap', 'tail-bootstrap', 'sort-bootstrap', 'date-bootstrap', 'id-bootstrap')
 CMP_MANIFEST_SHA256 = 'a3267d3387b08780fb1e372f5a742dccd9faa84568292506d3389f35e869ad56'
 HOSTNAME_MANIFEST_SHA256 = '32450fa3c2d68e63c13f1d32795f4d3e14cab8b5beac909ee27242cef279750d'
 _CMP_SOURCES = tuple('usr.bin/cmp/' + name + '.c' for name in ('cmp', 'misc', 'regular', 'special'))
@@ -48,13 +49,15 @@ UNAME_MANIFEST_SHA256 = '668f39859e9bcf7995f9402e046bf1598527f2db294515a40dceb89
 TAIL_MANIFEST_SHA256 = '15ab76bc438699a789dc94351e71151301b2560072345243040aa446028f34c8'
 SORT_MANIFEST_SHA256 = 'ed61a6a5caae08acd3334bf5769f22df82930cc2a7fd4ae8cdfcf4abffdfd2db'
 DATE_MANIFEST_SHA256 = '51840761173803ca69439053d8ee5fa72c4b331d7cb6ddf729f54c9eb4cfd8c8'
+ID_MANIFEST_SHA256 = '7184d420bdd70778b1c290f028bc43df9441db16087657d06915c2b9d3fc2e55'
+_ID_GROUP_HEADER = 'common/include/libutil/compat_grouplist.h'
 _NBTOOL_CONFIG = 'tools/compat/bootstrap/nbtool_config.h'
 _NATIVE_LOCAL_HEADERS = {'cmp': ('extern.h',), 'tr': ('extern.h',), 'tail': ('extern.h',),
                          'date': ('extern.h',), 'cut': ('x_cut.c',), 'sort': ('sort.h', 'fsort.h', 'pathnames.h')}
 _NATIVE_DIRECTORIES = {'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
                        'basename': 'usr.bin/basename', 'dirname': 'usr.bin/dirname',
                        'cat': 'bin/cat', 'head': 'usr.bin/head', 'uniq': 'usr.bin/uniq',
-                       'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut', 'env': 'usr.bin/env', 'uname': 'usr.bin/uname', 'tail': 'usr.bin/tail', 'sort': 'usr.bin/sort', 'date': 'bin/date'}
+                       'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut', 'env': 'usr.bin/env', 'uname': 'usr.bin/uname', 'tail': 'usr.bin/tail', 'sort': 'usr.bin/sort', 'date': 'bin/date', 'id': 'usr.bin/id'}
 _NATIVE_SOURCES = {'date': ('bin/date/date.c',), 'sort': (*('usr.bin/sort/' + name + '.c' for name in
                            ('append', 'fields', 'files', 'fsort', 'init', 'msort', 'sort', 'tmp', 'radix_sort')),
                            *_EFUN_SOURCES),
@@ -63,11 +66,11 @@ _NATIVE_SOURCES = {'date': ('bin/date/date.c',), 'sort': (*('usr.bin/sort/' + na
                    'cmp': _CMP_SOURCES, 'hostname': _HOSTNAME_SOURCES, 'cat': ('bin/cat/cat.c',),
                    'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'), 'pwd': ('bin/pwd/pwd.c',), 'cut': ('usr.bin/cut/cut.c', *_EFUN_SOURCES),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
-                      for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf', 'env', 'uname')}}
-_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41)
+                      for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf', 'env', 'uname', 'id')}}
+_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31)
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
-_ALIASES = {'grep': ('egrep', 'fgrep'), 'tail': ('tac',)}
+_ALIASES = {'grep': ('egrep', 'fgrep'), 'tail': ('tac',), 'id': ('groups', 'whoami')}
 _UNAME_FIELDS = ('sysname', 'nodename', 'release', 'version', 'machine', 'machine_arch')
 
 
@@ -93,7 +96,7 @@ def _uname_output(fields):
                      os.fsencode(getattr(current, field)) for field in fields) + b'\n'
 
 
-def _literal_cases(manifest, count, *, work_root_output=False, uname_output=False):
+def _literal_cases(manifest, count, *, work_root_output=False, uname_output=False, identity_oracle=False):
     """Check finite stream-case structure. The pinned owner supplies semantics."""
     cases = manifest['runtime_cases']
     _require(isinstance(cases, list) and len(cases) == count,
@@ -102,7 +105,8 @@ def _literal_cases(manifest, count, *, work_root_output=False, uname_output=Fals
     for case in cases:
         output_key = ('stdout_work_root' if work_root_output and isinstance(case, dict) and
                       'stdout_work_root' in case else 'stdout_uname' if uname_output and
-                      isinstance(case, dict) and 'stdout_uname' in case else 'stdout')
+                      isinstance(case, dict) and 'stdout_uname' in case else 'stdout_identity' if identity_oracle and
+                      isinstance(case, dict) and 'stdout_identity' in case else 'stdout')
         base = {'name', 'invocation', 'args', 'stdin', 'exit', output_key}
         _require(isinstance(case, dict) and
                  set(case) in (base | {'stderr'}, base | {'stderr_nonempty'}),
@@ -116,7 +120,9 @@ def _literal_cases(manifest, count, *, work_root_output=False, uname_output=Fals
                   case['stdout_work_root'] is True and case['exit'] == 0 if output_key == 'stdout_work_root' else
                   isinstance(case['stdout_uname'], list) and bool(case['stdout_uname']) and
                   all(field in _UNAME_FIELDS for field in case['stdout_uname']) and
-                  len(set(case['stdout_uname'])) == len(case['stdout_uname']) and case['exit'] == 0) and
+                  len(set(case['stdout_uname'])) == len(case['stdout_uname']) and case['exit'] == 0
+                  if output_key == 'stdout_uname' else
+                  isinstance(case['stdout_identity'], str) and case['stdout_identity'] in IDENTITY_OUTPUTS and case['exit'] == 0) and
                  type(case['exit']) is int and 0 <= case['exit'] <= 255 and
                  (isinstance(case['stderr'], str) if 'stderr' in case else case['stderr_nonempty'] is True),
                  'invalid literal program case or output path')
@@ -135,7 +141,7 @@ def _profile(plan):
               'cat': CAT_MANIFEST_SHA256, 'head': HEAD_MANIFEST_SHA256, 'uniq': UNIQ_MANIFEST_SHA256,
               'wc': WC_MANIFEST_SHA256, 'tr': TR_MANIFEST_SHA256,
               'printf': PRINTF_MANIFEST_SHA256, 'pwd': PWD_MANIFEST_SHA256, 'cut': CUT_MANIFEST_SHA256,
-              'env': ENV_MANIFEST_SHA256, 'uname': UNAME_MANIFEST_SHA256, 'tail': TAIL_MANIFEST_SHA256, 'sort': SORT_MANIFEST_SHA256, 'date': DATE_MANIFEST_SHA256}[name]
+              'env': ENV_MANIFEST_SHA256, 'uname': UNAME_MANIFEST_SHA256, 'tail': TAIL_MANIFEST_SHA256, 'sort': SORT_MANIFEST_SHA256, 'date': DATE_MANIFEST_SHA256, 'id': ID_MANIFEST_SHA256}[name]
     return ('tools/' + name + '/bootstrap.json',
             digest, _NATIVE_SOURCES[name],
             ('tools/' + name + '/Makefile', 'tools/Makefile.host', directory + '/Makefile',
@@ -156,9 +162,9 @@ def _native_program_contract(manifest, name):
         manifest['source_makefile'] == directory + '/Makefile' and
         manifest['compiler'] == dict(family='gcc', major=16, abi='native') and
         manifest['sources'] == list(_NATIVE_SOURCES[name]) and
-        manifest['headers'] == [*(directory + '/' + header for header in _NATIVE_LOCAL_HEADERS.get(name, ())),
-                                _BOOTSTRAP_CDEFS, *(_EFUN_HEADERS if efun else (_NBTOOL_CONFIG,) if nbtool else ())] and
-        manifest['include_dirs'] == ([directory, 'tools/compat', 'common/lib/libc/stdlib'] if efun else [directory, 'tools/compat/bootstrap'] if nbtool else [directory] if name in _NATIVE_LOCAL_HEADERS else []) and
+        manifest['headers'] == ([_ID_GROUP_HEADER, _BOOTSTRAP_CDEFS] if name == 'id' else [*(directory + '/' + header for header in _NATIVE_LOCAL_HEADERS.get(name, ())),
+                                _BOOTSTRAP_CDEFS, *(_EFUN_HEADERS if efun else (_NBTOOL_CONFIG,) if nbtool else ())]) and
+        manifest['include_dirs'] == (['common/include'] if name == 'id' else [directory, 'tools/compat', 'common/lib/libc/stdlib'] if efun else [directory, 'tools/compat/bootstrap'] if nbtool else [directory] if name in _NATIVE_LOCAL_HEADERS else []) and
         manifest['cppflags'] == (['-DHAVE_NBTOOL_CONFIG_H=1', '-include', 'nbtool_config.h'] if efun else (['-DHAVE_NBTOOL_CONFIG_H=1'] if nbtool else []) + ['-include', _BOOTSTRAP_CDEFS]) and
         all(manifest[key] == [] for key in ('cflags', 'link_flags', 'libraries')) and
         manifest['invocations'] == [name, *_ALIASES.get(name, ())], 'unsupported direct-source ' + name + ' contract')
@@ -169,7 +175,7 @@ def _native_program_contract(manifest, name):
                  all(case['invocation'] == 'cmp' and 'stdout_nonempty' not in case
                      for case in manifest['runtime_cases']), 'unsupported fixed cmp semantic cases')
     elif name in _LITERAL_CASE_COUNTS:
-        if name in ('basename', 'dirname', 'tr', 'printf', 'pwd', 'env', 'uname', 'date'):
+        if name in ('basename', 'dirname', 'tr', 'printf', 'pwd', 'env', 'uname', 'date', 'id'):
             _require(manifest['files'] == {}, 'this program needs no fixture files')
         else:
             files = manifest['files']
@@ -178,7 +184,7 @@ def _native_program_contract(manifest, name):
                          key != 'missing.txt' for key in files) and
                      sum(data_size(value) for value in files.values()) <= MAX_FILE_BYTES,
                      'filter programs need bounded immutable fixture files')
-        _literal_cases(manifest, _LITERAL_CASE_COUNTS[name], work_root_output=name == 'pwd', uname_output=name == 'uname')
+        _literal_cases(manifest, _LITERAL_CASE_COUNTS[name], work_root_output=name == 'pwd', uname_output=name == 'uname', identity_oracle=name == 'id')
     else:
         # These are the only accepted tails. No hostname operand can reach a child.
         _require(manifest['files'] == {} and manifest['runtime_cases'] == [
@@ -351,6 +357,9 @@ def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
         elif name == 'stdout' and program == 'uname' and 'stdout_uname' in case:
             _require(data == _uname_output(case['stdout_uname']),
                      'uname actual stdout differs from the read-only controller APIs')
+        elif name == 'stdout' and program == 'id' and 'stdout_identity' in case:
+            _require(data == identity_output(case['stdout_identity']),
+                     'id actual stdout differs from the independent OS identity APIs')
         elif name == 'stderr' and case.get('stderr_nonempty') is True:
             _require(bool(data), program + ' error case did not produce actual stderr')
         else:
