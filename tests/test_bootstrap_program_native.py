@@ -93,6 +93,12 @@ class NativeProgramTests(unittest.TestCase):
                 args=[], stdin='', exit=0, stdout_work_root=True, stderr='') for index in range(8)]
             case.manifest['runtime_cases'] += [dict(name='case' + str(index), invocation=name,
                 args=['-z'], stdin='', exit=1, stdout='', stderr_nonempty=True) for index in range(8, 10)]
+        elif name in ('env', 'uname'):
+            count = 19 if name == 'env' else 15
+            case.manifest['runtime_cases'] = [dict(name='case' + str(index), invocation=name,
+                args=['-i', 'A=one', './env'] if name == 'env' else [], stdin='', exit=0,
+                stderr='', **({'stdout': 'A=one\n'} if name == 'env' else
+                              {'stdout_uname': ['sysname']})) for index in range(count)]
         elif name == 'printf':
             case.manifest['runtime_cases'] = [dict(name='case' + str(index), invocation=name,
                 args=['%s', 'synthetic result'], stdin='', exit=0, stdout='synthetic result', stderr='')

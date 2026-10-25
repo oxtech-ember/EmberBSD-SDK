@@ -23,7 +23,7 @@ The SDK constructs commands from that data. It does not copy a recipe.
 The plan format is `emberbsd-native-gcc16-producer-plan`, version 1,
 scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`,
 `hostname-bootstrap`, `basename-bootstrap`, `dirname-bootstrap`, `cat-bootstrap`,
-`head-bootstrap`, `uniq-bootstrap`, `wc-bootstrap`, `tr-bootstrap`, `printf-bootstrap`, `pwd-bootstrap`, and `cut-bootstrap`.
+`head-bootstrap`, `uniq-bootstrap`, `wc-bootstrap`, `tr-bootstrap`, `printf-bootstrap`, `pwd-bootstrap`, `cut-bootstrap`, `env-bootstrap`, and `uname-bootstrap`.
 Each stage selects one exact source-owner manifest.
 It has exactly `format`, `version`, `scope`, `stage`, `seed_descriptor`, `host`,
 `sources`, `work_root`, `required_roles`, `resources`, `program`, and `commands`.
@@ -352,3 +352,42 @@ The result is pending independent review and never qualifies an ordinary provide
 Run `test_bootstrap_program_cut` with `EMBERBSD_TEST_OS_SOURCE` for source consistency.
 Its compiler children are synthetic. Real compiler probes, C analysis and memory validation
 must run separately with the independently accepted exact source and seed plan.
+
+## Fixed env and uname profiles
+
+The OS owns `tools/env/bootstrap.json` and `tools/uname/bootstrap.json`.
+Their SHA256 pins are:
+
+- env: `b16ad21f0c3b820ba1345c40606f42ee379eb92c3d098448e0e61b5c83b39846`.
+- uname: `668f39859e9bcf7995f9402e046bf1598527f2db294515a40dceb895ca97148d`.
+
+Each source proof has seven members: the manifest, README, host makefile,
+`tools/Makefile.host`, `tools/compat/bootstrap_cdefs.h`, the source makefile and one C file.
+Both profiles use the same selected native compiler, ABI and shell as other direct programs.
+They introduce no compatibility library or alternate command executor.
+
+The env profile has nineteen literal cases and 22 commands.
+It tests assignment, clearing, NUL separators, removal, directory changes and error statuses.
+Its child cases execute the same owned `./env` output from the work directory.
+This tests inheritance and child exit propagation without a host command or default path search.
+The preflight requires `missing.txt` to be absent before a missing-command or directory case.
+An existing nonexecutable command is represented by the work directory itself.
+The final runtime observation uses `env -i` without a child.
+This profile does not qualify arbitrary external child programs or other PATH providers.
+
+The uname profile has fifteen cases and 18 commands.
+Successful cases declare a nonempty unique list of fields in `stdout_uname`.
+The finite names are `sysname`, `nodename`, `release`, `version`, `machine`, and `machine_arch`.
+Only uname accepts this field, only with exit zero, and never alongside literal stdout.
+The OS manifest owns field order and option semantics, including the distinction between `-a` and `-ap`.
+SDK reads the five standard fields with `os.uname()`.
+For machine architecture, the Darwin controller calls `sysctl` through standard-library `ctypes`.
+The fixed read-only MIB is `CTL_HW/HW_MACHINE_ARCH` (6, 12) in the admitted Darwin ABI.
+It checks query status, bounded returned lengths and exactly one terminal NUL.
+Missing APIs and malformed data fail verification without an external-command fallback.
+The verifier joins exact field bytes with spaces and appends one newline.
+Embedded version whitespace remains unchanged. Child output never supplies expected values.
+
+Run `test_bootstrap_program_env_uname` with `EMBERBSD_TEST_OS_SOURCE` for source consistency.
+Unit tests use synthetic children and API replies. Native compilation, actual API results,
+C analysis and memory acceptance remain separate checks before qualification.
