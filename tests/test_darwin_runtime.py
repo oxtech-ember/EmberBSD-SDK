@@ -524,7 +524,8 @@ class DarwinRuntimeTests(unittest.TestCase):
                 validate_darwin_runtime_closure(closure, f.descriptor)
 
     def test_executable_rpath_cannot_escape_or_hide_symlink_traversal(self):
-        for suffix in ('/../../outside', '/../alias', '/alias/../lib', '/plain/../lib'):
+        for suffix in ('/../../outside', '/../alias', '/alias/../lib', '/plain/../lib',
+                       '/missing/../lib'):
             with self.subTest(suffix=suffix):
                 f = Fixture(self)
                 binary = f.bundle / 'bin'
