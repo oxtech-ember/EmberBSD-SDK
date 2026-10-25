@@ -19,7 +19,7 @@ from .native_toolset import _file, _json, _require, _sha
 from .paths import canonical_existing, canonical_new, reject_overlap
 
 BOOTSTRAP_FORMAT = 'emberbsd-native-gcc16-bootstrap-plan'
-# The Ports Darwin profile's make handoff edge. See recipe_make().
+# The Ports Darwin profile's make and shell handoff edge. See recipe_make().
 MAKE_PROVIDER = 'devel/bmake'
 
 
@@ -94,36 +94,68 @@ def recipe_order(plan):
     return result
 
 
+def _ports_prefix(plan, recipe):
+    """Return the Ports prefix when the recipe has the handoff edge, else None."""
+    if MAKE_PROVIDER not in plan['recipes'][recipe]['dependencies']:
+        return None
+    return _safe_path(plan['output_bundle_root'])
+
+
 def recipe_make(plan, commands, recipe):
-    """Select the make for one recipe from its bound dependency edge.
+    """Select the make and shell for one recipe from its bound dependency edge.
 
     The Ports profile owns the handoff. It gives every recipe outside the
-    devel/bmake closure a direct devel/bmake edge. Those recipes start with the
-    installed Ports bmake and its own share/mk. Only the remaining recipes use
-    the bound initial make and its -m tree, because -m reaches child makes
-    through MAKEFLAGS.
+    devel/bmake closure a direct devel/bmake edge; shells/mksh is in that
+    closure. Those recipes start with the installed Ports bmake, its own
+    share/mk and the installed Ports mksh. Only the remaining recipes use the
+    bound initial make, its -m tree and the initial shell, because -m reaches
+    child makes through MAKEFLAGS and SHELL= on the command line overrides the
+    profile.
     """
     initial = tuple(commands['make'])
     _require(len(initial) == 5 and initial[1] == '-m',
              'bound recipe steps need the bound initial make tuple')
-    if MAKE_PROVIDER not in plan['recipes'][recipe]['dependencies']:
+    prefix = _ports_prefix(plan, recipe)
+    if prefix is None:
         return initial
-    return (os.path.join(_safe_path(plan['output_bundle_root']), 'bin/bmake'), *initial[3:])
+    return (os.path.join(prefix, 'bin/bmake'), 'SHELL=' + os.path.join(prefix, 'bin/mksh'),
+            *initial[4:])
+
+
+def recipe_gmake(plan, commands, recipe):
+    """Keep the bound gmake and give it the shell recipe_make() selects."""
+    initial = tuple(commands['gmake'])
+    _require(len(initial) == 3 and initial[1].startswith('SHELL='),
+             'bound recipe steps need the bound initial gmake tuple')
+    prefix = _ports_prefix(plan, recipe)
+    if prefix is None:
+        return initial
+    return (initial[0], 'SHELL=' + os.path.join(prefix, 'bin/mksh'), initial[2])
+
+
+def recipe_environment(plan, commands, recipe):
+    """Give the recipe environment the shell recipe_make() selects."""
+    env = metadata_environment(plan, commands)
+    prefix = _ports_prefix(plan, recipe)
+    if prefix is not None:
+        shell = os.path.join(prefix, 'bin/mksh')
+        env.update(SHELL=shell, CONFIG_SHELL=shell)
+    return env
 
 
 def recipe_steps(plan, descriptor, commands, flags):
     """Construct complete selected tuples and fixed targets. No caller tail."""
     work = _safe_path(plan['work_root'])
     export = _safe_path(plan['ports_export']['root'])
-    env = metadata_environment(plan, commands)
     jobs = '-j' + str(plan['resources']['cpu_jobs'])
     result = []
     for number, recipe in enumerate(recipe_order(plan)):
         make = recipe_make(plan, commands, recipe)
+        env = recipe_environment(plan, commands, recipe)
         for phase in ('build', 'install'):
             if recipe == 'lang/gcc16' and phase == 'install':
                 result.append(dict(id='gcc16-compare', recipe=recipe, phase='compare', role='gmake',
-                    cwd=work, env=dict(env), argv=[*commands['gmake'], '--no-print-directory', jobs,
+                    cwd=work, env=dict(env), argv=[*recipe_gmake(plan, commands, recipe), '--no-print-directory', jobs,
                         '-C', _safe_path(plan['recipes'][recipe]['object_directory']), 'compare']))
             result.append(dict(id=f'r{number:03d}-' + phase, recipe=recipe, phase=phase, role='make',
                 cwd=work, env=dict(env), argv=[*make, 'EMBERBSD_DARWIN_BOOTSTRAP=yes',

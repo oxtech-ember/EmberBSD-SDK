@@ -343,13 +343,18 @@ the evaluated `WRKDIR`, `WRKSRC` and `OBJDIR` metadata. It must be below
    `--no-print-directory -j1 -C object_directory compare`.
 5. Install GCC. `comparison_command` is exactly `gcc16-compare`.
 
-`recipe_make()` selects the recipe's make tuple from the bound dependency edge.
+`recipe_make()` selects the recipe's make and shell from the bound dependency edge.
 The Ports profile owns the
 [make handoff](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/common-build-tools/bootstrap/README.md#make-handoff).
 It gives every recipe outside the `devel/bmake` closure a direct `devel/bmake` edge.
-Such a recipe starts with `output_bundle_root/bin/bmake` and the bound `SHELL` and
-`MAKECONF` words. It does not use `-m`, so the Ports bmake reads its own `share/mk`.
-The other recipes, `devel/bmake` included, keep the complete bound initial tuple.
+That closure includes `shells/mksh`. Such a recipe starts with
+`output_bundle_root/bin/bmake`, `SHELL=output_bundle_root/bin/mksh` and the bound
+`MAKECONF` word. It does not use `-m`, so the Ports bmake reads its own `share/mk`.
+A `SHELL=` word on the command line overrides the profile, so the bound initial
+shell word must not reach it. `recipe_environment()` sets `SHELL` and
+`CONFIG_SHELL` to the same Ports mksh, and `recipe_gmake()` gives the bound gmake
+that `SHELL=` word for the GCC comparison step. The other recipes, `devel/bmake`
+included, keep the complete bound initial tuples and environment.
 The SDK keeps no recipe list. bmake passes `-m` to child makes through `MAKEFLAGS`.
 
 The complete `argv`, `cwd`, `env`, role, ID and order must equal this construction.

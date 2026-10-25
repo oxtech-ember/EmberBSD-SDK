@@ -107,25 +107,40 @@ class RecipeTests(unittest.TestCase):
                 self.assertIn('-j1', step['argv'])
         self.assertEqual(self.plan['commands'][3]['argv'][-1], 'compare')
 
-    def test_recipes_with_the_ports_bmake_edge_start_the_ports_bmake(self):
+    def test_recipes_with_the_ports_bmake_edge_start_the_ports_bmake_and_mksh(self):
         recipes = self.plan['recipes']
         recipes['devel/bmake'] = dict(copy.deepcopy(recipes['devel/gmp']), dependencies=[])
         recipes['devel/gmp']['dependencies'] = [*recipes['devel/gmp']['dependencies'], 'devel/bmake']
         initial = list(self.commands['make'])
         self.assertEqual(initial[1], '-m')
         steps = recipe.recipe_steps(self.plan, self.descriptor, self.commands, self.descriptor['abi_flags'])
-        starts = {(step['recipe'], step['phase']): step['argv'] for step in steps if step['role'] == 'make'}
-        final = [str(self.work / 'prefix/bin/bmake'), *initial[3:]]
-        self.assertEqual(starts[('devel/bmake', 'build')][:5], initial)
-        self.assertEqual(starts[('lang/gcc16', 'build')][:5], initial)
+        starts = {(step['recipe'], step['phase']): step for step in steps}
+        shell = str(self.work / 'prefix/bin/mksh')
+        final = [str(self.work / 'prefix/bin/bmake'), 'SHELL=' + shell, initial[4]]
+        seed_env = producer.metadata_environment(self.plan, self.commands)
+        self.assertNotEqual(seed_env['SHELL'], shell)
+        for key in (('devel/bmake', 'build'), ('lang/gcc16', 'build'), ('lang/gcc16', 'compare')):
+            self.assertEqual(starts[key]['argv'][:len(self.commands[starts[key]['role']])],
+                             list(self.commands[starts[key]['role']]))
+            self.assertEqual(starts[key]['env'], seed_env)
         for phase in ('build', 'install'):
-            argv = starts[('devel/gmp', phase)]
-            self.assertEqual(argv[:3], final)
-            self.assertNotIn('-m', argv)
-            self.assertEqual(argv[3:], ['EMBERBSD_DARWIN_BOOTSTRAP=yes', '-C',
-                                        self.plan['ports_export']['root'] + '/devel/gmp', phase])
+            step = starts[('devel/gmp', phase)]
+            self.assertEqual(step['argv'][:3], final)
+            self.assertNotIn('-m', step['argv'])
+            self.assertEqual([w for w in step['argv'] if w.startswith('SHELL=')], ['SHELL=' + shell])
+            self.assertEqual(step['argv'][3:], ['EMBERBSD_DARWIN_BOOTSTRAP=yes', '-C',
+                                                self.plan['ports_export']['root'] + '/devel/gmp', phase])
+            self.assertEqual(step['env'], dict(seed_env, SHELL=shell, CONFIG_SHELL=shell))
+        recipes['lang/gcc16']['dependencies'] = [*recipes['lang/gcc16']['dependencies'], 'devel/bmake']
+        steps = recipe.recipe_steps(self.plan, self.descriptor, self.commands, self.descriptor['abi_flags'])
+        compare = [step for step in steps if step['phase'] == 'compare'][0]
+        gmake = list(self.commands['gmake'])
+        self.assertEqual(compare['argv'][:3], [gmake[0], 'SHELL=' + shell, gmake[2]])
+        self.assertEqual(compare['env']['SHELL'], shell)
         with self.assertRaisesRegex(SDKError, 'bound initial make'):
             recipe.recipe_make(self.plan, dict(self.commands, make=tuple(initial[:1])), 'devel/gmp')
+        with self.assertRaisesRegex(SDKError, 'bound initial gmake'):
+            recipe.recipe_gmake(self.plan, dict(self.commands, gmake=tuple(gmake[:1])), 'lang/gcc16')
 
     def test_wrong_tail_bare_tuple_and_route_overrides_fail_before_child(self):
         for kind in ('bare', 'tail', 'assignment', 'env', 'compare', 'ordering'):
