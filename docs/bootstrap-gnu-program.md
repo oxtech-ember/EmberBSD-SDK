@@ -1,6 +1,7 @@
 # Fixed initial GNU utility programs
 
-These two initial-only profiles build GNU diffutils 3.12 and findutils 4.11.0.
+These initial-only profiles build GNU diffutils 3.12, findutils 4.11.0,
+and GNU make 4.4.1.
 They use `BOOTSTRAP_PROGRAM_API = 1`, the existing producer plan version 1,
 and `bootstrap_pilot.run_producer`. They add no executor or result format.
 They issue no ordinary provider qualification.
@@ -14,6 +15,7 @@ The exact Ports specifications are:
 | --- | --- | --- |
 | `diffutils-bootstrap` | `profiles/common-build-tools/bootstrap/gnu-diffutils.json` | `7da6d3dd3c973e9e9550f88266d8dc3b612c6319ef9b33b1d09828d56cfb0f50` |
 | `findutils-bootstrap` | `profiles/common-build-tools/bootstrap/gnu-findutils.json` | `dca85a054a5a4af27925eba8b78abc2f3ec093e5e874c2b70b7321169dba27b7` |
+| `gmake-bootstrap` | `profiles/common-build-tools/bootstrap/gnu-gmake.json` | `111fe6fbec75de0facb45c6559f31d44bd5f7e535fd47bb6a6fc6f21498b6cec` |
 
 The specification retains the canonical recipe, configure arguments, make
 targets, output paths, required roles, literal fixtures, and semantic cases.
@@ -26,6 +28,8 @@ The plan keeps the direct-program fields documented in
 `manifest` and `archive` are regular `{path, sha256}` references.
 `patches` is the complete ordered list of canonical patch references.
 The archive must match the recipe's SHA256, SHA512, BLAKE2s and Size values.
+The fixed GNU make recipe publishes SHA512, BLAKE2s and Size. Its archive must
+match those three values and its raw SHA256 file reference.
 Each patch must also match its pkgsrc distinfo SHA1 after complete LF records
 that contain `$NetBSD` are removed. Its raw SHA256 and owner Git blob remain pinned.
 
@@ -42,6 +46,10 @@ all three patches. Findutils needs `DESCR`, `Makefile`, `PLIST`, `distinfo`, and
 both patches. Paths keep their `pkgsrc/devel/diffutils` or
 `pkgsrc/sysutils/findutils` prefix. Its member rows are the existing file-only
 `{git_blob, sha256}` records. The independent gate verifies Ports Git membership.
+GNU make needs `DESCR`, `Makefile`, `PLIST`, `distinfo`, `options.mk`, and all six
+patches under `upstream/pkgsrc/devel/gmake`. Those recipe files belong to the
+pinned pkgsrc Git submodule. The gate must verify the Ports gitlink and each
+submodule blob. The top-level specification remains a Ports Git member.
 
 The prepared release tree contains all release files after those ordered patches.
 Its proof member map covers every inventory entry. File rows have `sha256` and
@@ -53,8 +61,10 @@ Do not replace that independent provenance check with a self-reported status.
 
 ## Fixed execution
 
-The resource agreement permits one CPU job, one heavy-link slot, and at most
-1200 seconds of command observation. Every configure and make command holds the
+The diffutils and findutils resource agreements require one CPU job. GNU make
+requires two CPU jobs for its fixed `-j2` semantic case. Its shell bootstrap
+compiles sequentially. All three agreements require one heavy-link slot and
+at most 1200 seconds of command observation. Every configure and build command holds the
 outer shared heavy-link context exclusively through complete child drainage.
 No nested launcher field is accepted. This serial route does not change the
 separate parallel full-SDK build policy.
@@ -79,6 +89,19 @@ Configure uses explicit equal build and host triplets from the accepted compiler
 is supplied. Each make target uses the complete accepted GNU make tuple,
 including its selected `SHELL` argument, and `-j1`.
 
+GNU make uses `gnu-configure-bootstrap`. It requires no `make` or `gmake` input
+role, command variable, or utility alias. After configure, the selected shell
+runs the release's `build.sh`. The script builds the complete `source/make`
+executable. It does not need a later make target. The complete release proof
+also includes `README`, `build.sh`, and `build.cfg.in`.
+The selected shell must have an accepted source-build provider and history.
+The canonical recipe's `PKGSRC_DEFAULT_SHELL` define embeds that shell path.
+Its semantic case checks the resulting default shell.
+The script expands compiler and flag variables without `eval`. This fixed
+route accepts literal command and ABI words without whitespace or shell
+metacharacters. The SDK retains the C string quotes in the generated define.
+The other two profiles keep their existing shell quoting rules.
+
 Only the fixed seven diff cases or fifteen find/xargs cases run.
 They use the selected shell's printf builtin and distinct stdout/stderr files.
 Every case with a child appends only the selected shell tuple and its fixed
@@ -87,7 +110,9 @@ It never uses its implicit echo child in these cases.
 Expected exits, exact streams, and marked nonempty error streams remain mandatory.
 The SDK checks every built output's native executable header before semantic cases.
 One final `--version` invocation per output retains DYLD library observations.
-Diffutils has 12 commands. Findutils has 22 commands.
+Diffutils has 12 commands. Findutils has 22 commands. GNU make has 11 commands,
+including eight cases for its version, default shell, space-containing variable,
+recursive make, two-job execution, question mode, recipe failure and missing target.
 
 The existing source/input shared leases, work exclusive lease, deadline,
 failed-drain HOLD, raw log references, and post-drain revalidation apply.

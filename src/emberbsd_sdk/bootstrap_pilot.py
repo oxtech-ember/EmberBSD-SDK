@@ -321,7 +321,7 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                     if step['phase'] == 'run':
                         _native_image(step['argv'][0], descriptor['host'])
                     heavy = ((recipe and 'link_control' not in plan) or step['phase'] == 'link' or
-                             gnu_program and step['phase'] in ('gnu-configure', 'gnu-build') or
+                             gnu_program and step['phase'] in ('gnu-configure', 'gnu-build', 'gnu-bootstrap') or
                              pkg_install and step['phase'] in ('pkg-configure', 'pkg-build'))
                     context = [resources['heavy_link_context']] if heavy else []
                     with ContextLocks(context, root):

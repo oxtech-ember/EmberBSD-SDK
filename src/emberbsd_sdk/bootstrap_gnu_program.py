@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
 # Origin: EmberBSD (AI-assisted).
-"""Two fixed initial GNU utility builds. The existing pilot owns every child."""
+"""Fixed initial GNU utility builds. The existing pilot owns every child."""
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -15,11 +16,15 @@ from .inventory import sha256_file, snapshot_tree
 from .native_toolset import _absolute, _bytes, _envelope, _json, _require, _source
 from .paths import canonical_existing, entry
 
-GNU_PROGRAM_STAGES = ('diffutils-bootstrap', 'findutils-bootstrap')
+GNU_PROGRAM_STAGES = ('diffutils-bootstrap', 'findutils-bootstrap', 'gmake-bootstrap')
 MANIFESTS = {
     'diffutils-bootstrap': ('diffutils', 'devel/diffutils', '3.12',
         '7da6d3dd3c973e9e9550f88266d8dc3b612c6319ef9b33b1d09828d56cfb0f50',
         ('patch-configure', 'patch-po_Makefile.in.in', 'patch-src_Makefile.in')),
+    'gmake-bootstrap': ('gmake', 'devel/gmake', '4.4.1',
+        '111fe6fbec75de0facb45c6559f31d44bd5f7e535fd47bb6a6fc6f21498b6cec',
+        ('patch-af', 'patch-lib_fnmatch.c', 'patch-src_getopt.c', 'patch-src_getopt.h',
+         'patch-src_hash.c', 'patch-src_job.c')),
     'findutils-bootstrap': ('findutils', 'sysutils/findutils', '4.11.0',
         'dca85a054a5a4af27925eba8b78abc2f3ec093e5e874c2b70b7321169dba27b7',
         ('patch-aa', 'patch-configure')),
@@ -38,6 +43,7 @@ def _patch_sha1(raw):
 
 def gnu_manifest(plan):
     name, recipe, _, digest, _ = MANIFESTS[plan['stage']]
+    bootstrap = name == 'gmake'
     root = plan['program']['owner']['root']
     relative = 'profiles/common-build-tools/bootstrap/gnu-' + name + '.json'
     reference = plan['program']['manifest']
@@ -49,13 +55,18 @@ def gnu_manifest(plan):
         'make_targets', 'output_programs', 'invocations', 'files', 'runtime_cases'} and
         manifest['format'] == 'emberbsd-native-bootstrap-program' and type(manifest['version']) is int and
         manifest['version'] == 1 and manifest['name'] == name and manifest['initial_only'] is True and
-        manifest['build_system'] == 'gnu-configure' and manifest['configure_args'] == ['--disable-nls'] and
+        manifest['build_system'] == ('gnu-configure-bootstrap' if bootstrap else 'gnu-configure') and
+        manifest['configure_args'] == (['--disable-nls', '--without-guile'] if bootstrap else ['--disable-nls']) and
         manifest['compiler'] == dict(family='gcc', major=16, abi='native') and
-        manifest['canonical_host_recipe'] == 'pkgsrc/' + recipe + '/Makefile' and
-        len(manifest['runtime_cases']) == (7 if name == 'diffutils' else 15) and
-        manifest['output_programs'] == (dict(diff='src/diff') if name == 'diffutils' else
+        manifest['canonical_host_recipe'] == ('upstream/pkgsrc/' if bootstrap else 'pkgsrc/') + recipe + '/Makefile' and
+        len(manifest['runtime_cases']) == (8 if bootstrap else 7 if name == 'diffutils' else 15) and
+        manifest['output_programs'] == (dict(gmake='make') if bootstrap else dict(diff='src/diff') if name == 'diffutils' else
                                         dict(find='find/find', xargs='xargs/xargs')) and
         manifest['invocations'] == list(manifest['output_programs']), 'unsupported fixed GNU program contract')
+    if bootstrap:
+        _require(manifest['make_targets'] == [] and
+                 not {'make', 'gmake'} & set(manifest['required_tool_roles']),
+                 'GNU make bootstrap cannot require an external make')
     for case in manifest['runtime_cases']:
         _require(case['invocation'] in manifest['invocations'] and
                  ('command_role' not in case or case['command_role'] == 'sh') and
@@ -105,11 +116,11 @@ def _owner(plan, descriptor):
     name, recipe, version, _, patch_names = MANIFESTS[plan['stage']]
     root = value['owner']['root']
     inventory, _ = _tree(value['owner'], descriptor, owner=True)
-    directory = 'pkgsrc/' + recipe
+    directory = ('upstream/pkgsrc/' if name == 'gmake' else 'pkgsrc/') + recipe
     expected = {os.path.relpath(value['manifest']['path'], root),
                 *(directory + '/' + n for n in ('Makefile', 'DESCR', 'PLIST', 'distinfo')),
                 *(directory + '/patches/' + n for n in patch_names)}
-    if name == 'diffutils':
+    if name in ('diffutils', 'gmake'):
         expected.add(directory + '/options.mk')
     _require({n for n, row in inventory.items() if row['kind'] == 'file'} == expected,
              'GNU owner needs its exact canonical recipe, specification and patch roster')
@@ -117,10 +128,12 @@ def _owner(plan, descriptor):
                     sha256=inventory[directory + '/patches/' + n]['sha256']) for n in patch_names]
     _require(value['patches'] == patches, 'GNU canonical patches are missing, reordered or replaced')
     distinfo = Path(root, directory, 'distinfo').read_text(encoding='utf-8')
-    filename = name + '-' + version + '.tar.xz'
+    filename = 'make-' + version + '.tar.gz' if name == 'gmake' else name + '-' + version + '.tar.xz'
     raw = _bytes(value['archive'], limit=16 * 1024 * 1024)
     for algorithm, constructor in (('SHA256', hashlib.sha256), ('SHA512', hashlib.sha512),
                                     ('BLAKE2s', hashlib.blake2s)):
+        if name == 'gmake' and algorithm == 'SHA256':
+            continue  # This fixed canonical distinfo publishes SHA512 and BLAKE2s.
         matches = re.findall(r'^' + algorithm + r' \(' + re.escape(filename) + r'\) = ([0-9a-f]+)$',
                              distinfo, re.M)
         _require(matches == [constructor(raw).hexdigest()], 'GNU archive differs from canonical ' + algorithm)
@@ -135,15 +148,30 @@ def _owner(plan, descriptor):
 
 def gnu_environment(plan, descriptor, commands, flags):
     work = _safe_path(plan['work_root'])
+    bootstrap = plan['stage'] == 'gmake-bootstrap'
+    def join(words):
+        if not bootstrap:
+            return shlex.join(words)
+        # build.sh expands command variables without eval. Shell quoting in
+        # those variables would become literal compiler argument bytes.
+        _require(all(re.fullmatch(r'[A-Za-z0-9_./+@%=:,-]+', word) for word in words),
+                 'GNU make shell bootstrap requires literal command and ABI words')
+        return ' '.join(words)
     result = dict(PATH=os.path.join(work, 'bin'), LC_ALL='C', TZ='UTC', TMPDIR=work,
                   CONFIG_SITE='/dev/null')
     for variable, role in (('CC', 'cc'), ('CXX', 'cxx'), ('CPP', 'cpp'), ('AS', 'as'), ('LD', 'ld'),
             ('AR', 'ar'), ('RANLIB', 'ranlib'), ('NM', 'nm'), ('STRIP', 'strip'),
             ('SHELL', 'sh'), ('CONFIG_SHELL', 'sh'), ('MAKE', 'gmake')):
-        result[variable] = shlex.join(commands[role])
+        if bootstrap and role == 'gmake':
+            continue
+        result[variable] = join(commands[role])
     for variable, key in (('CPPFLAGS', 'cppflags'), ('CFLAGS', 'cflags'), ('CXXFLAGS', 'cxxflags')):
-        result[variable] = shlex.join(flags[key])
-    result['LDFLAGS'] = shlex.join([*flags['ldflags'], '-Wl,--threads=1'])
+        result[variable] = join(flags[key])
+    result['LDFLAGS'] = join([*flags['ldflags'], '-Wl,--threads=1'])
+    if bootstrap:
+        shell = _safe_path(commands['sh'][0])
+        result['CPPFLAGS'] = (result['CPPFLAGS'] + ' -DPKGSRC_DEFAULT_SHELL=' + json.dumps(shell)).lstrip()
+        result['EMBERBSD_BOOTSTRAP_EXPECTED_SHELL'] = shell
     return result
 
 
@@ -155,6 +183,9 @@ def gnu_steps(plan, descriptor, commands, flags):
     result = [dict(id='configure', phase='gnu-configure', cwd=source, env=dict(env), expected_exit=0,
         argv=[*commands['sh'], os.path.join(source, 'configure'), '--build=' + triplet, '--host=' + triplet,
               '--prefix=' + os.path.join(work, 'unused-prefix'), *manifest['configure_args']])]
+    if plan['stage'] == 'gmake-bootstrap':
+        result.append(dict(id='bootstrap', phase='gnu-bootstrap', cwd=source, env=dict(env), expected_exit=0,
+            argv=[*commands['sh'], os.path.join(source, 'build.sh')]))
     for index, row in enumerate(manifest['make_targets']):
         result.append(dict(id=f'build-{index:02d}', phase='gnu-build', cwd=source, env=dict(env), expected_exit=0,
             argv=[*commands['gmake'], '--no-print-directory', '-j1', '-C',
@@ -206,6 +237,11 @@ def prepare_gnu_work(plan, descriptor, commands):
 
 def verify_gnu_step(step, work, plan):
     manifest = gnu_manifest(plan)
+    if step['phase'] == 'gnu-bootstrap':
+        from .bootstrap_pilot import _native_image
+        path = os.path.join(work, 'source', 'make')
+        _native_image(path, plan['host'])
+        return dict(program_outputs=dict(gmake=dict(path=path, sha256=sha256_file(path))))
     if step['phase'] == 'gnu-build':
         from .bootstrap_pilot import _native_image
         index = int(step['id'].removeprefix('build-'))
@@ -242,12 +278,17 @@ def validate_gnu_plan(plan, descriptor, commands, flags):
     for source in plan['sources'].values():
         _source(source)
     _validate_resources(plan['resources'], metadata=True)
-    _require(plan['resources']['cpu_jobs'] == 1, 'initial GNU programs require serial make and one outer link lease')
+    _require(plan['resources']['cpu_jobs'] == (2 if plan['stage'] == 'gmake-bootstrap' else 1),
+             'initial GNU programs require their fixed CPU budget and one outer link lease')
     value = plan['program']
     _require(set(value) == {'source', 'owner', 'manifest', 'archive', 'patches'}, 'unsupported fixed GNU input fields')
     manifest = _owner(plan, descriptor)
     inventory, _ = _tree(value['source'], descriptor, owner=False)
     sentinels = {'configure', 'Makefile.in', 'COPYING', manifest['source_makefile']}
+    if plan['stage'] == 'gmake-bootstrap':
+        sentinels.update(('README', 'build.sh', 'build.cfg.in'))
+        _require(not {'make', 'gmake'} & set(plan['required_roles']),
+                 'GNU make bootstrap cannot select an external make role')
     _require(all(inventory.get(name, {}).get('kind') == 'file' for name in sentinels),
              'GNU release omits a required canonical source file')
     required = set(manifest['required_tool_roles']) | set(descriptor['driver_components'].values())
@@ -260,6 +301,10 @@ def validate_gnu_plan(plan, descriptor, commands, flags):
         provider = descriptor['tools'][role]['provider']
         _require(descriptor['history'][provider]['kind'] == 'source-build',
                  'GNU prerequisites must be accepted source builds: ' + role)
+    if plan['stage'] == 'gmake-bootstrap':
+        provider = descriptor['tools']['sh']['provider']
+        _require(descriptor['providers'][provider]['origin'] == descriptor['history'][provider]['kind'] == 'source-build',
+                 'GNU make bootstrap requires an accepted source-built shell')
     _require(entry(os.path.join(plan['work_root'], 'missing.txt')) is None, 'GNU missing-file control already exists')
     _require(plan['commands'] == gnu_steps(plan, descriptor, commands, flags),
              'GNU command differs from the fixed source-owned configure/make route')
