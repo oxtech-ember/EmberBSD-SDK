@@ -4,6 +4,7 @@
 
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -33,6 +34,8 @@ class ReleaseTests(unittest.TestCase):
             root.mkdir()
             self.repos[name] = root
             self.git(name, 'init', '-q')
+            # Global excludes must not hide source files in these Git fixtures.
+            self.git(name, 'config', 'core.excludesFile', os.devnull)
             self.git(name, 'config', 'user.name', 'Release Test')
             self.git(name, 'config', 'user.email', 'release@example.invalid')
             (root / 'source').write_text(name, encoding='utf-8')
