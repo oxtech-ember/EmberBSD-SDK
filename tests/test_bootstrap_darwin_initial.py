@@ -120,6 +120,33 @@ class InitialDarwinTests(unittest.TestCase):
         self.assertNotIn('gcc16-compare', [row['id'] for row in steps])
         self.assertEqual(set(case.plan['recipes']), {'lang/gcc16', 'devel/cmake', 'lang/llvm', 'devel/lld'})
 
+    def test_initial_plan_passes_the_existing_complete_source_and_command_gate(self):
+        case = self.initial_recipe()
+        export = case.fixture.export
+        original = export / 'lang/gcc16'
+        members = snapshot_tree(str(original))
+        for name, row in case.plan['recipes'].items():
+            root = export / name
+            if root != original:
+                for relative, item in members.items():
+                    path = root / relative
+                    if item['kind'] == 'directory':
+                        path.mkdir(parents=True, exist_ok=True)
+                    else:
+                        self.assertEqual(item['kind'], 'file')
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes((original / relative).read_bytes())
+            row['inventory'] = case.f.document(snapshot_tree(str(root)))
+        inventory = case.f.document(snapshot_tree(str(export)))
+        case.fixture.proof['inventory'] = inventory
+        case.plan['metadata']['export'].update(inventory=inventory,
+            source_proof=case.f.document(case.fixture.proof))
+        case.plan['ports_export'] = dict(source=case.descriptor['sources']['ports'],
+                                         **case.plan['metadata']['export'])
+        case.refresh()
+        with patch('subprocess.Popen', side_effect=AssertionError('no child')):
+            self.assertEqual(case.validate(), case.plan)
+
     def test_initial_purpose_cannot_leak_into_full_phase(self):
         case = self.initial_recipe()
         case.plan['metadata']['darwin_tool_phase'] = 'full'
