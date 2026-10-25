@@ -9,7 +9,9 @@ import json
 from pathlib import Path
 import tarfile
 
-from emberbsd_sdk.libelf import BASE_PREFIX, BASE_REPOSITORY, BASE_TREE_IDS, RECIPE
+from emberbsd_sdk.libelf import (BASE_PREFIX, BASE_REPOSITORY, BASE_TREE_IDS,
+                                 PACKAGING_OVERRIDES, RECIPE,
+                                 SOURCE_HEADER_OVERRIDES)
 
 DISTNAME = 'elftoolchain-0.7.1'
 URL = ('https://downloads.sourceforge.net/project/elftoolchain/'
@@ -36,7 +38,8 @@ def _added(path, data):
             b''.join(b'+' + line for line in data.splitlines(keepends=True)))
 
 
-def recipe_fixture(ports, archive, *, bad_member=None, bad_type=None):
+def recipe_fixture(ports, archive, *, bad_member=None, bad_type=None,
+                   source_header_overrides=True):
     recipe = Path(ports, RECIPE)
     (recipe / 'patches').mkdir(parents=True)
     (recipe / 'files').mkdir()
@@ -58,7 +61,8 @@ PKG_FAIL_REASON+= "EmberBSD base provides libelf. Rebuild the base from this Por
     original = {
         'common/Makefile': b'common upstream\n',
         'common/elf.h': b'elf header upstream\n',
-        'common/sys/elfdefinitions.m4': b'm4 upstream\n',
+        'common/sys/elfconstants.m4': b'elf constants upstream\n',
+        'common/sys/elfdefinitions.m4': b'elf definitions upstream\n',
         'libelf/Makefile': b'libelf make upstream\n',
         'libelf/Version.map': b'version map upstream\n',
         'libelf/libelf.c': b'libelf source upstream\n',
@@ -68,7 +72,8 @@ PKG_FAIL_REASON+= "EmberBSD base provides libelf. Rebuild the base from this Por
     output = {
         'common/Makefile': b'common patched\n',
         'common/elf.h': b'elf header patched\n',
-        'common/sys/elfdefinitions.m4': b'm4 patched\n',
+        'common/sys/elfconstants.m4': b"define(`STN_UNDEF', 0)\n",
+        'common/sys/elfdefinitions.m4': b'elf definitions patched\n',
         'common/sys/generated.m4': b'new generated source\n',
         'libelf/Makefile': b'libelf ABI2 Makefile\n',
         'libelf/Version.map': b'ELF_1.0 { global: elf_getversion; };\n',
@@ -95,6 +100,7 @@ PKG_FAIL_REASON+= "EmberBSD base provides libelf. Rebuild the base from this Por
         'patch-00-bsd-libelf-common': (
             _unified('common/Makefile', original['common/Makefile'], output['common/Makefile']) +
             _unified('common/elf.h', original['common/elf.h'], output['common/elf.h']) +
+            _unified('common/sys/elfconstants.m4', original['common/sys/elfconstants.m4'], output['common/sys/elfconstants.m4']) +
             _unified('common/sys/elfdefinitions.m4', original['common/sys/elfdefinitions.m4'], output['common/sys/elfdefinitions.m4']) +
             _removed('common/native-elf-format', original['common/native-elf-format']) +
             _removed('common/os.Linux.mk', original['common/os.Linux.mk']) +
@@ -104,15 +110,18 @@ PKG_FAIL_REASON+= "EmberBSD base provides libelf. Rebuild the base from this Por
         'patch-libelf_source': _unified('libelf/libelf.c', original['libelf/libelf.c'], output['libelf/libelf.c']),
     }
     archive_bytes = Path(archive).read_bytes()
+    overridden = set(PACKAGING_OVERRIDES)
+    if source_header_overrides:
+        overridden.update(SOURCE_HEADER_OVERRIDES)
     files = {}
     for name, data in output.items():
-        if name in ('libelf/Makefile', 'libelf/Version.map'):
+        if name in overridden:
             base = original[name]
             files[name] = dict(mode=0o644, size=len(base), sha256=hashlib.sha256(base).hexdigest())
         else:
             files[name] = dict(mode=0o644, size=len(data), sha256=hashlib.sha256(data).hexdigest())
     overrides = {}
-    for name in ('libelf/Makefile', 'libelf/Version.map'):
+    for name in sorted(overridden):
         data = output[name]
         overrides[name] = dict(mode=0o644, size=len(data), sha256=hashlib.sha256(data).hexdigest(),
                                base_sha256=files[name]['sha256'], reason='portable native ABI contract')

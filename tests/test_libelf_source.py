@@ -16,8 +16,8 @@ from test_core import TemporaryCase
 from libelf_fixture import RECIPE, recipe_fixture
 from emberbsd_sdk import jsonio
 from emberbsd_sdk.errors import SDKError
-from emberbsd_sdk.libelf import (MANIFEST, RECEIPT, prepare_source,
-                                 validate_identity, validate_source)
+from emberbsd_sdk.libelf import (MANIFEST, RECEIPT, SOURCE_HEADER_OVERRIDES,
+                                 prepare_source, validate_identity, validate_source)
 
 
 class LibelfSourceTests(TemporaryCase):
@@ -48,6 +48,10 @@ class LibelfSourceTests(TemporaryCase):
         self.assertEqual((self.output / 'common/Makefile').read_bytes(), b'common patched\n')
         self.assertEqual((self.output / 'common/sys/generated.m4').read_bytes(),
                          b'new generated source\n')
+        self.assertEqual((self.output / 'common/sys/elfconstants.m4').read_bytes(),
+                         b"define(`STN_UNDEF', 0)\n")
+        self.assertEqual((self.output / 'common/sys/elfdefinitions.m4').read_bytes(),
+                         b'elf definitions patched\n')
         self.assertFalse((self.output / 'common/native-elf-format').exists())
         self.assertFalse((self.output / 'common/os.Linux.mk').exists())
         self.assertEqual((self.output / 'libelf/Makefile').read_bytes(), b'libelf ABI2 Makefile\n')
@@ -226,14 +230,24 @@ class LibelfSourceTests(TemporaryCase):
     def test_manifest_override_must_bind_base_and_supported_paths(self):
         manifest_path = self.ports / MANIFEST
         original = json.loads(manifest_path.read_text())
-        manifest = copy.deepcopy(original)
-        manifest['packaging_overrides']['libelf/Makefile']['base_sha256'] = '0' * 64
-        manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
-        self.commit()
-        with self.assertRaisesRegex(SDKError, 'packaging override'):
-            self.prepare()
+        for name in ('libelf/Makefile', *sorted(SOURCE_HEADER_OVERRIDES)):
+            with self.subTest(bad_base=name):
+                manifest = copy.deepcopy(original)
+                manifest['packaging_overrides'][name]['base_sha256'] = '0' * 64
+                manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
+                self.commit()
+                with self.assertRaisesRegex(SDKError, 'packaging override'):
+                    self.prepare()
         manifest_path.write_text(json.dumps(original, indent=2) + '\n')
         self.commit()
+        for name in sorted(SOURCE_HEADER_OVERRIDES):
+            with self.subTest(partial=name):
+                manifest = copy.deepcopy(original)
+                del manifest['packaging_overrides'][name]
+                manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
+                self.commit()
+                with self.assertRaisesRegex(SDKError, 'override set'):
+                    self.prepare()
         manifest = copy.deepcopy(original)
         manifest['packaging_overrides']['libelf/unreviewed.c'] = dict(
             mode=0o644, size=0, sha256='0' * 64, base_sha256='0' * 64,
@@ -242,6 +256,21 @@ class LibelfSourceTests(TemporaryCase):
         self.commit()
         with self.assertRaisesRegex(SDKError, 'override set'):
             self.prepare()
+
+    def test_legacy_two_path_override_manifest_remains_supported(self):
+        manifest_path = self.ports / MANIFEST
+        manifest = json.loads(manifest_path.read_text())
+        for name in SOURCE_HEADER_OVERRIDES:
+            row = manifest['packaging_overrides'].pop(name)
+            manifest['files'][name] = {
+                key: row[key] for key in ('size', 'mode', 'sha256')
+            }
+        manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
+        self.commit()
+        record = self.prepare()
+        self.assertEqual(record, validate_source(self.output, ports=self.ports))
+        self.assertEqual((self.output / 'common/sys/elfconstants.m4').read_bytes(),
+                         b"define(`STN_UNDEF', 0)\n")
 
     def test_unsafe_archive_members_are_refused(self):
         import shutil

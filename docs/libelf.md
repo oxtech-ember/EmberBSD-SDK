@@ -41,8 +41,12 @@ patches in lexical order. It rejects custom extraction or source-changing
 hooks, alternate archives, unsupported recipe variables, unsafe paths,
 links, special files and unexpected source files. The manifest binds the
 expected `common/` and `libelf/` contents to the recorded EmberBSD base
-revision. The two recipe-owned packaging overrides retain their base hashes
-and state their reason.
+revision. The manifest accepts the historical pair of recipe-owned packaging
+overrides for `libelf/Makefile` and `libelf/Version.map`. It also accepts that
+pair with both source-header constants overrides, `common/sys/elfconstants.m4`
+and `common/sys/elfdefinitions.m4`. Each override retains its base hash and
+states its reason. The source-header entries are accepted only as a complete
+pair; other override paths are rejected.
 
 Patch application uses BSD patch options and sends any backup files to a fresh
 temporary directory for that patch. The temporary directory is outside the

@@ -28,7 +28,14 @@ BASE_TREE_IDS = {
     'common': '598ff3ac00acdcec17cda0ec326681b3ee24ab8c',
     'libelf': 'cfd8db242562d5f3e716aabe5499539bd25d52d8',
 }
-PACKAGING_OVERRIDES = {'libelf/Makefile', 'libelf/Version.map'}
+PACKAGING_OVERRIDES = frozenset({'libelf/Makefile', 'libelf/Version.map'})
+SOURCE_HEADER_OVERRIDES = frozenset({
+    'common/sys/elfconstants.m4', 'common/sys/elfdefinitions.m4',
+})
+SUPPORTED_OVERRIDE_SETS = (
+    PACKAGING_OVERRIDES,
+    PACKAGING_OVERRIDES | SOURCE_HEADER_OVERRIDES,
+)
 MAX_ARCHIVE_SIZE = 64 * 1024 * 1024
 
 
@@ -112,7 +119,8 @@ def _manifest(root):
              'base-source manifest must cover common and libelf')
 
     overrides = value['packaging_overrides']
-    _require(isinstance(overrides, dict) and set(overrides) == PACKAGING_OVERRIDES,
+    _require(isinstance(overrides, dict) and
+             any(set(overrides) == supported for supported in SUPPORTED_OVERRIDE_SETS),
              'unsupported elftoolchain packaging override set')
     expected = dict(files)
     for name, row in overrides.items():
