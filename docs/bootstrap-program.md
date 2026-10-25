@@ -1,7 +1,7 @@
 # Fixed direct-source bootstrap programs
 
-These finite profiles build initial grep, cmp, or hostname from OS-owned contracts.
-It admits only an independently accepted seed and exact plan.
+These finite profiles build initial grep, cmp, hostname, basename and dirname from OS-owned contracts.
+They admit only an independently accepted seed and exact plan.
 It does not qualify a provider or bypass ordinary NativeToolset admission.
 It needs no completed package dependency graph or future build output.
 Origin: EmberBSD (AI-assisted). The OS retains its source licenses and authors.
@@ -21,8 +21,9 @@ The SDK constructs commands from that data. It does not copy a recipe.
 ## Accepted inputs
 
 The plan format is `emberbsd-native-gcc16-producer-plan`, version 1,
-scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`, and
-`hostname-bootstrap`. Each stage selects one exact source-owner manifest.
+scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`,
+`hostname-bootstrap`, `basename-bootstrap`, and `dirname-bootstrap`.
+Each stage selects one exact source-owner manifest.
 It has exactly `format`, `version`, `scope`, `stage`, `seed_descriptor`, `host`,
 `sources`, `work_root`, `required_roles`, `resources`, `program`, and `commands`.
 The host and all source pins repeat the seed descriptor.
@@ -133,6 +134,47 @@ Both profiles use the same source inventory and Git blob proof checks as grep.
 They add no aliases, C++ compiler requirement, compatibility library, custom flags,
 or provider qualification. Their initial use requires the declared host libc
 interfaces. These fixed contracts do not establish support on another host OS.
+
+## Fixed basename and dirname profiles
+
+Each profile uses one existing C implementation and the shared annotation header.
+Their manifests are `tools/basename/bootstrap.json` and `tools/dirname/bootstrap.json`.
+The respective SHA256 values are:
+
+- `28d250d01b132c2fab6619094ebd2a00862baafb3610d759a0d84ad53874bd46`.
+- `581b5d3fced84f25c3b185de626ff78a7eb45009c01b916a255438655ba1dd47`.
+
+For either name, the complete source roster has seven regular files:
+
+- `tools/<name>/Makefile`, `README.md`, and `bootstrap.json`.
+- `tools/Makefile.host` and `tools/compat/bootstrap_cdefs.h`.
+- `usr.bin/<name>/Makefile` and `<name>.c`.
+
+The accepted native libc supplies the path function, `getopt`, `err` and locale APIs.
+No configure step, generated source or extra library is selected.
+The same forced-header compile and one-object link route applies.
+The runner then checks 14 basename cases or 11 dirname cases.
+They cover empty, root, repeated-slash, trailing-slash and ordinary paths,
+option termination, missing operands, excess operands and invalid options.
+Basename also checks matching, absent, complete-name and empty suffixes.
+Dirname checks the dot path. Outputs and exits come from the fixed source contract.
+A system utility never computes the expected output.
+
+The final runtime observation passes `/usr/file` to the owned program.
+This is a path string; the program does not open it.
+The resulting plans have 17 and 14 commands, respectively.
+The source, argv, environment, separate streams and pending-qualification checks
+are shared with the other direct-source profiles.
+
+Run the source-owner consistency check against an explicit OS checkout:
+
+```sh
+EMBERBSD_TEST_OS_SOURCE=/absolute/os python3 -B -m unittest discover \
+    -s tests -p test_bootstrap_program_native.py
+```
+
+This checks manifests, source rosters and links. It runs no native compiler.
+Actual compilation, source analysis and runtime acceptance remain separate.
 
 ## Common execution and evidence
 

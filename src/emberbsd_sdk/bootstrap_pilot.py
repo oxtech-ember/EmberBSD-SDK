@@ -177,7 +177,7 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
          bootstrap_plan, required_roles, profile):
     from .bootstrap_make import MAKE_PROBE_FORMAT, make_probe_sources, verify_make_step
     from .bootstrap_producer import PRODUCER_FORMAT, metadata_paths
-    from .bootstrap_program import program_outputs, program_sources, verify_program_step
+    from .bootstrap_program import PROGRAM_STAGES, program_outputs, program_sources, verify_program_step
     from .bootstrap_gnu_program import GNU_PROGRAM_STAGES, prepare_gnu_work
     from .bootstrap_bsdinstall import prepare_bsdinstall_work
     from .bootstrap_pkg_install import prepare_pkg_install_work
@@ -198,7 +198,7 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     bsdinstall = profile == 'producer' and plan.get('stage') == 'bsdinstall-bootstrap'
     pkg_install = profile == 'producer' and plan.get('stage') == 'pkg-install-bootstrap'
     program = profile == 'producer' and (gnu_program or bsdinstall or pkg_install or plan.get('stage') in
-                                        ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap'))
+                                        PROGRAM_STAGES)
     relocation = profile == 'producer' and plan.get('stage') == 'utility-relocation'
     recipe = profile == 'bootstrap'
     if relocation:

@@ -371,10 +371,10 @@ def validate_producer_plan(plan, descriptor, commands, flags):
     if plan.get('stage') == 'utility-relocation':
         from .bootstrap_relocation import validate_relocation_plan
         return validate_relocation_plan(plan, descriptor, commands, flags)
-    if plan.get('stage') in ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
-                            'diffutils-bootstrap', 'findutils-bootstrap', 'bsdinstall-bootstrap',
-                            'pkg-install-bootstrap'):
-        from .bootstrap_program import validate_program_plan
+    from .bootstrap_program import PROGRAM_STAGES, validate_program_plan
+    from .bootstrap_gnu_program import GNU_PROGRAM_STAGES
+    if plan.get('stage') in (*PROGRAM_STAGES, *GNU_PROGRAM_STAGES,
+                            'bsdinstall-bootstrap', 'pkg-install-bootstrap'):
         return validate_program_plan(plan, descriptor, commands, flags)
     _envelope(plan, PRODUCER_FORMAT, scope='gcc16-bootstrap')
     _require(set(plan) == {'format', 'version', 'scope', 'stage', 'seed_descriptor', 'host', 'sources',

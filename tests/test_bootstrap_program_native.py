@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import re
 import shutil
 import unittest
 from unittest.mock import patch
@@ -17,6 +18,34 @@ import test_bootstrap_program as fixtures
 from emberbsd_sdk import bootstrap_program as program
 from emberbsd_sdk.bootstrap_seed import _plan
 from emberbsd_sdk.errors import ProcessOwnershipError, SDKError
+
+
+def path_cases(name):
+    """Independent semantic expectations; no basename or dirname is executed."""
+    normal = 'file' if name == 'basename' else '/usr'
+    tails = [
+        ('normal', ['/usr/file'], normal + '\n'),
+        ('empty', [''], '\n' if name == 'basename' else '.\n'),
+        ('root', ['/'], '/\n'),
+        ('slashes', ['///'], '/\n'),
+        ('trailing-slash', ['/usr/bin/'], 'bin\n' if name == 'basename' else '/usr\n'),
+        ('no-directory', ['file'], 'file\n' if name == 'basename' else '.\n'),
+        ('option-terminator', ['--', '-file'], '-file\n' if name == 'basename' else '.\n')]
+    if name == 'basename':
+        tails += [('suffix', ['/usr/file.txt', '.txt'], 'file\n'),
+                  ('other-suffix', ['file.txt', '.c'], 'file.txt\n'),
+                  ('whole-suffix', ['file', 'file'], 'file\n'),
+                  ('empty-suffix', ['file', ''], 'file\n')]
+    else:
+        tails += [('dot', ['.'], '.\n')]
+    result = [dict(name=case, invocation=name, args=args, stdin='', exit=0, stdout=out, stderr='')
+              for case, args, out in tails]
+    for case, args in [('missing-operand', []),
+                       ('extra-operands', ['one', 'two', 'three'] if name == 'basename' else ['one', 'two']),
+                       ('invalid-option', ['-z'])]:
+        result.append(dict(name=case, invocation=name, args=args, stdin='', exit=1,
+                           stdout='', stderr_nonempty=True))
+    return result
 
 
 class NativeProgramTests(unittest.TestCase):
@@ -32,7 +61,7 @@ class NativeProgramTests(unittest.TestCase):
         case.plan['stage'] = name + '-bootstrap'
         relative, _, sources, provenance = program._profile(case.plan)
         case.manifest.update(name=name, canonical_host_recipe='tools/' + name + '/Makefile',
-            source_makefile=('usr.bin/cmp' if name == 'cmp' else 'bin/hostname') + '/Makefile',
+            source_makefile=('bin/hostname' if name == 'hostname' else 'usr.bin/' + name) + '/Makefile',
             sources=list(sources),
             headers=(['usr.bin/cmp/extern.h'] if name == 'cmp' else []) + [program._BOOTSTRAP_CDEFS],
             include_dirs=['usr.bin/cmp'] if name == 'cmp' else [],
@@ -46,6 +75,8 @@ class NativeProgramTests(unittest.TestCase):
                            stdin='', exit=0 if index == 0 else 1 if index == 1 else 2, stdout='')
                 row.update(dict(stderr='') if index < 2 else dict(stderr_nonempty=True))
                 case.manifest['runtime_cases'].append(row)
+        elif name in ('basename', 'dirname'):
+            case.manifest['runtime_cases'] = path_cases(name)
         else:
             case.manifest['runtime_cases'] = [
                 dict(name='read-hostname', invocation='hostname', args=[], stdin='', exit=0,
@@ -144,6 +175,108 @@ class NativeProgramTests(unittest.TestCase):
                 # Each subtest needs a fresh work path.
                 self.case.work = self.case.base / 'hostname-work'
                 self.case.plan['work_root'] = str(self.case.work)
+
+    @unittest.skipUnless(os.environ.get('EMBERBSD_TEST_OS_SOURCE'),
+                         'set EMBERBSD_TEST_OS_SOURCE for source-owner consistency')
+    def test_path_manifests_match_explicit_os_source(self):
+        root = Path(os.environ['EMBERBSD_TEST_OS_SOURCE']).resolve(strict=True)
+        for name in ('basename', 'dirname'):
+            with self.subTest(name=name):
+                relative, digest, sources, provenance = program._profile({'stage': name + '-bootstrap'})
+                raw = (root / relative).read_bytes()
+                self.assertEqual(hashlib.sha256(raw).hexdigest(), digest)
+                manifest = json.loads(raw)
+                program._native_program_contract(manifest, name)
+                self.assertEqual(manifest['runtime_cases'], path_cases(name))
+                for member in (*sources, *manifest['headers'], *provenance):
+                    self.assertTrue((root / member).is_file(), member)
+                    self.assertFalse((root / member).is_symlink(), member)
+                recipe = (root / manifest['canonical_host_recipe']).read_text()
+                self.assertRegex(recipe, r'HOST_SRCDIR=\s*usr.bin/' + name + r'\n')
+                self.assertRegex(recipe, r'NOCOMPATLIB=\s*yes\n')
+                self.assertIn('-include ${NETBSDSRCDIR}/' + program._BOOTSTRAP_CDEFS, recipe)
+                readme = root / ('tools/' + name + '/README.md')
+                for target in re.findall(r'\]\(([^)]+)\)', readme.read_text()):
+                    self.assertTrue((readme.parent / target).exists(), target)
+
+    def test_path_programs_use_existing_plan_and_runner(self):
+        for name in ('basename', 'dirname'):
+            with self.subTest(name=name):
+                self.assertIn(name + '-bootstrap', program.PROGRAM_STAGES)
+                self.configure(name)
+                case = self.case
+                self.assertIs(case.validate(), case.plan)
+                self.assertEqual(_plan(case.f.document(case.plan), case.descriptor,
+                                       case.commands, case.flags), case.plan)
+                steps = case.plan['commands']
+                self.assertEqual(len(steps), len(path_cases(name)) + 3)
+                self.assertEqual(steps[0]['argv'][-4:],
+                    ['-c', str(case.source / ('usr.bin/' + name + '/' + name + '.c')),
+                     '-o', str(case.work / (name + '.o'))])
+                self.assertEqual(steps[-1]['argv'], [str(case.work / name), '/usr/file'])
+                self.assertEqual(program.program_sources(case.plan), {})
+                with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=self.fake_command) as run:
+                    result = case.invoke()
+                self.assertEqual(run.call_count, len(steps))
+                self.assertEqual(result['status'], 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW')
+                self.assertFalse(result['ordinary_provider_qualified'])
+                self.assertTrue(result['inputs_revalidated_after_drain'] and result['all_leases_closed'])
+                case.work = case.base / (name + '-next-work')
+                case.plan['work_root'] = str(case.work)
+
+    def test_path_program_contract_and_output_changes_refuse(self):
+        for name in ('basename', 'dirname'):
+            self.configure(name)
+            original = copy.deepcopy(self.case.manifest)
+            for field in ('args', 'stdout', 'exit', 'cases', 'flags', 'sources', 'files'):
+                with self.subTest(name=name, field=field):
+                    self.case.manifest = copy.deepcopy(original)
+                    if field in ('args', 'stdout', 'exit'):
+                        self.case.manifest['runtime_cases'][0][field] = {'args': ['unexpected'],
+                            'stdout': 'wrong\n', 'exit': 1}[field]
+                    elif field == 'cases':
+                        self.case.manifest['runtime_cases'].pop()
+                    elif field == 'flags':
+                        self.case.manifest['cflags'] = ['-w']
+                    elif field == 'sources':
+                        self.case.manifest['sources'] += ['unowned.c']
+                    else:
+                        self.case.manifest['files'] = {'unneeded': 'data'}
+                    with self.assertRaises(SDKError):
+                        self.refresh_manifest(name)
+            self.case.manifest = copy.deepcopy(original)
+            self.refresh_manifest(name)
+            self.case.work.mkdir(exist_ok=True)
+            row = original['runtime_cases'][0]
+            step = next(s for s in self.case.plan['commands'] if s['id'] == 'case-' + row['name'])
+            (self.case.work / (row['name'] + '.stdout')).write_text('wrong\n')
+            (self.case.work / (row['name'] + '.stderr')).write_text('')
+            with self.assertRaisesRegex(SDKError, 'actual stdout'):
+                program.verify_program_step(step, str(self.case.work), self.case.plan)
+
+    def test_path_source_and_route_changes_refuse_before_child(self):
+        for name in ('basename', 'dirname'):
+            self.configure(name)
+            for change in ('header', 'argv', 'env'):
+                with self.subTest(name=name, change=change):
+                    original = copy.deepcopy(self.case.plan)
+                    header = self.case.source / program._BOOTSTRAP_CDEFS
+                    raw = header.read_bytes()
+                    if change == 'header':
+                        header.write_bytes(b'changed')
+                    elif change == 'argv':
+                        self.case.plan['commands'][-1]['argv'].append('extra')
+                    else:
+                        self.case.plan['commands'][0]['env']['PATH'] += ':/bin'
+                    with patch('emberbsd_sdk.bootstrap_pilot.run_logged') as run:
+                        with self.assertRaises(SDKError):
+                            self.case.invoke()
+                    run.assert_not_called()
+                    self.assertFalse(self.case.work.exists())
+                    header.write_bytes(raw)
+                    self.case.plan.clear()
+                    self.case.plan.update(original)
+                    self.case.inputs = self.case.plan['program']['source']
 
     def test_hostname_setter_tails_and_nonfixed_sentinels_refuse(self):
         self.configure('hostname')

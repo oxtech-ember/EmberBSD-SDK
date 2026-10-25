@@ -19,12 +19,45 @@ MANIFEST_RELATIVE = 'tools/grep/bootstrap.json'
 MANIFEST_SHA256 = 'cdb8f56fd1107b1cc9ccdbe4cc352599e8575b7984f3c6b6a074426c71e56d3e'
 _SOURCES = tuple('usr.bin/grep/' + name + '.c' for name in ('fastgrep', 'file', 'grep', 'queue', 'util'))
 _PROVENANCE = ('tools/grep/Makefile', 'tools/Makefile.host', 'usr.bin/grep/Makefile', 'tools/grep/README.md')
-PROGRAM_STAGES = ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap')
+PROGRAM_STAGES = ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
+                  'basename-bootstrap', 'dirname-bootstrap')
 CMP_MANIFEST_SHA256 = 'a3267d3387b08780fb1e372f5a742dccd9faa84568292506d3389f35e869ad56'
 HOSTNAME_MANIFEST_SHA256 = '32450fa3c2d68e63c13f1d32795f4d3e14cab8b5beac909ee27242cef279750d'
 _CMP_SOURCES = tuple('usr.bin/cmp/' + name + '.c' for name in ('cmp', 'misc', 'regular', 'special'))
 _HOSTNAME_SOURCES = ('bin/hostname/hostname.c',)
 _BOOTSTRAP_CDEFS = 'tools/compat/bootstrap_cdefs.h'
+BASENAME_MANIFEST_SHA256 = '28d250d01b132c2fab6619094ebd2a00862baafb3610d759a0d84ad53874bd46'
+DIRNAME_MANIFEST_SHA256 = '581b5d3fced84f25c3b185de626ff78a7eb45009c01b916a255438655ba1dd47'
+_NATIVE_DIRECTORIES = {'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
+                       'basename': 'usr.bin/basename', 'dirname': 'usr.bin/dirname'}
+_NATIVE_SOURCES = {'cmp': _CMP_SOURCES, 'hostname': _HOSTNAME_SOURCES,
+                   **{name: ('usr.bin/' + name + '/' + name + '.c',)
+                      for name in ('basename', 'dirname')}}
+_RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
+                 'hostname': (), 'basename': ('/usr/file',), 'dirname': ('/usr/file',)}
+
+
+def _path_cases(name):
+    """Recognize the fixed source-owner path cases without running a utility."""
+    basename = name == 'basename'
+    rows = [('normal', ['/usr/file'], 'file' if basename else '/usr'),
+            ('empty', [''], '' if basename else '.'),
+            ('root', ['/'], '/'), ('slashes', ['///'], '/'),
+            ('trailing-slash', ['/usr/bin/'], 'bin' if basename else '/usr'),
+            ('no-directory', ['file'], 'file' if basename else '.'),
+            ('option-terminator', ['--', '-file'], '-file' if basename else '.')]
+    rows += ([('suffix', ['/usr/file.txt', '.txt'], 'file'),
+              ('other-suffix', ['file.txt', '.c'], 'file.txt'),
+              ('whole-suffix', ['file', 'file'], 'file'),
+              ('empty-suffix', ['file', ''], 'file')] if basename else [('dot', ['.'], '.')])
+    cases = [dict(name=case, invocation=name, args=args, stdin='', exit=0, stdout=out + '\n', stderr='')
+             for case, args, out in rows]
+    cases += [dict(name=case, invocation=name, args=args, stdin='', exit=1,
+                   stdout='', stderr_nonempty=True)
+              for case, args in [('missing-operand', []),
+                ('extra-operands', ['one', 'two', 'three'] if basename else ['one', 'two']),
+                ('invalid-option', ['-z'])]]
+    return cases
 
 
 def _profile(plan):
@@ -32,18 +65,19 @@ def _profile(plan):
     _require(stage in PROGRAM_STAGES, 'unsupported direct-source bootstrap program stage')
     if stage == 'grep-bootstrap':
         return MANIFEST_RELATIVE, MANIFEST_SHA256, _SOURCES, _PROVENANCE
-    name = 'cmp' if stage == 'cmp-bootstrap' else 'hostname'
-    directory = 'usr.bin/cmp' if name == 'cmp' else 'bin/hostname'
+    name = stage.removesuffix('-bootstrap')
+    directory = _NATIVE_DIRECTORIES[name]
+    digest = {'cmp': CMP_MANIFEST_SHA256, 'hostname': HOSTNAME_MANIFEST_SHA256,
+              'basename': BASENAME_MANIFEST_SHA256, 'dirname': DIRNAME_MANIFEST_SHA256}[name]
     return ('tools/' + name + '/bootstrap.json',
-            CMP_MANIFEST_SHA256 if name == 'cmp' else HOSTNAME_MANIFEST_SHA256,
-            _CMP_SOURCES if name == 'cmp' else _HOSTNAME_SOURCES,
+            digest, _NATIVE_SOURCES[name],
             ('tools/' + name + '/Makefile', 'tools/Makefile.host', directory + '/Makefile',
              'tools/' + name + '/README.md'))
 
 
 def _native_program_contract(manifest, name):
     cmp = name == 'cmp'
-    directory = 'usr.bin/cmp' if cmp else 'bin/hostname'
+    directory = _NATIVE_DIRECTORIES[name]
     _require(set(manifest) == {'format', 'version', 'name', 'origin', 'canonical_host_recipe', 'source_makefile',
         'compiler', 'sources', 'headers', 'include_dirs', 'cppflags', 'cflags', 'link_flags', 'libraries',
         'invocations', 'files', 'runtime_cases'} and manifest['format'] == 'emberbsd-native-bootstrap-program' and
@@ -51,7 +85,7 @@ def _native_program_contract(manifest, name):
         manifest['canonical_host_recipe'] == 'tools/' + name + '/Makefile' and
         manifest['source_makefile'] == directory + '/Makefile' and
         manifest['compiler'] == dict(family='gcc', major=16, abi='native') and
-        manifest['sources'] == list(_CMP_SOURCES if cmp else _HOSTNAME_SOURCES) and
+        manifest['sources'] == list(_NATIVE_SOURCES[name]) and
         manifest['headers'] == (['usr.bin/cmp/extern.h', _BOOTSTRAP_CDEFS] if cmp else [_BOOTSTRAP_CDEFS]) and
         manifest['include_dirs'] == (['usr.bin/cmp'] if cmp else []) and
         manifest['cppflags'] == ['-include', _BOOTSTRAP_CDEFS] and
@@ -63,6 +97,9 @@ def _native_program_contract(manifest, name):
                  len(manifest['runtime_cases']) == 18 and
                  all(case['invocation'] == 'cmp' and 'stdout_nonempty' not in case
                      for case in manifest['runtime_cases']), 'unsupported fixed cmp semantic cases')
+    elif name in ('basename', 'dirname'):
+        _require(manifest['files'] == {} and manifest['runtime_cases'] == _path_cases(name),
+                 'unsupported fixed ' + name + ' semantic cases')
     else:
         # These are the only accepted tails. No hostname operand can reach a child.
         _require(manifest['files'] == {} and manifest['runtime_cases'] == [
@@ -90,7 +127,7 @@ def program_manifest(plan):
              'unsupported source-owner bootstrap program manifest')
     manifest = _json(reference)
     if plan['stage'] != 'grep-bootstrap':
-        _native_program_contract(manifest, 'cmp' if plan['stage'] == 'cmp-bootstrap' else 'hostname')
+        _native_program_contract(manifest, plan['stage'].removesuffix('-bootstrap'))
         return manifest
     _require(set(manifest) == {'format', 'version', 'name', 'origin', 'canonical_host_recipe', 'source_makefile',
         'compiler', 'sources', 'headers', 'include_dirs', 'cppflags', 'cflags', 'link_flags', 'libraries',
@@ -167,8 +204,7 @@ def program_steps(plan, descriptor, commands, flags):
         result.append(dict(id='case-' + case['name'], phase='program-case', cwd=work, env=dict(env),
                            expected_exit=case['exit'], argv=[*commands['sh'], '-c', command]))
     observed = dict(env, DYLD_PRINT_LIBRARIES='1')
-    tail = ['-q', 'needle', 'input.txt'] if manifest['name'] == 'grep' else (
-        ['-s', 'same.txt', 'same.txt'] if manifest['name'] == 'cmp' else [])
+    tail = _RUNTIME_ARGS[manifest['name']]
     result.append(dict(id='runtime-observation', phase='run', cwd=work, env=observed, expected_exit=0,
                        argv=[os.path.join(work, manifest['name']), *tail]))
     return result

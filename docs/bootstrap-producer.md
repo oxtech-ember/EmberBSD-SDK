@@ -14,7 +14,8 @@ scope `gcc16-bootstrap`. It has exactly `format`, `version`, `scope`, `stage`,
 `seed_descriptor`, `host`, `sources`, `work_root`, `required_roles`, `resources`,
 `metadata`, and `commands`. This page describes `stage: metadata`.
 The separate [direct-source program profile](bootstrap-program.md) supports
-`stage: grep-bootstrap`, `cmp-bootstrap`, or `hostname-bootstrap` with its own
+`stage: grep-bootstrap`, `cmp-bootstrap`, `hostname-bootstrap`,
+`basename-bootstrap`, or `dirname-bootstrap` with its own
 finite input fields and commands.
 The [fixed initial GNU profiles](bootstrap-gnu-program.md) add
 `diffutils-bootstrap` and `findutils-bootstrap` through the same producer entry.
