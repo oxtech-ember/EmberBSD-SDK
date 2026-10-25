@@ -162,6 +162,24 @@ class ByaccContractTests(fixtures.ProgramTests):
         (self.work / 'parser.tab.c').write_bytes(b'changed parser\n')
         with self.assertRaises(SDKError): byacc.verify_byacc_history(self.plan, result)
 
+    def test_changed_generated_input_refuses_before_parser_compiler(self):
+        original = program.verify_program_step
+        seen = []
+        def verify(step, work, plan, **kwargs):
+            value = original(step, work, plan, **kwargs)
+            if step['id'] == 'regenerate':
+                (self.work / 'parser.tab.c').write_bytes(b'changed after regeneration\n')
+            return value
+        def child(argv, log, **kwargs):
+            seen.append(Path(log).stem)
+            return self.fake_command(argv, log, **kwargs)
+        with patch('emberbsd_sdk.bootstrap_program.verify_program_step', side_effect=verify), \
+             patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=child):
+            result = self.invoke()
+        self.assertEqual(result['status'], 'FAILED')
+        self.assertEqual(seen[-1], 'regenerate')
+        self.assertFalse((self.work / 'parser.o').exists())
+
     def test_changed_regeneration_stops_before_parser_compile(self):
         fake = self.fake_command
         def change(argv, log, **kwargs):

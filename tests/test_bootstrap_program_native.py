@@ -61,7 +61,7 @@ class NativeProgramTests(unittest.TestCase):
         case.plan['stage'] = name + '-bootstrap'
         relative, _, sources, provenance = program._profile(case.plan)
         case.manifest.update(name=name, canonical_host_recipe='tools/' + name + '/Makefile',
-            source_makefile=(('bin/' if name in ('hostname', 'cat', 'pwd', 'date') else 'usr.bin/') + name) + '/Makefile',
+            source_makefile=(('bin/' if name in ('hostname', 'cat', 'pwd', 'date', 'expr') else 'usr.bin/') + name) + '/Makefile',
             sources=list(sources),
             headers=(['usr.bin/' + name + '/extern.h'] if name in ('cmp', 'tr', 'tail') else []) + [program._BOOTSTRAP_CDEFS],
             include_dirs=['usr.bin/' + name] if name in ('cmp', 'tr', 'tail') else [],
@@ -76,6 +76,18 @@ class NativeProgramTests(unittest.TestCase):
             case.manifest['runtime_cases'][0]['stdout_identity'] = 'uid'
             case.manifest['runtime_cases'][-1]['invocation'] = 'whoami'
             case.manifest['runtime_cases'][-2]['invocation'] = 'groups'
+        elif name == 'expr':
+            path = case.f.bundle / 'yacc'
+            path.write_bytes(case.f.image)
+            path.chmod(0o755)
+            case.descriptor['tools']['yacc'] = dict(case.descriptor['tools']['sh'], path=str(path),
+                sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+            case.commands['yacc'] = (str(path),)
+            case.plan['required_roles'].append('yacc')
+            case.manifest.update(cflags=['-fwrapv'], generation=dict(tool='yacc', source='bin/expr/expr.y',
+                output='expr.c', arguments=['-o', 'expr.c']),
+                runtime_cases=[dict(name='case' + str(index), invocation=name, args=['7'], stdin='',
+                    exit=0, stdout='7\n', stderr='') for index in range(52)])
         elif name == 'date':
             case.manifest.update(headers=['bin/date/extern.h', program._BOOTSTRAP_CDEFS,
                                           'tools/compat/bootstrap/nbtool_config.h'],
@@ -158,6 +170,8 @@ class NativeProgramTests(unittest.TestCase):
 
     def fake_command(self, argv, log, **kwargs):
         case = self.case
+        if Path(log).stem == 'generate-expr':
+            (case.work / 'expr.c').write_bytes(b'synthetic generated parser\n')
         returned = case.fake_command(argv, log, **kwargs)
         if case.manifest['name'] == 'id' and Path(log).stem == 'case-case0':
             (case.work / 'case0.stdout').write_bytes(b'synthetic identity\n')

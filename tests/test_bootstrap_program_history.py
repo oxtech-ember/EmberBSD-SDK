@@ -119,6 +119,23 @@ class ProgramHistoryTests(unittest.TestCase):
         return _history({'os-basename': self.history}, self.descriptor['providers'],
                         descriptor=self.descriptor, inspect_inputs=inspect_inputs)
 
+    def test_expr_generated_source_is_required_without_reexecuting_yacc(self):
+        self.make_fixture('expr')
+        with patch('subprocess.Popen', side_effect=AssertionError('no historical generator')):
+            self.assertEqual(self.verify(), {'os-basename': []})
+        shutil.rmtree(self.case.f.bundle)
+        with patch('subprocess.Popen', side_effect=AssertionError('no retired generator')):
+            self.assertEqual(self.verify(), {'os-basename': []})
+        original = copy.deepcopy(self.result['commands'][0]['generated'])
+        for bad in ({}, {'expr.c': dict(original['expr.c'], sha256='0' * 64)}):
+            self.result['commands'][0]['generated'] = bad
+            with self.assertRaises(SDKError):
+                self.verify()
+        self.result['commands'][0]['generated'] = original
+        (self.case.work / 'expr.c').write_bytes(b'changed historical parser\n')
+        with self.assertRaises(SDKError):
+            self.verify()
+
     def test_git_history_preserves_the_old_source_pin_without_archives(self):
         with patch('subprocess.Popen', side_effect=AssertionError('history cannot start a process')):
             self.assertEqual(self.verify(), {'os-basename': []})

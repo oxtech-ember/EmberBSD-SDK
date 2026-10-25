@@ -134,6 +134,9 @@ def _commands(plan, result, manifest):
     if plan['stage'] == 'byacc-bootstrap':
         from .bootstrap_byacc import verify_byacc_history
         verify_byacc_history(plan, result)
+    else:
+        from .bootstrap_generated import verify_history
+        verify_history(plan, result)
     image = os.path.join(plan['work_root'], manifest['name'])
     link = next(row for row in actual if row['id'] == 'link-' + manifest['name'])
     _require(link['output'] == dict(path=image, sha256=outputs[manifest['name']]),

@@ -152,22 +152,10 @@ def verify_byacc_step(step, work, plan, actual_exit, completed):
         regular_file(path)
         _require(Path(path).read_bytes() == configuration_bytes(plan, completed),
                  'Byacc configuration changed after capability observation')
+    from .bootstrap_generated import after_step
+    generated = after_step(step, plan, actual_exit, completed)
     if step['phase'] == 'generator':
-        generated = {}
-        for name in manifest['generated']:
-            path = os.path.join(work, name)
-            regular_file(path)
-            _require(0 < Path(path).stat().st_size <= 2 * 1024 * 1024, 'Byacc generated output has invalid size')
-            generated[name] = dict(path=path, sha256=sha256_file(path))
-        if step['id'] == 'regenerate':
-            previous = next(row for row in completed if row['id'] == 'generate')
-            _require(generated == previous['generated'], 'Byacc generation is not byte reproducible')
-        return dict(generated=generated)
-    generated = next((row['generated'] for row in completed if row['id'] == 'regenerate'), None)
-    if generated is not None:
-        for reference in generated.values():
-            regular_file(reference['path'])
-            _bytes(reference)
+        return generated
     if step['phase'] != 'program-case':
         return {}
     case = next(row for row in manifest['runtime_cases'] if step['id'] == 'case-' + row['name'])
@@ -232,13 +220,8 @@ def verify_byacc_history(plan, result):
     config = next(row for row in rows if row['id'] == 'capability-run')['configuration_header']
     _require(config == dict(path=os.path.join(work, 'config.h'), sha256=outputs['config.h']) and
              _bytes(config) == configuration_bytes(plan, rows), 'historical Byacc capabilities differ')
-    first = next(row for row in rows if row['id'] == 'generate')['generated']
-    second = next(row for row in rows if row['id'] == 'regenerate')['generated']
-    _require(first == second and set(first) == set(byacc_manifest(plan)['generated']),
-             'historical Byacc regeneration differs')
-    for name, reference in first.items():
-        _require(reference == dict(path=os.path.join(work, name), sha256=outputs[name]) and bool(_bytes(reference)),
-                 'historical generated parser differs from recorded outputs')
+    from .bootstrap_generated import verify_history
+    verify_history(plan, result)
 
 
 def history_origins(plan):

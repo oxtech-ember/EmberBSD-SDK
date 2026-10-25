@@ -178,7 +178,7 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     from .bootstrap_make import MAKE_PROBE_FORMAT, make_probe_sources, verify_make_step
     from .bootstrap_producer import PRODUCER_FORMAT, metadata_paths
     from .bootstrap_program import (PROGRAM_STAGES, program_outputs, program_sources,
-                                    verify_program_step, program_step_exits)
+                                    verify_program_step, prepare_program_step, program_step_exits)
     from .bootstrap_gnu_program import GNU_PROGRAM_STAGES, prepare_gnu_work
     from .bootstrap_bsdinstall import prepare_bsdinstall_work
     from .bootstrap_pkg_install import prepare_pkg_install_work
@@ -322,6 +322,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                 expected_exits = (program_step_exits(step, plan) if program else
                                   (step['expected_exit'],) if make_probe else (0,))
                 try:
+                    if program:
+                        prepare_program_step(step, plan, result['commands'])
                     if step['phase'] == 'run':
                         _native_image(step['argv'][0], descriptor['host'])
                     heavy = ((recipe and 'link_control' not in plan) or step['phase'] in ('link', 'compat-probe-link') or

@@ -28,7 +28,7 @@ _SOURCES = tuple('usr.bin/grep/' + name + '.c' for name in ('fastgrep', 'file', 
 _PROVENANCE = ('tools/grep/Makefile', 'tools/Makefile.host', 'usr.bin/grep/Makefile', 'tools/grep/README.md')
 PROGRAM_STAGES = ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
                   'basename-bootstrap', 'dirname-bootstrap',
-                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap', 'env-bootstrap', 'uname-bootstrap', 'tail-bootstrap', 'sort-bootstrap', 'date-bootstrap', 'id-bootstrap')
+                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap', 'env-bootstrap', 'uname-bootstrap', 'tail-bootstrap', 'sort-bootstrap', 'date-bootstrap', 'id-bootstrap', 'expr-bootstrap')
 CMP_MANIFEST_SHA256 = 'a3267d3387b08780fb1e372f5a742dccd9faa84568292506d3389f35e869ad56'
 HOSTNAME_MANIFEST_SHA256 = '32450fa3c2d68e63c13f1d32795f4d3e14cab8b5beac909ee27242cef279750d'
 _CMP_SOURCES = tuple('usr.bin/cmp/' + name + '.c' for name in ('cmp', 'misc', 'regular', 'special'))
@@ -51,14 +51,15 @@ SORT_MANIFEST_SHA256 = 'ed61a6a5caae08acd3334bf5769f22df82930cc2a7fd4ae8cdfcf4ab
 DATE_MANIFEST_SHA256 = '51840761173803ca69439053d8ee5fa72c4b331d7cb6ddf729f54c9eb4cfd8c8'
 ID_MANIFEST_SHA256 = '7184d420bdd70778b1c290f028bc43df9441db16087657d06915c2b9d3fc2e55'
 _ID_GROUP_HEADER = 'common/include/libutil/compat_grouplist.h'
+EXPR_MANIFEST_SHA256 = '505c27cdc0db4b2d22b6f348559e91735bf723b1f47251d6e98fa3d979e71854'
 _NBTOOL_CONFIG = 'tools/compat/bootstrap/nbtool_config.h'
 _NATIVE_LOCAL_HEADERS = {'cmp': ('extern.h',), 'tr': ('extern.h',), 'tail': ('extern.h',),
                          'date': ('extern.h',), 'cut': ('x_cut.c',), 'sort': ('sort.h', 'fsort.h', 'pathnames.h')}
 _NATIVE_DIRECTORIES = {'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
                        'basename': 'usr.bin/basename', 'dirname': 'usr.bin/dirname',
                        'cat': 'bin/cat', 'head': 'usr.bin/head', 'uniq': 'usr.bin/uniq',
-                       'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut', 'env': 'usr.bin/env', 'uname': 'usr.bin/uname', 'tail': 'usr.bin/tail', 'sort': 'usr.bin/sort', 'date': 'bin/date', 'id': 'usr.bin/id'}
-_NATIVE_SOURCES = {'date': ('bin/date/date.c',), 'sort': (*('usr.bin/sort/' + name + '.c' for name in
+                       'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut', 'env': 'usr.bin/env', 'uname': 'usr.bin/uname', 'tail': 'usr.bin/tail', 'sort': 'usr.bin/sort', 'date': 'bin/date', 'id': 'usr.bin/id', 'expr': 'bin/expr'}
+_NATIVE_SOURCES = {'expr': ('bin/expr/expr.y',), 'date': ('bin/date/date.c',), 'sort': (*('usr.bin/sort/' + name + '.c' for name in
                            ('append', 'fields', 'files', 'fsort', 'init', 'msort', 'sort', 'tmp', 'radix_sort')),
                            *_EFUN_SOURCES),
                    'tail': tuple('usr.bin/tail/' + name + '.c' for name in
@@ -67,7 +68,7 @@ _NATIVE_SOURCES = {'date': ('bin/date/date.c',), 'sort': (*('usr.bin/sort/' + na
                    'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'), 'pwd': ('bin/pwd/pwd.c',), 'cut': ('usr.bin/cut/cut.c', *_EFUN_SOURCES),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
                       for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf', 'env', 'uname', 'id')}}
-_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31)
+_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52)
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
 _ALIASES = {'grep': ('egrep', 'fgrep'), 'tail': ('tac',), 'id': ('groups', 'whoami')}
@@ -141,7 +142,7 @@ def _profile(plan):
               'cat': CAT_MANIFEST_SHA256, 'head': HEAD_MANIFEST_SHA256, 'uniq': UNIQ_MANIFEST_SHA256,
               'wc': WC_MANIFEST_SHA256, 'tr': TR_MANIFEST_SHA256,
               'printf': PRINTF_MANIFEST_SHA256, 'pwd': PWD_MANIFEST_SHA256, 'cut': CUT_MANIFEST_SHA256,
-              'env': ENV_MANIFEST_SHA256, 'uname': UNAME_MANIFEST_SHA256, 'tail': TAIL_MANIFEST_SHA256, 'sort': SORT_MANIFEST_SHA256, 'date': DATE_MANIFEST_SHA256, 'id': ID_MANIFEST_SHA256}[name]
+              'env': ENV_MANIFEST_SHA256, 'uname': UNAME_MANIFEST_SHA256, 'tail': TAIL_MANIFEST_SHA256, 'sort': SORT_MANIFEST_SHA256, 'date': DATE_MANIFEST_SHA256, 'id': ID_MANIFEST_SHA256, 'expr': EXPR_MANIFEST_SHA256}[name]
     return ('tools/' + name + '/bootstrap.json',
             digest, _NATIVE_SOURCES[name],
             ('tools/' + name + '/Makefile', 'tools/Makefile.host', directory + '/Makefile',
@@ -155,7 +156,7 @@ def _native_program_contract(manifest, name):
     directory = _NATIVE_DIRECTORIES[name]
     _require(set(manifest) == {'format', 'version', 'name', 'origin', 'canonical_host_recipe', 'source_makefile',
         'compiler', 'sources', 'headers', 'include_dirs', 'cppflags', 'cflags', 'link_flags', 'libraries',
-        'invocations', 'files', 'runtime_cases'} | ({'compat'} if efun else set()) and
+        'invocations', 'files', 'runtime_cases'} | ({'compat'} if efun else set()) | ({'generation'} if name == 'expr' else set()) and
         manifest['format'] == 'emberbsd-native-bootstrap-program' and
         type(manifest['version']) is int and manifest['version'] == 1 and manifest['name'] == name and
         manifest['canonical_host_recipe'] == 'tools/' + name + '/Makefile' and
@@ -166,8 +167,12 @@ def _native_program_contract(manifest, name):
                                 _BOOTSTRAP_CDEFS, *(_EFUN_HEADERS if efun else (_NBTOOL_CONFIG,) if nbtool else ())]) and
         manifest['include_dirs'] == (['common/include'] if name == 'id' else [directory, 'tools/compat', 'common/lib/libc/stdlib'] if efun else [directory, 'tools/compat/bootstrap'] if nbtool else [directory] if name in _NATIVE_LOCAL_HEADERS else []) and
         manifest['cppflags'] == (['-DHAVE_NBTOOL_CONFIG_H=1', '-include', 'nbtool_config.h'] if efun else (['-DHAVE_NBTOOL_CONFIG_H=1'] if nbtool else []) + ['-include', _BOOTSTRAP_CDEFS]) and
-        all(manifest[key] == [] for key in ('cflags', 'link_flags', 'libraries')) and
+        manifest['cflags'] == (['-fwrapv'] if name == 'expr' else []) and
+        all(manifest[key] == [] for key in ('link_flags', 'libraries')) and
         manifest['invocations'] == [name, *_ALIASES.get(name, ())], 'unsupported direct-source ' + name + ' contract')
+    if name == 'expr':
+        _require(manifest['generation'] == dict(tool='yacc', source='bin/expr/expr.y',
+                 output='expr.c', arguments=['-o', 'expr.c']), 'unsupported expr generator contract')
     if cmp:
         _require(set(manifest['files']) == {'same.txt', 'different.txt', 'short.txt', 'skip-left.txt', 'skip-right.txt'} and
                  all(isinstance(value, str) for value in manifest['files'].values()) and
@@ -175,7 +180,7 @@ def _native_program_contract(manifest, name):
                  all(case['invocation'] == 'cmp' and 'stdout_nonempty' not in case
                      for case in manifest['runtime_cases']), 'unsupported fixed cmp semantic cases')
     elif name in _LITERAL_CASE_COUNTS:
-        if name in ('basename', 'dirname', 'tr', 'printf', 'pwd', 'env', 'uname', 'date', 'id'):
+        if name in ('basename', 'dirname', 'tr', 'printf', 'pwd', 'env', 'uname', 'date', 'id', 'expr'):
             _require(manifest['files'] == {}, 'this program needs no fixture files')
         else:
             files = manifest['files']
@@ -265,7 +270,7 @@ def program_outputs(plan):
         from .bootstrap_gnu_program import gnu_outputs
         return gnu_outputs(plan)
     manifest = program_manifest(plan)
-    extra = []
+    extra = [manifest['generation']['output']] if manifest['name'] == 'expr' else []
     if plan.get('stage') in EFUN_PROGRAM_STAGES:
         from .bootstrap_compat import probe_outputs
         extra = [*program_sources(plan), *probe_outputs(plan, manifest)]
@@ -301,15 +306,26 @@ def program_steps(plan, descriptor, commands, flags):
     elif manifest['name'] == 'date':
         cppflags = ['-DHAVE_NBTOOL_CONFIG_H=1', *cppflags]
     includes = [word for directory in manifest['include_dirs'] for word in ('-I', os.path.join(source, directory))]
+    if manifest['name'] == 'expr':
+        selected = descriptor['tools'].get('yacc', {})
+        _require(selected.get('kind') == 'native' and
+                 tuple(commands.get('yacc', ())) == (selected.get('path'),) and
+                 os.path.isabs(selected.get('path', '')) and
+                 selected['path'] != descriptor['bundle_root'] and
+                 os.path.commonpath((_absolute(selected['path']), _absolute(descriptor['bundle_root']))) ==
+                 descriptor['bundle_root'],
+                 'expr needs one explicitly selected native yacc invocation')
+        result.append(dict(id='generate-expr', phase='generator', cwd=work, env=dict(env), expected_exit=0,
+            argv=[*commands['yacc'], '-o', os.path.join(work, 'expr.c'), os.path.join(source, 'bin/expr/expr.y')]))
     for relative in manifest['sources']:
         name = Path(relative).stem
         output = os.path.join(work, name + '.o')
         objects.append(output)
         result.append(dict(id='compile-' + name, phase='compile', cwd=work, env=dict(env), expected_exit=0,
-            argv=[*driver, *flags['cppflags'], *flags['cflags'], '-v', *cppflags,
-                  *includes, '-c', os.path.join(source, relative), '-o', output]))
+            argv=[*driver, *flags['cppflags'], *flags['cflags'], *manifest['cflags'], '-v', *cppflags,
+                  *includes, '-c', (os.path.join(work, 'expr.c') if manifest['name'] == 'expr' else os.path.join(source, relative)), '-o', output]))
     result.append(dict(id='link-' + manifest['name'], phase='link', cwd=work, env=dict(env), expected_exit=0,
-        argv=[*driver, *flags['cflags'], '-v', *objects, *flags['ldflags'], '-Wl,--threads=1',
+        argv=[*driver, *flags['cflags'], *manifest['cflags'], '-v', *objects, *flags['ldflags'], '-Wl,--threads=1',
               *(['-Wl,-v'] if descriptor['host']['os'] == 'Darwin' else []),
               '-o', os.path.join(work, manifest['name'])]))
     for case in manifest['runtime_cases']:
@@ -325,6 +341,11 @@ def program_steps(plan, descriptor, commands, flags):
     result.append(dict(id='runtime-observation', phase='run', cwd=work, env=observed, expected_exit=0,
                        argv=[os.path.join(work, manifest['name']), *tail]))
     return result
+
+
+def prepare_program_step(step, plan, completed=()):
+    from .bootstrap_generated import before_step
+    before_step(step, plan, completed)
 
 
 def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
@@ -346,6 +367,11 @@ def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
     if plan.get('stage') in GNU_PROGRAM_STAGES:
         from .bootstrap_gnu_program import verify_gnu_step
         return verify_gnu_step(step, work, plan)
+    if plan.get('stage') == 'expr-bootstrap':
+        from .bootstrap_generated import after_step
+        generated = after_step(step, plan, actual_exit, completed)
+        if step['phase'] == 'generator':
+            return generated
     if step['phase'] == 'link':
         name = program_manifest(plan)['name']
         aliases = {alias: name for alias in _ALIASES.get(name, ())}
@@ -406,6 +432,8 @@ def validate_program_plan(plan, descriptor, commands, flags):
     from .bootstrap_pilot import _validate_resources
     _validate_resources(plan['resources'])
     required = {'cc', 'sh', *descriptor['driver_components'].values()}
+    if plan['stage'] == 'expr-bootstrap':
+        required.add('yacc')
     _require(isinstance(plan['required_roles'], list) and
              len(plan['required_roles']) == len(set(plan['required_roles'])) and
              required <= set(plan['required_roles']) <= set(commands), 'program input roles are incomplete')

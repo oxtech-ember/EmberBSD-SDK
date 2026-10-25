@@ -168,3 +168,9 @@ The context supplies no admission and never starts a process.
 
 `test_bootstrap_history_context` checks shared DAG expansion counts, cycles,
 bounds, changed source and metadata inputs, unknown-list preservation and fresh calls.
+
+The `expr-bootstrap` route also retains its generated `expr.c` member.
+Its `generate-expr` observation must bind that exact output path and SHA256.
+History checks the retained bytes and the source-owned generation plan.
+It does not run the historical yacc or reopen its retired executable.
+The original accepted seed keeps the generator's provider and provenance.
