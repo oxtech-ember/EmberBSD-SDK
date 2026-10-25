@@ -66,6 +66,9 @@ bootstrap input checks. The full recipe graph and output bundle are not needed.
 The fixture `makeconf` bytes are exported as `MAKECONF_SOURCE`.
 They contain only the SPDX line, the finite-pilot comment, and
 `EMBERBSD_BOOTSTRAP_MAKECONF=finite-bootstrap-make-v1`, with a final newline.
+The selected shell must be mksh and report the MIRBSD shell family.
+The fixed fixture text uses its `print -r --` builtin.
+It does not require or infer a `printf` builtin or an external `printf`.
 Generate exact commands with
 `make_probe_steps(descriptor, selected_commands, abi_flags, work_root)`.
 Do not append custom arguments or environment overrides.

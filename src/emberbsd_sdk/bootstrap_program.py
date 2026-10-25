@@ -10,6 +10,7 @@ import shlex
 import socket
 
 from .bootstrap_producer import PRODUCER_FORMAT
+from .bootstrap_shell import literal_stdin
 from .bootstrap_gnu_program import GNU_PROGRAM_STAGES
 from .inventory import sha256_file, snapshot_tree
 from .native_toolset import _absolute, _bytes, _envelope, _json, _require, _source
@@ -209,10 +210,11 @@ def program_steps(plan, descriptor, commands, flags):
                   *includes, '-c', os.path.join(source, relative), '-o', output]))
     result.append(dict(id='link-' + manifest['name'], phase='link', cwd=work, env=dict(env), expected_exit=0,
         argv=[*driver, *flags['cflags'], '-v', *objects, *flags['ldflags'], '-Wl,--threads=1',
+              *(['-Wl,-v'] if descriptor['host']['os'] == 'Darwin' else []),
               '-o', os.path.join(work, manifest['name'])]))
     for case in manifest['runtime_cases']:
         command = shlex.join([os.path.join(work, case['invocation']), *case['args']])
-        command = "printf '%s' " + shlex.quote(case['stdin']) + ' | ' + command
+        command = literal_stdin(case['stdin']) + ' | ' + command
         command += ' >' + shlex.quote(os.path.join(work, case['name'] + '.stdout'))
         command += ' 2>' + shlex.quote(os.path.join(work, case['name'] + '.stderr'))
         result.append(dict(id='case-' + case['name'], phase='program-case', cwd=work, env=dict(env),

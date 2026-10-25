@@ -14,6 +14,7 @@ import tarfile
 from .bootstrap_bsdinstall import _compat
 from .bootstrap_gnu_program import _tree
 from .bootstrap_make import _safe_path
+from .bootstrap_shell import literal_stdin
 from .inventory import sha256_file, snapshot_tree
 from .native_toolset import _bytes, _envelope, _json, _native_image, _require
 from .paths import entry
@@ -111,7 +112,7 @@ def pkg_install_steps(plan, descriptor, commands, flags):
     for case in manifest['runtime_cases']:
         argv = [work + '/source/' + manifest['output_programs'][case['invocation']],
                 *(_token(word, work) for word in case['args'])]
-        command = "printf '%s' " + shlex.quote(case['stdin']) + ' | ' + shlex.join(argv)
+        command = literal_stdin(case['stdin']) + ' | ' + shlex.join(argv)
         command += ' >' + shlex.quote(work + '/' + case['name'] + '.stdout')
         command += ' 2>' + shlex.quote(work + '/' + case['name'] + '.stderr')
         result.append(dict(id='case-' + case['name'], phase='program-case', cwd=work,

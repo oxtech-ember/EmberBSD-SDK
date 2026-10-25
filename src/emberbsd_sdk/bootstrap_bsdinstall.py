@@ -10,13 +10,14 @@ import shlex
 import stat
 
 from .bootstrap_gnu_program import _tree
+from .bootstrap_shell import literal_stdin
 from .inventory import sha256_file, snapshot_tree
 from .native_toolset import _absolute, _bytes, _envelope, _json, _native_image, _require
 from .paths import canonical_existing, entry
 
 STAGE = 'bsdinstall-bootstrap'
 MANIFEST_RELATIVE = 'profiles/common-build-tools/bootstrap/bsdinstall.json'
-MANIFEST_SHA256 = 'c00c20a8ae0de0c0b98a7bfa6bd1ed3c373bc2467f274a469dcf426f2aa5bd60'
+MANIFEST_SHA256 = '3fbcfcd31129ead586d82e4a22e05c0c8512139d4b0554cbfb660e9eab2cb2d9'
 _PATCH = 'profiles/common-build-tools/patches/pkgsrc-bsdinstall-native-shell.patch'
 _DIRECTORY = 'sysutils/bsdinstall'
 _SOURCES = tuple(_DIRECTORY + '/files/' + name + '.c' for name in ('bsdinstall', 'setmode'))
@@ -150,10 +151,12 @@ def bsdinstall_steps(plan, descriptor, commands, flags):
                   '-I', os.path.join(compat, 'include'), '-c', os.path.join(source, relative), '-o', output]))
     result.append(dict(id='link-bsdinstall', phase='link', cwd=work, env=dict(env), expected_exit=0,
         argv=[*commands['cc'], *flags['cflags'], '-v', *objects, os.path.join(compat, 'lib/libnbcompat.a'),
-              *flags['ldflags'], '-Wl,--threads=1', '-o', os.path.join(work, 'bsdinstall')]))
+              *flags['ldflags'], '-Wl,--threads=1',
+              *(['-Wl,-v'] if descriptor['host']['os'] == 'Darwin' else []),
+              '-o', os.path.join(work, 'bsdinstall')]))
     for case in manifest['runtime_cases']:
         args = [os.path.join(work, 'bsdinstall') if word == '@PROGRAM@' else word for word in case['args']]
-        command = "umask 022; printf '%s' " + shlex.quote(case['stdin']) + ' | '
+        command = 'umask 022; ' + literal_stdin(case['stdin']) + ' | '
         command += shlex.join([os.path.join(work, 'bsdinstall'), *args])
         command += ' >' + shlex.quote(os.path.join(work, case['name'] + '.stdout'))
         command += ' 2>' + shlex.quote(os.path.join(work, case['name'] + '.stderr'))

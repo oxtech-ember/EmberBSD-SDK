@@ -70,12 +70,15 @@ the three source-owner feature defines, and the exact source include directory.
 The source contract disables NLS, bzip2, and gzip. It adds no diagnostic suppression.
 The sixth command links the five owned objects with the same driver tuple,
 native `cflags` and `ldflags`, `-v`, and `-Wl,--threads=1`.
+Darwin direct-source links also use the fixed `-Wl,-v` diagnostic.
+This requests the actual linker version and search paths through collect2.
+Inspect that command-reported evidence; it is not kernel execution tracing.
 The shared heavy-link context remains exclusive through link drainage.
 The SDK checks each actual object's native header and the final native executable.
 
 The SDK creates relative `egrep` and `fgrep` links to the owned output.
 It writes the manifest's two fixed input files under the exclusive work lease.
-The next 14 commands use the selected absolute shell, its `printf` builtin,
+The next 14 commands use the selected absolute mksh and its `print -rn --` builtin,
 a quoted pipeline, and separate stdout/stderr redirections.
 They check the source-owner stdin/file, regular/extended/fixed pattern,
 quiet, line-number, multiple-pattern, pattern-file, and alias cases.
@@ -83,6 +86,9 @@ The missing-file control must remain absent.
 Match, no-match, and invalid-input exits are checked as exact 0, 1, and 2 values.
 Successful and no-match cases require exact output bytes.
 Error cases require actual nonempty stderr and exact stdout bytes.
+The shared literal-stdin constructor checks the MIRBSD shell family first.
+It preserves quoted UTF-8 input bytes without escape processing or an added newline.
+No external `printf` is needed to feed stdin in any finite program profile.
 
 One final command runs `grep -q needle input.txt` with
 `DYLD_PRINT_LIBRARIES=1`. It preserves the raw runtime observation log separately.

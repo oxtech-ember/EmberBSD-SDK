@@ -488,10 +488,11 @@ class NativeProgramTests(unittest.TestCase):
                 *case.flags['cflags'], '-v', '-DWITHOUT_NLS', '-DWITHOUT_BZ2', '-DWITHOUT_GZIP',
                 '-I', str(case.source / 'usr.bin/grep'), '-c', str(case.source / source), '-o', output])
         self.assertEqual(steps[5]['argv'], [*case.commands['cc'], *case.flags['cflags'], '-v',
-            *objects, *case.flags['ldflags'], '-Wl,--threads=1', '-o', str(case.work / 'grep')])
+            *objects, *case.flags['ldflags'], '-Wl,--threads=1', '-Wl,-v', '-o', str(case.work / 'grep')])
         for case_row, step in zip(case.manifest['runtime_cases'], steps[6:20]):
-            command = "printf '%s' " + shlex.quote(case_row['stdin']) + ' | ' + shlex.join(
-                [str(case.work / case_row['invocation']), *case_row['args']])
+            command = ('case "${KSH_VERSION-}" in *MIRBSD*) ;; *) exit 42;; esac; '
+                'print -rn -- ' + shlex.quote(case_row['stdin']) + ' | ' + shlex.join(
+                [str(case.work / case_row['invocation']), *case_row['args']]))
             for stream, redirection in (('stdout', ' >'), ('stderr', ' 2>')):
                 command += redirection + shlex.quote(str(case.work / (case_row['name'] + '.' + stream)))
             self.assertEqual(step['argv'], [*case.commands['sh'], '-c', command])

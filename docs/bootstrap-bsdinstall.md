@@ -11,7 +11,7 @@ Origin: EmberBSD (AI-assisted). The BSD sources retain their original licenses.
 
 The fixed Ports manifest is
 `profiles/common-build-tools/bootstrap/bsdinstall.json`, SHA256
-`c00c20a8ae0de0c0b98a7bfa6bd1ed3c373bc2467f274a469dcf426f2aa5bd60`.
+`3fbcfcd31129ead586d82e4a22e05c0c8512139d4b0554cbfb660e9eab2cb2d9`.
 It selects two ordered C files and 19 semantic cases.
 The plan uses the existing producer format, version 1, scope `gcc16-bootstrap`.
 It has the same top-level fields as the direct-source program profiles.
@@ -90,13 +90,17 @@ The strip path must not need shell quoting. The canonical `-S` route constructs
 its strip command text inside the selected shell.
 No ambient `STRIP` variable is passed.
 The linker uses the exact static archive, native linker flags,
-and `-Wl,--threads=1`. The existing heavy-link EX lease lasts through drainage.
+and `-Wl,--threads=1`. Darwin links also request the fixed `-Wl,-v` diagnostic.
+This is command-reported linker evidence, not kernel execution tracing.
+The existing heavy-link EX lease lasts through drainage.
 
 There are 23 commands: two compilations, one link, 19 semantic cases, and one
-runtime observation. Cases use the selected shell, fixed umask 022, quoted
+runtime observation. Cases use the selected mksh, fixed umask 022, quoted
 operands, and separate stdout and stderr files. They check bytes, file types,
 modes, required absence, and native headers after strip. The `@PROGRAM@` operand
 in the two fixed strip cases resolves only to the built installer.
+The shared `print -rn --` stdin route preserves bytes without an external formatter.
+The pinned after-install hook also uses mksh `print` builtins only.
 The canonical two-file build does not enable `SUPPORT_MTREE`; the metalog case
 requires its real refusal. It does not claim an implemented metadata writer.
 The last command records `DYLD_PRINT_LIBRARIES=1` separately.

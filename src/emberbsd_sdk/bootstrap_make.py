@@ -100,22 +100,22 @@ def make_probe_sources(descriptor, commands):
         f'.if "${{MAKECONF}}" != "{conf}" || "${{EMBERBSD_BOOTSTRAP_MAKECONF:U}}" != "finite-bootstrap-make-v1"\n'
         '.error bootstrap MAKECONF was not loaded\n.endif\n'
         '.if empty(.SUFFIXES:M.c) || empty(.SUFFIXES:M.o)\n.error upstream suffixes were lost\n.endif\n'
-        "ASSIGN != printf '%s\\n' \"$${KSH_VERSION-}\"\n"
-        "MOD_COMMAND = printf '%s\\n' \"$${KSH_VERSION-}\"\n"
+        "ASSIGN != print -r -- \"$${KSH_VERSION-}\"\n"
+        "MOD_COMMAND = print -r -- \"$${KSH_VERSION-}\"\n"
         'MODIFIER := ${MOD_COMMAND:sh}\n'
         '.if empty(ASSIGN:M*MIRBSD*) || empty(MODIFIER:M*MIRBSD*)\n.error parse-time shell changed\n.endif\n')
     bsd = (common_bsd + '.PHONY: all fail\nall: fixture.result\n'
-           "\t@printf 'bmake-assign-ok\\nbmake-modifier-ok\\nupstream-suffixes-ok\\n'\n"
-           f"\t@printf 'bmake-shell %s\\n' '${{.SHELL}}'\n"
+           "\t@print -r -- bmake-assign-ok; print -r -- bmake-modifier-ok; print -r -- upstream-suffixes-ok\n"
+           f"\t@print -r -- 'bmake-shell ${{.SHELL}}'\n"
            f'\t+{shlex.join(commands["make"])} -j1 -f BRecursive.mk child\n'
-           "\t@printf 'bmake-positive-ok\\n'\n"
+           "\t@print -r -- bmake-positive-ok\n"
            '.SUFFIXES: .probe .result\n.probe.result:\n'
            "\t@case \"$${KSH_VERSION-}\" in *MIRBSD*) ;; *) exit 42;; esac\n"
-           "\t@printf 'implicit-ok\\n' > '${.TARGET}'\n"
-           "fail:\n\t@printf 'expected-bmake-failure\\n'; exit 7\n")
+           "\t@print -r -- implicit-ok > '${.TARGET}'\n"
+           "fail:\n\t@print -r -- expected-bmake-failure; exit 7\n")
     bsd_recursive = (common_bsd + '.PHONY: child\nchild:\n'
                      "\t@case \"$${KSH_VERSION-}\" in *MIRBSD*) ;; *) exit 42;; esac\n"
-                     "\t@printf 'bmake-recursive-ok\\n'\n")
+                     "\t@print -r -- bmake-recursive-ok\n")
     common_gnu = (f'ifneq ($(SHELL),{shell})\n$(error bootstrap GNU shell changed)\nendif\n'
                   f'ifneq ($(MAKECONF),{conf})\n$(error bootstrap GNU MAKECONF changed)\nendif\n'
                   'include $(MAKECONF)\n'
@@ -123,13 +123,13 @@ def make_probe_sources(descriptor, commands):
                   '$(error bootstrap GNU MAKECONF was not loaded)\nendif\n')
     gnu = (common_gnu + '.PHONY: all fail\nall:\n'
            "\t@case \"$${KSH_VERSION-}\" in *MIRBSD*) ;; *) exit 42;; esac\n"
-           f"\t@printf 'gmake-shell %s\\n' '$(SHELL)'\n"
+           f"\t@print -r -- 'gmake-shell $(SHELL)'\n"
            f'\t+{shlex.join(commands["gmake"])} --no-print-directory -j1 -f GRecursive.mk child\n'
-           "\t@printf 'gmake-positive-ok\\n'\n"
-           "fail:\n\t@printf 'expected-gmake-failure\\n'; exit 7\n")
+           "\t@print -r -- gmake-positive-ok\n"
+           "fail:\n\t@print -r -- expected-gmake-failure; exit 7\n")
     gnu_recursive = (common_gnu + '.PHONY: child\nchild:\n'
                      "\t@case \"$${KSH_VERSION-}\" in *MIRBSD*) ;; *) exit 42;; esac\n"
-                     "\t@printf 'gmake-recursive-ok\\n'\n")
+                     "\t@print -r -- gmake-recursive-ok\n")
     return {name: text.encode('ascii') for name, text in
             [('BMakefile', bsd), ('BRecursive.mk', bsd_recursive),
              ('GMakefile', gnu), ('GRecursive.mk', gnu_recursive), ('fixture.probe', 'finite-input\n')]}
@@ -140,11 +140,11 @@ def make_probe_steps(descriptor, commands, flags, work_root):
     work = _absolute(work_root)
     env = _environment({role: words[0] for role, words in commands.items()}, commands, flags)
     env.update(LC_ALL='C', TZ='UTC', TMPDIR=work, MAKECONF=descriptor['make_binding']['makeconf']['path'])
-    positive = 'case "${KSH_VERSION-}" in *MIRBSD*) ;; *) exit 42;; esac; printf "shell-positive-ok\\n"'
+    positive = 'case "${KSH_VERSION-}" in *MIRBSD*) ;; *) exit 42;; esac; print -r -- shell-positive-ok'
     rows = [('shell-positive', 'shell', [*commands['sh'], '-c', positive], 0),
             ('bmake-positive', 'make', [*commands['make'], '-j1', '-f', 'BMakefile', 'all'], 0),
             ('gmake-positive', 'make', [*commands['gmake'], '--no-print-directory', '-j1', '-f', 'GMakefile', 'all'], 0),
-            ('shell-failure', 'shell', [*commands['sh'], '-c', 'printf "expected-shell-failure\\n"; exit 7'], 7),
+            ('shell-failure', 'shell', [*commands['sh'], '-c', 'print -r -- expected-shell-failure; exit 7'], 7),
             ('bmake-failure', 'make', [*commands['make'], '-j1', '-f', 'BMakefile', 'fail'], 2),
             ('gmake-failure', 'make', [*commands['gmake'], '--no-print-directory', '-j1', '-f', 'GMakefile', 'fail'], 2)]
     return [dict(id=name, phase=phase, argv=argv, cwd=work, env=dict(env), expected_exit=status)

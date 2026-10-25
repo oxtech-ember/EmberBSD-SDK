@@ -42,6 +42,8 @@ required library, and refusal to count the active host cache for a separate
 additional `-V` calls retain raw dyld observations. The selected-only PATH and
 fixed `-F none` inputs do not admit generic compressed-package support or an
 external decompressor. The full initial profile also sets `PKG_COMPRESSION=none`.
+Semantic stdin uses the selected mksh `print -rn --` builtin with a MIRBSD guard.
+The declared external `printf` role remains required by the source build contract.
 
 The existing runner retains work and input leases, process groups, drainage,
 HOLD, input revalidation, and pending independent review. Output runtime

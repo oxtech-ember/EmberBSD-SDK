@@ -103,7 +103,10 @@ metacharacters. The SDK retains the C string quotes in the generated define.
 The other two profiles keep their existing shell quoting rules.
 
 Only the fixed seven diff cases or fifteen find/xargs cases run.
-They use the selected shell's printf builtin and distinct stdout/stderr files.
+They use the selected mksh `print -rn --` builtin and distinct stdout/stderr files.
+The shared stdin constructor checks the MIRBSD family and preserves exact literal bytes.
+The GNU source contracts still require their declared external `printf` provider
+for configure and explicit formatted argument cases.
 Every case with a child appends only the selected shell tuple and its fixed
 source-owner `command_args`. Xargs always has that explicit command.
 It never uses its implicit echo child in these cases.

@@ -12,6 +12,7 @@ import shlex
 import shutil
 
 from .bootstrap_make import _safe_path
+from .bootstrap_shell import literal_stdin
 from .inventory import sha256_file, snapshot_tree
 from .native_toolset import _absolute, _bytes, _envelope, _json, _require, _source
 from .paths import canonical_existing, entry
@@ -194,7 +195,7 @@ def gnu_steps(plan, descriptor, commands, flags):
         argv = [os.path.join(source, manifest['output_programs'][case['invocation']]), *case['args']]
         if 'command_role' in case:
             argv += [*commands['sh'], *case['command_args']]
-        command = "printf '%s' " + shlex.quote(case['stdin']) + ' | ' + shlex.join(argv)
+        command = literal_stdin(case['stdin']) + ' | ' + shlex.join(argv)
         command += ' >' + shlex.quote(os.path.join(work, case['name'] + '.stdout'))
         command += ' 2>' + shlex.quote(os.path.join(work, case['name'] + '.stderr'))
         result.append(dict(id='case-' + case['name'], phase='program-case', cwd=work, env=dict(env),

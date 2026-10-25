@@ -201,7 +201,8 @@ class MakeTests(unittest.TestCase):
     def test_finite_source_probes_parse_time_shell_recursion_and_implicit_rule(self):
         sources = bootstrap_make.make_probe_sources(self.seed.descriptor, self.seed.commands)
         bsd = sources['BMakefile'].decode()
-        self.assertIn('ASSIGN != printf', bsd)
+        self.assertIn('ASSIGN != print -r --', bsd)
+        self.assertTrue(all(b'printf' not in text for text in sources.values()))
         self.assertIn('${MOD_COMMAND:sh}', bsd)
         self.assertIn('${.SHELL}', bsd)
         self.assertIn('.probe.result:', bsd)
