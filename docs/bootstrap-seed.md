@@ -346,8 +346,23 @@ the evaluated `WRKDIR`, `WRKSRC` and `OBJDIR` metadata. It must be below
    common recipe directory, and `build`.
 3. Install each dependency with the same tuple and the `install` target.
 4. After the GCC build, run the complete selected `gmake` tuple,
-   `--no-print-directory -j1 -C object_directory compare`.
+   `--no-print-directory -j1 -C object_directory "--eval=.PHONY: compare" compare`.
 5. Install GCC. `comparison_command` is exactly `gcc16-compare`.
+
+GCC writes a file named `compare` after its bootstrap comparison. The fixed
+GNU make `--eval` argument marks only that target phony. The separate SDK step
+must repeat the comparison even when this stamp exists. It does not use `-B`,
+rebuild GCC, delete stage objects or change the upstream comparison command.
+A zero make exit is not sufficient evidence when stage 2 was deleted. Independent
+output review must retain actual stage 2/3 objects and reject `stage2-lean` or
+an empty comparison. The upstream lean guard remains intact.
+
+For a source scheduling regression, run `tests/test_bootstrap_recipe.py` with
+a fresh absolute work path and three `--gmake-arg` values for the complete
+selected gmake, `SHELL=...` and `MAKECONF=...` tuple. This explicit fixture uses
+only the selected make and shell. It checks a pre-existing stamp, equal and
+different inputs, and the lean guard. It does not compile or qualify a tool.
+The default unittest mode does not execute this fixture.
 
 `recipe_make()` selects the recipe's make and shell from the bound dependency edge.
 The Ports profile owns the

@@ -7,8 +7,10 @@ import copy
 import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -106,6 +108,22 @@ class RecipeTests(unittest.TestCase):
             else:
                 self.assertIn('-j1', step['argv'])
         self.assertEqual(self.plan['commands'][3]['argv'][-1], 'compare')
+
+    def test_compare_forces_only_the_stamped_target(self):
+        command = self.plan['commands'][3]
+        self.assertEqual(command['argv'][-2:], ['--eval=.PHONY: compare', 'compare'])
+        self.assertEqual(command['argv'].count('--eval=.PHONY: compare'), 1)
+        self.assertFalse(any(word in ('-B', '--always-make') for word in command['argv']))
+        self.assertTrue(all('--eval=.PHONY: compare' not in step['argv']
+                            for step in self.plan['commands'] if step['id'] != 'gcc16-compare'))
+
+    def test_missing_phony_override_is_refused_before_child(self):
+        self.plan['commands'][3]['argv'].remove('--eval=.PHONY: compare')
+        with patch('emberbsd_sdk.bootstrap_pilot.run_logged') as run:
+            with self.assertRaisesRegex(SDKError, 'complete source-owned route'):
+                self.invoke()
+            run.assert_not_called()
+        self.assertFalse(self.work.exists())
 
     def test_recipes_with_the_ports_bmake_edge_start_the_ports_bmake_and_mksh(self):
         recipes = self.plan['recipes']
@@ -316,5 +334,79 @@ class RecipeTests(unittest.TestCase):
             self.assertEqual(self.validate(inspect_inputs=False), self.plan)
 
 
+
+
+def real_compare_fixture(argv):
+    """Check GNU make stamp scheduling, not GCC object equivalence."""
+    import argparse
+    parser = argparse.ArgumentParser(description=real_compare_fixture.__doc__)
+    parser.add_argument('work', type=Path)
+    parser.add_argument('--gmake-arg', action='append', required=True)
+    args = parser.parse_args(argv)
+    words = args.gmake_arg
+    if (len(words) != 3 or not os.path.isabs(words[0]) or
+            not words[1].startswith('SHELL=/') or not words[2].startswith('MAKECONF=/')):
+        raise AssertionError('Pass the complete explicit selected gmake/SHELL/MAKECONF tuple')
+    if not args.work.is_absolute() or args.work.exists() or args.work.is_symlink():
+        raise AssertionError('Use a fresh absolute source-test work directory')
+    args.work.mkdir()
+    empty = args.work / 'empty-bin'
+    empty.mkdir()
+    for stage in ('stage2-gcc', 'stage3-gcc'):
+        (args.work / stage).mkdir()
+        (args.work / stage / 'fixture.o').write_text('same\n')
+    (args.work / 'compare').write_text('timestamp\n')
+    makefile = args.work / 'fixture.mk'
+    makefile.write_text(
+        '.PHONY: compile\ncompile:\n\t@echo "unexpected compile" >> compile.calls\n'
+        'compare:\n'
+        '\t@if test -f stage2-lean; then echo "Cannot compare object files as stage 2 was deleted."; exit 0; fi; \\\n'
+        '\techo "compared" >> compare.calls; \\\n'
+        '\tIFS= read -r first < stage2-gcc/fixture.o; \\\n'
+        '\tIFS= read -r second < stage3-gcc/fixture.o; \\\n'
+        '\ttest "$$first" = "$$second"\n')
+    plan = dict(work_root=str(args.work), ports_export=dict(root=str(args.work / 'unused-export')),
+                resources=dict(cpu_jobs=1), recipes={'lang/gcc16':dict(object_directory=str(args.work))})
+    with patch.object(recipe, 'recipe_order', return_value=['lang/gcc16']), \
+         patch.object(recipe, 'recipe_make', return_value=('not-executed',)), \
+         patch.object(recipe, 'recipe_environment', return_value={}), \
+         patch.object(recipe, 'recipe_gmake', return_value=tuple(words)):
+        step = recipe.recipe_steps(plan, {}, {}, {})[1]
+    fixed = [*step['argv'][:-1], '-rR', '-f', str(makefile), step['argv'][-1]]
+    old = [word for word in fixed if word != '--eval=.PHONY: compare']
+    env = dict(PATH=str(empty), LC_ALL='C', TZ='UTC', TMPDIR=str(args.work),
+               SHELL=words[1].removeprefix('SHELL='))
+    observations = []
+    def run(name, command):
+        result = subprocess.run(command, cwd=args.work, env=env, capture_output=True, timeout=60)
+        stdout, stderr = args.work / (name + '.stdout'), args.work / (name + '.stderr')
+        stdout.write_bytes(result.stdout)
+        stderr.write_bytes(result.stderr)
+        observations.append(dict(name=name, argv=command, exit=result.returncode,
+                                 stdout=str(stdout), stderr=str(stderr)))
+        return result
+    assert run('old-stamped', old).returncode == 0
+    calls = args.work / 'compare.calls'
+    assert not calls.exists(), 'The baseline must reproduce the stamped no-op'
+    assert run('new-equal', fixed).returncode == 0 and calls.read_bytes() == b'compared\n'
+    (args.work / 'stage3-gcc/fixture.o').write_text('different\n')
+    assert run('new-different', fixed).returncode == 2
+    assert calls.read_bytes() == b'compared\ncompared\n'
+    (args.work / 'stage2-lean').write_text('timestamp\n')
+    lean = run('new-lean-control', fixed)
+    assert lean.returncode == 0 and b'Cannot compare object files' in lean.stdout
+    assert calls.read_bytes() == b'compared\ncompared\n'
+    assert not (args.work / 'compile.calls').exists()
+    result = dict(status='PASS_SOURCE_SCHEDULING_TEST', observations=observations,
+                  old_stamp_skips_comparison=True, fixed_target_detects_difference=True,
+                  lean_success_is_not_a_comparison=True, compilation_performed=False,
+                  ordinary_provider_qualified=False)
+    (args.work / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+    print(json.dumps(result))
+
+
 if __name__ == '__main__':
-    unittest.main()
+    if any(word.startswith('--gmake-arg') for word in sys.argv[1:]):
+        real_compare_fixture(sys.argv[1:])
+    else:
+        unittest.main()
