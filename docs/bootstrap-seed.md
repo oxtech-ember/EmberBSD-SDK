@@ -367,8 +367,9 @@ The default unittest mode does not execute this fixture.
 `recipe_make()` selects the recipe's make and shell from the bound dependency edge.
 The Ports profile owns the
 [make handoff](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/common-build-tools/bootstrap/README.md#make-handoff).
-It gives every recipe outside the `devel/bmake` closure a direct `devel/bmake` edge.
-That closure includes `shells/mksh`. Such a recipe starts with
+It gives every recipe outside the seed set a direct `devel/bmake` edge.
+The seed set is the `devel/bmake` closure, which includes `shells/mksh`, and the
+dependencies of `archivers/gzip`. Such a recipe starts with
 `output_bundle_root/bin/bmake`, `SHELL=output_bundle_root/bin/mksh` and the bound
 `MAKECONF` word. It does not use `-m`, so the Ports bmake reads its own `share/mk`.
 A `SHELL=` word on the command line overrides the profile, so the bound initial

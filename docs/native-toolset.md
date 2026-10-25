@@ -226,6 +226,43 @@ permits `accepted_input_scope: "bootstrap-seed"` only with its complete
 `bootstrap_graduation` evidence reference. The seed keeps its original scope.
 The output must still pass every ordinary qualification check below.
 
+An unchanged first foundation can support additional ordinary providers in the
+same absolute bundle. Each inherited bootstrap provider can add one
+`original_output` object to its existing provider-build record:
+
+```json
+{
+  "descriptor": {"path": "/evidence/original.json", "sha256": "<SHA256>"},
+  "qualification": {"path": "/evidence/original-qualified.json", "sha256": "<SHA256>"},
+  "provider": "<the unchanged provider name>"
+}
+```
+
+Keep `accepted_input_scope: "bootstrap-seed"` and the original graduation.
+Every other build field must equal the original provider-build record.
+The loader validates the original ordinary receipt and graduation against the
+original descriptor. It allows only additional inventory entries in this private
+historical check. Public loading of the old descriptor still requires its exact
+inventory. Nested reuse and cyclic references are refused.
+All inherited providers must reference the same original foundation pair.
+
+The absolute bundle root, host, compiler, ABI inputs and flags, driver mapping,
+and all original source pins, providers and tool records must remain unchanged.
+All old inventory rows must remain identical, including file bytes, modes and
+link targets. Additional named source pins and providers are permitted.
+New providers require actual `qualified-native` builds. Their trusted gate must
+accept the build and its qualified compiler inputs; this reference does not
+qualify a build automatically.
+
+The new receipt must contain fresh complete ordinary probes, identity and
+driver queries, and a fresh execution audit. Their referenced check files must
+not alias the original check files. For this extension, the execution audit must
+also contain `dynamic_dependencies` in the existing bootstrap runtime-closure
+shape. The loader validates it against all tools in the new descriptor.
+The original graduation still validates the original runtime closure, so added
+files cannot shadow its accepted runtime paths or rpath absences.
+Only an independently accepted new receipt can qualify the extended descriptor.
+
 The execution audit has format `emberbsd-native-execution-audit`, version `1`,
 scope `native-build`, status `PASS`, matching `descriptor_sha256` and `host`,
 and `tools` equal to the complete descriptor tool records.

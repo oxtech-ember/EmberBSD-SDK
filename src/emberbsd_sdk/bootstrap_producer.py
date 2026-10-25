@@ -41,6 +41,7 @@ BUILTIN_HELPER_PROFILE_SHA256 = 'd601e1332d820b922c43cbf19b9150ad3527fd00eea6d67
 CA_PREFIX_PROFILE_SHA256 = '3366a715faa4c6271d3020f484b969d552164cdfe23bf8dc08e266234d82501f'
 METADATA_PHASE_PROFILE_SHA256 = '87b856b28ff8757bd9c3c62cefaeb032d95be12da79e4fff7415b6b7b8a4a9b9'
 CA_METADATA_PHASE_PROFILE_SHA256 = '06009d0687d0553bcb2de546415caf185b9bdff372006df9147b1e92bc8a9052'
+GZIP_HANDOFF_PROFILE_SHA256 = '75f3fa97e7e346f7abded91fef0f52e802af481f480f4474ef78ec9a4e47804b'
 EARLY_TOOLS = tuple('awk basename cat cut date dirname env expr grep head id pwd sed sort tail tr uname uniq wc'.split())
 # Recipe builds run these bare commands, which pkgsrc does not create as tools:
 # ninja-build's bootstrap runs od, and meson's Darwin compiler checks run lipo.
@@ -69,7 +70,8 @@ def _native_provider_profile(digest):
                       BOOTSTRAP_PKGTOOLS_PROFILE_SHA256, HOST_RUBY_PROFILE_SHA256,
                       MAKE_HANDOFF_PROFILE_SHA256, SHELL_HANDOFF_PROFILE_SHA256,
                       BUILTIN_HELPER_PROFILE_SHA256, CA_PREFIX_PROFILE_SHA256,
-                      METADATA_PHASE_PROFILE_SHA256, CA_METADATA_PHASE_PROFILE_SHA256)
+                      METADATA_PHASE_PROFILE_SHA256, CA_METADATA_PHASE_PROFILE_SHA256,
+                      GZIP_HANDOFF_PROFILE_SHA256)
 
 
 def _recognized_profile(digest):

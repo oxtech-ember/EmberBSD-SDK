@@ -324,6 +324,14 @@ class ProgramHistoryTests(unittest.TestCase):
         self.history['provisioned_members'][0]['invocation'] = 'awk'
         with self.assertRaises(SDKError): self.verify()
 
+    def test_date_history_keeps_the_original_fixed_mode_and_source_pin(self):
+        self.make_fixture('date')
+        self.assertEqual(self.verify(), {'os-basename': []})
+        compile_step = self.result['commands'][0]
+        compile_step['argv'].remove('-DHAVE_NBTOOL_CONFIG_H=1')
+        with self.assertRaises(SDKError):
+            self.verify()
+
     def test_sort_history_binds_the_shared_observed_configuration(self):
         self.make_fixture('sort')
         self.assertEqual(self.verify(), {'os-basename': []})

@@ -25,7 +25,7 @@ scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`,
 `hostname-bootstrap`, `basename-bootstrap`, `dirname-bootstrap`, `cat-bootstrap`,
 `head-bootstrap`, `uniq-bootstrap`, `wc-bootstrap`, `tr-bootstrap`, `printf-bootstrap`,
 `pwd-bootstrap`, `cut-bootstrap`, `env-bootstrap`, `uname-bootstrap`, `tail-bootstrap`,
-and `sort-bootstrap`.
+`sort-bootstrap`, and `date-bootstrap`.
 Each stage selects one exact source-owner manifest.
 It has exactly `format`, `version`, `scope`, `stage`, `seed_descriptor`, `host`,
 `sources`, `work_root`, `required_roles`, `resources`, `program`, and `commands`.
@@ -456,6 +456,38 @@ The initial profile does not qualify `-o`, replacement permissions, non-C locale
 The C implementation retains these operations. Actual compilation, C analysis and memory validation are separate gates.
 Run `test_bootstrap_program_sort`, `test_bootstrap_program_cut` and `test_bootstrap_program_history`
 with `EMBERBSD_TEST_OS_SOURCE` for source and synthetic-runner checks.
+
+## Fixed native date tool mode
+
+The OS owns `tools/date/bootstrap.json` and its 41 exact semantic cases.
+Its SHA256 pin is `51840761173803ca69439053d8ee5fa72c4b331d7cb6ddf729f54c9eb4cfd8c8`.
+The nine-member source proof contains the complete date implementation, its declaration header,
+normal host and target recipes, common host integration, manifest, README and two shared headers.
+The existing host recipe selects date without the target network-time source or utility library.
+
+The finite route sets `HAVE_NBTOOL_CONFIG_H=1`, as the ordinary native tool build does.
+It supplies the shared source-owned `tools/compat/bootstrap/nbtool_config.h`.
+That header includes the existing annotation header and declares no configure capabilities.
+Native headers and libc remain explicit ABI inputs. No efun library or private implementation is required.
+The normal host build retains its full compatibility configuration.
+
+The existing C tool mode excludes clock setters, network setting and accounting writes.
+A canonical date operand without `-j` is refused. The profile checks this refusal.
+Tool-mode `-d` supports ISO dates; natural-language parsing and `-f` remain unavailable.
+These limits do not change the ordinary target date program.
+The repaired ISO digit check validates all required bytes and stops at a NUL or nondigit.
+Invalid-input cases are for the repaired parser only, without an old malformed-input replay.
+
+The 44 commands compile and link one complete C file, run 41 cases and observe runtime dependencies.
+Expectations are fixed bytes for fixed epochs, ISO dates, leap years and canonical `-j` conversions.
+UTC uses `-u` and `UTC0`; the offset case uses a fixed POSIX timezone.
+The tests do not derive expectations from the child, current time or host zoneinfo files.
+Formatting growth, incomplete fields, invalid numbers and unavailable operations also have exact outcomes.
+
+The existing runner, selected tools, source proof and historical acceptance checks remain in force.
+Changed mode flags, source headers or owner semantics refuse before a child starts.
+`test_bootstrap_program_date` builds every step from the real owner manifest with `EMBERBSD_TEST_OS_SOURCE`.
+Synthetic tests do not establish native execution, C analysis or memory acceptance.
 
 ## Fixed Ports Byacc profile
 
