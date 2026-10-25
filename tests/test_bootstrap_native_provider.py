@@ -227,7 +227,8 @@ class NativeProviderTests(unittest.TestCase):
                        producer.GZIP_HANDOFF_PROFILE_SHA256, producer.SOURCE_GZIP_HANDOFF_PROFILE_SHA256,
                        producer.SOURCE_GZIP_MAKE_SPLIT_PROFILE_SHA256,
                        producer.RUNTIME_FLAGS_REAPPLY_PROFILE_SHA256,
-                       producer.NATIVE_RUNTIME_SHELL_PROFILE_SHA256):
+                       producer.NATIVE_RUNTIME_SHELL_PROFILE_SHA256,
+                       producer.PERL_DTRACE_PROFILE_SHA256):
             with self.subTest(profile=digest):
                 case.plan['metadata']['profile']['sha256'] = digest
                 self.assertTrue(producer._recognized_profile(digest))
@@ -245,7 +246,8 @@ class NativeProviderTests(unittest.TestCase):
                        producer.GZIP_HANDOFF_PROFILE_SHA256, producer.SOURCE_GZIP_HANDOFF_PROFILE_SHA256,
                        producer.SOURCE_GZIP_MAKE_SPLIT_PROFILE_SHA256,
                        producer.RUNTIME_FLAGS_REAPPLY_PROFILE_SHA256,
-                       producer.NATIVE_RUNTIME_SHELL_PROFILE_SHA256):
+                       producer.NATIVE_RUNTIME_SHELL_PROFILE_SHA256,
+                       producer.PERL_DTRACE_PROFILE_SHA256):
             with self.subTest(profile=digest):
                 self.case.plan['metadata']['recipes'] = ['lang/gcc16', 'lang/llvm']
                 self.case.plan['metadata']['profile']['sha256'] = digest

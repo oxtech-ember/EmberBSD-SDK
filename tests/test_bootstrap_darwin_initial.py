@@ -20,11 +20,11 @@ from emberbsd_sdk.inventory import snapshot_tree
 
 
 class InitialDarwinTests(unittest.TestCase):
-    def metadata(self):
+    def metadata(self, *, profile_constant='INITIAL_DARWIN_PROFILE_SHA256'):
         case = test_bootstrap_producer.MetadataTests(methodName='runTest')
         case.setUp()
         self.addCleanup(case.doCleanups)
-        guard = patch.object(producer, 'INITIAL_DARWIN_PROFILE_SHA256', case.profile_sha, create=True)
+        guard = patch.object(producer, profile_constant, case.profile_sha, create=True)
         guard.start()
         self.addCleanup(guard.stop)
         case.plan['resources']['cpu_jobs'] = 1
@@ -68,6 +68,34 @@ class InitialDarwinTests(unittest.TestCase):
             with self.assertRaisesRegex(SDKError, 'initial.*profile'):
                 case.validate()
 
+    def test_initial_phase_accepts_only_the_two_compatible_profile_identities(self):
+        accepted = (producer.INITIAL_DARWIN_PROFILE_SHA256,
+                    producer.PERL_DTRACE_PROFILE_SHA256)
+        self.assertEqual(accepted, (
+            'd54e703a263c307917f6b3d376e83bae04720aa74d1325d530faea50cfb6b765',
+            'd61850c6dcd6ffa7c722a623912e00588a8de13317275ff91dea70bed300f1f9'))
+        historical = {value for name, value in vars(producer).items()
+                      if name.endswith('PROFILE_SHA256') and isinstance(value, str)}
+        with patch('subprocess.Popen', side_effect=AssertionError('no child')):
+            for digest in accepted:
+                plan = dict(metadata=dict(darwin_tool_phase='initial', profile=dict(sha256=digest)))
+                with self.subTest(accepted=digest):
+                    self.assertEqual(producer.darwin_tool_phase(plan), 'initial')
+            for digest in (historical - set(accepted)) | {'0' * 64}:
+                plan = dict(metadata=dict(darwin_tool_phase='initial', profile=dict(sha256=digest)))
+                with self.subTest(refused=digest), self.assertRaisesRegex(SDKError, 'initial.*profile'):
+                    producer.darwin_tool_phase(plan)
+
+    def test_perl_profile_passes_the_complete_initial_metadata_gate(self):
+        with patch('subprocess.Popen', side_effect=AssertionError('no child')):
+            case = self.metadata(profile_constant='PERL_DTRACE_PROFILE_SHA256')
+            self.assertIs(case.validate(), case.plan)
+            values = producer.metadata_assignments(case.plan, case.descriptor, case.commands,
+                                                  case.descriptor['abi_flags'])
+        self.assertEqual(values['EMBERBSD_DARWIN_TOOL_PHASE'], 'initial')
+        for name in ('LIBTOOL', 'INSTALL_NAME_TOOL', 'TAPI'):
+            self.assertNotIn('EMBERBSD_DARWIN_' + name, values)
+
     def test_unknown_phase_refuses_before_child(self):
         case = self.metadata()
         for value in ('', 'FULL', 'ar', True, ['initial']):
@@ -89,7 +117,7 @@ class InitialDarwinTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaisesRegex(SDKError, 'explicit native role: libtool_darwin'):
                 case.validate()
 
-    def initial_recipe(self):
+    def initial_recipe(self, *, profile_constant='INITIAL_DARWIN_PROFILE_SHA256'):
         case = test_bootstrap_recipe.RecipeTests(methodName='runTest')
         case.setUp()
         self.addCleanup(case.doCleanups)
@@ -102,7 +130,7 @@ class InitialDarwinTests(unittest.TestCase):
         plan['recipes']['lang/gcc16']['dependencies'] = ['devel/lld']
         plan['metadata']['recipes'] = sorted(plan['recipes'])
         plan['metadata']['darwin_tool_phase'] = 'initial'
-        guard = patch.object(producer, 'INITIAL_DARWIN_PROFILE_SHA256',
+        guard = patch.object(producer, profile_constant,
                              case.plan['metadata']['profile']['sha256'])
         guard.start()
         self.addCleanup(guard.stop)
@@ -119,6 +147,44 @@ class InitialDarwinTests(unittest.TestCase):
         self.assertEqual(steps[-1]['argv'][-2:], ['BUILD_TARGET=llvm-libtool-darwin llvm-install-name-tool llvm-readtapi llvm-lipo', 'build'])
         self.assertNotIn('gcc16-compare', [row['id'] for row in steps])
         self.assertEqual(set(case.plan['recipes']), {'lang/gcc16', 'devel/cmake', 'lang/llvm', 'devel/lld'})
+
+    def test_perl_profile_keeps_initial_purpose_and_exact_target_command_gate(self):
+        with patch('subprocess.Popen', side_effect=AssertionError('no child')):
+            case = self.initial_recipe(profile_constant='PERL_DTRACE_PROFILE_SHA256')
+            steps = recipe.recipe_steps(case.plan, case.descriptor, case.commands,
+                                        case.descriptor['abi_flags'])
+            self.assertEqual([(row['recipe'], row['phase']) for row in steps],
+                             [('devel/cmake', 'build'), ('devel/cmake', 'install'),
+                              ('lang/llvm', 'build-tools')])
+            self.assertEqual(steps[-1]['argv'][-2:], [
+                'BUILD_TARGET=llvm-libtool-darwin llvm-install-name-tool llvm-readtapi llvm-lipo',
+                'build'])
+            self.assertNotIn('gcc16-compare', [row['id'] for row in steps])
+            for field, value in (('purpose', 'first-native-gcc16'), ('phase', 'full')):
+                changed = copy.deepcopy(case.plan)
+                if field == 'phase':
+                    changed['metadata']['darwin_tool_phase'] = value
+                else:
+                    changed[field] = value
+                with self.subTest(field=field), self.assertRaisesRegex(SDKError, 'initial.*(purpose|phase)'):
+                    recipe.recipe_steps(changed, case.descriptor, case.commands,
+                                        case.descriptor['abi_flags'])
+            case.plan['commands'] = steps
+            # Isolate the same complete command gate as the existing initial test.
+            with patch.object(recipe, 'validate_metadata_inputs', return_value=case.plan['metadata']):
+                self.assertIs(recipe.validate_bound_recipe_plan(case.plan, case.descriptor, case.commands,
+                              case.descriptor['abi_flags'], inspect_inputs=False), case.plan)
+                for kind in ('omit', 'reorder', 'target'):
+                    case.plan['commands'] = copy.deepcopy(steps)
+                    if kind == 'omit':
+                        case.plan['commands'].pop(0)
+                    elif kind == 'reorder':
+                        case.plan['commands'].reverse()
+                    else:
+                        case.plan['commands'][-1]['argv'][-2] += ' clang'
+                    with self.subTest(kind=kind), self.assertRaises(SDKError):
+                        recipe.validate_bound_recipe_plan(case.plan, case.descriptor, case.commands,
+                            case.descriptor['abi_flags'], inspect_inputs=False)
 
     def test_initial_plan_passes_the_existing_complete_source_and_command_gate(self):
         case = self.initial_recipe()
@@ -290,10 +356,14 @@ class InitialDarwinTests(unittest.TestCase):
         self.addCleanup(case.doCleanups)
         output = case.output()
         case.seed.graduate(output)
-        initial = dict(case.seed.plan, purpose='initial-darwin-tools')
-        with patch('emberbsd_sdk.bootstrap_seed._plan', return_value=initial):
-            with self.assertRaisesRegex(SDKError, 'initial tool phase'):
-                output.load()
+        for digest in (producer.INITIAL_DARWIN_PROFILE_SHA256,
+                       producer.PERL_DTRACE_PROFILE_SHA256):
+            initial = dict(case.seed.plan, purpose='initial-darwin-tools',
+                           metadata=dict(darwin_tool_phase='initial', profile=dict(sha256=digest)))
+            with self.subTest(profile=digest), \
+                    patch('emberbsd_sdk.bootstrap_seed._plan', return_value=initial):
+                with self.assertRaisesRegex(SDKError, 'initial tool phase'):
+                    output.load()
 
 
 if __name__ == '__main__':

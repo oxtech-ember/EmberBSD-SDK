@@ -43,8 +43,12 @@ The source owner retains the canonical exporter and all recipes in Ports.
 
 The optional `darwin_tool_phase` field selects `full` or `initial`.
 Its absence retains the historical full route and exact MAKECONF bytes.
-The initial route requires profile SHA256
-`d54e703a263c307917f6b3d376e83bae04720aa74d1325d530faea50cfb6b765`.
+The initial route accepts exactly these pinned profile SHA256 identities:
+`d54e703a263c307917f6b3d376e83bae04720aa74d1325d530faea50cfb6b765` and
+`d61850c6dcd6ffa7c722a623912e00588a8de13317275ff91dea70bed300f1f9`.
+The second profile only adds the explicit foundation Perl `-dtrace` choice.
+It retains the same initial/full phase boundary. Other profile identities are refused
+for the initial route. Full plans keep their historical default phase.
 It runs the same fixed metadata queries without future Darwin output roles.
 It does not permit recipe execution through this metadata stage.
 See the [initial tools boundary](bootstrap-seed.md#initial-darwin-tools).
@@ -280,3 +284,10 @@ Perl's early build shell and real cat shebang probe follow accepted host tools.
 Metadata keeps its accepted initial command routes. Embedded runtime shells
 name the final prefix; they are not executed during metadata queries.
 The earlier profile identities and fixed query roster remain unchanged.
+
+The additive `PERL_DTRACE_PROFILE_SHA256` identity recognizes the Darwin
+foundation policy with Perl DTrace instrumentation explicitly unselected. The
+Ports recipe keeps that optional feature available with an explicit qualified
+`DTRACE` provider. The SDK does not supply a DTrace executable or accept a path
+as provider qualification. Historical profile identities and their emitted
+command/ABI mappings remain unchanged.

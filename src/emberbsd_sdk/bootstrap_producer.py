@@ -47,6 +47,7 @@ SOURCE_GZIP_MAKE_SPLIT_PROFILE_SHA256 = 'c707c392394e9765fe48ce3cc10e13bb924b1c7
 RUNTIME_FLAGS_REAPPLY_PROFILE_SHA256 = '15793fddb726c8fdd56c41b5000e414060e67f9e0991fe09622e3cbdece1f17d'
 NATIVE_RUNTIME_SHELL_PROFILE_SHA256 = '42772112699331e4c091eec7d7cad0a5ce04461e7db3c807497673b69046681c'
 INITIAL_DARWIN_PROFILE_SHA256 = 'd54e703a263c307917f6b3d376e83bae04720aa74d1325d530faea50cfb6b765'
+PERL_DTRACE_PROFILE_SHA256 = 'd61850c6dcd6ffa7c722a623912e00588a8de13317275ff91dea70bed300f1f9'
 EARLY_TOOLS = tuple('awk basename cat cut date dirname env expr grep head id pwd sed sort tail tr uname uniq wc'.split())
 # Recipe builds run these bare commands, which pkgsrc does not create as tools:
 # ninja-build's bootstrap runs od, and meson's Darwin compiler checks run lipo.
@@ -78,7 +79,8 @@ def _native_provider_profile(digest):
                       METADATA_PHASE_PROFILE_SHA256, CA_METADATA_PHASE_PROFILE_SHA256,
                       GZIP_HANDOFF_PROFILE_SHA256, SOURCE_GZIP_HANDOFF_PROFILE_SHA256,
                       SOURCE_GZIP_MAKE_SPLIT_PROFILE_SHA256, RUNTIME_FLAGS_REAPPLY_PROFILE_SHA256,
-                      NATIVE_RUNTIME_SHELL_PROFILE_SHA256, INITIAL_DARWIN_PROFILE_SHA256)
+                      NATIVE_RUNTIME_SHELL_PROFILE_SHA256, INITIAL_DARWIN_PROFILE_SHA256,
+                      PERL_DTRACE_PROFILE_SHA256)
 
 
 def _recognized_profile(digest):
@@ -90,7 +92,8 @@ def darwin_tool_phase(plan):
     data = plan['metadata']
     phase = data.get('darwin_tool_phase', 'full')
     _require(type(phase) is str and phase in ('initial', 'full'), 'unsupported Darwin tool phase')
-    _require(phase != 'initial' or data['profile']['sha256'] == INITIAL_DARWIN_PROFILE_SHA256,
+    _require(phase != 'initial' or data['profile']['sha256'] in (
+                 INITIAL_DARWIN_PROFILE_SHA256, PERL_DTRACE_PROFILE_SHA256),
              'initial Darwin tools require their pinned common profile')
     return phase
 
