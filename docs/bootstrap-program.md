@@ -1,6 +1,6 @@
 # Fixed direct-source bootstrap programs
 
-These finite profiles build initial grep, cmp, hostname, basename and dirname from OS-owned contracts.
+These finite profiles build initial native programs from OS-owned contracts.
 They admit only an independently accepted seed and exact plan.
 They do not qualify a provider or bypass ordinary NativeToolset admission.
 They need no completed package dependency graph or future build output.
@@ -22,7 +22,8 @@ The SDK constructs commands from that data. It does not copy a recipe.
 
 The plan format is `emberbsd-native-gcc16-producer-plan`, version 1,
 scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`,
-`hostname-bootstrap`, `basename-bootstrap`, and `dirname-bootstrap`.
+`hostname-bootstrap`, `basename-bootstrap`, `dirname-bootstrap`, `cat-bootstrap`,
+`head-bootstrap`, and `uniq-bootstrap`.
 Each stage selects one exact source-owner manifest.
 It has exactly `format`, `version`, `scope`, `stage`, `seed_descriptor`, `host`,
 `sources`, `work_root`, `required_roles`, `resources`, `program`, and `commands`.
@@ -178,6 +179,43 @@ EMBERBSD_TEST_OS_SOURCE=/absolute/os python3 -B -m unittest discover \
 
 This checks manifests, source rosters and links. It runs no native compiler.
 Actual compilation, source analysis and runtime acceptance remain separate.
+
+## Fixed cat, head and uniq profiles
+
+These profiles use the existing OS C implementations and shared annotation header.
+Each source roster has the same seven members as the path profiles.
+Cat uses `bin/cat`; head and uniq use `usr.bin/<name>`.
+Their pinned manifests are `tools/<name>/bootstrap.json`:
+
+- cat: `f9db202d70a9cb0b39a0486f14f137d3fb29b1c00ed75fcffe93aaf86c5faf1a`.
+- head: `34f117e1bbcc6801597c85c682b5252075b939815527b9c47b2a04e79fbddfe6`.
+- uniq: `88376a81e9c96b455840a0fb636912442cba7325cee89fbbe9df8eb43401236e`.
+
+The normal `tools/cat/Makefile` keeps its compatibility-library behavior.
+The new head and uniq host recipes select native libc with `NOCOMPATLIB=yes`.
+The direct-source routes need no configure step or compatibility archive.
+The accepted native ABI must supply the interfaces documented by each owner.
+
+The OS manifests own 18 cat, 16 head and 16 uniq cases.
+They select stdin, files, options, empty inputs, unterminated lines and errors.
+Cat and head also check output after an earlier missing file.
+SDK checks only the pinned digest, finite schema and case count.
+It keeps no second table of semantic arguments or expected output.
+
+Fixture names are lowercase `.txt` basenames; values are literal UTF-8 strings.
+The runner writes them only in fresh owned work and revalidates their bytes.
+`missing.txt` must remain absent, including dangling symlinks.
+No case may replace a fixture with a generated output.
+The initial uniq contract therefore excludes its successful output-file operand.
+This finite coverage does not remove that capability from the program.
+
+The first pinned case supplies final runtime-observation arguments.
+Each profile reads its owned input fixture without waiting for stdin.
+There are 21 cat commands and 19 commands each for head and uniq.
+All source proof, selected-tool, argv, stream and drain checks remain shared.
+Use `test_bootstrap_program_filters.py` with `EMBERBSD_TEST_OS_SOURCE` to check
+real source contracts and rejection of changed manifests before a child starts.
+These checks do not establish native compilation, C analysis or runtime acceptance.
 
 ## Common execution and evidence
 

@@ -21,7 +21,8 @@ MANIFEST_SHA256 = 'cdb8f56fd1107b1cc9ccdbe4cc352599e8575b7984f3c6b6a074426c71e56
 _SOURCES = tuple('usr.bin/grep/' + name + '.c' for name in ('fastgrep', 'file', 'grep', 'queue', 'util'))
 _PROVENANCE = ('tools/grep/Makefile', 'tools/Makefile.host', 'usr.bin/grep/Makefile', 'tools/grep/README.md')
 PROGRAM_STAGES = ('grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
-                  'basename-bootstrap', 'dirname-bootstrap')
+                  'basename-bootstrap', 'dirname-bootstrap',
+                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap')
 CMP_MANIFEST_SHA256 = 'a3267d3387b08780fb1e372f5a742dccd9faa84568292506d3389f35e869ad56'
 HOSTNAME_MANIFEST_SHA256 = '32450fa3c2d68e63c13f1d32795f4d3e14cab8b5beac909ee27242cef279750d'
 _CMP_SOURCES = tuple('usr.bin/cmp/' + name + '.c' for name in ('cmp', 'misc', 'regular', 'special'))
@@ -29,11 +30,16 @@ _HOSTNAME_SOURCES = ('bin/hostname/hostname.c',)
 _BOOTSTRAP_CDEFS = 'tools/compat/bootstrap_cdefs.h'
 BASENAME_MANIFEST_SHA256 = '28d250d01b132c2fab6619094ebd2a00862baafb3610d759a0d84ad53874bd46'
 DIRNAME_MANIFEST_SHA256 = '581b5d3fced84f25c3b185de626ff78a7eb45009c01b916a255438655ba1dd47'
+CAT_MANIFEST_SHA256 = 'f9db202d70a9cb0b39a0486f14f137d3fb29b1c00ed75fcffe93aaf86c5faf1a'
+HEAD_MANIFEST_SHA256 = '34f117e1bbcc6801597c85c682b5252075b939815527b9c47b2a04e79fbddfe6'
+UNIQ_MANIFEST_SHA256 = '88376a81e9c96b455840a0fb636912442cba7325cee89fbbe9df8eb43401236e'
 _NATIVE_DIRECTORIES = {'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
-                       'basename': 'usr.bin/basename', 'dirname': 'usr.bin/dirname'}
-_NATIVE_SOURCES = {'cmp': _CMP_SOURCES, 'hostname': _HOSTNAME_SOURCES,
+                       'basename': 'usr.bin/basename', 'dirname': 'usr.bin/dirname',
+                       'cat': 'bin/cat', 'head': 'usr.bin/head', 'uniq': 'usr.bin/uniq'}
+_NATIVE_SOURCES = {'cmp': _CMP_SOURCES, 'hostname': _HOSTNAME_SOURCES, 'cat': ('bin/cat/cat.c',),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
-                      for name in ('basename', 'dirname')}}
+                      for name in ('basename', 'dirname', 'head', 'uniq')}}
+_LITERAL_CASE_COUNTS = dict(basename=14, dirname=11, cat=18, head=16, uniq=16)
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
 
@@ -68,7 +74,8 @@ def _profile(plan):
     name = stage.removesuffix('-bootstrap')
     directory = _NATIVE_DIRECTORIES[name]
     digest = {'cmp': CMP_MANIFEST_SHA256, 'hostname': HOSTNAME_MANIFEST_SHA256,
-              'basename': BASENAME_MANIFEST_SHA256, 'dirname': DIRNAME_MANIFEST_SHA256}[name]
+              'basename': BASENAME_MANIFEST_SHA256, 'dirname': DIRNAME_MANIFEST_SHA256,
+              'cat': CAT_MANIFEST_SHA256, 'head': HEAD_MANIFEST_SHA256, 'uniq': UNIQ_MANIFEST_SHA256}[name]
     return ('tools/' + name + '/bootstrap.json',
             digest, _NATIVE_SOURCES[name],
             ('tools/' + name + '/Makefile', 'tools/Makefile.host', directory + '/Makefile',
@@ -97,9 +104,16 @@ def _native_program_contract(manifest, name):
                  len(manifest['runtime_cases']) == 18 and
                  all(case['invocation'] == 'cmp' and 'stdout_nonempty' not in case
                      for case in manifest['runtime_cases']), 'unsupported fixed cmp semantic cases')
-    elif name in ('basename', 'dirname'):
-        _require(manifest['files'] == {}, 'path programs need no fixture files')
-        _literal_cases(manifest, 14 if name == 'basename' else 11)
+    elif name in _LITERAL_CASE_COUNTS:
+        if name in ('basename', 'dirname'):
+            _require(manifest['files'] == {}, 'path programs need no fixture files')
+        else:
+            files = manifest['files']
+            _require(isinstance(files, dict) and bool(files) and
+                     all(isinstance(key, str) and re.fullmatch(r'[a-z][a-z0-9-]*\.txt', key) and
+                         key != 'missing.txt' and isinstance(value, str) for key, value in files.items()),
+                     'filter programs need bounded immutable fixture files')
+        _literal_cases(manifest, _LITERAL_CASE_COUNTS[name])
     else:
         # These are the only accepted tails. No hostname operand can reach a child.
         _require(manifest['files'] == {} and manifest['runtime_cases'] == [
@@ -204,7 +218,7 @@ def program_steps(plan, descriptor, commands, flags):
         result.append(dict(id='case-' + case['name'], phase='program-case', cwd=work, env=dict(env),
                            expected_exit=case['exit'], argv=[*commands['sh'], '-c', command]))
     observed = dict(env, DYLD_PRINT_LIBRARIES='1')
-    tail = (manifest['runtime_cases'][0]['args'] if manifest['name'] in ('basename', 'dirname')
+    tail = (manifest['runtime_cases'][0]['args'] if manifest['name'] in _LITERAL_CASE_COUNTS
             else _RUNTIME_ARGS[manifest['name']])
     result.append(dict(id='runtime-observation', phase='run', cwd=work, env=observed, expected_exit=0,
                        argv=[os.path.join(work, manifest['name']), *tail]))
@@ -300,7 +314,7 @@ def validate_program_plan(plan, descriptor, commands, flags):
         blob = hashlib.sha1(b'blob ' + str(len(raw)).encode('ascii') + b'\0' + raw).hexdigest()
         _require(set(row) == {'git_blob', 'sha256'} and row['git_blob'] == blob and
                  row['sha256'] == inventory[relative]['sha256'], 'bootstrap program Git blob or content differs')
-    if manifest['name'] in ('grep', 'cmp'):
+    if manifest['name'] in ('grep', 'cmp', 'cat', 'head', 'uniq'):
         _require(entry(os.path.join(plan['work_root'], 'missing.txt')) is None,
                  manifest['name'] + ' missing-file control already exists')
     _require(plan['commands'] == program_steps(plan, descriptor, commands, flags),

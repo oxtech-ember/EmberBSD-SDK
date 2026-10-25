@@ -61,7 +61,7 @@ class NativeProgramTests(unittest.TestCase):
         case.plan['stage'] = name + '-bootstrap'
         relative, _, sources, provenance = program._profile(case.plan)
         case.manifest.update(name=name, canonical_host_recipe='tools/' + name + '/Makefile',
-            source_makefile=('bin/hostname' if name == 'hostname' else 'usr.bin/' + name) + '/Makefile',
+            source_makefile=(('bin/' if name in ('hostname', 'cat') else 'usr.bin/') + name) + '/Makefile',
             sources=list(sources),
             headers=(['usr.bin/cmp/extern.h'] if name == 'cmp' else []) + [program._BOOTSTRAP_CDEFS],
             include_dirs=['usr.bin/cmp'] if name == 'cmp' else [],
@@ -75,6 +75,15 @@ class NativeProgramTests(unittest.TestCase):
                            stdin='', exit=0 if index == 0 else 1 if index == 1 else 2, stdout='')
                 row.update(dict(stderr='') if index < 2 else dict(stderr_nonempty=True))
                 case.manifest['runtime_cases'].append(row)
+        elif name in ('cat', 'head', 'uniq'):
+            case.manifest['files'] = {'input.txt': 'synthetic input\n', 'empty.txt': ''}
+            count = 18 if name == 'cat' else 16
+            case.manifest['runtime_cases'] = [dict(name='case' + str(index), invocation=name,
+                args=['input.txt'], stdin='', exit=0, stdout='synthetic result\n', stderr='')
+                for index in range(count)]
+            case.manifest['runtime_cases'][-1].update(args=['missing.txt'], exit=1, stdout='')
+            del case.manifest['runtime_cases'][-1]['stderr']
+            case.manifest['runtime_cases'][-1]['stderr_nonempty'] = True
         elif name in ('basename', 'dirname'):
             case.manifest['runtime_cases'] = path_cases(name)
         else:
