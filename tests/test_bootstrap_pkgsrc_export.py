@@ -174,13 +174,19 @@ class SourceFixtureDependencyTests(TemporaryCase):
         invocations = []
 
         def selected_only(argv, *args, **kwargs):
-            self.assertIn(Path(argv[0]).name, ('git', Path(os.sys.executable).name))
+            executable = shutil.which(argv[0])
+            self.assertIsNotNone(executable)
+            self.assertIn(os.path.realpath(executable),
+                          (os.path.realpath(shutil.which('git')), os.path.realpath(os.sys.executable)))
             invocations.append(argv)
             return popen(argv, *args, **kwargs)
 
         result = unittest.TestResult()
         case = PkgsrcExportSourceTests('test_worker_imports_only_hashed_current_ports_exporter')
-        with patch('subprocess.Popen', side_effect=selected_only):
+        alias = self.root / 'selected-python-alias'
+        alias.symlink_to(os.sys.executable)
+        with patch.object(os.sys, 'executable', str(alias)), \
+                patch('subprocess.Popen', side_effect=selected_only):
             case.run(result)
         self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
         self.assertTrue(invocations)
