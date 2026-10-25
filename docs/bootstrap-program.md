@@ -118,8 +118,21 @@ Files and symlinks may declare `same_inode_as` for another same-type expected en
 This relation compares device/inode without following either entry.
 Reports retain the verified relation, not portable expectations for raw inode numbers.
 
+Files, directories, and symlinks can also declare optional `atime_ns` and `mtime_ns` fields.
+Each value must be an integer from `-2**63` through `2**63 - 1`, in nanoseconds since the Unix epoch.
+Boolean and floating-point values are refused. Negative values represent times before the epoch.
+Setup applies fixed times after fixture creation and mode changes, without following links.
+It preserves an omitted timestamp and requires an exact roundtrip before the child can start.
+Host or filesystem timestamp limits cause refusal; the controller never rounds an expected value.
+Hardlink fixtures inherit their regular target's times. They cannot assign separate inode times.
+Final expectations can assert either time on each regular-file alias independently.
+Absent entries cannot declare timestamps. Existing contracts without timestamps remain unchanged.
+
 After child drainage, SDK Python checks the bounded tree with no-follow directory descriptors.
 Directory enumeration streams at most the remaining node budget plus one refusal entry before sorting.
+It records directory metadata before descent and all file metadata before reading content or link text.
+These snapshots preserve the original access time, including access through another hardlink alias.
+Observation can itself update access times. The report contains only timestamps requested by the contract.
 It rejects unexpected entries, special files, changed types, wrong modes, and differing bytes or links.
 It creates a flat `<case-name>.filesystem.json` observation in the finite output roster.
 Historical validation checks that hash-bound report with the same source-owned contract.

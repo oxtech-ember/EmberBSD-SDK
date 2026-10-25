@@ -16,6 +16,7 @@ from .jsonio import json_bytes
 PROGRAMS = ('chmod', 'mkdir', 'ln', 'rmdir', 'rm')
 MAX_NODES = 64
 MAX_BYTES = 1024 * 1024
+_TIMES = ('atime_ns', 'mtime_ns')
 _DIRECTORY = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
 
 
@@ -73,12 +74,18 @@ def validate(value):
                 fields['absent'] = {'type'}
             allowed = fields.get(kind, set())
             optional = ({'same_inode_as'} if not initial and kind in ('file', 'symlink') else set())
+            if kind in ('file', 'directory', 'symlink'):
+                optional.update(_TIMES)
             if not initial and kind == 'symlink':
                 optional.add('mode')
             _require(bool(allowed) and allowed <= set(row) <= allowed | optional,
                      'unsupported filesystem entry fields or type')
             if 'mode' in row:
                 _mode(row['mode'])
+            for field in _TIMES:
+                if field in row:
+                    _require(type(row[field]) is int and -(2**63) <= row[field] < 2**63,
+                             'filesystem timestamp needs signed 64-bit integer nanoseconds')
             if kind == 'file':
                 total += data_size(row['data'])
             if 'target' in row:
@@ -192,6 +199,23 @@ def prepare(work, case, *, key=None):
                         os.fchmod(child, _mode(row['mode']))
                     finally:
                         os.close(child)
+        # Complete child creation and mode changes before assigning directory
+        # times. Hardlink fixtures inherit the regular target's times.
+        for name, row in sorted(value['fixtures'].items(), reverse=True):
+            if not any(field in row for field in _TIMES):
+                continue
+            with _parent(root_fd, name) as (fd, leaf):
+                before = os.stat(leaf, dir_fd=fd, follow_symlinks=False)
+                check_type = {'file': stat.S_ISREG, 'directory': stat.S_ISDIR,
+                              'symlink': stat.S_ISLNK}[row['type']]
+                _require(check_type(before.st_mode), 'filesystem timestamp target changed type')
+                times = tuple(row.get(field, getattr(before, 'st_' + field)) for field in _TIMES)
+                os.utime(leaf, ns=times, dir_fd=fd, follow_symlinks=False)
+                after = os.stat(leaf, dir_fd=fd, follow_symlinks=False)
+                _require((before.st_dev, before.st_ino, before.st_mode) ==
+                         (after.st_dev, after.st_ino, after.st_mode) and
+                         (after.st_atime_ns, after.st_mtime_ns) == times,
+                         'filesystem timestamp did not roundtrip exactly')
     finally:
         os.close(root_fd)
     return root
@@ -216,7 +240,7 @@ def observe(work, case, *, key=None):
     key = key or case['name']
     root = case_directory(work, key)
     work_fd = os.open(work, _DIRECTORY)
-    entries, identities = {}, {}
+    entries, identities, snapshots = {}, {}, {}
     total = 0
 
     def walk(fd, prefix=''):
@@ -234,35 +258,28 @@ def observe(work, case, *, key=None):
             _require(name in value['expect'] and len(entries) < MAX_NODES,
                      'filesystem child created an undeclared entry')
             st = os.stat(leaf, dir_fd=fd, follow_symlinks=False)
+            snapshots[name] = st
             identities[name] = (st.st_dev, st.st_ino)
             row = dict(mode=f'{stat.S_IMODE(st.st_mode):04o}')
+            row.update({field: getattr(st, 'st_' + field) for field in _TIMES
+                        if field in value['expect'][name]})
             if stat.S_ISDIR(st.st_mode):
                 row['type'] = 'directory'
                 entries[name] = row
                 child = os.open(leaf, _DIRECTORY, dir_fd=fd)
                 try:
-                    _require(os.fstat(child).st_ino == st.st_ino, 'filesystem directory changed during observation')
+                    opened = os.fstat(child)
+                    _require((opened.st_dev, opened.st_ino) == identities[name],
+                             'filesystem directory changed during observation')
                     walk(child, name + '/')
                 finally:
                     os.close(child)
             elif stat.S_ISREG(st.st_mode):
                 _require(st.st_size <= MAX_BYTES, 'filesystem output exceeds its bound')
-                file_fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
-                with os.fdopen(file_fd, 'rb') as stream:
-                    before = os.fstat(stream.fileno())
-                    _require(stat.S_ISREG(before.st_mode) and
-                             (before.st_dev, before.st_ino) == identities[name], 'filesystem file changed type or identity')
-                    raw = stream.read(MAX_BYTES + 1)
-                    after = os.fstat(stream.fileno())
-                total += len(raw)
-                _require(total <= MAX_BYTES and len(raw) == st.st_size and
-                         (before.st_size, before.st_mtime_ns, before.st_ctime_ns) ==
-                         (after.st_size, after.st_mtime_ns, after.st_ctime_ns),
-                         'filesystem data changed during observation or exceeds its bound')
-                row.update(type='file', size=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+                row['type'] = 'file'
                 entries[name] = row
             elif stat.S_ISLNK(st.st_mode):
-                row.update(type='symlink', target=os.readlink(leaf, dir_fd=fd))
+                row['type'] = 'symlink'
                 if 'mode' not in value['expect'][name]:
                     del row['mode']
                 entries[name] = row
@@ -274,6 +291,35 @@ def observe(work, case, *, key=None):
             case_fd = os.open(leaf, _DIRECTORY, dir_fd=fd)
             try:
                 walk(case_fd)
+                # Capture every alias before reading file data or link text.
+                # Those reads can update atime, including a peer hardlink.
+                for name, row in entries.items():
+                    if row['type'] == 'directory':
+                        continue
+                    st = snapshots[name]
+                    with _parent(case_fd, name) as (parent_fd, member):
+                        if row['type'] == 'symlink':
+                            row['target'] = os.readlink(member, dir_fd=parent_fd)
+                            after = os.stat(member, dir_fd=parent_fd, follow_symlinks=False)
+                            _require((st.st_dev, st.st_ino, st.st_mode, st.st_mtime_ns, st.st_ctime_ns) ==
+                                     (after.st_dev, after.st_ino, after.st_mode, after.st_mtime_ns, after.st_ctime_ns),
+                                     'filesystem link changed during observation')
+                            continue
+                        file_fd = os.open(member, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+                        with os.fdopen(file_fd, 'rb') as stream:
+                            before = os.fstat(stream.fileno())
+                            _require(stat.S_ISREG(before.st_mode) and
+                                     (before.st_dev, before.st_ino) == identities[name],
+                                     'filesystem file changed type or identity')
+                            raw = stream.read(MAX_BYTES + 1)
+                            after = os.fstat(stream.fileno())
+                        total += len(raw)
+                        _require(total <= MAX_BYTES and len(raw) == st.st_size and
+                                 (st.st_mode, st.st_size, st.st_mtime_ns, st.st_ctime_ns) ==
+                                 (before.st_mode, before.st_size, before.st_mtime_ns, before.st_ctime_ns) ==
+                                 (after.st_mode, after.st_size, after.st_mtime_ns, after.st_ctime_ns),
+                                 'filesystem data changed during observation or exceeds its bound')
+                        row.update(size=len(raw), sha256=hashlib.sha256(raw).hexdigest())
             finally:
                 os.close(case_fd)
         for name, wanted in value['expect'].items():
