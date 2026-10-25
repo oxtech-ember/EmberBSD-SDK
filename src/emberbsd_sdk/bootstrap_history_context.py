@@ -11,12 +11,15 @@ import os
 
 from .errors import SDKError
 from .paths import stable_identity
+from .jsonio import MAX_JSON, loads_json
 
 _CURRENT = ContextVar('bootstrap_history_validation', default=None)
 MAX_NODES = 256
 MAX_DEPTH = 64
 MAX_GUARDS = 32768
 MAX_KEY_BYTES = 16 * 1024 * 1024
+MAX_JSON_DOCUMENTS = 1024
+MAX_JSON_VALIDATED_BYTES = 64 * 1024 * 1024
 
 
 def _digest(value):
@@ -37,6 +40,8 @@ class _Context:
         self.guards = {}
         self.guard_weight = 0
         self.checking = False
+        self.json_validated = set()
+        self.json_weight = 0
 
     def observe(self, key, value, weight=1):
         if self.checking or not self.frames:
@@ -106,6 +111,32 @@ def validate_history(arguments, validate, *, memoize=True):
     finally:
         if token is not None:
             _CURRENT.reset(token)
+
+
+def load_json(data, *, max_bytes=MAX_JSON, max_depth=32):
+    """Reuse strict validation of exact bytes; return a fresh mutable value."""
+    context = _CURRENT.get()
+    if context is None or type(data) is not bytes:
+        return loads_json(data, max_bytes=max_bytes, max_depth=max_depth)
+    key = (hashlib.sha256(data).digest(), len(data), max_bytes, max_depth,
+           MAX_JSON_DOCUMENTS, MAX_JSON_VALIDATED_BYTES)
+    try:
+        if key in context.json_validated:
+            # The identical bytes passed all strict checks under these limits.
+            # Decode again in C instead of sharing or deep-copying mutable objects.
+            return json.loads(data)
+        value = loads_json(data, max_bytes=max_bytes, max_depth=max_depth)
+        if (len(context.json_validated) < MAX_JSON_DOCUMENTS and
+                context.json_weight + len(data) <= MAX_JSON_VALIDATED_BYTES):
+            context.json_validated.add(key)
+            context.json_weight += len(data)
+        return value
+    except (SDKError, UnicodeError, ValueError, RecursionError) as exc:
+        context.json_validated.clear()
+        context.json_weight = 0
+        if isinstance(exc, SDKError):
+            raise
+        raise SDKError(f'invalid JSON: {exc}') from exc
 
 
 def observe_file(path, digest):

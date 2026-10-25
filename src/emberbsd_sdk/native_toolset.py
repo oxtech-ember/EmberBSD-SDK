@@ -14,7 +14,7 @@ from types import MappingProxyType
 from .errors import SDKError
 from . import paths
 from .inventory import sha256_file, snapshot_installed_tree, snapshot_tree
-from .jsonio import MAX_JSON, loads_json
+from .jsonio import MAX_JSON
 from .paths import canonical_existing, inside, open_regular, verify_stable
 
 NATIVE_TOOLSET_API = 1
@@ -110,7 +110,8 @@ def _file(reference):
 
 
 def _json(reference):
-    result = loads_json(_bytes(reference))
+    from .bootstrap_history_context import load_json
+    result = load_json(_bytes(reference))
     _require(isinstance(result, dict), 'expected a metadata object')
     return result
 

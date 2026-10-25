@@ -147,6 +147,18 @@ One top-level history validation owns an in-memory context for its nested histor
 The key includes complete history, provider and descriptor values and the input-inspection mode.
 A previously completed node can reuse its unknown-list result within that call only.
 No context, result or receipt cache survives the top-level call, including a failed call.
+
+Repeated JSON references still read stable bytes and verify SHA256 on every access.
+Within this scope, strict JSON checks can reuse a successful exact-byte validation.
+The marker binds the byte digest, length, parser limits and reuse budgets.
+Each return uses a new decoded object. Callers never share mutable parsed metadata.
+The first read retains duplicate-key, nesting, UTF-8 and finite-number checks.
+Changed bytes or limits cannot reuse that marker. Parser errors discard all JSON markers.
+At most 1,024 markers cover 64 MiB of distinct validated document bytes.
+Only markers are retained, not documents or decoded objects.
+When either budget is full, reads continue through the full strict parser.
+JSON reads outside this history scope keep their existing strict behavior.
+
 Separate seed loads always start fresh. Historical and current input-inspection modes cannot share a result.
 
 A memo hit rehashes the files observed during the original validation.
@@ -163,7 +175,7 @@ Active-node recurrence refuses cycles. The scope permits at most 256 history nod
 64 active levels and 32768 input guard entries. A tree consumes one entry per member,
 plus its root; separately hashed files also consume entries.
 An encoded node key or inventory fingerprint input is limited to 16 MiB.
-Exceeding a bound fails validation; it never truncates a graph or omits evidence.
+Exceeding a graph or input-guard bound fails validation. It never truncates a graph or omits evidence.
 The context supplies no admission and never starts a process.
 
 `test_bootstrap_history_context` checks shared DAG expansion counts, cycles,
