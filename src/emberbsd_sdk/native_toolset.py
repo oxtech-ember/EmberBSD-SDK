@@ -269,7 +269,7 @@ def _flags(value, allowed_roots=None, *, host=None):
     return MappingProxyType(result)
 
 
-def _payload(descriptor, required_roles):
+def _payload(descriptor, required_roles, *, _current_inventory=None):
     """Shared current-byte checks for native and separately scoped seed inputs."""
     root = _absolute(descriptor['bundle_root'])
     _require(canonical_existing(root) == root and os.path.isdir(root),
@@ -279,7 +279,11 @@ def _payload(descriptor, required_roles):
     inventory = _json(descriptor['inventory'])
     _require(not inside(descriptor['inventory']['path'], root),
              'inventory must be outside its payload')
-    _require(snapshot_tree(root) == inventory, 'native bundle inventory changed')
+    if _current_inventory is not None:
+        _require(all(_current_inventory.get(path) == row for path, row in inventory.items()),
+                 'original native bundle entries changed')
+    _require(snapshot_tree(root) == (inventory if _current_inventory is None else _current_inventory),
+             'native bundle inventory changed')
     tools, records = {}, descriptor['tools']
     _require(isinstance(records, dict) and records, 'explicit tool members are required')
     _require(isinstance(required_roles, (list, tuple, set, frozenset)) and required_roles,
@@ -431,7 +435,64 @@ def load_native_toolset(path, *, descriptor_sha256, accepted_producer_receipt, r
         raise SDKError(f'invalid native toolset: {exc}') from exc
 
 
-def _load(path, descriptor_sha256, accepted_producer_receipt, required_roles):
+def _check_file_identities(value):
+    """Keep fresh qualification evidence separate from the original checks."""
+    if isinstance(value, dict):
+        if set(value) == {'path', 'sha256'}:
+            info = os.stat(_file(value))
+            return {(info.st_dev, info.st_ino)}
+        return set().union(*(_check_file_identities(row) for row in value.values()))
+    if isinstance(value, list):
+        return set().union(*(_check_file_identities(row) for row in value))
+    return set()
+
+
+def _original_output(build, name, provider, descriptor, receipt, originals):
+    """Reuse one directly qualified bootstrap output without changing its scope."""
+    reference = build['original_output']
+    _require(isinstance(reference, dict) and set(reference) ==
+             {'descriptor', 'qualification', 'provider'} and reference['provider'] == name,
+             'invalid original bootstrap output reference')
+    original = _json(reference['descriptor'])
+    accepted = _json(reference['qualification'])
+    for key in ('bundle_root', 'host', 'compiler', 'host_abi', 'abi_flags', 'driver_components'):
+        _require(original[key] == descriptor[key], f'original output {key} changed')
+    for key in ('sources', 'providers', 'tools'):
+        _require(all(descriptor[key].get(member) == row for member, row in original[key].items()),
+                 f'original output {key} changed')
+    _require(original['providers'].get(name) == provider,
+             'original output provider changed')
+    for member in original['providers']:
+        old_build = _json(accepted['provider_builds'][member])
+        current = _json(receipt['provider_builds'][member])
+        _require('original_output' not in old_build,
+                 'original bootstrap build contains nested reuse')
+        if old_build.get('accepted_input_scope') == 'bootstrap-seed':
+            expected = dict(reference, provider=member)
+            _require(current.get('original_output') == expected and
+                     {key: row for key, row in current.items() if key != 'original_output'} == old_build,
+                     'original bootstrap build changed')
+        else:
+            _require(current == old_build, 'original qualified build changed')
+    _require(receipt['checks'] != accepted['checks'] and
+             _check_file_identities(receipt['checks']).isdisjoint(
+                 _check_file_identities(accepted['checks'])) and
+             _check_file_identities(receipt['execution_audit']).isdisjoint(
+                 _check_file_identities(accepted['execution_audit'])),
+             'new qualification must have fresh probes, queries and audit')
+    identity = tuple((reference[key]['path'], reference[key]['sha256'])
+                     for key in ('descriptor', 'qualification'))
+    _require(not originals or identity in originals,
+             'reused providers must reference one original foundation')
+    if identity not in originals:
+        _load(reference['descriptor']['path'], reference['descriptor']['sha256'],
+              reference['qualification'], tuple(original['tools']),
+              _current_inventory=_json(descriptor['inventory']))
+        originals[identity] = original
+
+
+def _load(path, descriptor_sha256, accepted_producer_receipt, required_roles, *,
+          _current_inventory=None):
     descriptor_sha256 = _sha(descriptor_sha256)
     descriptor = _json(dict(path=os.fspath(path), sha256=descriptor_sha256))
     _envelope(descriptor, 'emberbsd-native-toolset')
@@ -457,6 +518,7 @@ def _load(path, descriptor_sha256, accepted_producer_receipt, required_roles):
     for source in sources.values():
         _source(source)
     _require(isinstance(providers, dict) and providers, 'provider provenance is required')
+    originals, origins = {}, {}
     for name, provider in providers.items():
         _require(isinstance(name, str) and _ROLE.fullmatch(name), 'invalid provider name')
         _require(provider['source'] in sources, 'unknown provider source')
@@ -466,6 +528,7 @@ def _load(path, descriptor_sha256, accepted_producer_receipt, required_roles):
                  'provider recipe must be source-relative without traversal')
         _sha(provider['recipe_sha256'])
         build = _json(receipt['provider_builds'][name])
+        origins[name] = build.get('accepted_input_scope')
         _envelope(build, 'emberbsd-native-provider-build')
         _require(build.get('status') == 'PASS' and build.get('host') == host and
                  build.get('source') == sources[provider['source']] and
@@ -473,20 +536,32 @@ def _load(path, descriptor_sha256, accepted_producer_receipt, required_roles):
                  build.get('recipe_sha256') == provider['recipe_sha256'],
                  'provider build does not match its source and recipe')
         _gcc(build['compiler'], host)
+        _require('original_output' not in build or
+                 (_current_inventory is None and build.get('accepted_input_scope') == 'bootstrap-seed'),
+                 'original output is limited to direct bootstrap provider reuse')
         if build.get('accepted_input_scope') == 'bootstrap-seed':
             # Only the first native GCC16 recipe closure can graduate. The seed
             # scope remains unchanged. Final ordinary qualification is still required.
             from .bootstrap_seed import verify_native_gcc16_graduation
-            verify_native_gcc16_graduation(
-                build.get('bootstrap_graduation'), output_descriptor=descriptor,
-                output_descriptor_sha256=descriptor_sha256, provider=provider)
+            if 'original_output' in build:
+                _original_output(build, name, provider, descriptor, receipt, originals)
+            else:
+                verify_native_gcc16_graduation(
+                    build.get('bootstrap_graduation'), output_descriptor=descriptor,
+                    output_descriptor_sha256=descriptor_sha256, provider=provider)
         else:
             _require(build.get('accepted_input_scope') == 'qualified-native',
                      'bootstrap seed is not an ordinary native provider')
             _require('bootstrap_graduation' not in build,
                      'bootstrap input scope cannot be relabeled as qualified-native')
         _file(build['build_log'])
-    root, inventory, tools, records, abi_inventories, flags = _payload(descriptor, required_roles)
+    if originals:
+        inherited = set().union(*(set(row['providers']) for row in originals.values()))
+        _require(all(name in inherited or origin == 'qualified-native'
+                     for name, origin in origins.items()),
+                 'added providers require qualified-native builds')
+    root, inventory, tools, records, abi_inventories, flags = _payload(
+        descriptor, required_roles, _current_inventory=_current_inventory)
     abi = descriptor['host_abi']
     _require(receipt.get('host_abi') == abi and receipt.get('abi_flags') == descriptor['abi_flags'],
              'producer native ABI inputs mismatch')
@@ -524,9 +599,13 @@ def _load(path, descriptor_sha256, accepted_producer_receipt, required_roles):
              and audit.get('host') == host and audit.get('tools') == records
              and audit.get('undeclared_tools') == [] and audit.get('path_searches') == []
              and audit.get('undeclared_abi_inputs') == [], 'native execution closure was not accepted')
+    if originals:
+        from .bootstrap_seed import _dynamic_closure
+        _dynamic_closure(audit.get('dynamic_dependencies'), descriptor)
     # Recheck payload bytes after evidence inspection. Consumers still must keep
     # the selected bundle immutable and hold their normal workspace leases.
-    _require(snapshot_tree(root) == inventory, 'native bundle changed during validation')
+    _require(snapshot_tree(root) == (inventory if _current_inventory is None else _current_inventory),
+             'native bundle changed during validation')
     for abi_root, abi_inventory in abi_inventories:
         _require(snapshot_tree(abi_root) == abi_inventory, 'native ABI changed during validation')
     return NativeToolset(descriptor_sha256, MappingProxyType(dict(accepted_producer_receipt)), root,
