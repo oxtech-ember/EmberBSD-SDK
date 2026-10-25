@@ -23,7 +23,11 @@ def hash_file(path, algorithm='sha256'):
         if stable_identity(os.fstat(handle.fileno())) != stable_identity(before):
             raise SDKError(f'file changed during inspection: {path}')
     verify_stable(path, before)
-    return digest.hexdigest()
+    result = digest.hexdigest()
+    if algorithm == 'sha256':
+        from .bootstrap_history_context import observe_file
+        observe_file(path, result)
+    return result
 
 
 def sha256_file(path):
@@ -35,7 +39,11 @@ INSTALLED_TREE_INVENTORY_API = 1
 
 def snapshot_tree(root, machine=None, exclude=()):
     """Inspect a strict payload. Links must resolve within the payload root."""
-    return _snapshot_tree(root, machine, exclude, installed_links=False)
+    exclude = tuple(exclude)
+    rows = _snapshot_tree(root, machine, exclude, installed_links=False)
+    from .bootstrap_history_context import observe_tree
+    observe_tree(root, machine, exclude, rows)
+    return rows
 
 
 def snapshot_installed_tree(root, exclude=()):

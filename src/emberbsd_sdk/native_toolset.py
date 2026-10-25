@@ -95,6 +95,8 @@ def _bytes(reference, limit=MAX_JSON):
     verify_stable(path, before)
     _require(len(data) <= limit, f'evidence exceeds size limit: {path}')
     _require(hashlib.sha256(data).hexdigest() == expected, f'SHA256 mismatch: {path}')
+    from .bootstrap_history_context import observe_file
+    observe_file(path, expected)
     return data
 
 
