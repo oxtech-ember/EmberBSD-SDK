@@ -268,6 +268,45 @@ class GNUProgramTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'source tree changed'):
             self.case.validate()
 
+    def test_patch_digest_filters_only_complete_lf_rcs_records(self):
+        self.assertEqual(gnu._patch_sha1(b'first\r\n$NetBSD: fixture $\r\n\xff\rbare\nlast'),
+                         hashlib.sha1(b'first\r\n\xff\rbare\nlast').hexdigest())
+        self.assertEqual(gnu._patch_sha1(b'body\n$NetBSD: final unterminated record'),
+                         hashlib.sha1(b'body\n').hexdigest())
+
+    def test_canonical_patch_digest_excludes_rcs_but_keeps_raw_sha256_and_body_checks(self):
+        self.configure()
+        value = self.case.plan['program']
+        reference = value['patches'][0]
+        path = Path(reference['path'])
+        info = self.owner / 'pkgsrc/devel/diffutils/distinfo'
+        before_digest = hashlib.sha1(path.read_bytes()).hexdigest()
+        body = b'\n--- value.orig\n+++ value\n@@ -1 +1 @@\n-before\n+after\n'
+        digest = hashlib.sha1(body).hexdigest()
+        canonical = info.read_text().replace(' = ' + before_digest + '\n', ' = ' + digest + '\n')
+
+        def refresh(data, distinfo):
+            path.write_bytes(data)
+            info.write_text(distinfo)
+            reference['sha256'] = hashlib.sha256(data).hexdigest()
+            value['owner'] = self.tree(self.owner, owner=True)
+
+        data = b'$NetBSD: first RCS record $\n' + body
+        refresh(data, canonical)
+        self.case.validate()
+        raw_digest = hashlib.sha1(data).hexdigest()
+        refresh(data, canonical.replace(' = ' + digest + '\n', ' = ' + raw_digest + '\n'))
+        with self.assertRaisesRegex(SDKError, 'canonical patch differs from distinfo'):
+            self.case.validate()
+        refresh(b'$NetBSD: changed RCS record $\n' + body, canonical)
+        self.case.validate()
+        reference['sha256'] = '0' * 64
+        with self.assertRaisesRegex(SDKError, 'patches are missing, reordered or replaced'):
+            self.case.validate()
+        refresh(b'$NetBSD: changed RCS record $\n' + body.replace(b'+after', b'+changed'), canonical)
+        with self.assertRaisesRegex(SDKError, 'canonical patch differs from distinfo'):
+            self.case.validate()
+
     def test_archive_and_canonical_distinfo_hashes_remain_mandatory(self):
         self.configure()
         reference = self.case.plan['program']['archive']

@@ -27,6 +27,15 @@ MANIFESTS = {
 _DRIVERS = {'cc', 'cxx', 'cpp', 'as', 'ld', 'ar', 'ranlib', 'nm', 'strip', 'gmake'}
 
 
+def _patch_sha1(raw):
+    # pkgsrc mk/checksum/checksum.awk and distinfo.awk remove full LF records
+    # that contain a NetBSD RCS ID before they calculate the patch digest.
+    lines = raw.split(b'\n')
+    filtered = b''.join(line + (b'\n' if index < len(lines) - 1 else b'')
+                        for index, line in enumerate(lines) if b'$NetBSD' not in line)
+    return hashlib.sha1(filtered).hexdigest()
+
+
 def gnu_manifest(plan):
     name, recipe, _, digest, _ = MANIFESTS[plan['stage']]
     root = plan['program']['owner']['root']
@@ -119,7 +128,7 @@ def _owner(plan, descriptor):
              [str(len(raw))], 'GNU archive size differs from canonical distinfo')
     for patch in patches:
         _require(re.findall(r'^SHA1 \(' + re.escape(Path(patch['path']).name) + r'\) = ([0-9a-f]+)$',
-                            distinfo, re.M) == [hashlib.sha1(_bytes(patch)).hexdigest()],
+                            distinfo, re.M) == [_patch_sha1(_bytes(patch))],
                  'GNU canonical patch differs from distinfo')
     return manifest
 

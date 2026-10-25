@@ -26,7 +26,8 @@ The plan keeps the direct-program fields documented in
 `manifest` and `archive` are regular `{path, sha256}` references.
 `patches` is the complete ordered list of canonical patch references.
 The archive must match the recipe's SHA256, SHA512, BLAKE2s and Size values.
-Each patch must also match its distinfo SHA1.
+Each patch must also match its pkgsrc distinfo SHA1 after complete LF records
+that contain `$NetBSD` are removed. Its raw SHA256 and owner Git blob remain pinned.
 
 `source` and `owner` each have `root`, `source`, `inventory`, and `source_proof`.
 Both source pins repeat `sources.ports`. For the release tree this names its
