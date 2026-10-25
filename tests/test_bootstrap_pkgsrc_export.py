@@ -4,7 +4,9 @@
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
+import unittest
 
 from test_core import TemporaryCase
 from emberbsd_sdk.bootstrap_pkgsrc_export import (
@@ -29,6 +31,13 @@ def write(path, data):
     return path
 
 
+def data_tool(path, role):
+    """Create executable metadata bytes. This fixture must never run."""
+    path = write(path, f'{role} fixture bytes\n')
+    path.chmod(0o755)
+    return path
+
+
 def commit(root, *paths):
     git(root, 'add', '-f', *(paths or ('.',)))
     git(root, '-c', 'user.name=SDK fixture', '-c', 'user.email=fixture@example.invalid',
@@ -45,8 +54,7 @@ class PkgsrcExportToolTests(TemporaryCase):
     def tools(self, patch_name='patch'):
         tools = {}
         for role, name in (('git', 'git'), ('patch', patch_name)):
-            path = write(self.root / name, f'{role} fixture bytes\n')
-            path.chmod(0o755)
+            path = data_tool(self.root / name, role)
             tools[role] = dict(path=str(path), sha256=sha256_file(path))
         return tools
 
@@ -137,8 +145,11 @@ class SourceFixture(TemporaryCase):
             'commit', '-qm', 'Pin pkgsrc')
         git(self.ports, 'remote', 'add', 'origin',
             'https://github.com/oxtech-ember/EmberBSD-Ports.git')
-        self.git = os.path.realpath(subprocess.check_output(['which', 'git'], text=True).strip())
-        self.patch = os.path.realpath(subprocess.check_output(['which', 'patch'], text=True).strip())
+        selected_git = shutil.which('git')
+        self.assertIsNotNone(selected_git, 'Git is required for fixture repositories')
+        self.git = os.path.realpath(selected_git)
+        # The fixture exporter invokes only Git. No patch execution is claimed.
+        self.patch = str(data_tool(self.root / 'patch', 'patch'))
         self.python = os.path.realpath(os.sys.executable)
         self.manifest_path = self.root / 'inputs/ports-manifest.json'
         self.descriptor_path = self.root / 'inputs/export-source.json'
@@ -155,6 +166,24 @@ class SourceFixture(TemporaryCase):
             'git': dict(path=self.git, sha256=sha256_file(self.git)),
             'patch': dict(path=self.patch, sha256=sha256_file(self.patch)),
         }
+
+
+class SourceFixtureDependencyTests(TemporaryCase):
+    def test_source_setup_and_worker_need_only_git_and_selected_python(self):
+        popen = subprocess.Popen
+        invocations = []
+
+        def selected_only(argv, *args, **kwargs):
+            self.assertIn(Path(argv[0]).name, ('git', Path(os.sys.executable).name))
+            invocations.append(argv)
+            return popen(argv, *args, **kwargs)
+
+        result = unittest.TestResult()
+        case = PkgsrcExportSourceTests('test_worker_imports_only_hashed_current_ports_exporter')
+        with patch('subprocess.Popen', side_effect=selected_only):
+            case.run(result)
+        self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+        self.assertTrue(invocations)
 
 
 class PkgsrcExportSourceTests(SourceFixture):
