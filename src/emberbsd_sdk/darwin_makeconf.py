@@ -160,6 +160,7 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
     variables = {'EMBERBSD_DARWIN_HOST_' + name.upper(): _word(value) for name, value in facts.items()}
     variables.update(WRKOBJDIR=os.path.join(work, 'obj'), DISTDIR=_path(distfiles),
                      PACKAGES=_path(packages), LOCALBASE=_path(prefix), PKG_DBDIR=_path(pkgdb),
+                     BATCH='yes',
                      EMBERBSD_DARWIN_MAKE=shlex.join(make), EMBERBSD_DARWIN_GMAKE=shlex.join(gmake),
                      EMBERBSD_DARWIN_SH=tools['sh'], EMBERBSD_DARWIN_TOOL_PHASE=tool_phase,
                      OSX_SDK_PATH=sdk, EMBERBSD_DARWIN_SDK_VERSION=sdk_version,

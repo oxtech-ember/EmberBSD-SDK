@@ -178,6 +178,7 @@ def metadata_assignments(plan, descriptor, commands, flags):
     facts = data['host_facts']
     variables = {'EMBERBSD_DARWIN_HOST_' + key.upper(): _word(value) for key, value in facts.items()}
     variables.update(metadata_paths(work))
+    variables['BATCH'] = 'yes'
     if 'darwin_tool_phase' in data:
         variables['EMBERBSD_DARWIN_TOOL_PHASE'] = phase
     if plan.get('format') == PRODUCER_FORMAT and plan.get('stage') == 'metadata':

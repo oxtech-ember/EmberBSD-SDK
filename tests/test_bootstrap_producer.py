@@ -191,10 +191,12 @@ class MetadataTests(unittest.TestCase):
     def test_metadata_phase_is_explicit_before_profile_include(self):
         values = producer.metadata_assignments(self.plan, self.descriptor, self.commands,
                                               self.descriptor['abi_flags'])
+        self.assertEqual(values['BATCH'], 'yes')
         self.assertEqual(values['EMBERBSD_DARWIN_METADATA'], 'yes')
         raw = producer.metadata_makeconf(self.plan, self.descriptor, self.commands,
                                          self.descriptor['abi_flags'])
         self.assertEqual(raw.splitlines().count(b'EMBERBSD_DARWIN_METADATA= yes'), 1)
+        self.assertEqual(raw.splitlines().count(b'BATCH= yes'), 1)
         self.assertLess(raw.index(b'EMBERBSD_DARWIN_METADATA= yes\n'), raw.index(b'.include '))
 
     def test_metadata_phase_requires_producer_format(self):
