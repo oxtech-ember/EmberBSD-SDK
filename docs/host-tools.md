@@ -95,6 +95,10 @@ filesystem and process behavior separate from command fixtures. Record the
 interpreter and platform for actual results. Type annotations document module
 interfaces; they do not replace input validation or runtime checks.
 
+Use the shared [`elf` inspection API](elf.md) for bounded header, dynamic and
+relocation reads. It uses file bytes and does not invoke a loader or an external
+ELF tool. Target relocation support remains policy in the Ports consumer.
+
 ## Run a logged producer
 
 `process.run_logged(argv, log, *, cwd=None, env=None, append=False,
