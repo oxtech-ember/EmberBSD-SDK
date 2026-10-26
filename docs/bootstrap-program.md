@@ -230,6 +230,20 @@ Hardlink fixtures inherit their regular target's times. They cannot assign separ
 Final expectations can assert either time on each regular-file alias independently.
 Absent entries cannot declare timestamps. Existing contracts without timestamps remain unchanged.
 
+Live Darwin admission adds a path condition when any filesystem expectation includes `atime_ns`.
+Create a real parent directory with a name ending in `.noindex`, then prepare a fresh `work_root` beneath it.
+For example, use `/owned/checks.noindex/touch-work`. The work root itself must remain absent before dispatch.
+Admission resolves the existing parent path; a symlink named `.noindex` pointing outside such a directory does not qualify.
+The same path check applies during post-drain input revalidation, when the work directory already exists.
+Retained historical plan validation does not impose this new live path condition or rewrite its evidence.
+Plans with only `mtime_ns`, fixture-only access times, or no timestamp expectations keep their existing path rules.
+
+Apple documents that a [`.noindex` path prevents Spotlight discovery](https://developer.apple.com/documentation/xcode/locating-a-missing-debug-symbol-file).
+A paired, same-filesystem diagnostic observed access-time changes in plain directories, but none beneath `.noindex`.
+The diagnostic used only metadata observations after setup and did not identify the process that changed those times.
+Indexing interference is an inference, not a traced process attribution. This path condition does not prevent arbitrary readers.
+All timestamp, inode, mode, and content comparisons remain exact; the controller neither restores timestamps nor retries a mismatch.
+
 After child drainage, SDK Python checks the bounded tree with no-follow directory descriptors.
 Directory enumeration streams at most the remaining node budget plus one refusal entry before sorting.
 It records directory metadata before descent and all file metadata before reading content or link text.

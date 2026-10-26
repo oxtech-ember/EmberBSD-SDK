@@ -25,7 +25,9 @@ class TouchProgramTests(unittest.TestCase):
         c.setUp()
         self.addCleanup(c.doCleanups)
         c.source = c.base / 'touch-source'
-        c.work = c.base / 'touch-work'
+        parent = c.base / 'touch.noindex'
+        parent.mkdir()
+        c.work = parent / 'touch-work'
         c.plan.update(stage='touch-bootstrap', work_root=str(c.work))
         relative, digest, sources, provenance = program._profile(c.plan)
         c.manifest = json.loads((owner/relative).read_text())
@@ -95,6 +97,21 @@ class TouchProgramTests(unittest.TestCase):
         self.assertTrue(all('-DHAVE_' not in word for word in compile_args))
         self.assertEqual(components.read_inputs(c.plan)[0], self.component_roots)
         self.assertEqual(len([p for p in program.program_outputs(c.plan) if p.endswith('.filesystem.json')]), 37)
+
+    def test_live_atime_path_refusal_preserves_retained_exact_plan(self):
+        c = self.case
+        c.work = c.base/'plain-touch-work'
+        c.plan['work_root'] = str(c.work)
+        c.plan['commands'] = program.program_steps(c.plan, c.descriptor, c.commands, c.flags)
+        reference = c.f.document(c.plan)
+        # The real owner contract, source membership, components, and commands
+        # all validate. Only new live admission refuses the indexed work path.
+        self.assertIs(c.validate(), c.plan)
+        self.assertEqual(_plan(reference, c.descriptor, c.commands, c.flags,
+                               inspect_inputs=False), c.plan)
+        with self.assertRaisesRegex(SDKError, 'atime_ns.*[.]noindex'):
+            _plan(reference, c.descriptor, c.commands, c.flags)
+        self.assertFalse(c.work.exists())
 
     def test_source_only_export_does_not_admit_missing_component_receipts(self):
         c = self.case

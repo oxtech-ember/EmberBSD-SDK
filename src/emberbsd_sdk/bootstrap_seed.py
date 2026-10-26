@@ -17,7 +17,7 @@ from .inventory import sha256_file, snapshot_installed_tree, snapshot_tree
 from .native_toolset import (_absolute, _bytes, _driver_queries, _envelope, _file,
                              _gcc, _json, _native_image, _payload, _require,
                              _sha, _source, _text)
-from .paths import canonical_existing, inside
+from .paths import canonical_existing, entry, inside, real_directory
 
 BOOTSTRAP_SEED_API = 1
 _SCOPE = 'gcc16-bootstrap'
@@ -346,6 +346,28 @@ def _seed_commands(descriptor, *, inspect_inputs=True):
     return seed_commands(descriptor, inspect_inputs=inspect_inputs)
 
 
+def _live_atime_work_root(plan):
+    """Exclude indexed work paths from live Darwin access-time observations."""
+    reference = plan.get('program', {}).get('manifest')
+    if plan['host']['os'] != 'Darwin' or reference is None:
+        return
+    manifest = _json(reference)
+    if not any('atime_ns' in expected
+               for case in manifest.get('runtime_cases', [])
+               for expected in case.get('filesystem', {}).get('expect', {}).values()):
+        return
+    work = _absolute(plan['work_root'])
+    parent = canonical_existing(os.path.dirname(work))
+    real_directory(parent)
+    _require(any(part.endswith('.noindex') for part in parent.split(os.sep)),
+             'Darwin atime_ns observations require work_root beneath a real .noindex directory; '
+             'create that parent and prepare a fresh plan before running any child')
+    # Initial dispatch separately requires an absent work root. Post-drain
+    # input revalidation must also accept that same, now populated directory.
+    if entry(work) is not None:
+        real_directory(work)
+
+
 def _plan(reference, descriptor, commands=None, flags=None, *, inspect_inputs=True):
     plan = _json(reference)
     if plan.get('format') == 'emberbsd-native-gcc16-pilot-plan':
@@ -360,8 +382,11 @@ def _plan(reference, descriptor, commands=None, flags=None, *, inspect_inputs=Tr
     if plan.get('format') == 'emberbsd-native-gcc16-producer-plan':
         from .bootstrap_producer import validate_producer_plan
         commands = _seed_commands(descriptor, inspect_inputs=inspect_inputs) if commands is None else commands
-        return validate_producer_plan(plan, descriptor, commands,
-                                      descriptor['abi_flags'] if flags is None else flags)
+        result = validate_producer_plan(plan, descriptor, commands,
+                                       descriptor['abi_flags'] if flags is None else flags)
+        if inspect_inputs:
+            _live_atime_work_root(result)
+        return result
     if plan.get('netbsd_profile') == 'netbsd11-amd64-pkgsrc-native-gcc16-v1':
         from .bootstrap_netbsd_recipe import validate_netbsd_recipe_plan
         if commands is None:
