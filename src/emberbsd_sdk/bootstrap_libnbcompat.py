@@ -75,12 +75,14 @@ def steps(plan, descriptor, commands, flags):
         env=dict(env), expected_exit=0, argv=[*commands['sh'], source + '/configure',
             '--build=' + triplet, '--host=' + triplet, '--prefix=' + prefix,
             '--cache-file=/dev/null', *data['configure_args']])]
-    args = ['-j' + str(plan['resources']['cpu_jobs']), 'MAKE=' + shlex.join(commands['make'])]
+    args = ['-j' + str(plan['resources']['cpu_jobs']), 'MAKE=' + shlex.join(commands['make']),
+            'LIBOBJDIR=', 'U=']
     result.append(dict(id='libnbcompat-build', phase='libnbcompat-build', cwd=source, env=dict(env),
         expected_exit=0, argv=[*commands['make'], *args, *data['make_targets']]))
     result.append(dict(id='libnbcompat-stage', phase='libnbcompat-stage', cwd=source, env=dict(env),
         expected_exit=0, argv=[*commands['make'], '-j1', 'MAKE=' + shlex.join(commands['make']),
-            'prefix=' + prefix, 'DESTDIR=', 'LIBMODE=644', 'INSTALL=' + env['INSTALL'], data['stage_target']]))
+            'LIBOBJDIR=', 'U=', 'prefix=' + prefix, 'DESTDIR=', 'LIBMODE=644',
+            'INSTALL=' + env['INSTALL'], data['stage_target']]))
     return result
 
 
@@ -205,21 +207,45 @@ def prepare(step, plan, completed):
                          'Ports library archive changed before installation')
 
 
-def _objects(plan, archive_path):
-    from .bootstrap_archive import members
+def _object_names(plan):
+    """Decode only the canonical Autoconf object spelling with fixed empty variables."""
     root = Path(plan['work_root'], 'source')
     makefile = (root/'Makefile').read_text()
+    database = (root/'db/Makefile.inc').read_text()
+    for step in plan['commands'][1:]:
+        for variable in ('LIBOBJDIR', 'U'):
+            _require(variable not in step['env'] and
+                     [arg for arg in step['argv'] if arg.startswith(variable + '=')] == [variable + '='],
+                     'Ports object variables need exact empty command-line bindings')
+    for text in (makefile, database):
+        for line in text.replace('\\\n', ' ').splitlines():
+            if re.match(r'^\s*(?:LIBOBJDIR|U)\b', line):
+                _require(re.fullmatch(r'\s*(?:LIBOBJDIR|U)=[ \t]*', line) is not None,
+                         'Ports object variables must be absent or literal empty assignments')
     _require(re.findall(r'^WITH_DB=\s*(\S+)\s*$', makefile, re.M) == ['yes'],
              'Ports library configured DB implementation is missing')
     def objects(text, operator):
         flat = text.replace('\\\n', ' ')
         rows = re.findall(r'^OBJS' + re.escape(operator) + r'\s*([^\n]*)$', flat, re.M)
         _require(len(rows) == 1, 'Ports library needs the canonical configured object list')
-        words = rows[0].split()
-        _require(all(re.fullmatch(r'[a-zA-Z0-9_]+\.o', n) for n in words), 'invalid Ports object spelling')
+        words = []
+        for token in rows[0].split():
+            match = re.fullmatch(r'\$\{LIBOBJDIR\}([a-zA-Z0-9_]+)\$U\.o', token)
+            if match:
+                token = match[1] + '.o'
+            _require(re.fullmatch(r'[a-zA-Z0-9_]+\.o', token) is not None,
+                     'invalid Ports object spelling')
+            words.append(token)
         return words
-    wanted = objects(makefile, '=') + objects((root/'db/Makefile.inc').read_text(), '+=')
+    wanted = objects(makefile, '=') + objects(database, '+=')
     _require(wanted and len(wanted) == len(set(wanted)), 'duplicate or empty Ports library objects')
+    return wanted
+
+
+def _objects(plan, archive_path):
+    from .bootstrap_archive import members
+    root = Path(plan['work_root'], 'source')
+    wanted = _object_names(plan)
     actual = members(_bytes(_regular(archive_path)))
     _require([name for name, _ in actual] == wanted, 'Ports library archive omits or adds configured DB objects')
     refs = {}
@@ -236,6 +262,7 @@ def verify(step, work, plan, actual_exit, completed):
     prepare(step, plan, completed)
     root = Path(work, 'source')
     if step['phase'] == 'libnbcompat-configure':
+        _object_names(plan)
         text = (root/'Makefile').read_text()
         expected = {k: step['env'][k] for k in ('CC', 'CPPFLAGS', 'LDFLAGS', 'AWK', 'AR', 'RANLIB', 'INSTALL')}
         expected.update(CCLD=step['env']['CC'], srcdir=str(root), prefix=os.path.join(work, 'stage'))

@@ -41,6 +41,8 @@ command holds the common heavy-link lease. The budget is at most 1200 seconds.
 The canonical source bytes, modes, and timestamps stay unchanged in owned work.
 Generated configuration bytes and modes remain bound before subsequent children.
 Archive members must match all configured native objects, including DB objects.
+Canonical `${LIBOBJDIR}name$U.o` entries use explicit empty command-line bindings
+for both variables. Nonempty assignments, other expressions and paths are refused.
 Installation checks every header against its source or generated file. It checks
 the installed archive member by member; indexing may change archive metadata.
 

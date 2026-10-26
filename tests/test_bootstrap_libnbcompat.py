@@ -213,6 +213,31 @@ class InitialPlanTests(unittest.TestCase):
         archive.write_bytes(archive.read_bytes()+b'changed')
         with self.assertRaises(SDKError):lib.prepare(self.plan['commands'][2],self.plan,[built])
 
+    def test_canonical_autoconf_objects_use_bound_empty_make_variables(self):
+        self.work.mkdir();lib.prepare_work(self.plan,self.commands);self.fake_outputs()
+        path=self.work/'source/Makefile'
+        path.write_text(path.read_text().replace('OBJS= glob.o','OBJS= ${LIBOBJDIR}glob$U.o'))
+        evidence=lib.verify(self.plan['commands'][1],str(self.work),self.plan,0,())
+        self.assertEqual(set(evidence['built_objects']),{'glob.o','db.o'})
+        for step in self.plan['commands'][1:]:
+            self.assertIn('LIBOBJDIR=',step['argv'])
+            self.assertIn('U=',step['argv'])
+            self.assertNotIn('LIBOBJDIR',step['env'])
+            self.assertNotIn('U',step['env'])
+
+    def test_unknown_object_expansions_and_variable_values_refuse_before_build(self):
+        self.work.mkdir();lib.prepare_work(self.plan,self.commands);self.fake_outputs()
+        path=self.work/'source/Makefile';original=path.read_text()
+        for spelling in ('${OTHER}glob$U.o','${LIBOBJDIR}../glob$U.o',
+                         '$(LIBOBJDIR)glob$U.o','${LIBOBJDIR}glob${U}.o',
+                         '${LIBOBJDIR}glob$U.o\nLIBOBJDIR= elsewhere/',
+                         '${LIBOBJDIR}glob$U.o\nU?= suffix',
+                         '${LIBOBJDIR}glob$U.o\nU:= ${OTHER}'):
+            path.write_text(original.replace('OBJS= glob.o','OBJS= '+spelling))
+            with self.subTest(spelling=spelling),self.assertRaises(SDKError):
+                lib.verify(self.plan['commands'][0],str(self.work),self.plan,0,())
+        path.write_text(original)
+
     def test_common_pilot_holds_all_roots_and_runs_three_owned_steps(self):
         descriptor_ref=self.plan['seed_descriptor'];plan_ref=self.f.document(self.plan)
         accepted=self.f.document({});case=self
