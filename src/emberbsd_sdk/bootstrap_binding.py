@@ -229,6 +229,27 @@ def _binding(descriptor, *, inspect_inputs):
     return value
 
 
+def same_driver_binding(historical, descriptor):
+    """Compare validated effective bindings without reopening retired payloads.
+
+    Ports commits and template checkout paths are provenance. Both descriptors
+    must retain their own source binding and the same fixed template digest.
+    All other fields, including instantiated specs paths and hashes, are exact.
+    Current payload validation remains the caller's full input loader duty.
+    """
+    try:
+        old = _binding(historical, inspect_inputs=False)
+        new = _binding(descriptor, inspect_inputs=False)
+    except SDKError:
+        return False
+    if old is None or new is None:
+        return old is new
+    return (old['ports_source']['repository'] == new['ports_source']['repository'] and
+            old['template']['sha256'] == new['template']['sha256'] and
+            {k: v for k, v in old.items() if k not in ('ports_source', 'template')} ==
+            {k: v for k, v in new.items() if k not in ('ports_source', 'template')})
+
+
 def seed_commands(descriptor, *, inspect_inputs=True):
     """Return only default -B or recognized fixed source-owned tuples."""
     value = _binding(descriptor, inspect_inputs=inspect_inputs)

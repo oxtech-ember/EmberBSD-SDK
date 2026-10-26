@@ -73,6 +73,10 @@ The validator checks the sealed stage, original metadata, complete output proof,
 and compiler/ABI compatibility. It preserves original source identities and
 does not reopen historical compiler or ABI payloads. Source and generated work
 must remain available for this new component contract.
+Both Ports receipt branches use the same fixed binding comparison as
+[OS component inputs](bootstrap-compat-component.md#retained-component-input).
+Only Ports commit provenance and an equal-digest template checkout path can differ.
+Effective specs, compiler, ABI and driver tools remain exact. Historical receipts stay unchanged.
 
 The exact older `ACCEPTED_INITIAL_LIBNBCOMPAT_INPUT` receipt remains supported.
 Only that retained-copy branch permits a later failure in a complete SDK recipe,
