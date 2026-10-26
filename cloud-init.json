@@ -11,7 +11,7 @@
       "workspace": "Target-specific Prebuild SDK, prepared pkgsrc export, verified libedit source, objects, stages and receipts.",
       "cache": "Verified source archives and downloaded native packages.",
       "temporary": "Temporary files and native configuration probes.",
-      "host_tools": "Native host-pkg-g16 prefix built by Ports with host GCC16. Selected tools and real paths remain inside this prefix."
+      "host_tools": "Native host-pkg-llvm prefix built by Ports with Clang/LLVM, or an explicit GCC platform prefix. Selected tools and real paths remain inside this prefix."
     },
     "dependencies": {
       "sdk_control": {
@@ -33,23 +33,23 @@
           "m4",
           "curl"
         ],
-        "base_compilers": "Use host GCC16 from the selected Ports prefix for native tools and cross GCC16 for target code. Host ABI headers, libraries, loaders, and OS process services remain normal host inputs.",
+        "base_compilers": "Use native Clang/LLVM from the selected Ports prefix for native tools. Select GCC only through an explicit platform profile. The current target runtime producer still uses the common cross GCC16 until the LLVM target runtime is available. Host ABI headers, libraries, loaders, and OS process services remain normal host inputs.",
         "ports_host_compilers": {
-          "requirement": "The current GCC16 cross recipe requires host-executable GCC and G++ major version 16; Clang is not a substitute for this recipe.",
+          "requirement": "Native Ports builds use Clang and clang++ from the selected prefix by default. An explicit GCC platform profile selects GCC and G++ major version 16 from its prefix.",
           "selectors": [
             "HOST_CC",
             "HOST_CXX"
           ],
           "defaults": [
-            "gcc-16",
-            "g++-16"
+            "clang",
+            "clang++"
           ],
-          "provider": "Use native Ports GCC16 inside host-pkg-g16. Select the prefix explicitly; do not substitute ambient system build tools."
+          "provider": "Use native Ports Clang/LLVM inside host-pkg-llvm. Select the prefix and any GCC exception explicitly; do not substitute ambient system build tools."
         },
-        "sdk_final_host_compilers": "Pass --host-prefix to sysroot and release commands. Check contained tool paths, host CPU, GCC16 components, and script interpreters. No independent qualification, acceptance receipt, or tool hash is required.",
+        "sdk_final_host_compilers": "Pass --host-prefix to sysroot and release commands. Check contained tool paths, host CPU, compiler driver components, and script interpreters. No independent qualification, acceptance receipt, or tool hash is required.",
         "header_rpc_preprocessor": {
           "when": "Install OS headers before the target compiler is available.",
-          "command": "The selected SDK native GCC16 preprocessor as one absolute executable path",
+          "command": "The selected SDK native preprocessor, clang-cpp by default, as one absolute executable path",
           "selection": "Set TOOL_RPCGEN for the includes invocation to RPCGEN_CPP=<native-cpp> <native-nbrpcgen>. Preserve the target CPP setting for later library builds.",
           "evidence": "Record the native preprocessor and its executed components. Check the generated rpcb_prot.h declarations required by libc."
         },
@@ -90,8 +90,8 @@
         "required_for_sdk_build": false,
         "tools": [
           "Cppcheck",
-          "GCC -fanalyzer",
           "Clang Static Analyzer",
+          "GCC -fanalyzer for explicit GCC profiles",
           "Valgrind Memcheck"
         ],
         "scope": "Development checks for compatible native C programs. These tools do not establish target execution acceptance."
@@ -206,8 +206,8 @@
           "POSIX session inspection and signals",
           "Public proc_pid_rusage RUSAGE_INFO_V0 and mach_absolute_time through standard-library ctypes and /usr/lib/libproc.dylib"
         ],
-        "native_tools": "Provide native development tools, a compatible macOS SDK and host-executable GCC/G++16 for the Ports GCC16 recipe.",
-        "sdk_selection": "The documented Ports workflow uses SDKROOT when host GCC cannot locate system libraries. xcrun --show-sdk-path selects the installed macOS SDK.",
+        "native_tools": "Provide the native Ports Clang/LLVM prefix and a compatible macOS SDK. An explicit GCC platform profile also needs host-executable GCC/G++16 from Ports.",
+        "sdk_selection": "The documented Ports workflow passes the macOS SDK path explicitly to the native compiler. xcrun --show-sdk-path selects the installed macOS SDK.",
         "filesystem": "Use a build filesystem with the common link and executable-mode capabilities. Builds must work on case-insensitive filesystems, such as the default APFS volume."
       },
       "qualification": {

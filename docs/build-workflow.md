@@ -3,7 +3,8 @@
 ## Select independent host and target inputs
 
 Read the [SDK tool selection policy](tool-selection.md) before any build.
-Select SDK native GCC16 for host programs and SDK cross GCC16 for target code.
+Select SDK native Clang/LLVM for host programs, or GCC through an explicit platform profile.
+The current target runtime producer still uses the SDK cross GCC16.
 Keep native generators separate from target files. Reject implicit system tools.
 The policy also identifies the current sysroot/release selector enforcement gap.
 The current backend uses POSIX shell and make; CMake remains the build system

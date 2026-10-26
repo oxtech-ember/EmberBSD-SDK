@@ -14,7 +14,7 @@ from emberbsd_sdk.native_toolset import load_host_prefix, validate_selection
 
 class PrefixFixture:
     def __init__(self, root):
-        self.root = Path(root) / 'host-pkg-g16'
+        self.root = Path(root) / 'host-pkg-llvm'
         self.host = {'os': 'Linux', 'cpu': 'x86_64'}
         self.queries = []
         for name in ('gcc', 'g++', 'cpp', 'as', 'ld', 'ar', 'sh', 'python3.15',
@@ -184,8 +184,8 @@ class HostPrefixTests(TemporaryCase):
                 ('pkg_info', 'sbin/pkg_info', 'bin/pkg_info'),
                 ('otool', 'bin/otool', 'bin/llvm-otool')):
             with self.subTest(role=role):
-                first = self.write('host-pkg-g16/' + preferred, header(62, 2), 0o755)
-                second = self.write('host-pkg-g16/' + alternate, header(62, 2), 0o755)
+                first = self.write('host-pkg-llvm/' + preferred, header(62, 2), 0o755)
+                second = self.write('host-pkg-llvm/' + alternate, header(62, 2), 0o755)
                 selected = self.fixture.load(roles=(role,))
                 self.assertEqual(selected.tool(role), str(first))
                 self.assertIn(str(first.parent), selected.path.split(os.pathsep))
@@ -237,7 +237,7 @@ class HostPrefixTests(TemporaryCase):
         for role, name in (('pkg_info', 'sbin/pkg_info'), ('pkg_info', 'bin/pkg_info'),
                            ('otool', 'bin/otool'), ('otool', 'bin/llvm-otool')):
             with self.subTest(path=name):
-                path = self.write('host-pkg-g16/' + name, header(183, 2), 0o755)
+                path = self.write('host-pkg-llvm/' + name, header(183, 2), 0o755)
                 with self.assertRaisesRegex(SDKError, 'expected a native executable'):
                     self.fixture.load(roles=(role,))
                 path.unlink()
@@ -329,11 +329,11 @@ class HostPrefixTests(TemporaryCase):
 
     def test_env_interpreter_checks_final_driver_tool_path(self):
         self.fixture.env_script('helper-python')
-        self.write('host-pkg-g16/sbin/helper-python', header(62, 2), 0o755)
-        self.write('host-pkg-g16/sbin/pkg_info', header(62, 2), 0o755)
+        self.write('host-pkg-llvm/sbin/helper-python', header(62, 2), 0o755)
+        self.write('host-pkg-llvm/sbin/pkg_info', header(62, 2), 0o755)
         (self.fixture.root / 'bin/as').unlink()
-        assembler = self.write('host-pkg-g16/libexec/as', header(62, 2), 0o755)
-        self.write('host-pkg-g16/libexec/helper-python', header(183, 2), 0o755)
+        assembler = self.write('host-pkg-llvm/libexec/as', header(62, 2), 0o755)
+        self.write('host-pkg-llvm/libexec/helper-python', header(183, 2), 0o755)
         original = self.fixture.capture
         def capture(argv, *, env):
             if argv[-1] == '-print-prog-name=as':

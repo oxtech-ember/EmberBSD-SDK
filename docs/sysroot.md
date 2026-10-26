@@ -14,7 +14,8 @@ Use a qualified host process adapter with CPython 3.15 and the prerequisites of
 the selected OS/Ports builders. Process adapters are available for Darwin and Linux.
 See [host platforms](host-platforms.md).
 Apply the [SDK tool selection policy](tool-selection.md).
-Use SDK native GCC16 for host programs and SDK cross GCC16 for target code.
+Use SDK native Clang/LLVM for host programs, or GCC through an explicit platform profile.
+The current target runtime producer still uses the SDK cross GCC16.
 Keep host tools and target inputs separate.
 Select the [native Ports prefix](native-toolset.md).
 The loader selects the roles required by the OS contract plus Python.
@@ -56,7 +57,7 @@ python3 scripts/build-sysroot.py \
   --os /absolute/EmberBSD \
   --ports /absolute/EmberBSD-Ports \
   --libedit-source /absolute/prepared-libedit \
-  --host-prefix /absolute/host-pkg-g16 \
+  --host-prefix /absolute/host-pkg-llvm \
   --compiler /absolute/gcc16-cross \
   --runtime-work /absolute/gcc16-runtime-work \
   --gcc-archive /absolute/gcc-16.2.0.tar.xz \

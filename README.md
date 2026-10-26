@@ -62,7 +62,7 @@ Target execution and compiler distribution remain separate checks.
 
 Use [diagnostic fuzz checks](docs/fuzz-check.md) to run prepared Clang host
 fuzz targets, replay their corpus with the selected production compiler family
-(Clang by default, explicit GCC16 alternative) and verify portable evidence.
+(Clang by default, explicit GCC alternative) and verify portable evidence.
 
 ## Repository structure
 

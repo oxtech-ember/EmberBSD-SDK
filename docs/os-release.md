@@ -49,7 +49,7 @@ python3 scripts/build-os-release.py \
   --os-source /absolute/EmberBSD \
   --ports /absolute/EmberBSD-Ports \
   --libedit-source /absolute/prepared-libedit \
-  --host-prefix /absolute/host-pkg-g16 \
+  --host-prefix /absolute/host-pkg-llvm \
   --compiler /absolute/gcc16-cross \
   --runtime-work /absolute/gcc16-runtime-work \
   --gcc-archive /absolute/gcc-16.2.0.tar.xz \
