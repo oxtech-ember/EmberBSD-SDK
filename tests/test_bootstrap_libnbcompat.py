@@ -100,13 +100,27 @@ class InitialPlanTests(unittest.TestCase):
         self.assertEqual(first['argv'][-2:],['--enable-bsd-getopt','--enable-db'])
 
     def test_missing_utilities_and_incomplete_make_shell_refuse(self):
-        for role in ('cp','mv','ls','diff'):
+        for role in ('cp','mv','ls','diff','printf'):
             old=list(self.plan['required_roles']);self.plan['required_roles'].remove(role)
             with self.subTest(role=role),self.assertRaises(SDKError):self.validate()
             self.plan['required_roles']=old
         self.commands['make']=self.commands['make'][:3]
         self.plan['commands']=program.program_steps(self.plan,self.descriptor,self.commands,self.flags)
         with self.assertRaises(SDKError):self.validate()
+
+    def test_external_printf_is_required_and_bound_before_each_child(self):
+        self.assertIn('printf',lib.ROLES)
+        self.work.mkdir();lib.prepare_work(self.plan,self.commands)
+        alias=self.work/'bin/printf'
+        self.assertEqual(os.readlink(alias),self.commands['printf'][0])
+        for step in self.plan['commands']:
+            with self.subTest(step=step['id']):
+                alias.unlink()
+                with self.assertRaises(SDKError):lib.prepare(step,self.plan,())
+                alias.symlink_to('/usr/bin/printf')
+                with self.assertRaises(SDKError):lib.prepare(step,self.plan,())
+                alias.unlink();alias.symlink_to(self.commands['printf'][0])
+                lib.prepare(step,self.plan,())
 
     def test_no_install_move_or_arbitrary_option_or_export_omission(self):
         for mutation in ('move','option','member'):

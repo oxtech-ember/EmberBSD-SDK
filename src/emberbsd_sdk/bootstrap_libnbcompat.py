@@ -16,13 +16,13 @@ from .paths import canonical_existing, entry
 
 STAGE = 'ports-libnbcompat-bootstrap'
 MANIFEST_RELATIVE = 'profiles/common-build-tools/bootstrap/libnbcompat.json'
-MANIFEST_SHA256 = 'fef8ff40505e51a195e2d63d33d17636c38b4c4606b4dfcc5cf4cebe50bd5dfb'
+MANIFEST_SHA256 = '340ca308f4d7ccf4618fa7856249e520464ff1e68923bf2689eb353655ef18a0'
 PATCH = 'profiles/common-build-tools/patches/pkgsrc-libnbcompat-sdk-diagnostics.patch'
 HELPER = 'profiles/common-build-tools/files/emberbsd-configure-diagnostics.sh'
 RECIPE = 'pkgtools/libnbcompat'
 SOURCE_DIRECTORY = RECIPE + '/files'
 ROLES = set('cc cpp as ld ar ranlib make sh awk basename cat chmod cp diff dirname expr grep '
-            'hostname ln ls mkdir mv rm rmdir sed sort tr uname'.split())
+            'hostname ln ls mkdir mv printf rm rmdir sed sort tr uname'.split())
 _DRIVERS = {'cc', 'cpp', 'as', 'ld', 'ar', 'ranlib', 'make'}
 SEED_FIELDS = ('host', 'compiler', 'sources', 'providers', 'host_abi', 'abi_flags', 'history',
                'dynamic_dependencies', 'driver_prefix', 'driver_binding', 'make_binding')

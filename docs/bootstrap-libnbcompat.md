@@ -7,7 +7,7 @@ not an ordinary library provider or a complete SDK. Origin: EmberBSD (AI-assiste
 ## Source and command contract
 
 The fixed owner is `profiles/common-build-tools/bootstrap/libnbcompat.json` in Ports.
-Its SHA256 is `fef8ff40505e51a195e2d63d33d17636c38b4c4606b4dfcc5cf4cebe50bd5dfb`.
+Its SHA256 is `340ca308f4d7ccf4618fa7856249e520464ff1e68923bf2689eb353655ef18a0`.
 The producer uses the existing envelope, scope `gcc16-bootstrap`, and public
 `bootstrap_program.program_steps` and `bootstrap_pilot.run_producer` interfaces.
 There is no separate executor.
@@ -29,6 +29,7 @@ Installation uses the canonical `install-sh -c`; its default move operation is
 not selected. The stage has the complete 40-header and static-archive package list.
 
 All manifest utility roles are mandatory, including `cp`, `mv`, `ls`, and `diff`.
+The selected native `printf` is also required; the common mksh has no such builtin.
 The owned PATH contains only their exact selected aliases. Each child checks
 the alias roster and targets again. Configuration diagnostics use the common
 Ports helper and the selected `uname`. Unavailable legacy platform queries
