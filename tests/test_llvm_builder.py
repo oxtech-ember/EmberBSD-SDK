@@ -143,6 +143,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         receipt = builder.preflight()
         self.assertEqual(len(receipt['plan']), 1)
         self.assertEqual(receipt['plan'][0][-2:], ['tools', 'bootstrap-headers'])
+        self.assertIn('EMBER_HOST_BFD_CONFIG=' + builder.options['host-binutils'] + '/host-bfd.mk', receipt['plan'][0])
         for name in ('stdio.h','sys/types.h','sys/param.h','stdint.h','limits.h','math.h','pthread.h'):
             write(Path(builder.paths['destination'])/'usr/include'/name, '/* base header */\n')
         builder.inspect_payload()
@@ -159,6 +160,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertFalse((output / 'usr/pkg/gcc16').exists())
         self.assertIn('EMBER_COMPILER_FAMILY=clang', result['signature']['flags'])
         self.assertIn('EMBER_HOST_COMPILER_FAMILY=gcc', result['signature']['flags'])
+        self.assertIn('EMBER_HOST_BFD_CONFIG=' + builder.options['host-binutils'] + '/host-bfd.mk', result['signature']['flags'])
 
     def test_opted_in_base_cxx_aliases_export_import_and_relocate(self):
         from emberbsd_sdk import llvm_runtime_install
@@ -320,5 +322,9 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.signature['llvm_phase'] = 'base'
         self.assertEqual(builder.context_signature(builder.paths['tools']), before)
         self.assertNotEqual(builder.context_signature(builder.paths['objects']), before)
+        bfd = builder.paths['host-binutils']
+        builder.paths['host-binutils'] = bfd + '-changed'
+        self.assertNotEqual(builder.context_signature(builder.paths['tools']), before)
+        builder.paths['host-binutils'] = bfd
         builder.signature['native_toolset'] = {'different': True}
         self.assertNotEqual(builder.context_signature(builder.paths['tools']), before)

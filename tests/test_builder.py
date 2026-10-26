@@ -87,8 +87,9 @@ def manifest(work):
 
 def fixture(root, target='aarch64'):
     root = Path(root); t = B.TARGETS[target]
-    for name in ('os', 'ports', 'compiler', 'runtime', 'pkgsrc', 'sdk-source'):
+    for name in ('os', 'ports', 'compiler', 'runtime', 'pkgsrc', 'sdk-source', 'host-binutils'):
         (root / name).mkdir()
+    write(root / 'host-binutils/host-bfd.mk', '# Synthetic OS dispatch input, not built BFD.\n')
     sdk, os_source, ports, compiler, work = (root / name for name in ('sdk', 'os', 'ports', 'compiler', 'runtime'))
     create(sdk, target=target); control = root / 'control.json'; write(control, '{}')
     for name in ('include', 'lib', 'libexec/ld.elf_so', 'tools', 'share/mk', 'sys', 'distrib', 'etc'):
@@ -209,7 +210,7 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
         write(native / name, '#!/bin/sh\nexit 0\n', 0o755)
     (native / 'python').symlink_to(os.path.realpath(sys.executable))
     (native / 'sh').symlink_to(os.path.realpath(shutil.which('sh')))
-    return {key: str(value) for key, value in ({'compiler-family': 'gcc', 'sdk': sdk, 'os': os_source, 'ports': ports, 'compiler': compiler, 'runtime-work': work, 'gcc-archive': root / 'gcc.tar.xz', 'pkgsrc': root / 'pkgsrc', 'target': target, 'jobs': '2', 'python': sys.executable, 'sdk-source': root / 'sdk-source', 'libedit-source': root / 'libedit-source', 'llvm-source': llvm_source, 'host-prefix': native} | {'host-cc': native / 'cc', 'host-cxx': native / 'cxx'}).items()}
+    return {key: str(value) for key, value in ({'compiler-family': 'gcc', 'sdk': sdk, 'os': os_source, 'ports': ports, 'compiler': compiler, 'runtime-work': work, 'gcc-archive': root / 'gcc.tar.xz', 'pkgsrc': root / 'pkgsrc', 'target': target, 'jobs': '2', 'python': sys.executable, 'sdk-source': root / 'sdk-source', 'libedit-source': root / 'libedit-source', 'llvm-source': llvm_source, 'host-prefix': native, 'host-binutils': root / 'host-binutils'} | {'host-cc': native / 'cc', 'host-cxx': native / 'cxx'}).items()}
 
 
 class BuilderTests(TemporaryCase):
@@ -285,6 +286,11 @@ class BuilderTests(TemporaryCase):
         builder.run()
         self.assertEqual(builder.process_inspector.empty_snapshot_timeout, 120)
 
+    def test_host_binutils_input_is_required_before_build_writes(self):
+        self.refusal_unchanged('--host-binutils', **{'host-binutils': ''})
+        (Path(self.options['host-binutils']) / 'host-bfd.mk').unlink()
+        self.refusal_unchanged()
+
     def test_read_only_plan_and_exact_native_commands(self):
         before = snapshot(self.root)
         record = self.run_builder(plan=True)
@@ -301,6 +307,7 @@ class BuilderTests(TemporaryCase):
             self.assertIn(flag, record['plan'][1])
         self.assertNotIn('MKOBJDIRS=no', record['plan'][1])
         self.assertIn('EMBER_LIBEDIT_SOURCE=' + self.options['libedit-source'], record['plan'][1])
+        self.assertIn('EMBER_HOST_BFD_CONFIG=' + self.options['host-binutils'] + '/host-bfd.mk', record['plan'][1])
         self.assertEqual(record['signature']['libedit']['recipe']['ports_commit'], record['sources']['ports']['commit'])
         self.assertEqual(record['plan'][2][-1], 'dependall'); self.assertEqual(record['plan'][3][-1], 'install')
         self.assertEqual(record['paths']['destination'], self.options['sdk'] + '/sysroot')

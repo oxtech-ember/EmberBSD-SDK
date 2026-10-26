@@ -13,6 +13,7 @@ only when its contract and complete set of selected symlinks match.
   --cwd "$OS_SOURCE" --log "$OBJECTS/build.log" --build-sh -- \
   -m evbarm -a aarch64 -T "$TOOLS" -O "$OBJECTS/os" \
   -V "EXTERNAL_TOOLCHAIN=$TARGET_PREFIX" \
+  -V "EMBER_HOST_BFD_CONFIG=$HOST_BINUTILS/host-bfd.mk" \
   -V EMBER_COMPILER_FAMILY=clang tools
 ```
 
@@ -20,6 +21,8 @@ The routing parent must already exist. The caller owns its tools and outputs
 for the command's lifetime. `--compiler-family` selects the host family; target
 family and target inputs remain explicit OS arguments. There is no fallback
 to another compiler family or ambient host tools.
+For external-toolchain OS builds, `HOST_BINUTILS` selects the complete common
+Ports native Binutils work tree for [host BFD and elfedit](https://github.com/oxtech-ember/EmberBSD/blob/main/tools/native-tools/README.md#common-host-bfd).
 
 `--build-sh` accepts build.sh arguments without the script path. It invokes the
 selected shell and records native ABI `HOST_*` flags and host compiler family

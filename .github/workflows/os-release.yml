@@ -33,6 +33,9 @@ name: Complete OS release producer
       host_prefix:
         description: Absolute native Ports tool prefix
         required: true
+      host_binutils:
+        description: Common native Binutils work tree for the selected target
+        required: true
       host_compiler_family:
         type: choice
         options: [clang, gcc]
@@ -81,6 +84,7 @@ jobs:
       COMPILER: ${{ inputs.compiler }}
       COMPILER_FAMILY: ${{ inputs.compiler_family }}
       HOST_PREFIX: ${{ inputs.host_prefix }}
+      HOST_BINUTILS: ${{ inputs.host_binutils }}
       HOST_COMPILER_FAMILY: ${{ inputs.host_compiler_family }}
       SDK_PYTHON: ${{ inputs.sdk_python }}
       LIBEDIT_SOURCE: ${{ inputs.libedit_source }}
@@ -116,6 +120,7 @@ jobs:
             --sdk-source "$GITHUB_WORKSPACE" --sdk "$SDK_WORKSPACE" \
             --os-source "$OS_SOURCE" --ports "$PORTS_SOURCE" --compiler "$COMPILER" \
             --host-prefix "$HOST_PREFIX" --libedit-source "$LIBEDIT_SOURCE" \
+            --host-binutils "$HOST_BINUTILS" \
             --compiler-family "$COMPILER_FAMILY" --host-compiler-family "$HOST_COMPILER_FAMILY" \
             --llvm-source "$LLVM_SOURCE" \
             --runtime-work "$RUNTIME_WORK" \

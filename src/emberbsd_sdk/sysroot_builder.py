@@ -372,7 +372,8 @@ class SysrootBuilder:
             return self.signature
         # OS native tools do not link the target runtime. Reuse their one tree
         # while target object directories distinguish headers, C base and C++.
-        return dict(scope='llvm-native-tools', **{name: self.signature[name] for name in
+        return dict(scope='llvm-native-tools', host_binutils=self.paths['host-binutils'],
+                    **{name: self.signature[name] for name in
             ('host', 'target', 'compiler', 'host_tools', 'native_toolset', 'native_inputs',
              'environment', 'tools', 'python', 'process_backend')})
 
@@ -431,6 +432,8 @@ class SysrootBuilder:
                 raise SDKError('--llvm-runtime-stage is required for direct final preflight; run() builds its prerequisites')
         elif not self.options.get('gcc-archive') or not self.options.get('pkgsrc'):
             raise SDKError('--gcc-archive and --pkgsrc are required for the explicit GCC runtime')
+        if not self.options.get('host-binutils'):
+            raise SDKError('--host-binutils is required for the OS host BFD tools')
         self.select_native_toolset()
         # Git is a source-inspection service. It is not a build-tool provider.
         self.git_command = self.find_command('git')
@@ -439,7 +442,7 @@ class SysrootBuilder:
         self.process_inspector = process.SessionInspector(env=self.environment, empty_snapshot_timeout=120)
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
-        input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source']
+        input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
                         if clang else ['runtime-work', 'gcc-archive', 'pkgsrc'])
         for name in input_names:
@@ -452,6 +455,7 @@ class SysrootBuilder:
                 paths.regular_file(self.paths[name])
                 continue
             paths.real_directory(self.paths[name])
+        paths.regular_file(os.path.join(self.paths['host-binutils'], 'host-bfd.mk'))
         sdk = self.paths['sdk']
         host = sysconfig.get_config_var('HOST_GNU_TYPE') or f'{platform.machine()}-{sysconfig.get_platform()}'
         self.host = re.sub('[^A-Za-z0-9_.+-]', '_', host)
@@ -523,7 +527,8 @@ class SysrootBuilder:
             self.runtime_command = [self.paths['python'], '-B', os.path.join(self.paths['ports'], verifier), 'check', self.paths['runtime-work'], self.paths['gcc-archive'], self.paths['pkgsrc'], '--sdk-source', self.paths['sdk-source']]
             self.flags = self.FLAGS + ['EMBER_COMPILER_FAMILY=gcc', f'EXTERNAL_TOOLCHAIN={self.paths["compiler"]}', f'EMBER_EXTERNAL_GCC_RUNTIME={prefix}', f'EMBER_LLVM_SOURCE={self.paths["llvm-source"]}']
         self.runtime_record = self.verify_runtime()
-        self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}'] + native_host_flags(self.native_selection)
+        self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}',
+                       f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
         self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, native_toolset=self.native_selection, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
         self.signature['native_inputs'] = self.native_inputs
         self.signature['compiler_family'] = self.compiler_family()

@@ -31,6 +31,11 @@ Provide:
 - Clean, fully materialized EmberBSD and Ports Git superprojects at recorded commits.
 - A Ports Clang/LLVM prefix with the selected target backend and LLD.
 - The prepared common Ports LLVM source, passed as `--llvm-source`.
+- The native [common Binutils build](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/cross/binutils.md)
+  selected with `--host-binutils`, including its matching `src`, `build`,
+  `prefix` and `host-bfd.mk`. The OS host tools consume BFD and `elfedit`
+  from this work tree through `EMBER_HOST_BFD_CONFIG`. Keep it unchanged
+  while the tools are built or reused.
 - A new runtime work path below the SDK object directory, or an explicitly
   selected completed full `--llvm-runtime-stage`.
 
@@ -64,6 +69,7 @@ python3 scripts/build-sysroot.py \
   --ports /absolute/EmberBSD-Ports \
   --libedit-source /absolute/prepared-libedit \
   --host-prefix /absolute/host-pkg-llvm \
+  --host-binutils /absolute/binutils-aarch64 \
   --compiler /absolute/host-pkg-llvm \
   --llvm-source /absolute/prepared-llvm \
   --runtime-work /absolute/prebuild-sdk-aarch64/obj/llvm-runtime \

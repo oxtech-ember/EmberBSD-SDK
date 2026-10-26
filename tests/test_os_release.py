@@ -605,7 +605,7 @@ class BuilderReleaseTests(TemporaryCase):
         sha = receipt['sources']['os']['commit']
         self.assertEqual(profile['schema'], 3)
         for mutation in ('identity', 'inputs', 'pin', 'host-cc', 'host-cxx', 'python',
-                         'host-prefix', 'native-routing', 'flags', 'environment'):
+                         'host-prefix', 'host-binutils', 'native-routing', 'flags', 'environment'):
             changed = copy.deepcopy(profile)
             signature = changed['sdk_receipt']['signature']
             if mutation == 'identity': del signature['native_toolset']
@@ -619,7 +619,7 @@ class BuilderReleaseTests(TemporaryCase):
         historical['schema'] = historical['sdk_receipt']['version'] = 2
         signature = historical['sdk_receipt']['signature']
         del signature['native_toolset']; del signature['native_inputs']; del signature['compiler_family']
-        for key in ('host-cc', 'host-cxx', 'host-prefix', 'native-routing'):
+        for key in ('host-cc', 'host-cxx', 'host-prefix', 'host-binutils', 'native-routing'):
             del historical['sdk_receipt']['paths'][key]
         signature['host_tools'] = {name: dict(path='/usr/bin/' + name, sha256='0' * 64,
                                              version='historical system compiler') for name in ('cc', 'c++')}
@@ -740,6 +740,7 @@ class BuilderReleaseTests(TemporaryCase):
         plan = OSReleaseBuilder(options | {'plan': True}).run()
         self.assertEqual(snapshot(self.root), before)
         self.assertEqual(plan['plan'][1][-2:], ['tools', 'release'])
+        self.assertIn('EMBER_HOST_BFD_CONFIG=' + options['host-binutils'] + '/host-bfd.mk', plan['plan'][1])
         self.assertEqual(plan['plan'][2][-1], 'install_image')
         self.assertEqual(plan['plan'][3][-1], 'iso-image')
         receipt = OSReleaseBuilder(options).run()

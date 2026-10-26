@@ -61,6 +61,9 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
         f'EMBER_LIBEDIT_SOURCE={paths["libedit-source"]}',
         f'MKREPRO_TIMESTAMP={timestamp}', f'EMBER_BUILD_ID={sha}', f'BUILDINFO=EmberBSD:{sha}',
         f'KERNOBJDIR={paths["objects"]}/kernels'] + (native_host_flags(native_selection) if native_selection is not None else [])
+    # Current preflight requires BFD; historical command records predate it.
+    if 'host-binutils' in paths:
+        flags.append(f'EMBER_HOST_BFD_CONFIG={paths["host-binutils"]}/host-bfd.mk')
     if compiler_family == 'gcc':
         flags.append('EMBER_COMPILER_FAMILY=' + compiler_family)
         if 'llvm-source' in paths:
@@ -162,6 +165,9 @@ def validate_profile(profile, sha, target):
     paths = receipt['paths']
     for key in ('os', 'ports', 'sdk-source', 'compiler', 'runtime-prefix', 'objects', 'tools', 'destination', 'libedit-source'):
         check(isinstance(paths[key], str) and paths[key].startswith('/') and not re.search(r'\s', paths[key]), 'Invalid producer path')
+    if 'host-binutils' in paths:
+        check(isinstance(paths['host-binutils'], str) and paths['host-binutils'].startswith('/') and
+              not re.search(r'\s', paths['host-binutils']), 'Invalid host Binutils producer path')
     check(signature['target'] == target_definition(target), 'Mixed target signature')
     # This checks saved command consistency without reading mutable tools.
     native = None

@@ -17,6 +17,8 @@ They do not define another toolchain recipe. The migration originates in
 and its `ember/tests/release-*.rb` contracts. The source license is BSD-2-Clause.
 
 See [libedit preparation](libedit.md) for the mandatory `--libedit-source` input.
+The `--host-binutils` work directory selects the matching common BFD and
+`elfedit` build used by OS host tools; see the [sysroot inputs](sysroot.md#required-inputs).
 
 ## Build inputs and commands
 
@@ -53,6 +55,7 @@ python3 scripts/build-os-release.py \
   --ports /absolute/EmberBSD-Ports \
   --libedit-source /absolute/prepared-libedit \
   --host-prefix /absolute/host-pkg-llvm \
+  --host-binutils /absolute/binutils-aarch64 \
   --compiler /absolute/host-pkg-llvm \
   --llvm-source /absolute/prepared-llvm \
   --runtime-work /absolute/prebuild-sdk-aarch64/obj/llvm-runtime \
