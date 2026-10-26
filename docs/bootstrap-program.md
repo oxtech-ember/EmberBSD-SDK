@@ -133,7 +133,7 @@ locale behavior, C path analysis, memory safety, or ordinary host integration.
 `ls-bootstrap` retains all five canonical `bin/ls` C files and three local headers.
 Its 16-member proof also includes the normal host route, owner checks, and required control.
 The owner manifest is `tools/ls/bootstrap.json`, SHA256
-`fd92ff6b309fa6ab793e2ee4b0ddd747961df2b22c9320387d5ad79af8ee478f`.
+`2420af8c57c055764a2a691e0e5e0a4cc6055aabe02d65799422c832a5f64633`.
 The `program.components` map has exactly one independently accepted `listing` input.
 It uses the same shared component selector, read leases, and revalidation as touch.
 It links the accepted archive and includes its actual public headers and configuration.
