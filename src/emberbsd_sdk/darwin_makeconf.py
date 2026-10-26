@@ -194,7 +194,7 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
             os.unlink(temporary)
     environment = process.sanitized_environment()
     environment.update(PATH=utility_bin, MAKECONF=output, SHELL=tools['sh'], CONFIG_SHELL=tools['sh'],
-                       TMPDIR=work, TZ='UTC')
+                       TMPDIR=work, TZ='UTC', PATH_SEPARATOR=os.pathsep)
     return dict(makeconf=output, selected_roles=sorted(tools), required_roles=sorted(required),
                 source_tools=sorted(sources), utility_bin=utility_bin,
                 initial_command=[*make, 'EMBERBSD_DARWIN_BOOTSTRAP=yes', '-C',

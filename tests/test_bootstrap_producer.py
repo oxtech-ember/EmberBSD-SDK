@@ -5,6 +5,7 @@
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -126,6 +127,7 @@ class MetadataTests(unittest.TestCase):
             self.assertLess(row['argv'].index('EMBERBSD_DARWIN_BOOTSTRAP=yes'), row['argv'].index('-C'))
             self.assertEqual(row['env']['PATH'], str(self.utility_bin))
             self.assertEqual(row['env']['TMPDIR'], str(self.work))
+            self.assertEqual(row['env']['PATH_SEPARATOR'], os.pathsep)
         variables = set(producer.VARIABLES)
         self.assertEqual(len(producer.VARIABLES), 56)
         self.assertIn('BOOTSTRAP_DEPENDS', variables)

@@ -57,7 +57,7 @@ class GNUProgramTests(unittest.TestCase):
         owner, source = case.base / (name + '-owner'), case.base / (name + '-source')
         owner.mkdir()
         source.mkdir()
-        raw_roles = {'sh', 'awk', 'cmp', 'hostname', 'grep', 'rm'} | ({'diff'} if name == 'findutils' else set())
+        raw_roles = {'sh', 'awk', 'cmp', 'hostname', 'grep', 'rm', 'uname'} | ({'diff'} if name == 'findutils' else set())
         roles = sorted(gnu._DRIVERS | raw_roles)
         for role in roles:
             if role not in case.commands:
@@ -186,6 +186,9 @@ class GNUProgramTests(unittest.TestCase):
         self.assertEqual(env['CXXFLAGS'], '-O2')
         self.assertEqual(shlex.split(env['LDFLAGS']), ['-LABI', '-Wl,--threads=1'])
         self.assertEqual(env['CONFIG_SITE'], '/dev/null')
+        self.assertEqual(env['PATH_SEPARATOR'], os.pathsep)
+        self.assertEqual(env['EMBERBSD_CONFIGURE_SDK'], 'yes')
+        self.assertEqual(env['EMBERBSD_CONFIGURE_UNAME'], case.commands['uname'][0])
         self.assertEqual(env['PATH'], str(case.work / 'bin'))
         self.assertFalse(any(key.startswith(('ac_cv_', 'gl_cv_', 'gt_cv_')) for key in env))
         for kind in ('build', 'host'):
@@ -194,6 +197,17 @@ class GNUProgramTests(unittest.TestCase):
         for step in steps[1:4]:
             self.assertEqual(step['argv'][:len(case.commands['gmake'])], list(case.commands['gmake']))
             self.assertEqual(step['argv'].count('-j1'), 1)
+
+    def test_diagnostics_require_one_explicit_uname_command(self):
+        self.configure()
+        for value in (None, (), ('/selected/uname', '-p')):
+            commands = dict(self.case.commands)
+            if value is None:
+                del commands['uname']
+            else:
+                commands['uname'] = value
+            with self.subTest(value=value), self.assertRaisesRegex(SDKError, 'selected uname'):
+                gnu.gnu_environment(self.case.plan, self.case.descriptor, commands, self.case.flags)
 
     def test_synthetic_completion_and_path_exclude_failed_apple_tools(self):
         for name, count in (('diffutils', 12), ('findutils', 22)):

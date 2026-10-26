@@ -159,7 +159,7 @@ def gnu_environment(plan, descriptor, commands, flags):
                  'GNU make shell bootstrap requires literal command and ABI words')
         return ' '.join(words)
     result = dict(PATH=os.path.join(work, 'bin'), LC_ALL='C', TZ='UTC', TMPDIR=work,
-                  CONFIG_SITE='/dev/null')
+                  CONFIG_SITE='/dev/null', PATH_SEPARATOR=os.pathsep)
     for variable, role in (('CC', 'cc'), ('CXX', 'cxx'), ('CPP', 'cpp'), ('AS', 'as'), ('LD', 'ld'),
             ('AR', 'ar'), ('RANLIB', 'ranlib'), ('NM', 'nm'), ('STRIP', 'strip'),
             ('SHELL', 'sh'), ('CONFIG_SHELL', 'sh'), ('MAKE', 'gmake')):
@@ -169,6 +169,10 @@ def gnu_environment(plan, descriptor, commands, flags):
     for variable, key in (('CPPFLAGS', 'cppflags'), ('CFLAGS', 'cflags'), ('CXXFLAGS', 'cxxflags')):
         result[variable] = join(flags[key])
     result['LDFLAGS'] = join([*flags['ldflags'], '-Wl,--threads=1'])
+    if not bootstrap:
+        _require(len(commands.get('uname', ())) == 1, 'GNU diagnostics need one selected uname invocation')
+        result.update(EMBERBSD_CONFIGURE_SDK='yes',
+                      EMBERBSD_CONFIGURE_UNAME=_absolute(commands['uname'][0]))
     if bootstrap:
         shell = _safe_path(commands['sh'][0])
         result['CPPFLAGS'] = (result['CPPFLAGS'] + ' -DPKGSRC_DEFAULT_SHELL=' + json.dumps(shell)).lstrip()

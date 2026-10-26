@@ -78,6 +78,8 @@ A different existing utility map fails without changing it.
 The command prints the exact `initial_command` and its environment as JSON data.
 This is an invocation description, not a receipt.
 Run that command with the returned environment and ordinary process failure handling.
+The environment sets `PATH_SEPARATOR` to the native Python `os.pathsep`.
+Autoconf must not discover it by running a shell from `/bin`.
 It builds and installs `devel/bmake` through the shared recipe and its dependencies.
 The utility mapping contains only explicit selected utility links.
 It excludes raw compiler and make names whose plain links would lose command arguments.

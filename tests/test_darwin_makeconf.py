@@ -83,6 +83,7 @@ class DarwinMakeconfTests(TemporaryCase):
         env = result['environment']
         self.assertEqual(env['PATH'], self.options['utility_bin'])
         self.assertEqual(env['LC_ALL'], 'C')
+        self.assertEqual(env['PATH_SEPARATOR'], os.pathsep)
         self.assertFalse({'MAKEFLAGS', 'COMPILER_PATH', 'CC', 'CONFIG_SITE'} & set(env))
 
     def test_rejects_external_tool_and_wrong_cpu(self):

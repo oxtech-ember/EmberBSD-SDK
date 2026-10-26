@@ -249,7 +249,7 @@ def metadata_environment(plan, commands):
     data, work = plan['metadata'], _safe_path(plan['work_root'])
     result = dict(PATH=_safe_path(data['utility_bin']), LC_ALL='C', TZ='UTC', TMPDIR=work,
                MAKECONF=_safe_path(data['makeconf']['path']), SHELL=_safe_path(commands['sh'][0]),
-               CONFIG_SHELL=_safe_path(commands['sh'][0]))
+               CONFIG_SHELL=_safe_path(commands['sh'][0]), PATH_SEPARATOR=os.pathsep)
     if plan['format'] == 'emberbsd-native-gcc16-bootstrap-plan':
         _require(len(commands.get('strip', ())) == 1,
                  'GCC comparison needs one selected strip invocation')
