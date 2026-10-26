@@ -170,6 +170,43 @@ while not Path(sys.argv[1]).exists():time.sleep(.01)
         self.assertEqual(code, 143)
         self.unlocked()
 
+    def session_churn(self):
+        # Short-lived chains in the inherited session, like a parallel build's
+        # compiler drivers: rows vanish between ps and getsid() continuously.
+        churn = subprocess.Popen(['/bin/sh', '-c', 'while :; do /bin/sh -c "/bin/sh -c /usr/bin/true & /usr/bin/true"; done'],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        def stop():
+            churn.kill()
+            churn.wait()
+        self.addCleanup(stop)
+        time.sleep(.3)
+        self.assertEqual(os.getsid(churn.pid), os.getsid(0))
+
+    def test_empty_group_is_proven_under_session_churn(self):
+        self.session_churn()
+        for _ in range(5):
+            group = link_launcher.LinkGroup()
+            group.start(['/usr/bin/true'])
+            self.assertEqual(group.child.wait(timeout=20), 0)
+            self.assertEqual(group.members(), set())
+            group.stop()
+
+    def test_live_group_member_is_found_under_session_churn(self):
+        self.session_churn()
+        ready = self.root / 'member'
+        group = link_launcher.LinkGroup()
+        group.start([sys.executable, '-B', '-c',
+                     'import os,sys,time\nfrom pathlib import Path\n'
+                     'if os.fork()==0:\n Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(60)\n'
+                     'while not Path(sys.argv[1]).exists():time.sleep(.01)\n', str(ready)])
+        self.assertEqual(group.child.wait(timeout=20), 0)
+        pid = int(self.ready(ready))
+        self.addCleanup(lambda: subprocess.run(['/bin/kill', '-9', str(pid)], stderr=subprocess.DEVNULL))
+        self.assertEqual(group.members(), {pid})
+        group.stop()
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+
 
 if __name__ == '__main__':
     unittest.main()

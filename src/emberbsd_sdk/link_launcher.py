@@ -36,6 +36,17 @@ class LinkGroup:
         self.child = subprocess.Popen(_argv(argv), process_group=0)
 
     def members(self):
+        # The kernel keeps a process group while any member exists, and
+        # fork() places a child in its parent's group atomically. ESRCH for
+        # this group is therefore a complete proof of emptiness, unaffected
+        # by unrelated rows that vanish from the shared session snapshot.
+        # Any other answer falls back to the session scan below.
+        try:
+            os.killpg(self.child.pid, 0)
+        except ProcessLookupError:
+            return set()
+        except PermissionError:
+            pass
         deadline = time.monotonic() + self.inspector.empty_snapshot_timeout
         while True:
             rows, uncertain = self.inspector._scan(self.sid)
