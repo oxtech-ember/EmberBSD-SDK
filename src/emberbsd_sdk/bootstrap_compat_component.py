@@ -176,35 +176,9 @@ def _archive(work, object_name='utimens.o'):
     path = Path(work, 'libnbcompat.a')
     ref = _regular(path)
     data = _bytes(ref)
-    _require(data.startswith(b'!<arch>\n'), 'component output is not a static archive')
-    offset, members = 8, []
-    while offset < len(data):
-        header = data[offset:offset + 60]
-        _require(len(header) == 60 and header[58:] == b'`\n',
-                 'component archive header is invalid')
-        try:
-            size = int(header[48:58])
-            name = header[:16].decode('ascii').strip()
-        except (ValueError, UnicodeError):
-            _require(False, 'component archive member is invalid')
-        _require(size >= 0 and offset + 60 + size <= len(data), 'component archive member is truncated')
-        body = data[offset + 60:offset + 60 + size]
-        if name.startswith('#1/'):
-            try:
-                count = int(name[3:])
-            except ValueError:
-                _require(False, 'component archive extended name is invalid')
-            _require(0 < count <= len(body), 'component archive extended name is invalid')
-            try:
-                name = body[:count].rstrip(b'\0').decode('ascii')
-            except UnicodeError:
-                _require(False, 'component archive extended name is invalid')
-            body = body[count:]
-        if name not in ('/', '/SYM64/', '__.SYMDEF', '__.SYMDEF SORTED',
-                         '__.SYMDEF_64', '__.SYMDEF_64 SORTED'):
-            members.append((name.rstrip('/'), body))
-        offset += 60 + size + size % 2
-    _require(offset == len(data) and members == [(object_name, Path(work, object_name).read_bytes())],
+    from .bootstrap_archive import members as archive_members
+    members = archive_members(data)
+    _require(members == [(object_name, Path(work, object_name).read_bytes())],
              'component archive has missing, changed or extra objects')
     return ref
 

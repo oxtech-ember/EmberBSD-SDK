@@ -11,10 +11,11 @@ import shutil
 import stat
 import tarfile
 
-from .bootstrap_bsdinstall import _compat
+from .bootstrap_libnbcompat import validate_input as _compat
 from .bootstrap_gnu_program import _tree
 from .bootstrap_make import _safe_path
 from .bootstrap_shell import literal_stdin
+from .bootstrap_source_work import copy_tree, tool_namespace
 from .inventory import sha256_file, snapshot_tree
 from .native_toolset import _bytes, _envelope, _json, _native_image, _require
 from .paths import entry
@@ -137,15 +138,7 @@ def prepare_pkg_install_work(plan, commands):
     for row in manifest['components']:
         source = Path(plan['program']['source']['root'], row['source_directory'])
         destination = Path(work, 'source', row['name'])
-        shutil.copytree(source, destination, copy_function=shutil.copy2, symlinks=False)
-        before = snapshot_tree(str(source))
-        for name, entry_row in before.items():
-            mode = entry_row['mode'] | (0o700 if entry_row['kind'] == 'directory' else 0o200)
-            os.chmod(destination / name, mode)
-        destination.chmod(destination.stat().st_mode | 0o700)
-        expected = {n: dict(r, mode=r['mode'] | (0o700 if r['kind'] == 'directory' else 0o200))
-                    for n, r in before.items()}
-        _require(snapshot_tree(str(destination)) == expected, 'staged pkg_install source differs')
+        copy_tree(source, destination)
     for relative, common in _GNU_CONFIG_OVERRIDES.items():
         source = Path(plan['program']['source']['root'], common)
         destination = Path(work, 'source', relative)
@@ -155,9 +148,7 @@ def prepare_pkg_install_work(plan, commands):
         _require(sha256_file(str(destination)) == sha256_file(str(source)) and
                  stat.S_IMODE(observed.st_mode) == stat.S_IMODE(expected.st_mode) and
                  observed.st_mtime_ns == expected.st_mtime_ns, 'common GNU config copy differs')
-    os.mkdir(work + '/bin')
-    for role in sorted((set(manifest['required_tool_roles']) | _CONFIGURE_UTILITIES) - _DRIVERS):
-        os.symlink(commands[role][0], work + '/bin/' + role)
+    tool_namespace(work + '/bin', commands, (set(manifest['required_tool_roles']) | _CONFIGURE_UTILITIES) - _DRIVERS)
     for directory in ('pkgdb', 'target', 'config'):
         os.mkdir(work + '/' + directory)
     for name in manifest['files']:

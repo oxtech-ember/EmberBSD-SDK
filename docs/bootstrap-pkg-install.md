@@ -15,6 +15,9 @@ the fixed manifest, `pkgsrc/export.conf`, and the dyld-cache infrastructure patc
 The export and profile retain the existing metadata source chain. The `compat`
 object retains the accepted initial libnbcompat headers, static library, actual
 component commands, independent review, and historical compiler and ABI pins.
+The shared [Ports component validator](bootstrap-libnbcompat.md) accepts either
+the complete initial Ports stage or the exact retained legacy component receipt.
+It does not accept an OS component archive as a substitute.
 
 The stage copies source files with their recorded mtimes into fresh owned work.
 It applies the common recipe `CONFIG_GUESS_OVERRIDE` and `CONFIG_SUB_OVERRIDE`

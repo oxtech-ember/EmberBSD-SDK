@@ -251,6 +251,9 @@ def _native_program_contract(manifest, name, *, manifest_digest=None):
 
 
 def program_manifest(plan):
+    if plan.get('stage') == 'ports-libnbcompat-bootstrap':
+        from . import bootstrap_libnbcompat as lib
+        return lib.manifest(plan)
     if plan.get('stage') in component.STAGES:
         return component.manifest(plan)
     if plan.get('stage') == 'byacc-bootstrap':
@@ -293,6 +296,8 @@ def program_manifest(plan):
 
 
 def program_sources(plan):
+    if plan.get('stage') == 'ports-libnbcompat-bootstrap':
+        return {}
     if plan.get('stage') in component.STAGES:
         return component.sources(plan)
     if plan.get('stage') == 'byacc-bootstrap':
@@ -310,6 +315,9 @@ def program_sources(plan):
 
 
 def program_outputs(plan):
+    if plan.get('stage') == 'ports-libnbcompat-bootstrap':
+        from . import bootstrap_libnbcompat as lib
+        return lib.outputs(plan)
     if plan.get('stage') in component.STAGES:
         return component.outputs(plan)
     if plan.get('stage') == 'byacc-bootstrap':
@@ -337,6 +345,9 @@ def program_outputs(plan):
 
 
 def program_steps(plan, descriptor, commands, flags):
+    if plan.get('stage') == 'ports-libnbcompat-bootstrap':
+        from . import bootstrap_libnbcompat as lib
+        return lib.steps(plan, descriptor, commands, flags)
     if plan.get('stage') in component.STAGES:
         return component.steps(plan, descriptor, commands, flags)
     if plan.get('stage') == 'byacc-bootstrap':
@@ -424,6 +435,9 @@ def program_elapsed_case(step, plan):
 
 def prepare_program_step(step, plan, completed=()):
     component_inputs.revalidate(plan)
+    if plan.get('stage') == 'ports-libnbcompat-bootstrap':
+        from . import bootstrap_libnbcompat as lib
+        return lib.prepare(step, plan, completed)
     if plan.get('stage') in component.STAGES:
         return component.prepare(step, plan, completed)
     from .bootstrap_generated import before_step
@@ -436,6 +450,9 @@ def prepare_program_step(step, plan, completed=()):
 
 def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
     component_inputs.revalidate(plan)
+    if plan.get('stage') == 'ports-libnbcompat-bootstrap':
+        from . import bootstrap_libnbcompat as lib
+        return lib.verify(step, work, plan, actual_exit, completed)
     if plan.get('stage') in component.STAGES:
         return component.verify(step, work, plan, actual_exit, completed)
     if plan.get('stage') == 'byacc-bootstrap':
@@ -541,6 +558,9 @@ def validate_program_source(plan, source_pin):
 
 
 def validate_program_plan(plan, descriptor, commands, flags):
+    if plan.get('stage') == 'ports-libnbcompat-bootstrap':
+        from . import bootstrap_libnbcompat as lib
+        return lib.validate_plan(plan, descriptor, commands, flags)
     if plan.get('stage') == 'byacc-bootstrap':
         from .bootstrap_byacc import validate_byacc_plan
         return validate_byacc_plan(plan, descriptor, commands, flags)
