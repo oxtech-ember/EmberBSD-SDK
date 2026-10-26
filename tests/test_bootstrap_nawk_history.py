@@ -109,6 +109,8 @@ class NawkHistoryTests(unittest.TestCase):
         unrelated = copy.deepcopy(self.descriptor)
         unrelated['providers']['nawk']['recipe'] = 'other/bootstrap.json'
         self.assertEqual(runtime.policy_read_paths(unrelated), [])
+        for unadmitted in ({}, dict(providers=None), dict(providers=dict(nawk=None))):
+            self.assertEqual(runtime.policy_read_paths(unadmitted), [])
         for kind in ('file', 'directory', 'symlink', 'dangling-symlink'):
             with self.subTest(kind=kind):
                 if kind == 'file': c.loader_config.write_text('/changed/search/path\n')

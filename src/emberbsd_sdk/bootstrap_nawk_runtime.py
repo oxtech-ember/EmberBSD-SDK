@@ -167,10 +167,16 @@ def validate_loader_config():
 
 
 def policy_read_paths(descriptor):
-    """Keep the fixed loader policy leased when a later seed reuses nawk."""
+    """Keep the fixed loader policy leased when a later seed reuses nawk.
+
+    The runner asks before seed admission, so an unadmitted descriptor
+    without providers adds no path and leaves refusal to the seed check.
+    """
     from .bootstrap_nawk import MANIFEST_RELATIVE
-    if any(row.get('origin') == 'source-build' and row.get('recipe') == MANIFEST_RELATIVE
-           for row in descriptor['providers'].values()):
+    providers = descriptor.get('providers')
+    rows = providers.values() if isinstance(providers, dict) else ()
+    if any(isinstance(row, dict) and row.get('origin') == 'source-build' and
+           row.get('recipe') == MANIFEST_RELATIVE for row in rows):
         validate_loader_config()
         return [LOADER_CONFIG]
     return []
