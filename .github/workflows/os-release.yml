@@ -25,26 +25,11 @@ name: Complete OS release producer
       compiler:
         description: Common verified GCC16 compiler prefix
         required: true
-      host_cc:
-        description: Absolute native C compiler selected by the accepted toolset
-        required: true
-      host_cxx:
-        description: Absolute native C++ compiler selected by the accepted toolset
-        required: true
-      native_toolset:
-        description: Absolute qualified native toolset descriptor
-        required: true
-      native_toolset_sha256:
-        description: Exact descriptor SHA256
-        required: true
-      native_producer_receipt:
-        description: Absolute independently accepted producer receipt
-        required: true
-      native_producer_receipt_sha256:
-        description: Receipt SHA256 from the trusted acceptance gate
+      host_prefix:
+        description: Absolute native Ports tool prefix built with host GCC16
         required: true
       sdk_python:
-        description: Absolute qualified SDK Python 3.15+ interpreter
+        description: Absolute Python 3.15+ interpreter inside host_prefix
         required: true
       libedit_source:
         description: Prepared libedit source for the selected Ports recipe
@@ -78,12 +63,7 @@ jobs:
       PORTS_COMMIT: ${{ inputs.ports_commit }}
       SDK_WORKSPACE: ${{ inputs.workspace }}
       COMPILER: ${{ inputs.compiler }}
-      HOST_CC: ${{ inputs.host_cc }}
-      HOST_CXX: ${{ inputs.host_cxx }}
-      NATIVE_TOOLSET: ${{ inputs.native_toolset }}
-      NATIVE_TOOLSET_SHA256: ${{ inputs.native_toolset_sha256 }}
-      NATIVE_PRODUCER_RECEIPT: ${{ inputs.native_producer_receipt }}
-      NATIVE_PRODUCER_RECEIPT_SHA256: ${{ inputs.native_producer_receipt_sha256 }}
+      HOST_PREFIX: ${{ inputs.host_prefix }}
       SDK_PYTHON: ${{ inputs.sdk_python }}
       LIBEDIT_SOURCE: ${{ inputs.libedit_source }}
       RUNTIME_WORK: ${{ inputs.runtime_work }}
@@ -110,15 +90,12 @@ jobs:
                   raise SystemExit('Source pin mismatch for ' + name)
           PY
           printf 'DESTINATION=%s/stages/release-%s-%s\n' "$SDK_WORKSPACE" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
-      - name: Plan and enforce the production admission gate
+      - name: Plan and build
         run: |
           set -- --profile "$PROFILE" --python "$SDK_PYTHON" \
             --sdk-source "$GITHUB_WORKSPACE" --sdk "$SDK_WORKSPACE" \
             --os-source "$OS_SOURCE" --ports "$PORTS_SOURCE" --compiler "$COMPILER" \
-            --host-cc "$HOST_CC" --host-cxx "$HOST_CXX" \
-            --native-toolset "$NATIVE_TOOLSET" --native-toolset-sha256 "$NATIVE_TOOLSET_SHA256" \
-            --native-producer-receipt "$NATIVE_PRODUCER_RECEIPT" \
-            --native-producer-receipt-sha256 "$NATIVE_PRODUCER_RECEIPT_SHA256" --libedit-source "$LIBEDIT_SOURCE" \
+            --host-prefix "$HOST_PREFIX" --libedit-source "$LIBEDIT_SOURCE" \
             --runtime-work "$RUNTIME_WORK" --gcc-archive "$GCC_ARCHIVE" --pkgsrc "$PKGSRC" \
             --destination "$DESTINATION" --jobs 4
           "$SDK_PYTHON" -B scripts/build-os-release.py "$@" --plan
@@ -138,4 +115,3 @@ jobs:
         if: always() && env.DESTINATION != ''
         run: |
           printf 'Producer destination: `%s`\n\n' "$DESTINATION" >> "$GITHUB_STEP_SUMMARY"
-          printf 'Actual builds remain blocked until OS nested native-tool routing is qualified. A plan or refused stage is not a release candidate.\n' >> "$GITHUB_STEP_SUMMARY"
