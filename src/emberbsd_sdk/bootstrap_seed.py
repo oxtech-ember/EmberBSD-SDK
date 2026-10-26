@@ -631,6 +631,8 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
              acceptance.get('accepted_input_scope') == 'bootstrap-seed',
              'seed was not accepted for this exact bootstrap plan')
     plan_header = _json(plan_ref)
+    from .bootstrap_nawk import is_initial_plan, selected_shell
+    netbsd_nawk = is_initial_plan(plan_header)
     netbsd_recipe = plan_header.get('netbsd_profile') == \
         'netbsd11-amd64-pkgsrc-native-gcc16-v1'
     netbsd_initial_pilot = (plan_header.get('format') == 'emberbsd-native-gcc16-pilot-plan' and
@@ -646,14 +648,14 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
     retained_origins = {'retained-local-netbsd-build', 'retained-netbsd-base-tools',
                         'retained-r13-pkgsrc-bootstrap-artifact'}
     if any(row.get('origin') in retained_origins for row in descriptor['providers'].values()):
-        _require((netbsd_recipe or netbsd_initial_pilot) and
+        _require((netbsd_recipe or netbsd_initial_pilot or netbsd_nawk) and
                  descriptor.get('admission') == 'netbsd11-amd64-first-native-v1' and
                  descriptor['host'] == {'os': 'NetBSD', 'cpu': 'amd64'},
                  'retained seed provenance is limited to the NetBSD first-native plan')
     for row in descriptor['providers'].values():
         _require(row['origin'] in ('source-build', 'binary-release', 'installed-package',
                  'installed-package-derived') or
-                 ((netbsd_recipe or netbsd_initial_pilot) and row['origin'] in retained_origins),
+                 ((netbsd_recipe or netbsd_initial_pilot or netbsd_nawk) and row['origin'] in retained_origins),
                  'invalid seed provider origin')
         if row['origin'] == 'source-build':
             _require(row['source'] in descriptor['sources'], 'unknown seed provider source')
@@ -670,10 +672,10 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
                                             'emberbsd-bootstrap-make-probe-plan',
                                             'emberbsd-native-gcc16-producer-plan')
     roles = set(required_roles) | set(plan_header['required_roles']) | (set() if is_pilot else {'sh'})
-    seed_roles = roles - ({'make', 'gmake', 'sh'} if netbsd_recipe else set())
+    seed_roles = roles - ({'make', 'gmake', 'sh'} if netbsd_recipe else {'sh'} if netbsd_nawk else set())
     external_tools = seed_external_tools(descriptor)
-    _require(not external_tools or netbsd_recipe or netbsd_initial_pilot,
-             'configured NetBSD base drivers are limited to the first-native recipe or pilot')
+    _require(not external_tools or netbsd_recipe or netbsd_initial_pilot or netbsd_nawk,
+             'configured NetBSD base drivers are limited to fixed first-native plans')
     root, inventory, tools, records, abi_inventories, flags = _payload(
         descriptor, seed_roles, allowed_external_tools=external_tools,
         netbsd_seed_abi=bool(external_tools))
@@ -686,6 +688,10 @@ def _load(path, descriptor_sha256, acceptance_ref, plan_ref, required_roles):
         selected_pkgsrc = load_pkgsrc_bootstrap_tools(pkgsrc_ref['path'],
             acceptance_sha256=pkgsrc_ref['sha256'])
         commands.update({role: selected_pkgsrc.command(role) for role in ('make', 'gmake', 'sh')})
+    if netbsd_nawk:
+        commands['sh'] = selected_shell(plan_header)
+    from .bootstrap_nawk_runtime import validate_shell_selection
+    validate_shell_selection(descriptor, commands)
     plan = _plan(plan_ref, descriptor, commands, flags)
     _dynamic_closure(descriptor['dynamic_dependencies'], descriptor,
                      allowed_external_tools=external_tools)

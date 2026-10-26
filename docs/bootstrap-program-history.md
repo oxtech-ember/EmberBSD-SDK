@@ -190,3 +190,9 @@ Its `generate-expr` observation must bind that exact output path and SHA256.
 History checks the retained bytes and the source-owned generation plan.
 It does not run the historical yacc or reopen its retired executable.
 The original accepted seed keeps the generator's provider and provenance.
+
+## Initial NetBSD nawk history
+
+The [nawk bootstrap](bootstrap-nawk.md) uses this history envelope with a
+Ports-owned manifest and separate NetBSD ELF and selected-shell runtime evidence.
+It keeps the bootstrap-only scope. Darwin runtime acceptance is unchanged.

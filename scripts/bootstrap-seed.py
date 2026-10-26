@@ -29,8 +29,30 @@ def main(argv=None):
             command.add_argument('--' + name, required=True)
             command.add_argument('--' + name + '-sha256', required=True)
         command.add_argument('--required-role', action='append', required=True)
+    nawk = commands.add_parser('plan-nawk', help='prepare the fixed initial NetBSD nawk plan; no acceptance or execution')
+    for name in ('descriptor', 'program-source', 'pkgsrc-tools-acceptance', 'shell-runtime'):
+        nawk.add_argument('--' + name, required=True)
+        nawk.add_argument('--' + name + '-sha256', required=True)
+    for name in ('work-root', 'lock-root', 'heavy-link-context', 'output'):
+        nawk.add_argument('--' + name, required=True)
+    nawk.add_argument('--runtime-seconds', type=int, default=120)
     args = parser.parse_args(argv)
     try:
+        if args.command == 'plan-nawk':
+            from emberbsd_sdk.bootstrap_nawk import make_plan
+            from emberbsd_sdk.jsonio import write_json
+            from emberbsd_sdk.inventory import sha256_file
+            result = make_plan(dict(path=args.descriptor, sha256=args.descriptor_sha256),
+                dict(path=args.program_source, sha256=args.program_source_sha256),
+                dict(path=args.pkgsrc_tools_acceptance, sha256=args.pkgsrc_tools_acceptance_sha256),
+                dict(path=args.shell_runtime, sha256=args.shell_runtime_sha256),
+                work_root=args.work_root, resources=dict(cpu_jobs=1, link_jobs=1,
+                    runtime_seconds=args.runtime_seconds, lock_root=args.lock_root,
+                    heavy_link_context=args.heavy_link_context))
+            write_json(args.output, result)
+            sys.stdout.write(json_bytes(dict(path=str(Path(args.output).resolve()),
+                                           sha256=sha256_file(args.output))).decode('utf-8'))
+            return 0
         options = dict(descriptor_sha256=args.descriptor_sha256,
             accepted_seed_receipt=dict(path=args.accepted_seed_receipt,
                                        sha256=args.accepted_seed_receipt_sha256),

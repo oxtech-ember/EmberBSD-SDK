@@ -291,10 +291,11 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     metadata = profile == 'producer' and plan.get('stage') == 'metadata'
     gnu_program = profile == 'producer' and plan.get('stage') in GNU_PROGRAM_STAGES
     byacc = profile == 'producer' and plan.get('stage') == 'byacc-bootstrap'
+    nawk = profile == 'producer' and plan.get('stage') == 'nawk-bootstrap'
     bsdinstall = profile == 'producer' and plan.get('stage') == 'bsdinstall-bootstrap'
     pkg_install = profile == 'producer' and plan.get('stage') == 'pkg-install-bootstrap'
     ports_library = profile == 'producer' and plan.get('stage') == 'ports-libnbcompat-bootstrap'
-    program = profile == 'producer' and (gnu_program or bsdinstall or pkg_install or byacc or ports_library or plan.get('stage') in
+    program = profile == 'producer' and (gnu_program or bsdinstall or pkg_install or byacc or nawk or ports_library or plan.get('stage') in
                                         PROGRAM_STAGES)
     relocation = profile == 'producer' and plan.get('stage') == 'utility-relocation'
     recipe = profile == 'bootstrap'
@@ -321,6 +322,10 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         roots = [descriptor['bundle_root']] + [row['root'] for kind in ('headers', 'libraries')
             for row in descriptor['host_abi'][kind]]
         roots += [plan['ports_export']['root'], plan['netbsd']['makeconf']['path']]
+    if nawk:
+        from .bootstrap_nawk import read_inputs
+        nawk_roots, nawk_documents = read_inputs(plan)
+        roots += nawk_roots
     if program:
         roots += [plan['program']['source']['root']]
         from .bootstrap_program_components import read_inputs
@@ -351,6 +356,9 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         shared.update(_references(plan['netbsd']))
         shared.update(_references(_json(plan['netbsd']['source_export_acceptance'])))
         shared.update(_references(_json(plan['netbsd']['source_transfer_acceptance'])))
+    if nawk:
+        for document in nawk_documents:
+            shared.update(_references(document))
     if program:
         shared.update(_references(_json(plan['program']['source']['source_proof'])))
         for document in component_documents:
@@ -368,7 +376,7 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     if recipe and 'link_control' in plan:
         control_python = validate_link_control(plan['link_control'], inspect_inputs=True)
         shared.add(control_python)
-    if recipe:
+    if recipe or nawk:
         for path in shared:
             reject_overlap(work, path)
     # Re-read all acceptance and plan bytes under their shared fences.

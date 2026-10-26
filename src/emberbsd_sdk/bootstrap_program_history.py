@@ -26,7 +26,7 @@ def _original_inputs(record):
     from .bootstrap_binding import seed_commands
     from .bootstrap_program import PROGRAM_STAGES, program_manifest, validate_program_plan
     plan = _json(record['bootstrap_plan'])
-    _require(plan.get('stage') in (*PROGRAM_STAGES, 'byacc-bootstrap'), 'history requires a fixed program profile')
+    _require(plan.get('stage') in (*PROGRAM_STAGES, 'byacc-bootstrap', 'nawk-bootstrap'), 'history requires a fixed program profile')
     result = _json(record['producer_result'])
     _envelope(result, 'emberbsd-native-gcc16-producer-result', scope=_SCOPE)
     _require(type(result.get('api')) is int and result['api'] == 1 and
@@ -60,7 +60,12 @@ def _original_inputs(record):
     _require(os.path.commonpath((root, source_root)) not in (root, source_root),
              'historical program source snapshot must be separate from its retired seed')
     commands = seed_commands(seed, inspect_inputs=False)
-    validate_program_plan(plan, seed, commands, seed['abi_flags'])
+    if plan.get('stage') == 'nawk-bootstrap':
+        from .bootstrap_nawk import selected_shell, validate_plan
+        commands['sh'] = selected_shell(plan, inspect_inputs=False)
+        validate_plan(plan, seed, commands, seed['abi_flags'], inspect_shell=False)
+    else:
+        validate_program_plan(plan, seed, commands, seed['abi_flags'])
     _require(record['source_proof'] == plan['program']['source']['source_proof'] and
              record['manifest'] == plan['program']['manifest'], 'program history source references differ')
     return plan, result, program_manifest(plan)
@@ -165,9 +170,12 @@ def _acceptance(reference, record, plan, result, image):
         'checks', 'limitations', 'semantic_review', 'runtime_audit', 'runtime_closure', 'artifact'},
         'unsupported independent program output acceptance fields')
     _envelope(accepted, 'emberbsd-bootstrap-program-output-acceptance', scope=_SCOPE)
+    from .bootstrap_nawk_runtime import CHECKS as NAWK_CHECKS
+    expected_checks = (NAWK_CHECKS if plan['stage'] == 'nawk-bootstrap' else
+        ['ports-release-and-patch-membership', *_CHECKS[1:]] if plan['stage'] == 'byacc-bootstrap' else _CHECKS)
     _require(accepted['status'] == 'PASS' and accepted['accepted_input_scope'] == 'bootstrap-seed' and
              accepted['ordinary_provider_qualified'] is False and accepted['checks'] ==
-             (['ports-release-and-patch-membership', *_CHECKS[1:]] if plan['stage'] == 'byacc-bootstrap' else _CHECKS) and
+             expected_checks and
              accepted['bootstrap_plan'] == record['bootstrap_plan'] and
              accepted['producer_result'] == record['producer_result'] and
              accepted['source_proof'] == record['source_proof'] and accepted['artifact'] == image,
@@ -177,6 +185,10 @@ def _acceptance(reference, record, plan, result, image):
     for text in accepted['limitations']:
         _text(text, 'bootstrap output qualification limit')
     _require(bool(_bytes(accepted['semantic_review'])), 'historical independent semantic review is empty')
+    if plan['stage'] == 'nawk-bootstrap':
+        from .bootstrap_nawk_runtime import verify_acceptance
+        verify_acceptance(accepted, plan, result, image)
+        return accepted
     audit = _json(accepted['runtime_audit'])
     _envelope(audit, 'emberbsd-darwin-output-runtime-audit', scope='producer-output')
     nodes = audit['nodes']
@@ -236,6 +248,7 @@ def verify_program_build_history(history, provider_name, descriptor, *, inspect_
             'bootstrap_plan', 'producer_result', 'output_acceptance'}, 'unsupported program build history fields')
         plan, result, manifest = _original_inputs(record)
         byacc = plan['stage'] == 'byacc-bootstrap'
+        nawk = plan['stage'] == 'nawk-bootstrap'
         if byacc:
             from .bootstrap_byacc import history_origins
             archives, patches = history_origins(plan)
@@ -247,12 +260,13 @@ def verify_program_build_history(history, provider_name, descriptor, *, inspect_
         source = plan['program']['source']['source']
         _require(set(provider) == {'origin', 'source', 'recipe', 'recipe_sha256'} and
                  provider['origin'] == 'source-build' and descriptor['sources'][provider['source']] == source and
-                 provider['recipe'] == ('pkgsrc/devel/byacc/bootstrap.json' if byacc else
+                 provider['recipe'] == ('pkgsrc/lang/nawk/bootstrap.json' if nawk else
+                                        'pkgsrc/devel/byacc/bootstrap.json' if byacc else
                                         'tools/' + manifest['name'] + '/bootstrap.json') and
                  provider['recipe_sha256'] == record['manifest']['sha256'] and descriptor['host'] == plan['host'],
                  'program provider differs from its original OS source and manifest')
         image = _commands(plan, result, manifest)
-        _acceptance(record['output_acceptance'], record, plan, result, image)
+        accepted_output = _acceptance(record['output_acceptance'], record, plan, result, image)
         roles = {role: row for role, row in descriptor['tools'].items() if row['provider'] == provider_name}
         members = history['provisioned_members']
         _require(roles and set(roles) <= set(manifest['invocations']) and isinstance(members, list) and
@@ -268,7 +282,7 @@ def verify_program_build_history(history, provider_name, descriptor, *, inspect_
             _require(selected != root and os.path.commonpath((selected, root)) == root and
                      os.path.basename(selected) == role and member['original_path'] == image['path'] and
                      member['sha256'] == image['sha256'] == row['sha256'] and row['path'] == selected and
-                     row['kind'] == 'native' and row['version'] == (manifest['release'] if byacc else 'os-' + source['commit']),
+                     row['kind'] == 'native' and row['version'] == (manifest['release'] if byacc or nawk else 'os-' + source['commit']),
                      'provisioned program differs from its accepted image or selected spelling')
             if inspect_inputs:
                 regular_file(selected)
@@ -276,6 +290,9 @@ def verify_program_build_history(history, provider_name, descriptor, *, inspect_
                 _file(dict(path=selected, sha256=member['sha256']))
                 _require(os.access(selected, os.X_OK), 'program member is not executable')
                 _native_image(selected, descriptor['host'])
+                if nawk:
+                    from .bootstrap_nawk_runtime import revalidate_runtime
+                    revalidate_runtime(accepted_output, image, selected, descriptor)
         return []
     except (OSError, KeyError, TypeError, ValueError, AttributeError, StopIteration) as exc:
         raise SDKError(f'invalid Git-program bootstrap history: {exc}') from exc

@@ -257,6 +257,9 @@ def _native_program_contract(manifest, name, *, manifest_digest=None):
 
 
 def program_manifest(plan):
+    if plan.get('stage') == 'nawk-bootstrap':
+        from . import bootstrap_nawk as nawk
+        return nawk.manifest(plan)
     if plan.get('stage') == 'ports-libnbcompat-bootstrap':
         from . import bootstrap_libnbcompat as lib
         return lib.manifest(plan)
@@ -302,6 +305,9 @@ def program_manifest(plan):
 
 
 def program_sources(plan):
+    if plan.get('stage') == 'nawk-bootstrap':
+        from . import bootstrap_nawk as nawk
+        return {}
     if plan.get('stage') == 'ports-libnbcompat-bootstrap':
         return {}
     if plan.get('stage') in component.STAGES:
@@ -321,6 +327,9 @@ def program_sources(plan):
 
 
 def program_outputs(plan):
+    if plan.get('stage') == 'nawk-bootstrap':
+        from . import bootstrap_nawk as nawk
+        return nawk.outputs(plan)
     if plan.get('stage') == 'ports-libnbcompat-bootstrap':
         from . import bootstrap_libnbcompat as lib
         return lib.outputs(plan)
@@ -353,6 +362,9 @@ def program_outputs(plan):
 
 
 def program_steps(plan, descriptor, commands, flags):
+    if plan.get('stage') == 'nawk-bootstrap':
+        from . import bootstrap_nawk as nawk
+        return nawk.steps(plan, descriptor, commands, flags)
     if plan.get('stage') == 'ports-libnbcompat-bootstrap':
         from . import bootstrap_libnbcompat as lib
         return lib.steps(plan, descriptor, commands, flags)
@@ -472,6 +484,9 @@ def prepare_program_step(step, plan, completed=()):
 
 
 def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
+    if plan.get('stage') == 'nawk-bootstrap':
+        from . import bootstrap_nawk as nawk
+        return nawk.verify(step, work, plan)
     component_inputs.revalidate(plan)
     if plan.get('stage') == 'ports-libnbcompat-bootstrap':
         from . import bootstrap_libnbcompat as lib
@@ -581,6 +596,9 @@ def validate_program_source(plan, source_pin):
 
 
 def validate_program_plan(plan, descriptor, commands, flags):
+    if plan.get('stage') == 'nawk-bootstrap':
+        from . import bootstrap_nawk as nawk
+        return nawk.validate_plan(plan, descriptor, commands, flags)
     if plan.get('stage') == 'ports-libnbcompat-bootstrap':
         from . import bootstrap_libnbcompat as lib
         return lib.validate_plan(plan, descriptor, commands, flags)

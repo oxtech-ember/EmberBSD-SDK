@@ -308,3 +308,9 @@ SDK iconv stub in the final C/C++ wrappers, including probes that omit
 `LDFLAGS`. Metadata and full plans accept this identity. The initial Darwin
 allowlist and all earlier profile identities remain unchanged. This source
 admission does not qualify the recipe output or the ordinary native toolset.
+
+## Initial NetBSD nawk
+
+The fixed [nawk bootstrap](bootstrap-nawk.md) uses the accepted NetBSD compiler
+seed and pkgsrc shell to build the common Ports sources. Its new plan and output
+need independent acceptance. This route does not qualify ordinary native tools.
