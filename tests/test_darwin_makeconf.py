@@ -84,6 +84,27 @@ class DarwinMakeconfTests(TemporaryCase):
         self.assertIn('EMBERBSD_COMPILER_FAMILY= gcc\n', Path(self.options['output']).read_text())
         self.assertEqual(result['compiler_family'], 'gcc')
 
+    def test_parallel_configuration_persists_budget_and_shared_launcher(self):
+        for family in ('clang', 'gcc'):
+            self.render(jobs=18, cpu_budget=18, compiler_family=family,
+                        link_python=self.tools['cc'], lock_root=self.root / 'work',
+                        heavy_link_context=self.root / 'work/heavy-link')
+            data = Path(self.options['output']).read_text()
+            self.assertIn('EMBERBSD_DARWIN_JOBS= 18\n', data)
+            self.assertIn('EMBERBSD_DARWIN_CPU_BUDGET= 18\n', data)
+            words = [self.tools['cc'], str(SDK_SOURCE / 'scripts/link-launcher.py'),
+                     '--lock-root', str(self.root / 'work'), '--context', str(self.root / 'work/heavy-link'), '--']
+            self.assertIn('EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER= ' + ';'.join(words) + '\n', data)
+            self.assertEqual('EMBERBSD_GCC16_LINKER_LAUNCHER=' in data, family == 'gcc')
+
+    def test_invalid_parallel_inputs_preserve_no_outputs(self):
+        for changes in ({'jobs': 0}, {'jobs': True}, {'jobs': -2}, {'jobs': 18, 'cpu_budget': 8},
+                        {'cpu_budget': 0}, {'jobs': 18}, {'link_python': self.tools['cc']}):
+            with self.subTest(changes=changes), self.assertRaises(SDKError):
+                self.render(**changes)
+            self.assertFalse(Path(self.options['output']).exists())
+            self.assertFalse(Path(self.options['utility_bin']).exists())
+
     def test_unknown_family_fails_without_outputs(self):
         with self.assertRaisesRegex(SDKError, 'compiler family'):
             self.render(compiler_family='automatic')
@@ -229,6 +250,16 @@ class DarwinMakeconfTests(TemporaryCase):
         self.assertEqual((code, stderr), (0, ''))
         self.assertEqual(json.loads(stdout)['makeconf'], self.options['output'])
         self.assertIn('-B/explicit/driver/ -specs=/explicit/seed.specs', Path(self.options['output']).read_text())
+
+    def test_cli_persists_parallel_inputs(self):
+        self.options.update(jobs=18, cpu_budget=18, link_python=self.tools['cc'],
+                            lock_root=self.root / 'work', heavy_link_context=self.root / 'work/heavy-link')
+        code, stdout, stderr = self.cli()
+        self.assertEqual((code, stderr), (0, ''))
+        data = Path(json.loads(stdout)['makeconf']).read_text()
+        self.assertIn('EMBERBSD_DARWIN_JOBS= 18\n', data)
+        self.assertIn('EMBERBSD_DARWIN_CPU_BUDGET= 18\n', data)
+        self.assertIn('EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER=', data)
 
     def test_cli_reports_duplicate_tool_without_traceback_or_output(self):
         code, stdout, stderr = self.cli(('--tool', 'awk=' + self.tools['awk']))

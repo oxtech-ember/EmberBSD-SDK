@@ -105,9 +105,34 @@ After that closure installs bmake, its makefiles, and mksh, use the resulting to
 
 Retain the returned utility PATH and selected environment for this command.
 The Ports profile owns the later make, shell, and gzip transitions.
-The first renderer supports serial builds only. `--tool-phase` forwards the profile's
+`--jobs` sets positive package build parallelism; its default is 1.
+`--cpu-budget` defaults to that job count and must be at least `--jobs`.
+For parallel builds, also select `--link-python`, `--lock-root` and
+`--heavy-link-context`. The Python executable must belong to a declared tool
+root. The lock directory must already exist; use the same lock root and
+resource context for builds sharing a heavy-link slot. For example:
+
+```sh
+--jobs 18 --cpu-budget 18 \
+--link-python /absolute/host-pkg-llvm/bin/python3.15 \
+--lock-root /absolute/shared-objects/coordination \
+--heavy-link-context /absolute/shared-objects/coordination/heavy-link
+```
+
+The renderer uses this SDK's existing `scripts/link-launcher.py` service.
+It persists the CMake command list, and the GCC command prefix when GCC is
+selected, in mk.conf with the job count and CPU budget. This is necessary
+because recursive dependency/barrier invocations can discard outer command
+overrides. Adding `MAKE_JOBS=18` only to the outer make is insufficient.
+`--tool-phase` forwards the profile's
 `initial` or `full` choice; the default is `full`. It does not change package checks.
 The normal recipe still performs compiler configuration, build tests, and installation checks.
+
+`tests/darwin-makeconf-parallel.py --make /absolute/bmake --shell /absolute/mksh
+--pkgsrc /absolute/exported-pkgsrc` evaluates the real exported profile and
+pkgsrc barrier with a temporary leaf fixture. Its negative control loses an
+outer job override with the old serial configuration; the persisted configuration
+retains jobs, budget and launcher in the recursive leaf. No package or compiler runs.
 
 Once the native Ports tools are installed, use [host prefix selection](native-toolset.md).
 Configuration success does not claim a compiler build, runtime check, or complete package graph.

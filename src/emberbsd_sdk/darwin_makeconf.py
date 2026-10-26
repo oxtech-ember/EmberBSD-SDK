@@ -81,14 +81,20 @@ def _mapping(destination, tools):
 def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pkgdb,
                    utility_bin, makefiles, macos_sdk, deployment, tools, compiler_args,
                    tool_roots, jobs=1, ldflags=(), source_tools=(), tool_phase='full',
-                   compiler_family='clang'):
+                   compiler_family='clang', cpu_budget=None, link_python=None,
+                   lock_root=None, heavy_link_context=None):
     """Render explicit inputs. Do not run tools, compiler queries, or a build.
 
     Initial tools can use several declared roots before the final Ports prefix
     exists. Compiler argument order is retained; this is not a compiler probe.
     """
-    _require(type(jobs) is int and jobs == 1,
-             'this initial configuration is serial; use jobs=1')
+    _require(type(jobs) is int and jobs > 0, 'jobs must be a positive integer')
+    cpu_budget = jobs if cpu_budget is None else cpu_budget
+    _require(type(cpu_budget) is int and cpu_budget > 0 and jobs <= cpu_budget,
+             'CPU budget must be positive and at least jobs')
+    link_inputs = (link_python, lock_root, heavy_link_context)
+    _require(all(link_inputs) if jobs > 1 or any(value is not None for value in link_inputs) else True,
+             'parallel builds require link-python, lock-root and heavy-link-context')
     _require(compiler_family in ('clang', 'gcc'), 'unsupported compiler family')
     _require(tool_phase in ('initial', 'full'), 'invalid Darwin tool phase')
     _require(isinstance(deployment, str) and re.fullmatch(r'[0-9]+(?:\.[0-9]+){0,2}', deployment),
@@ -158,11 +164,24 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
                      EMBERBSD_DARWIN_SH=tools['sh'], EMBERBSD_DARWIN_TOOL_PHASE=tool_phase,
                      OSX_SDK_PATH=sdk, EMBERBSD_DARWIN_SDK_VERSION=sdk_version,
                      EMBERBSD_COMPILER_FAMILY=compiler_family,
-                     MACOSX_DEPLOYMENT_TARGET=deployment, EMBERBSD_DARWIN_JOBS='1',
-                     EMBERBSD_DARWIN_CPU_BUDGET='1', EMBERBSD_DARWIN_UTILITY_BIN=utility_bin,
+                     MACOSX_DEPLOYMENT_TARGET=deployment, EMBERBSD_DARWIN_JOBS=str(jobs),
+                     EMBERBSD_DARWIN_CPU_BUDGET=str(cpu_budget), EMBERBSD_DARWIN_UTILITY_BIN=utility_bin,
                      EMBERBSD_DARWIN_NATIVE_TOOLS=' '.join(sorted(utilities)),
                      EMBERBSD_DARWIN_SOURCE_TOOLS=' '.join(sorted(sources)),
                      LDFLAGS=shlex.join([_word(word) for word in ldflags]))
+    if all(link_inputs):
+        from .bootstrap_recipe import recipe_cmake_linker_launcher, recipe_linker_launcher
+        link_python = _safe_path(os.fspath(link_python))
+        _require(os.path.normpath(link_python) == link_python, 'use a normalized link Python path')
+        launcher = _path(Path(__file__).resolve().parents[2] / 'scripts/link-launcher.py', existing=True)
+        regular_file(launcher)
+        # Reuse the existing SDK service and both native argument encodings.
+        link = dict(link_control={'python': {'path': link_python}, 'launcher': {'path': launcher}},
+                    resources={'lock_root': _path(lock_root, directory=True, existing=True),
+                               'heavy_link_context': _path(heavy_link_context)})
+        variables['EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER'] = recipe_cmake_linker_launcher(link)
+        if compiler_family == 'gcc':
+            variables['EMBERBSD_GCC16_LINKER_LAUNCHER'] = recipe_linker_launcher(link)
     for role, command in commands.items():
         variables['EMBERBSD_DARWIN_SEED_' + role.upper()] = shlex.join(command)
     variables['EMBERBSD_DARWIN_SEED_AS'] = shlex.join(
@@ -185,6 +204,8 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
     try:
         for selected in tools.values():
             _member(selected, (*roots, utility_bin), host, search_path=utility_bin)
+        if link_python is not None:
+            _member(link_python, (*roots, utility_bin), host, search_path=utility_bin)
         with tempfile.NamedTemporaryFile(prefix='.darwin-makeconf-', dir=os.path.dirname(output),
                                          delete=False) as stream:
             temporary = stream.name

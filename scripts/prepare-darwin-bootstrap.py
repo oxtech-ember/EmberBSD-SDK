@@ -31,7 +31,11 @@ def main(argv=None):
                             help='append one compiler argument; use --' + role + '-arg=-OPTION')
     parser.add_argument('--ldflag', action='append', default=[])
     parser.add_argument('--source-tool', action='append', default=[])
-    parser.add_argument('--jobs', type=int, action=UniqueOption, help='serial initial build; default 1')
+    parser.add_argument('--jobs', type=int, action=UniqueOption, help='positive package build parallelism; default 1')
+    parser.add_argument('--cpu-budget', type=int, action=UniqueOption, help='available CPU budget; defaults to jobs')
+    parser.add_argument('--link-python', action=UniqueOption, help='explicit native Python for the shared SDK linker launcher')
+    parser.add_argument('--lock-root', action=UniqueOption, help='existing shared linker lock directory')
+    parser.add_argument('--heavy-link-context', action=UniqueOption, help='shared heavy-link resource path')
     parser.add_argument('--tool-phase', choices=('initial', 'full'), action=UniqueOption)
     parser.add_argument('--compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
                         help='Clang by default; select GCC explicitly for a platform exception')
@@ -57,7 +61,8 @@ def main(argv=None):
             compiler_args={role: getattr(args, role + '_arg') for role in ('cc', 'cxx', 'cpp')},
             ldflags=args.ldflag, source_tools=args.source_tool,
             jobs=1 if args.jobs is None else args.jobs, tool_phase=args.tool_phase or 'full',
-            compiler_family=args.compiler_family or 'clang')
+            compiler_family=args.compiler_family or 'clang', cpu_budget=args.cpu_budget,
+            link_python=args.link_python, lock_root=args.lock_root, heavy_link_context=args.heavy_link_context)
         print(json.dumps(result, indent=2))
         return 0
     except Exception as error:
