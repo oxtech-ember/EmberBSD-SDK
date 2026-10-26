@@ -62,6 +62,7 @@ MKDIR_MANIFEST_SHA256 = '6d52c3dd9fe813f652e7d98110f56af8078b9617d6d1f3ca0b3b08e
 MKDIR_LEGACY_MANIFEST_SHA256 = '111fe0d327e4ccdc7de008ac3844e49893edfbd43d62400ef2dbc4ceb76c5453'
 MKDIR_MANIFEST_CASE_COUNTS = {MKDIR_MANIFEST_SHA256: 11, MKDIR_LEGACY_MANIFEST_SHA256: 10}
 _FILESYSTEM_MANIFESTS = {
+    'cp': '94482f0c991a0bd3178371b969e0b16dcb823d2a9c24479fa1860aad9617c675',
     'ls': '2420af8c57c055764a2a691e0e5e0a4cc6055aabe02d65799422c832a5f64633',
     'touch': '096e55a50b02a993e465022733118c73cb3d9494c92a83b31b045b4a4b998542',
     'chmod': '0139b41d150bb82e79a99547c4d3a6f5cac975152c32e850922af7bdb269e1ae',
@@ -70,14 +71,16 @@ _FILESYSTEM_MANIFESTS = {
     'rmdir': '22e24af317a8e1c18559c407f0497a18f24bfb9c88ff8a89b48a9aa09b3ae995',
     'rm': '8ae57707433b60bb726b4b070d3389abc775514fc663064dca75180b816342fc'}
 _NBTOOL_CONFIG = 'tools/compat/bootstrap/nbtool_config.h'
-_NATIVE_LOCAL_HEADERS = {'ls': ('ls.h', 'extern.h', 'ls_stat.h'), 'sleep': ('sleep_darwin.h',), 'cmp': ('extern.h',), 'tr': ('extern.h',), 'tail': ('extern.h',), 'hexdump': ('hexdump.h',),
+_NATIVE_LOCAL_HEADERS = {'cp': ('extern.h',), 'ls': ('ls.h', 'extern.h', 'ls_stat.h'), 'sleep': ('sleep_darwin.h',), 'cmp': ('extern.h',), 'tr': ('extern.h',), 'tail': ('extern.h',), 'hexdump': ('hexdump.h',),
                          'date': ('extern.h',), 'cut': ('x_cut.c',), 'sort': ('sort.h', 'fsort.h', 'pathnames.h')}
+_NATIVE_SHARED_HEADERS = {'cp': ('tools/compat/compat_stat_time.h',)}
 _NATIVE_DIRECTORIES = {'sleep': 'bin/sleep', **{name: 'bin/' + name for name in filesystem.PROGRAMS}, 'touch': 'usr.bin/touch', 'hexdump': 'usr.bin/hexdump', 'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
                        'basename': 'usr.bin/basename', 'dirname': 'usr.bin/dirname',
                        'cat': 'bin/cat', 'head': 'usr.bin/head', 'uniq': 'usr.bin/uniq',
                        'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut', 'env': 'usr.bin/env', 'uname': 'usr.bin/uname', 'tail': 'usr.bin/tail', 'sort': 'usr.bin/sort', 'date': 'bin/date', 'id': 'usr.bin/id', 'expr': 'bin/expr'}
 _NATIVE_SOURCES = {'sleep': ('bin/sleep/sleep.c',), **{name: ('bin/' + name + '/' + name + '.c',) for name in filesystem.PROGRAMS}, 'touch': ('usr.bin/touch/touch.c',), 'hexdump': (*('usr.bin/hexdump/' + name + '.c' for name in
                               ('conv', 'display', 'hexdump', 'hexsyntax', 'odsyntax', 'parse')), *_EFUN_SOURCES),
+                   'cp': ('bin/cp/cp.c', 'bin/cp/utils.c'),
                    'ls': tuple('bin/ls/' + name + '.c' for name in ('cmp', 'ls', 'main', 'print', 'util')),
                    'expr': ('bin/expr/expr.y',), 'date': ('bin/date/date.c',), 'sort': (*('usr.bin/sort/' + name + '.c' for name in
                            ('append', 'fields', 'files', 'fsort', 'init', 'msort', 'sort', 'tmp', 'radix_sort')),
@@ -88,8 +91,8 @@ _NATIVE_SOURCES = {'sleep': ('bin/sleep/sleep.c',), **{name: ('bin/' + name + '/
                    'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'), 'pwd': ('bin/pwd/pwd.c',), 'cut': ('usr.bin/cut/cut.c', *_EFUN_SOURCES),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
                       for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf', 'env', 'uname', 'id')}}
-_LITERAL_CASE_COUNTS = dict(ls=38, touch=36, sleep=21, chmod=12, mkdir=11, ln=12, rmdir=9, rm=25, basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
-_REQUIRED_CONTROLS = {'ls': 'tools/ls/probes/control.c'}
+_LITERAL_CASE_COUNTS = dict(cp=34, ls=38, touch=36, sleep=21, chmod=12, mkdir=11, ln=12, rmdir=9, rm=25, basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
+_REQUIRED_CONTROLS = {'cp': 'tools/cp/probes/control.c', 'ls': 'tools/ls/probes/control.c'}
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
 _ALIASES = {'grep': ('egrep', 'fgrep'), 'tail': ('tac',), 'id': ('groups', 'whoami'), 'hexdump': ('od',)}
@@ -188,7 +191,8 @@ def _profile(plan):
             digest, _NATIVE_SOURCES[name],
             ('tools/' + name + '/Makefile', 'tools/Makefile.host', directory + '/Makefile',
              'tools/' + name + '/README.md', *(_EFUN_PROVENANCE if name in EFUN_PROGRAMS else ()),
-             *(('tools/' + name + '/test-source.py',) if name in ('rm', 'touch', 'ls') else ()),
+             *(('tools/' + name + '/test-source.py',) if name in ('rm', 'touch', 'ls', 'cp') else ()),
+             *(('tools/compat/Makefile', 'tools/compat/test-stat-time.py', 'tools/compat/README.stat-time.md') if name in _NATIVE_SHARED_HEADERS else ()),
              *((_REQUIRED_CONTROLS[name], 'tools/Makefile') if name in _REQUIRED_CONTROLS else ())))
 
 
@@ -207,9 +211,9 @@ def _native_program_contract(manifest, name, *, manifest_digest=None):
         manifest['source_makefile'] == directory + '/Makefile' and
         manifest['compiler'] == dict(family='gcc', major=16, abi='native') and
         manifest['sources'] == list(_NATIVE_SOURCES[name]) and
-        manifest['headers'] == ([directory + '/' + header for header in _NATIVE_LOCAL_HEADERS.get(name, ())] if components else [_ID_GROUP_HEADER, _BOOTSTRAP_CDEFS] if name == 'id' else [*(directory + '/' + header for header in _NATIVE_LOCAL_HEADERS.get(name, ())),
+        manifest['headers'] == ([*(directory + '/' + header for header in _NATIVE_LOCAL_HEADERS.get(name, ())), *_NATIVE_SHARED_HEADERS.get(name, ())] if components else [_ID_GROUP_HEADER, _BOOTSTRAP_CDEFS] if name == 'id' else [*(directory + '/' + header for header in _NATIVE_LOCAL_HEADERS.get(name, ())),
                                 _BOOTSTRAP_CDEFS, *(_EFUN_HEADERS if efun else (_NBTOOL_CONFIG,) if nbtool else ())]) and
-        manifest['include_dirs'] == (['common/include'] if name == 'id' else [directory, 'tools/compat', 'common/lib/libc/stdlib'] if efun else [directory, 'tools/compat/bootstrap'] if nbtool else [directory] if name in _NATIVE_LOCAL_HEADERS else []) and
+        manifest['include_dirs'] == ([directory, 'tools/compat'] if name in _NATIVE_SHARED_HEADERS else ['common/include'] if name == 'id' else [directory, 'tools/compat', 'common/lib/libc/stdlib'] if efun else [directory, 'tools/compat/bootstrap'] if nbtool else [directory] if name in _NATIVE_LOCAL_HEADERS else []) and
         manifest['cppflags'] == ([] if components else ['-DHAVE_NBTOOL_CONFIG_H=1', '-include', 'nbtool_config.h'] if efun else (['-DHAVE_NBTOOL_CONFIG_H=1'] if nbtool else []) + ['-include', _BOOTSTRAP_CDEFS]) and
         manifest['cflags'] == (['-fwrapv'] if name == 'expr' else []) and
         manifest['link_flags'] == [] and manifest['libraries'] == (['m'] if name in ('sleep', 'touch') else []) and

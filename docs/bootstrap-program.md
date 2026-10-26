@@ -26,7 +26,7 @@ scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`,
 `head-bootstrap`, `uniq-bootstrap`, `wc-bootstrap`, `tr-bootstrap`, `printf-bootstrap`,
 `pwd-bootstrap`, `sleep-bootstrap`, `touch-bootstrap`, `cut-bootstrap`, `env-bootstrap`, `uname-bootstrap`, `tail-bootstrap`,
 `sort-bootstrap`, `date-bootstrap`, `id-bootstrap`, `expr-bootstrap`, `hexdump-bootstrap`,
-`chmod-bootstrap`, `mkdir-bootstrap`, `ln-bootstrap`, `rmdir-bootstrap`, `rm-bootstrap`, and `ls-bootstrap`.
+`chmod-bootstrap`, `mkdir-bootstrap`, `ln-bootstrap`, `rmdir-bootstrap`, `rm-bootstrap`, `ls-bootstrap`, and `cp-bootstrap`.
 The separate [OS file-time component](bootstrap-compat-component.md) uses
 `compat-filetime-bootstrap`, `compat-parsedate-bootstrap`, `compat-listing-bootstrap`
 and `compat-filemeta-bootstrap`
@@ -157,6 +157,27 @@ nonprintable names, signals, and I/O faults are outside this finite semantic acc
 C analysis, memory checks, and ordinary host qualification remain separate requirements.
 Run `test_bootstrap_program_ls` with `EMBERBSD_LS_SOURCE` set to the selected OS source.
 These tests use synthetic children and do not establish native ls execution.
+
+## Initial cp and shared metadata
+
+`cp-bootstrap` retains both complete canonical `bin/cp` translation units.
+It selects exactly the independently accepted `filetime` and `filemeta` components.
+The shared selector retains both receipts, archives, public headers, and read leases.
+The owner manifest is `tools/cp/bootstrap.json`, SHA256
+`94482f0c991a0bd3178371b969e0b16dcb823d2a9c24479fa1860aad9617c675`.
+Its 15 source members include the common stat timestamp accessor and required control.
+The normal host target keeps the complete OS compatibility library and canonical options.
+
+There are 41 commands and 34 finite cases. The native control must succeed before
+production compilation. It checks descriptor zero, real stat nanoseconds, timestamps,
+flags, no-follow operations, and the public metadata API. Both control and cp loader
+traces belong to the output runtime audit. Only cp is provisionable.
+The owner cases check bytes, mmap chunks, modes, times, recursion, links, prompts and errors.
+The source API control does not prove actual cp preservation of nonempty ACLs or xattrs.
+Those consumer scenarios need typed native metadata fixtures and observations around cp.
+No ordinary SDK, other-host, C-analysis or memory qualification is implied.
+Run `test_bootstrap_program_cp` with `EMBERBSD_CP_SOURCE` selecting the owner source.
+No native children are executed by these source/data tests.
 
 ## Fixed filesystem effects
 

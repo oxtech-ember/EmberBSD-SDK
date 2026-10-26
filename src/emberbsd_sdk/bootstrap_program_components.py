@@ -7,7 +7,7 @@ from pathlib import Path
 from . import bootstrap_compat_component as component
 from .native_toolset import _json, _require
 
-CONSUMERS = {'touch-bootstrap': ('filetime', 'parsedate'), 'ls-bootstrap': ('listing',)}
+CONSUMERS = {'touch-bootstrap': ('filetime', 'parsedate'), 'ls-bootstrap': ('listing',), 'cp-bootstrap': ('filetime', 'filemeta')}
 
 
 def selected(plan, descriptor):
