@@ -24,7 +24,7 @@ from emberbsd_sdk.jsonio import json_bytes, read_json, write_json
 
 
 def _parser():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description='Retired historical bootstrap interface. Normal builds use --host-prefix; see docs/native-toolset.md. ' + __doc__)
     subparsers = parser.add_subparsers(dest='action', required=True)
     manifest = subparsers.add_parser('make-source-manifest')
     manifest.add_argument('--ports-source', required=True)

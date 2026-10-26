@@ -1,5 +1,9 @@
 # Scoped pkgsrc bootstrap provider
 
+> Retired bootstrap admission interface. This document describes historical data.
+> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+
 This provider consumes a separately accepted current Ports/pkgsrc source export,
 its target-side transfer acceptance, and the accepted GCC16 compiler-only seed.
 It runs on NetBSD 11.0 amd64. The seed remains scoped to `bmake-bootstrap`;

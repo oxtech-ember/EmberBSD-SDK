@@ -1,5 +1,9 @@
 # NetBSD first-native GCC16 recipe route
 
+> Retired bootstrap admission interface. This document describes historical data.
+> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+
 The first-native recipe controller has a fixed NetBSD 11 amd64 branch in
 `bootstrap-seed.py run-bootstrap`. It uses the existing
 `emberbsd-native-gcc16-bootstrap-plan` envelope and the existing independent

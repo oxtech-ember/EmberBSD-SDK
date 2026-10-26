@@ -40,9 +40,11 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
     flags = flags_for(target) + [f'EXTERNAL_TOOLCHAIN={paths["compiler"]}',
         f'EMBER_EXTERNAL_GCC_RUNTIME={paths["runtime-prefix"]}',
         f'EMBER_LIBEDIT_SOURCE={paths["libedit-source"]}',
-        f'HOST_CC={cc}', f'HOST_CXX={cxx}',
         f'MKREPRO_TIMESTAMP={timestamp}', f'EMBER_BUILD_ID={sha}', f'BUILDINFO=EmberBSD:{sha}',
         f'KERNOBJDIR={paths["objects"]}/kernels'] + (native_host_flags(native_selection) if native_selection is not None else [])
+    if native_selection is None or native_selection['format'] != 'emberbsd-host-prefix':
+        position = flags.index(f'MKREPRO_TIMESTAMP={timestamp}')
+        flags[position:position] = [f'HOST_CC={cc}', f'HOST_CXX={cxx}']
     if target == 'aarch64':
         flags += ['RELEASEMACHINEDIR=evbarm-aarch64', 'MAKETARSETS=base comp', 'MKDEBUGKERNEL=no']
     else:
@@ -109,8 +111,7 @@ def validate_profile(profile, sha, target):
     for key in ('os', 'ports', 'sdk-source', 'compiler', 'runtime-prefix', 'objects', 'tools', 'destination', 'libedit-source'):
         check(isinstance(paths[key], str) and paths[key].startswith('/') and not re.search(r'\s', paths[key]), 'Invalid producer path')
     check(signature['target'] == target_definition(target), 'Mixed target signature')
-    # This checks saved command consistency. Only load_native_toolset can
-    # establish a live selection from independently accepted evidence.
+    # This checks saved command consistency without reading mutable tools.
     native = None
     if explicit_native:
         validate_native_binding(signature, paths, profile['shell'])
@@ -122,7 +123,7 @@ def validate_profile(profile, sha, target):
           'Missing successful producer execution')
     environment = signature['environment']
     check(set(environment).issubset({'PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'USER', 'LOGNAME', 'LC_ALL', 'MAKECONF',
-                                   'GIT_OPTIONAL_LOCKS', 'GIT_NO_LAZY_FETCH', 'PYTHONDONTWRITEBYTECODE'}) and
+                                   'GIT_OPTIONAL_LOCKS', 'GIT_NO_LAZY_FETCH', 'PYTHONDONTWRITEBYTECODE', 'EMBER_NATIVE_TOOLS'}) and
           environment['LC_ALL'] == 'C' and environment['MAKECONF'] == '/dev/null', 'Uncontrolled build environment')
     outputs = ([KERNEL] + ['release/evbarm-aarch64/binary/sets/' + n for n in SYSROOT_SETS] if target == 'aarch64'
                else ['release/images/' + n for n in images(version)])
@@ -150,7 +151,7 @@ class OSReleaseBuilder(SysrootBuilder):
         super().preflight()
         self.receipt.update(format='emberbsd-os-release-build', version=3, scope='os-release-build',
                             previous_contexts=self.contexts, plan=[self.runtime_command, *self.release_commands, self.runtime_command],
-                            not_checked=['OS nested native-tool routing', 'target execution', 'VM installation', 'physical hardware', 'binary publication'])
+                            not_checked=['target execution', 'VM installation', 'physical hardware', 'binary publication'])
         self.receipt.pop('copy', None)
         return self.receipt
 

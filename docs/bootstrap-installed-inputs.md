@@ -1,5 +1,9 @@
 # Installed-package bootstrap inputs
 
+> Retired bootstrap admission interface. This document describes historical data.
+> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+
 An existing installed package is a separate seed history kind.
 It is not a binary release archive or a source-build receipt.
 Use it only with the [scoped first GCC16 bootstrap contract](bootstrap-seed.md).

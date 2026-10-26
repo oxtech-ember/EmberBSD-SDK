@@ -1,10 +1,8 @@
 # Compose and publish OS releases
 
-Actual OS release builds currently fail before preflight or producer execution.
-The OS nested native-tool contract is not qualified. There is no override flag.
-A qualified [native toolset](native-toolset.md) permits a read-only `--plan`.
-The [sysroot guide](sysroot.md#recorded-producer-sequence) identifies the exact
-OS source routes that keep execution blocked.
+Use the native Ports tool prefix with `--host-prefix`.
+The builder checks prefix paths and host architecture, then uses the OS command mapping.
+No independent native-tool qualification or admission receipt is required.
 
 SDK owns release orchestration, kit composition and immutable publication.
 The OS owns `build.sh`, distribution rules, media layout and installer checks.
@@ -46,18 +44,12 @@ Canonical version behavior follows OS commit
 python3 scripts/build-os-release.py --help
 python3 scripts/build-os-release.py \
   --profile aarch64-sysroot \
-  --python /absolute/python3 \
   --sdk-source /absolute/EmberBSD-SDK \
   --sdk /absolute/prebuild-sdk-aarch64 \
   --os-source /absolute/EmberBSD \
   --ports /absolute/EmberBSD-Ports \
   --libedit-source /absolute/prepared-libedit \
-  --host-cc /absolute/native-gcc16/bin/gcc \
-  --host-cxx /absolute/native-gcc16/bin/g++ \
-  --native-toolset /absolute/evidence/native-toolset.json \
-  --native-toolset-sha256 "$descriptor_hash" \
-  --native-producer-receipt /absolute/evidence/qualification.json \
-  --native-producer-receipt-sha256 "$accepted_receipt_hash" \
+  --host-prefix /absolute/host-pkg-g16 \
   --compiler /absolute/gcc16-cross \
   --runtime-work /absolute/gcc16-runtime-work \
   --gcc-archive /absolute/gcc-16.2.0.tar.xz \
@@ -66,15 +58,14 @@ python3 scripts/build-os-release.py \
   --jobs 4 --plan
 ```
 
-The plan reports `build_admission` as refused. Removing `--plan` still refuses
-execution. The workspace target must match the
+Remove `--plan` to run the build. The workspace target must match the
 profile. The destination must be new or empty and must be outside the active
 sysroot. Use paths without whitespace. `--objects` and `--tools` select shared
 workspace object paths; reuse requires an identical compatible context.
 Do not point this producer at a core-sysroot object's incompatible context.
 No compilation or output writes occur in plan mode.
-The three driver/interpreter path options are checked aliases for the accepted
-native roles. The context binds the complete normalized native selection.
+The three optional driver/interpreter path options are checked aliases for the selected
+native prefix roles. The context binds the complete normalized native selection.
 Only native `HOST_*` flags receive its ABI arguments. Saved profile verification
 checks command and selection consistency; it does not requalify local tools.
 
@@ -88,7 +79,7 @@ OS sets do not own the external SDK or GCC16 package payload. Select one matchin
 Ports runtime provider separately and check image dependency closure before
 VM qualification. The adapter alone does not compose that runtime package.
 
-After native routing qualification, the producer is designed to record exact commands, source commits, compiler/runtime
+The producer records exact commands, source commits, compiler/runtime
 hashes, source archive and output hashes. It sanitizes inherited make controls.
 The common SDK log and incomplete receipt remain on failure. `build-success`
 appears only after all producer operations and receipt checks succeed.
@@ -181,8 +172,7 @@ verifiable without rewriting their receipts. Their bootstrap GCC12 provenance
 stays explicit. It is not evidence for today's common GCC16 build profile.
 Historical schema 2 receipts retain their source, compiler, runtime and command
 checks. They do not establish native toolset qualification. New plans use
-schema 3 and bind the accepted native selection. Actual builds remain blocked
-until nested producer routing is qualified. Existing immutable tags must not
+schema 3 and bind the selected native prefix. Builds use the OS native command mapping. Existing immutable tags must not
 be repurposed.
 
 Run `python3 -B -m unittest discover -s tests -p 'test_*.py'`.

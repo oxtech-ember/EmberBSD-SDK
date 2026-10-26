@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-"""Explicit, receipt-bound native build tools. This module runs no tools."""
+"""Native tool selection and readers for historical toolset records."""
 
 from dataclasses import dataclass
 import hashlib
@@ -18,6 +18,12 @@ from .jsonio import MAX_JSON
 from .paths import canonical_existing, inside, open_regular, verify_stable
 
 NATIVE_TOOLSET_API = 1
+
+
+def load_host_prefix(prefix, *, required_roles, host=None):
+    """Load installed native Ports tools without a descriptor or receipt."""
+    from .host_prefix import load_host_prefix as load
+    return load(prefix, required_roles=required_roles, host=host)
 NATIVE_C_PROBE = (b'#include <stdio.h>\n'
                   b'int main(void) { return puts("emberbsd-native-c-v1") < 0; }\n')
 NATIVE_CXX_PROBE = (b'#include <iostream>\n'
@@ -429,6 +435,10 @@ class NativeToolset:
 def validate_selection(value, *, required_roles):
     """Check saved selection consistency without reading files or qualifying it."""
     try:
+        if isinstance(value, dict) and value.get('format') == 'emberbsd-host-prefix':
+            from .host_prefix import validate_host_prefix
+            validate_host_prefix(value, required_roles=required_roles)
+            return
         _require(isinstance(value, dict) and set(value) ==
                  {'format', 'version', 'api', 'descriptor_sha256', 'producer_receipt',
                   'bundle_root', 'host', 'compiler', 'tools', 'abi_flags'}, 'invalid saved native selection')

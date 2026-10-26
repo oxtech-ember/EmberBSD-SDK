@@ -1,9 +1,8 @@
 # Build an EmberBSD sysroot
 
-Actual sysroot builds currently fail before preflight or producer execution.
-The OS producer does not yet enforce complete native-tool routing.
-There is no override flag. A qualified native toolset permits a read-only
-`--plan`; it does not remove this execution gate.
+Use the native Ports tool prefix with `--host-prefix`.
+The builder checks prefix paths and host architecture, then uses the OS command mapping.
+No independent native-tool qualification or admission receipt is required.
 
 The recorded producer sequence covers target headers, OS CRT and libraries,
 the dynamic loader, and audited GCC16 developer support. It does not install
@@ -17,13 +16,10 @@ See [host platforms](host-platforms.md).
 Apply the [SDK tool selection policy](tool-selection.md).
 Use SDK native GCC16 for host programs and SDK cross GCC16 for target code.
 Keep host tools and target inputs separate.
-Select an accepted [native toolset](native-toolset.md) with its descriptor and
-independently accepted producer receipt, each pinned by SHA256.
-The loader runs before compiler or runtime queries. It requires the direct
-`cc`, `cxx`, `sh`, and `python` roles, in addition to its compiler-component checks.
-`--host-cc`, `--host-cxx`, and `--python` remain required checked aliases.
-They must resolve to the corresponding qualified role. Commands retain the
-qualified path spelling, including a qualified in-bundle symlink.
+Select the [native Ports prefix](native-toolset.md).
+The loader selects the roles required by the OS contract plus Python.
+`--host-cc`, `--host-cxx`, and `--python` are optional checked aliases.
+They must resolve to their corresponding prefix tools.
 
 Provide:
 
@@ -55,18 +51,12 @@ Use the implemented script's help for the exact options:
 ```sh
 python3 scripts/build-sysroot.py --help
 python3 scripts/build-sysroot.py \
-  --python /absolute/native/python3 \
   --sdk-source /absolute/EmberBSD-SDK \
   --sdk /absolute/prebuild-sdk-aarch64 \
   --os /absolute/EmberBSD \
   --ports /absolute/EmberBSD-Ports \
   --libedit-source /absolute/prepared-libedit \
-  --host-cc /absolute/native-gcc16/bin/gcc \
-  --host-cxx /absolute/native-gcc16/bin/g++ \
-  --native-toolset /absolute/evidence/native-toolset.json \
-  --native-toolset-sha256 "$descriptor_hash" \
-  --native-producer-receipt /absolute/evidence/qualification.json \
-  --native-producer-receipt-sha256 "$accepted_receipt_hash" \
+  --host-prefix /absolute/host-pkg-g16 \
   --compiler /absolute/gcc16-cross \
   --runtime-work /absolute/gcc16-runtime-work \
   --gcc-archive /absolute/gcc-16.2.0.tar.xz \
@@ -74,9 +64,8 @@ python3 scripts/build-sysroot.py \
   --target aarch64 --jobs 2 --plan
 ```
 
-The plan validates inputs and reports the recorded build commands. It does not
-compile or create a successful-build receipt. It reports `build_admission`
-as refused. Removing `--plan` still refuses execution.
+The plan checks inputs and lists the build commands without creating outputs.
+Remove `--plan` to run those commands.
 
 The builder first compares `--target` with the canonical layout declaration.
 An unknown or different target fails before compiler, runtime or producer
@@ -95,32 +84,18 @@ Keep the active sysroot unchanged while other consumers use it.
 `obj`. Defaults use stable host/target names. Object reuse requires the recorded
 compiler, runtime, host, target and configuration context. The tool does not
 clear an incompatible context to make a build pass.
-The context includes the normalized native selection, descriptor hash, accepted
-producer receipt reference, tool paths, and ABI flags. An older context without
-that identity is incompatible. Native ABI flags map only to `HOST_CPPFLAGS`,
-`HOST_CFLAGS`, `HOST_CXXFLAGS`, and `HOST_LDFLAGS`. They do not enter target flags.
-The planned environment contains only directories of declared native tools in
-`PATH`. Git is selected separately for source inspection.
-This consumer refuses a native tool directory that contains the host `PATH`
-separator. Such a directory cannot be represented as one `PATH` entry.
-
-The builder repeats the same accepted toolset check before outputs, before dispatch, and after producers.
-Drift after context preparation quarantines both object trees. Restoring the original bytes does not permit reuse.
-New sysroot receipts use version 2 and bind the native selection, input pins, paths, flags, and environment.
-Transfer verification retains historical version 1 checks without adding native qualification.
+The context includes the selected native prefix, tool paths, host and target, and flags.
+Native ABI flags map only to `HOST_CPPFLAGS`, `HOST_CFLAGS`, `HOST_CXXFLAGS`, and `HOST_LDFLAGS`.
+The build environment uses prefix directories in `PATH`; Git source inspection remains separate.
+The builder loads the OS contract roles and publishes `EMBER_NATIVE_TOOLS` under the locked tools tree.
+It checks the selection again before dispatch and completion.
+A changed selection after output preparation leaves the object contexts quarantined.
+New build records bind selected paths and commands. Historical records remain readable.
 
 ## Recorded producer sequence
 
-Execution of this sequence remains blocked. At OS commit
-[`51e33e73`](https://github.com/oxtech-ember/EmberBSD/tree/51e33e73bad73e84801a4c99adcaa898b32f9e79),
-[`build.sh:1807`](https://github.com/oxtech-ember/EmberBSD/blob/51e33e73bad73e84801a4c99adcaa898b32f9e79/build.sh#L1807)
-searches `PATH` for make. Its
-[`bootstrap:1906`](https://github.com/oxtech-ember/EmberBSD/blob/51e33e73bad73e84801a4c99adcaa898b32f9e79/build.sh#L1906)
-invokes bare `env` and retains `${HOST_CC-cc}`.
-Its [shell selection](https://github.com/oxtech-ember/EmberBSD/blob/51e33e73bad73e84801a4c99adcaa898b32f9e79/build.sh#L408)
-also has system fallbacks. Selecting four direct roles does not qualify these
-nested utilities or their searches. The OS needs its own checked selector
-contract before this SDK execution gate can be replaced.
+The [OS command mapping](native-os-routing.md) supplies native make, shell, compilers, and utilities.
+The builder does not use the old implicit make bootstrap.
 
 The selected OS source provides these operations:
 

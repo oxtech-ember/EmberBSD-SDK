@@ -17,7 +17,7 @@ from emberbsd_sdk.jsonio import json_bytes
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description='Retired historical bootstrap interface. Normal builds use --host-prefix; see docs/native-toolset.md. ' + __doc__)
     commands = parser.add_subparsers(dest='command', required=True)
     check = commands.add_parser('check', help='check current inputs; do not execute the plan')
     pilot = commands.add_parser('run-pilot', help='run the finite accepted C/C++ pilot once')

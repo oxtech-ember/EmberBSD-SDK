@@ -18,14 +18,13 @@ class UniqueOption(argparse.Action):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Plan a GCC16 EmberBSD OS sysroot. Actual builds are refused until OS nested native-tool routing is qualified.')
-    for name in ('sdk', 'os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'target', 'jobs', 'python', 'sdk-source', 'libedit-source', 'host-cc', 'host-cxx'):
-        parser.add_argument('--' + name, required=True, action=UniqueOption, help='explicit host Python 3.15+ interpreter' if name == 'python' else 'selected SDK source checkout' if name == 'sdk-source' else 'absolute SDK native GCC 16 driver (no PATH or Clang fallback)' if name.startswith('host-') else None)
+    parser = argparse.ArgumentParser(description='Build a GCC16 EmberBSD OS sysroot with a native Ports prefix.')
+    for name in ('sdk', 'os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'target', 'jobs', 'sdk-source', 'libedit-source', 'host-prefix'):
+        parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix built with host GCC16'}.get(name))
     for name in ('destination', 'objects', 'tools'):
         parser.add_argument('--' + name, action=UniqueOption)
-    for name in ('native-toolset', 'native-toolset-sha256', 'native-producer-receipt', 'native-producer-receipt-sha256'):
-        parser.add_argument('--' + name, required=True, action=UniqueOption,
-                            help='explicit qualified native toolset evidence; see docs/native-toolset.md')
+    for name in ('host-cc', 'host-cxx', 'python'):
+        parser.add_argument('--' + name, action=UniqueOption, help='optional checked alias inside --host-prefix')
     parser.add_argument('--plan', action='store_true', help='inspect inputs and emit commands without creating outputs')
     arguments = parser.parse_args()
     try:

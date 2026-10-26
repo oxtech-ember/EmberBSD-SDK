@@ -60,7 +60,7 @@ The `debian13-x86_64-aarch64` profile retains historical Debian bootstrap observ
 System GCC14 observations do not authorize new builds under the tool selection policy.
 To add
 a profile, choose a host environment, declare independent `host` and `target`
-fields, and record that host's native tool providers and qualification evidence.
+fields, and select that host's native Ports prefix.
 Keep package managers, versions and resource observations in that profile.
 Resource figures are not minimums or proof of a complete build. Keep actual
 build and target-execution receipts separate from the environment description.

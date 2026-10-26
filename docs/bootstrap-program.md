@@ -1,5 +1,9 @@
 # Fixed direct-source bootstrap programs
 
+> Retired bootstrap admission interface. This document describes historical data.
+> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+
 These finite profiles build initial native programs from OS-owned contracts.
 They admit only an independently accepted seed and exact plan.
 They do not qualify a provider or bypass ordinary NativeToolset admission.

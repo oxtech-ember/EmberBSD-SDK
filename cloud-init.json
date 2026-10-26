@@ -11,7 +11,7 @@
       "workspace": "Target-specific Prebuild SDK, prepared pkgsrc export, verified libedit source, objects, stages and receipts.",
       "cache": "Verified source archives and downloaded native packages.",
       "temporary": "Temporary files and native configuration probes.",
-      "host_tools": "Selected SDK native tool and interpreter prefix with recorded producer provenance; a path or symlink alone does not establish membership."
+      "host_tools": "Native host-pkg-g16 prefix built by Ports with host GCC16. Selected tools and real paths remain inside this prefix."
     },
     "dependencies": {
       "sdk_control": {
@@ -33,7 +33,7 @@
           "m4",
           "curl"
         ],
-        "base_compilers": "Use SDK native GCC16 for host programs and SDK cross GCC16 for target code. Select all build tools through the SDK policy in docs/tool-selection.md. Host ABI headers and libraries must be explicit recorded inputs; system compiler fallback is forbidden.",
+        "base_compilers": "Use host GCC16 from the selected Ports prefix for native tools and cross GCC16 for target code. Host ABI headers, libraries, loaders, and OS process services remain normal host inputs.",
         "ports_host_compilers": {
           "requirement": "The current GCC16 cross recipe requires host-executable GCC and G++ major version 16; Clang is not a substitute for this recipe.",
           "selectors": [
@@ -44,9 +44,9 @@
             "gcc-16",
             "g++-16"
           ],
-          "provider": "Use the qualified SDK native GCC16 provider and record absolute paths and provenance. Ambient PATH defaults and system package installation are not approved substitutes."
+          "provider": "Use native Ports GCC16 inside host-pkg-g16. Select the prefix explicitly; do not substitute ambient system build tools."
         },
-        "sdk_final_host_compilers": "Require the SDK NativeToolset descriptor and independently accepted producer receipt, both pinned by SHA256. Sysroot and release plans use checked native GCC16 and Python aliases. Actual builds remain blocked until OS nested native-tool routing is qualified.",
+        "sdk_final_host_compilers": "Pass --host-prefix to sysroot and release commands. Check contained tool paths, host CPU, GCC16 components, and script interpreters. No independent qualification, acceptance receipt, or tool hash is required.",
         "header_rpc_preprocessor": {
           "when": "Install OS headers before the target compiler is available.",
           "command": "The selected SDK native GCC16 preprocessor as one absolute executable path",

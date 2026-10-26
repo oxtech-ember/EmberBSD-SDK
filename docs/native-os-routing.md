@@ -1,42 +1,33 @@
-# Publish OS native-tool routing
+# Route native tools to the OS build
 
 `emberbsd_sdk.native_os_routing` implements routing API version 1.
-It publishes the OS-owned `tools/native-tools/contract` through the existing
-exclusive directory publication API. It does not start a producer.
+It publishes the selected OS `tools/native-tools/contract` as a command mapping.
+Read that source tree's `tools/native-tools/README.md` for the OS interface.
 
-The OS interface is available from
-[OS commit 387df575](https://github.com/oxtech-ember/EmberBSD/commit/387df575a49e256c6a6d274903583ffb4b5c369e).
-Read that source tree's `tools/native-tools/README.md` for its current scope.
-The initial OS pilot covers build.sh, make selection, wrapper generation, and
-tools-target dispatch. It does not qualify nested configure or generated tools.
-SDK sysroot and release execution must remain refused until those routes pass.
+Sysroot and release builders use this sequence:
 
-Before publication, the producer must:
+1. Read the OS contract and obtain its required tool roles.
+2. Load those roles and Python from `--host-prefix`.
+3. Lock the output contexts and publish the mapping under the tools directory.
+4. Invoke `build.sh` with the selected shell and `EMBER_NATIVE_TOOLS`.
 
-1. Pin the clean OS source and the contract's exact SHA256.
-2. Call `read_native_os_contract` to obtain its required role set.
-3. Load the ordinary `NativeToolset` with independently accepted producer evidence
-   and those required roles. A bootstrap seed cannot replace that selection.
-4. Hold the workspace read leases for the selected tools, host ABI inputs, and
-   OS source. Own an output parent outside every input tree.
-5. Call `publish_native_os_routing` with the selection, contract path, contract
-   hash, and an absent absolute destination below that owned parent.
+The mapping contains the contract and symbolic links to selected absolute paths.
+An internal compiler alias keeps its spelling because GCC can use its invocation path.
+The OS uses the mapped NetBSD make, shell, utilities, and host compiler variables.
+SDK does not pass conflicting `HOST_CC`, `HOST_CXX`, or `HOST_SH` command overrides.
+Native ABI flags remain separate from target flags.
 
-The published directory contains the exact regular contract file and symlinks
-to the selected absolute tool spellings. An in-bundle alias remains an alias.
-The emitter does not copy binaries, create wrappers, or canonicalize argv[0].
-It refuses the OS interface's unsupported path characters before publication.
-The fixed binding set includes `HOST_YACC` for an explicitly declared selected `yacc` role.
-An absent generator role fails before publication. The emitter does not search for another yacc.
-An existing destination remains unchanged. Failed publication removes only
-the emitter's exact private stage directory.
+The mapping is ordinary command routing. It needs no independent acceptance.
+Keep tools unchanged while a build runs. An existing mapping must match the selected prefix.
+The emitter refuses missing roles, invalid paths, and an existing output destination.
+Failed publication removes only its own temporary directory.
+The contract hash checks the source copy; it does not qualify a toolchain.
 
-Invoke `build.sh` with the selected shell's absolute path. Set
-`EMBER_NATIVE_TOOLS` to the published directory. Keep the leases, routing
-directory, and selected payloads immutable until all children have drained.
-The returned mapping record is routing evidence, not tool qualification or
-permission to bypass SDK execution gates.
+The direct API is `publish_native_os_routing(toolset, *, contract_path,
+contract_sha256, destination)`, where `toolset` comes from `load_host_prefix`.
+`read_native_os_contract(path, *, sha256)` returns bytes, rows, and required roles.
+The builders compute the contract hash from their selected OS source.
+Users do not supply a separate contract receipt.
 
-`tests/test_native_os_routing.py` checks publication, selected aliases,
-missing roles, unsupported paths, malformed contracts, and no-replace failures.
-It never executes its synthetic members or compiles a program.
+`tests/test_native_os_routing.py` checks publication and refusal cases.
+`tests/test_native_consumers.py` checks prefix selection and producer wiring.

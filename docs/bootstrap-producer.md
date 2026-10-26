@@ -1,5 +1,9 @@
 # First-native GCC16 metadata producer
 
+> Retired bootstrap admission interface. This document describes historical data.
+> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+
 This interface admits one finite metadata stage with accepted bootstrap inputs.
 It runs no build target and issues no provider qualification.
 It needs no completed dependency graph or future compiler output.

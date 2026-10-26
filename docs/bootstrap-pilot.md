@@ -1,5 +1,9 @@
 # First C/C++ bootstrap pilot
 
+> Retired bootstrap admission interface. This document describes historical data.
+> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+
 This finite pilot runs an independently accepted GCC16 seed once.
 It preserves actual failure and command evidence. It does not issue acceptance.
 It does not require a completed common-recipe build or a qualified ordinary SDK.

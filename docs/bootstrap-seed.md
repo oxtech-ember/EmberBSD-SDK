@@ -1,5 +1,9 @@
 # First native GCC16 bootstrap
 
+> Retired bootstrap admission interface. This document describes historical data.
+> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+
 This interface admits a seed for one first-native-GCC16 plan.
 It does not admit that seed for ordinary builds or issue acceptance.
 The resulting GCC16 still needs [NativeToolset qualification](native-toolset.md).

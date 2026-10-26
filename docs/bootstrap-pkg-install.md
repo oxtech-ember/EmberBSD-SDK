@@ -1,5 +1,9 @@
 # Initial native package tools
 
+> Retired bootstrap admission interface. This document describes historical data.
+> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+
 The `pkg-install-bootstrap` producer stage builds the canonical libarchive and
 `pkg_install` sources with the selected GCC 16 driver and native ABI. It uses
 the fixed Ports `pkg-install.json` contract and the canonical pkgsrc bootstrap

@@ -1,5 +1,9 @@
 # Fixed initial GNU utility programs
 
+> Retired bootstrap admission interface. This document describes historical data.
+> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+
 These initial-only profiles build GNU diffutils 3.12, findutils 4.11.0,
 and GNU make 4.4.1.
 They use `BOOTSTRAP_PROGRAM_API = 1`, the existing producer plan version 1,

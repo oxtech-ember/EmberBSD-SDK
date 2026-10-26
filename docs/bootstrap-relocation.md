@@ -1,5 +1,9 @@
 # Initial Darwin utility relocation
 
+> Retired bootstrap admission interface. This document describes historical data.
+> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+
 `emberbsd_sdk.bootstrap_relocation` provides `BOOTSTRAP_RELOCATION_API = 1`.
 It describes one finite initial utility transformation for GCC16 bootstrap.
 The module runs no tool and provisions no payload.

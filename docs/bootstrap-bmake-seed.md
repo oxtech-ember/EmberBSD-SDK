@@ -1,5 +1,9 @@
 # First bmake bootstrap seed
 
+> Retired bootstrap admission interface. This document describes historical data.
+> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+
 This narrow producer builds the first native `bmake` when no accepted bmake
 input exists. It uses the shared [Ports bmake source owner](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/common-build-tools/bmake.md)
 and one previously accepted native GCC16 compiler-only seed. The resulting

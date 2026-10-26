@@ -1,5 +1,9 @@
 # Current Ports pkgsrc source export
 
+> Retired bootstrap admission interface. This document describes historical data.
+> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+
 The current EmberBSD-Ports tree deliberately disables the old standalone
 `prepare-pkgsrc.py` entry point. Run its `export_pkgsrc` callable only through
 `scripts/bootstrap-pkgsrc.py`, which pins the clean Ports Git root, initialized

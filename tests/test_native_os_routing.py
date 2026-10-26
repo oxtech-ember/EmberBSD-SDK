@@ -81,7 +81,7 @@ class NativeOSRoutingTests(unittest.TestCase):
         self.assertEqual(list(self.root.glob('.native-os-tools-*')), [sentinel])
 
     def test_seed_or_unqualified_mapping_object_is_refused(self):
-        with self.assertRaisesRegex(SDKError, 'ordinary NativeToolset'):
+        with self.assertRaisesRegex(SDKError, 'selected host prefix'):
             publish_native_os_routing(object(), contract_path=str(self.contract),
                 contract_sha256=self.sha, destination=str(self.root / 'routing'))
 

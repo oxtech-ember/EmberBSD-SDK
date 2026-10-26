@@ -10,6 +10,7 @@ import tempfile
 
 from .errors import SDKError
 from .native_toolset import NativeToolset
+from .host_prefix import HostPrefix
 from .paths import (canonical_existing, open_regular, path_string,
                     reject_overlap, verify_stable)
 from .publication import publish_directory_noreplace
@@ -62,13 +63,11 @@ def publish_native_os_routing(toolset, *, contract_path, contract_sha256,
                               destination):
     """Publish links to selected spellings under caller-owned input leases.
 
-    The caller must load the NativeToolset through its accepted evidence gate.
-    It must pin the OS source, own the output parent, and hold all source, ABI,
-    toolset and output leases until every consumer has drained. The mapping is
-    not a provider, an acceptance receipt, or a production execution override.
+    The caller selects a host prefix, owns the output parent, and keeps the
+    selected tools unchanged until every consumer has drained.
     """
-    if not isinstance(toolset, NativeToolset):
-        raise SDKError('OS routing requires an accepted ordinary NativeToolset')
+    if not isinstance(toolset, (HostPrefix, NativeToolset)):
+        raise SDKError('OS routing requires a selected host prefix or historical NativeToolset')
     data, rows, _ = read_native_os_contract(contract_path, sha256=contract_sha256)
     destination = os.fspath(destination)
     if not isinstance(destination, str) or not _SAFE_PATH.fullmatch(destination):
@@ -99,7 +98,8 @@ def publish_native_os_routing(toolset, *, contract_path, contract_sha256,
         # Publication moves the stage. On failure remove only our exact stage.
         if os.path.isdir(stage):
             shutil.rmtree(stage)
-    return dict(format='emberbsd-native-os-routing', version=NATIVE_OS_ROUTING_API,
-                directory=destination, contract_sha256=contract_sha256,
-                native_toolset_sha256=toolset.descriptor_sha256, members=members,
-                production_build_admitted=False)
+    result = dict(format='emberbsd-native-os-routing', version=NATIVE_OS_ROUTING_API,
+                  directory=destination, contract_sha256=contract_sha256, members=members)
+    if isinstance(toolset, NativeToolset):
+        result.update(native_toolset_sha256=toolset.descriptor_sha256, production_build_admitted=False)
+    return result

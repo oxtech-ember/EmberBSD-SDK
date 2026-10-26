@@ -1,119 +1,64 @@
 # Select SDK build tools
 
-The sysroot and OS release commands currently refuse actual builds before
-preflight. The OS nested native-tool routes are not qualified. No override
-flag bypasses that gate. Their `--plan` mode requires accepted native-toolset
-evidence. A successful plan does not authorize execution.
+Use the native `host-pkg-g16` prefix built by Ports with its host GCC16.
+Build the cross SDK from this prefix. Pass it through `--host-prefix` or the
+shared [load_host_prefix API](native-toolset.md).
+No qualification report, acceptance receipt, or tool hash is an admission requirement.
+Existing control Python, Git, and patch can download and prepare source before
+the native prefix exists. Source acquisition does not require an installed compiler.
 
-## Required build policy
+## Host and target tools
 
-Use the selected SDK tool set for OS, Ports, application, and test builds.
-This includes bootstrap steps, configuration probes, and native generators.
-Host describes where a program runs. It does not authorize a system compiler.
-
-| Output | Required compiler and inputs |
+| Output | Compiler and inputs |
 | --- | --- |
-| EmberBSD applications and libraries | The SDK GCC16 cross compiler, declared target triplet, EmberBSD sysroot, and matching runtime |
-| Kernel-only or freestanding code | The SDK GCC16 cross compiler and the selected producer's target inputs; no application sysroot requirement |
-| Native host code and generators | The SDK native GCC16 for the declared host OS and CPU, with its recorded host ABI inputs |
+| Native programs and generators | Host GCC16 and native tools from the selected Ports prefix |
+| EmberBSD applications and libraries | Cross GCC16, the target triplet, EmberBSD sysroot, and matching runtime |
+| Kernel-only or freestanding code | Cross GCC16 and the selected producer's target inputs |
 
-Do not use a target compiler to produce a native generator.
-Keep native executables separate from target ELF files.
-Use current shared Ports recipes for third-party tools and dependencies.
-Keep native OS tool build rules in the OS repository.
-SDK selects and records these producers; it must not copy their recipes.
-Use the [first-native GCC16 bootstrap contract](bootstrap-seed.md) when no qualified
-native GCC16 exists. That scoped seed cannot be used as an ordinary provider.
-For NetBSD 11 amd64, the first-native route and its seed admission boundary are
-specified in [bootstrap-netbsd-gcc16.md](bootstrap-netbsd-gcc16.md).
-When an accepted native GCC16 compiler exists but the first `bmake` is missing,
-use only the [first bmake bootstrap producer](bootstrap-bmake-seed.md). That
-producer requires a separately issued narrow compiler-seed acceptance receipt,
-revalidates the full prefix inventory, binds explicit assembler and linker
-routes, runs the current common Ports recipe with a private hashed OS utility
-path, and refuses system compiler or make substitution. Its pending result
-also requires a separate producer-evidence receipt after independent review of
-the source-bound command logs and output; the behavior audit cannot confer that
-provenance by itself. Its output remains a bmake-only bootstrap seed; it does
-not qualify an ordinary provider.
+Use shared Ports recipes for compilers, tools, and third-party dependencies.
+Keep native OS tool rules in the OS repository.
+SDK connects these producers. It does not maintain another compiler recipe.
 
-Select the entire build tool set explicitly.
-This includes preprocessors, assemblers, linkers, archivers, metadata tools,
-make, CMake, Meson, Ninja, interpreters, and code generators.
-Record resolved absolute paths, versions, hashes, and producer provenance.
-Inspect the compiler driver's selected assembler, linker, headers, and libraries.
-A version string or a symlink inside the SDK does not prove SDK provenance.
+The native prefix supplies compilers, preprocessors, assembler, linker,
+archiver, make, CMake, Meson, Ninja, interpreters, and generators as required.
+Each selected executable and its real path must remain inside the prefix.
+Check the native CPU, GCC16 host triplet, compiler-selected components,
+and script interpreter paths. Set a prefix-only build `PATH`.
+Reject a missing tool or an external build-tool path instead of substituting one.
 
-Do not select build tools from ambient `PATH`, Xcode, Command Line Tools,
-Homebrew, MacPorts, or the host package manager.
-Do not install a missing system package as a build workaround.
-Host ABI headers and libraries must be explicit inputs of the qualified SDK host profile.
-Keep them outside target include, library, and pkg-config searches.
-Git, filesystem inspection, and OS process services do not replace build tool providers.
-Documentation and skill-package validation are separate from EmberBSD artifact builds.
+Do not select build tools from ambient `PATH`, Xcode, Homebrew, MacPorts,
+or host package directories. Host ABI libraries and headers, loaders,
+and OS process services are normal host inputs. Keep native ABI paths out of
+target include, library, and pkg-config searches.
+Git source inspection and documentation checks are separate from artifact builds.
 
-## Before compilation
+## Producer routing
 
-1. Inspect the actual producer interface, plan, environment, and saved configuration.
-2. Select native and target tools separately through that interface.
-3. Verify compiler, binutils, interpreter, generator, and pkg-config identities.
-4. Inspect CMake toolchain files, Meson native/cross files, and configure caches where applicable.
-5. Check configuration probes and nested build commands for implicit system selections.
-6. Refuse the dependent build if an SDK tool or explicit selector is missing.
+Select native and target tools separately through the producer interface.
+Check configuration files and nested commands for external tool selection.
+An exported `HOST_CC` is insufficient if the producer overrides it.
+Fix a concrete selection defect in SDK, Ports, or OS and add its regression.
+Do not add a qualification pipeline to establish that an installed tool is usable.
 
-An exported `HOST_CC` or `HOST_CXX` is insufficient if the producer overrides it.
-Recording a system compiler in a receipt does not authorize its use.
-Repair selection, provisioning, or refusal behavior in SDK, Ports, or OS.
-Add a regression that rejects the system fallback.
-A local wrapper, compiler rename, or temporary `PATH` change does not close that repair.
-SDK bootstrap requires a separate producer with pinned, qualified inputs.
-It does not exempt bootstrap code from the GCC16 requirement.
+Sysroot and release builders read the selected OS `tools/native-tools/contract`.
+They load its roles from the prefix and publish the OS command mapping.
+`EMBER_NATIVE_TOOLS` selects that mapping. The OS binds compiler and shell
+variables itself; SDK passes native ABI flags without conflicting overrides.
+`--plan` inspects inputs and lists commands. Removing it runs the producer.
+There is no unconditional native-tool qualification gate.
 
-Invalidate incompatible configuration caches, objects, and generators after tool changes.
-Verify actual commands and the resulting host and target architectures.
-A passing plan, workspace manifest, or successful link does not establish SDK completeness.
+After tools or configuration change, use compatible objects or rebuild affected outputs.
+Keep host executables separate from target binaries.
+An actual build result and target execution are distinct checks.
 
 ## Diagnostic boundaries
 
-Clang cannot compile ordinary host or target build outputs, including bootstrap tools.
+Clang does not compile ordinary host or target outputs.
 Clang Static Analyzer remains an analysis tool.
-The separate [diagnostic fuzz workflow](fuzz-check.md) permits Clang host fuzz targets.
-Record diagnostic inputs and keep those outputs outside packages, sysroots, and releases.
-Replay fuzz corpora with GCC16 as that procedure requires.
-These exceptions do not authorize a Clang-built production generator.
+The separate [fuzz workflow](fuzz-check.md) permits diagnostic host fuzz targets.
+Keep those outputs outside packages, sysroots, and releases, and replay with GCC16.
 
-## Native host compiler selection
-
-`sysroot_builder.SysrootBuilder` and the release builder require the four
-selectors `--native-toolset`, `--native-toolset-sha256`,
-`--native-producer-receipt`, and `--native-producer-receipt-sha256`.
-The [NativeToolset API](native-toolset.md) verifies the accepted evidence and
-current files before compiler or runtime queries. The builders repeat the same
-loader before output creation, dispatch, and completion.
-No descriptor, bootstrap seed, or self-supplied receipt hash is implicit.
-
-`--host-cc`, `--host-cxx`, and `--python` remain explicit checked aliases.
-They must resolve to the selected native `cc`, `cxx`, and `python` members.
-Commands use the qualified selected spelling. The compiler identity record
-marks `origin=accepted-native-toolset` and binds the descriptor hash.
-Its version metadata comes from accepted evidence, not a new `--version` run.
-The builder does not repeat compiler probes through canonical aliases.
-
-System tool trees cannot become SDK providers through a receipt declaration.
-The common loader rejects system roots and checks contained members and pinned driver components,
-including `lto-wrapper`. Dedicated SDK directories remain permitted.
-Offline verification of new receipts checks the saved native selection, input pins,
-checked aliases, native flags, and declared-tool `PATH`. It reads no mutable local tool paths.
-It establishes consistency, not live qualification. Accepted GCC16 version suffixes remain intact.
-Historical receipts retain their original checks without gaining native qualification.
-The contracts are in `tests/test_native_toolset.py` and `tests/test_native_consumers.py`.
-
-## Remaining enforcement gaps
-
-The native loader requires receipt-bound in-bundle assembler and linker members.
-It refuses bare or external driver-component paths. A complete ordinary native
-provider and the separate bootstrap seed producer remain required inputs.
-The OS still searches for make and invokes undeclared utilities. The exact
-[source routes](sysroot.md#recorded-producer-sequence) prevent actual SDK builds.
-SDK-only planned `PATH` directories and four selected direct roles do not prove
-complete nested routing. Ports consumers need their own checked mappings too.
+Checksums for downloaded archives, packages, and distributed outputs remain useful.
+Removing native admission receipts does not remove content integrity checks.
+Legacy bootstrap admission interfaces are retained only for historical data.
+They are not part of the normal `host-pkg-g16` workflow.

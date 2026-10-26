@@ -81,24 +81,15 @@ maintain another compiler recipe or another libc.
 
 ## Build and validation boundaries
 
-Follow the [SDK tool selection policy](docs/tool-selection.md), including its remaining enforcement gaps.
-Sysroot and OS release execution currently fails before preflight until the OS
-nested native-tool contract is qualified. Accepted native-toolset evidence
-permits read-only plans; there is no execution override.
-Use SDK native GCC16 for host generators and SDK cross GCC16 for EmberBSD target code.
-Reject implicit system compiler and build-tool selection.
-Use [native toolset validation](docs/native-toolset.md) to check an explicit bundle
-and an accepted producer receipt without running tools. This API does not implement
-a native bundle producer or supply qualified tools.
-Use [OS native-tool routing](docs/native-os-routing.md) to publish the OS-owned
-mapping from an accepted native toolset. The mapping does not admit a build.
-The [first-native GCC16 contract](docs/bootstrap-seed.md) admits an independently
-accepted seed for one common recipe plan. The [first C/C++ pilot](docs/bootstrap-pilot.md)
-can run after input and route acceptance, before that recipe closure is built.
-The separate [first bmake bootstrap seed](docs/bootstrap-bmake-seed.md) requires
-independent acceptance of a compiler-only GCC16 input when the initial make
-tool is absent; its acceptance stays scoped to bmake bootstrap.
-These interfaces keep seed and ordinary qualification separate.
+Follow the [SDK tool selection policy](docs/tool-selection.md).
+The native toolset is the `host-pkg-g16` prefix built by Ports with host GCC16.
+Select it with `--host-prefix` for sysroot and OS release builds.
+No separate toolchain qualification, descriptor, acceptance receipt, or hash is required.
+The [native prefix API](docs/native-toolset.md) checks contained executable paths,
+host CPU, GCC16 driver components, and script interpreters.
+The [OS command mapping](docs/native-os-routing.md) selects those tools for nested builds.
+Use the native GCC16 for host generators and cross GCC16 for EmberBSD target code.
+Reject implicit system build-tool selection.
 The selected target architecture, ABI and runtime must agree. Build-host tools
 remain host executables. Boards and VMs execute prepared acceptance programs.
 

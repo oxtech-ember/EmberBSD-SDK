@@ -1,5 +1,9 @@
 # Initial Ports libnbcompat
 
+> Retired bootstrap admission interface. This document describes historical data.
+> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+
 The `ports-libnbcompat-bootstrap` stage builds the complete common Ports library.
 It uses native GCC16 and the accounted Darwin arm64 ABI. It is an initial input,
 not an ordinary library provider or a complete SDK. Origin: EmberBSD (AI-assisted).

@@ -1,5 +1,9 @@
 # Finite bootstrap make and shell probe
 
+> Retired bootstrap admission interface. This document describes historical data.
+> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+
 This probe checks an independently accepted bootstrap make input once.
 It does not compile C or C++. It does not qualify an ordinary SDK or execute
 package metadata, configure, or the full GCC16 recipe graph.

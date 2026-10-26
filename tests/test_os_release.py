@@ -28,7 +28,7 @@ class OSReleaseBuilder(ProductionReleaseBuilder):
     """Keep original fake release dispatch tests separate from admission."""
     load_native_toolset = fixture_native_selection
 
-    def require_native_producer_routing(self):
+    def prepare_native_routing(self):
         pass
 
 
@@ -308,12 +308,12 @@ class BuilderReleaseTests(TemporaryCase):
         sha = receipt['sources']['os']['commit']
         self.assertEqual(profile['schema'], 3)
         for mutation in ('identity', 'inputs', 'pin', 'host-cc', 'host-cxx', 'python',
-                         'native-toolset', 'native-producer-receipt', 'flags', 'environment'):
+                         'host-prefix', 'native-routing', 'flags', 'environment'):
             changed = copy.deepcopy(profile)
             signature = changed['sdk_receipt']['signature']
             if mutation == 'identity': del signature['native_toolset']
             elif mutation == 'inputs': del signature['native_inputs']
-            elif mutation == 'pin': signature['native_inputs']['native-toolset-sha256'] = 'f' * 64
+            elif mutation == 'pin': signature['native_inputs']['host-prefix'] += '-changed'
             elif mutation == 'flags': signature['flags'].append('HOST_CC=/usr/bin/cc')
             elif mutation == 'environment': signature['environment']['PATH'] = '/usr/bin:/bin'
             else: changed['sdk_receipt']['paths'][mutation] = '/different/provider'
@@ -322,7 +322,7 @@ class BuilderReleaseTests(TemporaryCase):
         historical['schema'] = historical['sdk_receipt']['version'] = 2
         signature = historical['sdk_receipt']['signature']
         del signature['native_toolset']; del signature['native_inputs']
-        for key in ('host-cc', 'host-cxx', 'native-toolset', 'native-producer-receipt'):
+        for key in ('host-cc', 'host-cxx', 'host-prefix', 'native-routing'):
             del historical['sdk_receipt']['paths'][key]
         signature['host_tools'] = {name: dict(path='/usr/bin/' + name, sha256='0' * 64,
                                              version='historical system compiler') for name in ('cc', 'c++')}

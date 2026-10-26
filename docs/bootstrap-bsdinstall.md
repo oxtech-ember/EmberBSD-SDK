@@ -1,5 +1,9 @@
 # Fixed initial BSD installer
 
+> Retired bootstrap admission interface. This document describes historical data.
+> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+
 The `bsdinstall-bootstrap` stage builds the canonical pkgsrc BSD installer.
 It uses native GCC16, two C files, and one retained static libnbcompat input.
 It uses the existing `bootstrap_program.program_steps` and

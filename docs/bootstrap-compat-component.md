@@ -1,5 +1,9 @@
 # Initial OS compatibility component
 
+> Retired bootstrap admission interface. This document describes historical data.
+> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+
 The `compat-filetime-bootstrap` stage builds the complete canonical OS
 `lib/libc/gen/utimens.c`. It produces one static archive and public subset headers.
 It uses the existing program plan format, source proof, seed admission and pilot runner.

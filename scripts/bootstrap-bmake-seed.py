@@ -29,7 +29,7 @@ def _print_and_save(path, value):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description='Retired historical bootstrap interface. Normal builds use --host-prefix; see docs/native-toolset.md. ' + __doc__)
     commands = parser.add_subparsers(dest='command', required=True)
 
     compiler = commands.add_parser('describe-compiler', help='bind an independently accepted GCC16 compiler seed')
