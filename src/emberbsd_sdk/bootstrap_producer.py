@@ -50,6 +50,7 @@ INITIAL_DARWIN_PROFILE_SHA256 = 'd54e703a263c307917f6b3d376e83bae04720aa74d1325d
 PERL_DTRACE_PROFILE_SHA256 = 'd61850c6dcd6ffa7c722a623912e00588a8de13317275ff91dea70bed300f1f9'
 ICONV_PROFILE_SHA256 = 'e6fa6a573e39cbe581b4fa697b4e77e213ea73b072d75acd8761c999396204d7'
 LIBTOOL_ICONV_PROFILE_SHA256 = '843a90ddd938c7a88a9929c452adc44f0f34b9aa1e5a667d2add5edce55dd408'
+FINAL_RUNTIME_FLAGS_PROFILE_SHA256 = '00142405ab9cff5e02cbd47bc9bad6906402e5d61a16cb1cc9a7837618d7fcd8'
 EARLY_TOOLS = tuple('awk basename cat cut date dirname env expr grep head id pwd sed sort tail tr uname uniq wc'.split())
 # Recipe builds run these bare commands, which pkgsrc does not create as tools:
 # ninja-build's bootstrap runs od, and meson's Darwin compiler checks run lipo.
@@ -82,7 +83,8 @@ def _native_provider_profile(digest):
                       GZIP_HANDOFF_PROFILE_SHA256, SOURCE_GZIP_HANDOFF_PROFILE_SHA256,
                       SOURCE_GZIP_MAKE_SPLIT_PROFILE_SHA256, RUNTIME_FLAGS_REAPPLY_PROFILE_SHA256,
                       NATIVE_RUNTIME_SHELL_PROFILE_SHA256, INITIAL_DARWIN_PROFILE_SHA256,
-                      PERL_DTRACE_PROFILE_SHA256, ICONV_PROFILE_SHA256, LIBTOOL_ICONV_PROFILE_SHA256)
+                      PERL_DTRACE_PROFILE_SHA256, ICONV_PROFILE_SHA256, LIBTOOL_ICONV_PROFILE_SHA256,
+                      FINAL_RUNTIME_FLAGS_PROFILE_SHA256)
 
 
 def _recognized_profile(digest):

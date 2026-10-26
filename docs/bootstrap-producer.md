@@ -300,3 +300,11 @@ validation. It does not extend the initial Darwin profile allowlist. The
 initial route continues to accept only its two explicit profile identities
 above. Earlier profile identities remain valid for their recorded source
 inputs.
+
+The additive `FINAL_RUNTIME_FLAGS_PROFILE_SHA256` identity,
+`00142405ab9cff5e02cbd47bc9bad6906402e5d61a16cb1cc9a7837618d7fcd8`, pins
+the Ports policy that retains static GCC runtime options and the selected
+SDK iconv stub in the final C/C++ wrappers, including probes that omit
+`LDFLAGS`. Metadata and full plans accept this identity. The initial Darwin
+allowlist and all earlier profile identities remain unchanged. This source
+admission does not qualify the recipe output or the ordinary native toolset.

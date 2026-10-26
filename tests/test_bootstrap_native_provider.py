@@ -45,7 +45,8 @@ class NativeProviderTests(unittest.TestCase):
         case = self.case
         for constant, expected in (
                 ('ICONV_PROFILE_SHA256', 'e6fa6a573e39cbe581b4fa697b4e77e213ea73b072d75acd8761c999396204d7'),
-                ('LIBTOOL_ICONV_PROFILE_SHA256', '843a90ddd938c7a88a9929c452adc44f0f34b9aa1e5a667d2add5edce55dd408')):
+                ('LIBTOOL_ICONV_PROFILE_SHA256', '843a90ddd938c7a88a9929c452adc44f0f34b9aa1e5a667d2add5edce55dd408'),
+                ('FINAL_RUNTIME_FLAGS_PROFILE_SHA256', '00142405ab9cff5e02cbd47bc9bad6906402e5d61a16cb1cc9a7837618d7fcd8')):
             with self.subTest(profile=constant):
                 self.assertEqual(getattr(producer, constant), expected)
                 with patch.object(producer, constant, case.profile_sha), \
@@ -209,7 +210,7 @@ class NativeProviderTests(unittest.TestCase):
         data['export']['source_proof'] = case.f.document(proof)
         case.plan['ports_export'] = dict(source=case.descriptor['sources']['ports'], **data['export'])
         for profile_constant in ('NATIVE_PROVIDER_PROFILE_SHA256', 'ICONV_PROFILE_SHA256',
-                                 'LIBTOOL_ICONV_PROFILE_SHA256'):
+                                 'LIBTOOL_ICONV_PROFILE_SHA256', 'FINAL_RUNTIME_FLAGS_PROFILE_SHA256'):
             with self.subTest(profile=profile_constant), \
                     patch.object(producer, 'PROFILE_SHA256', '0' * 64), \
                     patch.object(producer, profile_constant, digest):
@@ -225,7 +226,8 @@ class NativeProviderTests(unittest.TestCase):
             python=dict(path=sys.executable, sha256=hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest()),
             launcher=dict(path=str(launcher), sha256=hashlib.sha256(launcher.read_bytes()).hexdigest()))
         case.plan['resources']['cpu_jobs'] = 18
-        for profile_constant in ('ICONV_PROFILE_SHA256', 'LIBTOOL_ICONV_PROFILE_SHA256'):
+        for profile_constant in ('ICONV_PROFILE_SHA256', 'LIBTOOL_ICONV_PROFILE_SHA256',
+                                 'FINAL_RUNTIME_FLAGS_PROFILE_SHA256'):
             with patch.object(producer, profile_constant, digest), \
                     patch.object(producer, 'PROFILE_SHA256', '0' * 64):
                 case.refresh()
@@ -265,7 +267,8 @@ class NativeProviderTests(unittest.TestCase):
                        producer.RUNTIME_FLAGS_REAPPLY_PROFILE_SHA256,
                        producer.NATIVE_RUNTIME_SHELL_PROFILE_SHA256,
                        producer.PERL_DTRACE_PROFILE_SHA256,
-                       producer.ICONV_PROFILE_SHA256, producer.LIBTOOL_ICONV_PROFILE_SHA256):
+                       producer.ICONV_PROFILE_SHA256, producer.LIBTOOL_ICONV_PROFILE_SHA256,
+                       producer.FINAL_RUNTIME_FLAGS_PROFILE_SHA256):
             with self.subTest(profile=digest):
                 case.plan['metadata']['profile']['sha256'] = digest
                 self.assertTrue(producer._recognized_profile(digest))
@@ -285,7 +288,8 @@ class NativeProviderTests(unittest.TestCase):
                        producer.RUNTIME_FLAGS_REAPPLY_PROFILE_SHA256,
                        producer.NATIVE_RUNTIME_SHELL_PROFILE_SHA256,
                        producer.PERL_DTRACE_PROFILE_SHA256,
-                       producer.ICONV_PROFILE_SHA256, producer.LIBTOOL_ICONV_PROFILE_SHA256):
+                       producer.ICONV_PROFILE_SHA256, producer.LIBTOOL_ICONV_PROFILE_SHA256,
+                       producer.FINAL_RUNTIME_FLAGS_PROFILE_SHA256):
             with self.subTest(profile=digest):
                 self.case.plan['metadata']['recipes'] = ['lang/gcc16', 'lang/llvm']
                 self.case.plan['metadata']['profile']['sha256'] = digest
