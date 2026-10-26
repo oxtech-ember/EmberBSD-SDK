@@ -198,6 +198,11 @@ def prepare(step, plan, completed):
         if step['phase'] == 'libnbcompat-stage':
             for ref in row.get('built_objects', {}).values():
                 _require(_regular(ref['path']) == ref, 'Ports library object changed before installation')
+            if 'archive' in row:
+                ref = row['archive']
+                _require(_regular(ref['path']) == ref and
+                         stat.S_IMODE(os.stat(ref['path']).st_mode) == row['archive_mode'],
+                         'Ports library archive changed before installation')
 
 
 def _objects(plan, archive_path):
@@ -250,7 +255,8 @@ def verify(step, work, plan, actual_exit, completed):
     generated_modes = {'nbcompat/nbconfig.h': stat.S_IMODE(os.stat(root/'nbcompat/nbconfig.h').st_mode)}
     if step['phase'] == 'libnbcompat-build':
         return dict(built_objects=objects, generated=generated, generated_modes=generated_modes,
-                    archive=_regular(root/'libnbcompat.a'))
+                    archive=_regular(root/'libnbcompat.a'),
+                    archive_mode=stat.S_IMODE(os.stat(root/'libnbcompat.a').st_mode))
     stage = Path(work, 'stage')
     inventory = snapshot_tree(str(stage))
     files = {n for n, row in inventory.items() if row['kind'] == 'file'}

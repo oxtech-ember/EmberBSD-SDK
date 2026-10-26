@@ -192,6 +192,13 @@ class InitialPlanTests(unittest.TestCase):
         extra.unlink();extra.symlink_to('nbcompat.h')
         with self.assertRaises(SDKError):lib.verify(self.plan['commands'][2],str(self.work),self.plan,0,())
 
+    def test_built_archive_drift_refuses_before_installation(self):
+        self.work.mkdir();lib.prepare_work(self.plan,self.commands);self.fake_outputs()
+        built=lib.verify(self.plan['commands'][1],str(self.work),self.plan,0,())
+        archive=self.work/'source/libnbcompat.a'
+        archive.write_bytes(archive.read_bytes()+b'changed')
+        with self.assertRaises(SDKError):lib.prepare(self.plan['commands'][2],self.plan,[built])
+
     def test_common_pilot_holds_all_roots_and_runs_three_owned_steps(self):
         descriptor_ref=self.plan['seed_descriptor'];plan_ref=self.f.document(self.plan)
         accepted=self.f.document({});case=self
