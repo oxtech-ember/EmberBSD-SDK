@@ -13,16 +13,24 @@ execution result, or an ABI compatibility claim.
 The first LLVM SDK cannot require an existing final LLVM SDK. Complete the
 producer and OS integration in this order:
 
-1. Prepare the EmberBSD headers and common LLVM sources. A builtins-only stage
-   consumes those actual inputs without requiring an application sysroot receipt.
+1. Prepare the limited EmberBSD base headers with the native OS
+   [`bootstrap-headers` operation](https://github.com/oxtech-ember/EmberBSD/blob/main/tools/docs/cross-build.md#headers-and-crt-for-runtime-bootstrap)
+   and prepare the common LLVM sources. The OS requires the canonical prepared
+   libedit source and excludes the old compiler runtime headers. A builtins-only
+   stage consumes these actual inputs without an application sysroot receipt.
 2. Build PIC static libunwind with the common recipe. The base OS can consume
-   that archive while building its libc and native CRT objects.
+   that archive while building its libc.
 3. Use the resulting base headers, libc and CRT to build shared libunwind,
    libc++abi and libc++. Keep the base input tree stable during this operation.
 4. Build the complete application sysroot against the full runtime stage.
 
 The OS owns crt0, crti, crtn, crtbegin and crtend. The common runtime producer
-does not replace them with objects from another OS. Compiler-rt builtins must
+does not replace them with objects from another OS. The OS `bootstrap-crt`
+operation installs the limited headers and builds only the OS CRT objects;
+it may run before builtins or libunwind because it does not link a target
+executable or shared library. These operations do not create a full base or
+application sysroot. Their control-flow and make-metadata checks do not claim
+actual compilation with the selected native prefix. Compiler-rt builtins must
 be selected through the matching Clang NetBSD driver in its normal library
 ordering; placing an archive before driver-added C++ libraries is insufficient.
 
