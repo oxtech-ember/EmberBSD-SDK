@@ -428,8 +428,12 @@ Other targets, omitted dependencies and changed order are refused before executi
 Add the evaluated LLVM `object_directory` below `work_root/obj`.
 Do not infer that path from a recipe name.
 
-The common initial profile selects AR/RANLIB archives and no LLVM shared dylib.
-It keeps all configured backends, options, dependencies and package file lists.
+The common initial profile selects AR/RANLIB archives. This controller also
+passes `LLVM_BUILD_LLVM_DYLIB=OFF` and `LLVM_LINK_LLVM_DYLIB=OFF` to the
+common LLVM recipe for its final five-tool operation. These explicit recipe
+inputs keep the tools statically linked to LLVM; the ordinary LLVM package defaults
+to `ON` for both, including with initial archive tools. Backends, other options,
+dependencies and package file lists remain unchanged.
 The complete first CMake build uses its ordinary static-library archive rules.
 Missing Darwin install-name, RPATH-change or shared TBD-export operations fail explicitly.
 They do not acquire tools through `xcrun` or system discovery.

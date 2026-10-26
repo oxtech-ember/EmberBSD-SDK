@@ -146,7 +146,21 @@ class InitialDarwinTests(unittest.TestCase):
         self.assertEqual([row['phase'] for row in steps], ['build', 'install', 'build-tools'])
         self.assertEqual(steps[-1]['argv'][-2:], ['BUILD_TARGET=llvm-libtool-darwin llvm-install-name-tool llvm-readtapi llvm-lipo llvm-otool', 'build'])
         self.assertNotIn('gcc16-compare', [row['id'] for row in steps])
+        static_args = {'LLVM_BUILD_LLVM_DYLIB=OFF', 'LLVM_LINK_LLVM_DYLIB=OFF'}
+        self.assertTrue(static_args <= set(steps[-1]['argv']))
+        for row in steps[:-1]:
+            self.assertFalse(static_args & set(row['argv']))
         self.assertEqual(set(case.plan['recipes']), {'lang/gcc16', 'devel/cmake', 'lang/llvm', 'devel/lld'})
+
+    def test_full_recipe_commands_do_not_select_static_llvm(self):
+        case = self.initial_recipe()
+        case.plan['purpose'] = 'first-native-gcc16'
+        case.plan['metadata']['darwin_tool_phase'] = 'full'
+        steps = recipe.recipe_steps(case.plan, case.descriptor, case.commands, case.descriptor['abi_flags'])
+        self.assertTrue(any(row['recipe'] == 'lang/llvm' for row in steps))
+        for row in steps:
+            self.assertNotIn('LLVM_BUILD_LLVM_DYLIB=OFF', row['argv'])
+            self.assertNotIn('LLVM_LINK_LLVM_DYLIB=OFF', row['argv'])
 
     def test_perl_profile_keeps_initial_purpose_and_exact_target_command_gate(self):
         with patch('subprocess.Popen', side_effect=AssertionError('no child')):
@@ -174,12 +188,15 @@ class InitialDarwinTests(unittest.TestCase):
             with patch.object(recipe, 'validate_metadata_inputs', return_value=case.plan['metadata']):
                 self.assertIs(recipe.validate_bound_recipe_plan(case.plan, case.descriptor, case.commands,
                               case.descriptor['abi_flags'], inspect_inputs=False), case.plan)
-                for kind in ('omit', 'reorder', 'target'):
+                for kind in ('omit', 'reorder', 'target', 'shared-llvm'):
                     case.plan['commands'] = copy.deepcopy(steps)
                     if kind == 'omit':
                         case.plan['commands'].pop(0)
                     elif kind == 'reorder':
                         case.plan['commands'].reverse()
+                    elif kind == 'shared-llvm':
+                        argv = case.plan['commands'][-1]['argv']
+                        argv[argv.index('LLVM_BUILD_LLVM_DYLIB=OFF')] = 'LLVM_BUILD_LLVM_DYLIB=ON'
                     else:
                         case.plan['commands'][-1]['argv'][-2] += ' clang'
                     with self.subTest(kind=kind), self.assertRaises(SDKError):
@@ -234,12 +251,15 @@ class InitialDarwinTests(unittest.TestCase):
             self.assertIs(recipe.validate_bound_recipe_plan(case.plan, case.descriptor, case.commands,
                 case.descriptor['abi_flags'], inspect_inputs=False), case.plan)
             original = copy.deepcopy(case.plan['commands'])
-            for kind in ('omit', 'reorder', 'target'):
+            for kind in ('omit', 'reorder', 'target', 'shared-llvm'):
                 case.plan['commands'] = copy.deepcopy(original)
                 if kind == 'omit':
                     case.plan['commands'].pop(0)
                 elif kind == 'reorder':
                     case.plan['commands'].reverse()
+                elif kind == 'shared-llvm':
+                    argv = case.plan['commands'][-1]['argv']
+                    argv[argv.index('LLVM_BUILD_LLVM_DYLIB=OFF')] = 'LLVM_BUILD_LLVM_DYLIB=ON'
                 else:
                     case.plan['commands'][-1]['argv'][-2] += ' clang'
                 with self.subTest(kind=kind), self.assertRaises(SDKError):

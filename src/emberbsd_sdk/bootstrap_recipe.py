@@ -226,6 +226,7 @@ def recipe_steps(plan, descriptor, commands, flags):
             result.append(dict(id=f'r{number:03d}-build-tools', recipe=recipe, phase='build-tools', role='make',
                 cwd=work, env=dict(env), argv=[*make, 'EMBERBSD_DARWIN_BOOTSTRAP=yes',
                     '-C', os.path.join(export, recipe),
+                    'LLVM_BUILD_LLVM_DYLIB=OFF', 'LLVM_LINK_LLVM_DYLIB=OFF',
                     'BUILD_TARGET=' + ' '.join(INITIAL_DARWIN_TARGETS), 'build']))
             break
         for phase in ('build', 'install'):
