@@ -22,7 +22,7 @@ _NAMES = {'cc': ('gcc16/bin/gcc', 'bin/gcc-16', 'bin/gcc16', 'bin/gcc'),
           'ranlib': ('bin/ranlib', 'bin/llvm-ranlib'),
           'nm': ('bin/nm', 'bin/llvm-nm'),
           'strip': ('bin/strip', 'bin/llvm-strip'),
-          'pkg_info': ('sbin/pkg_info', 'bin/pkg_info'),
+          'pkg_info': ('sbin/pkg_info', 'bin/pkg_info', 'gnu/bin/pkg_info'),
           'otool': ('bin/otool', 'bin/llvm-otool'),
           'install': ('bin/bsdinstall', 'bin/install', 'bin/ginstall'),
           'awk': ('bin/awk', 'bin/nawk', 'bin/gawk', 'gnu/bin/awk'),
@@ -30,7 +30,19 @@ _NAMES = {'cc': ('gcc16/bin/gcc', 'bin/gcc-16', 'bin/gcc16', 'bin/gcc'),
           'make': ('bin/bmake', 'bin/make'),
           'python': ('bin/python3.15', 'bin/python3', 'bin/python'),
           'sh': ('bin/sh', 'bin/mksh', 'bin/dash', 'bin/bash'),
-          'pkg-config': ('bin/pkg-config', 'bin/pkgconf')}
+          'pkg-config': ('bin/pkg-config', 'bin/pkgconf'),
+          'patch': ('bin/patch', 'bin/nbpatch', 'gnu/bin/patch'),
+          'tar': ('bin/tar', 'bin/nbtar', 'bin/bsdtar', 'gnu/bin/tar'),
+          'gzcat': ('bin/gzcat', 'bin/zcat', 'gnu/bin/gzcat'),
+          'readelf': ('bin/readelf', 'bin/llvm-readelf', 'gnu/bin/readelf'),
+          'install_name_tool': ('bin/install_name_tool', 'bin/llvm-install-name-tool', 'gnu/bin/install_name_tool'),
+          'libtool_darwin': ('bin/libtool_darwin', 'bin/llvm-libtool-darwin', 'gnu/bin/libtool_darwin'),
+          'lipo': ('bin/lipo', 'bin/llvm-lipo', 'gnu/bin/lipo'),
+          'llvm_readtapi': ('bin/llvm_readtapi', 'bin/llvm-readtapi', 'gnu/bin/llvm_readtapi'),
+          'pkg_add': ('bin/pkg_add', 'sbin/pkg_add', 'gnu/bin/pkg_add'),
+          'pkg_admin': ('bin/pkg_admin', 'sbin/pkg_admin', 'gnu/bin/pkg_admin'),
+          'pkg_create': ('bin/pkg_create', 'sbin/pkg_create', 'gnu/bin/pkg_create'),
+          'pkg_delete': ('bin/pkg_delete', 'sbin/pkg_delete', 'gnu/bin/pkg_delete')}
 _COMPONENTS = ('cc1', 'cc1plus', 'collect2', 'lto1', 'lto-wrapper', 'as', 'ld')
 
 
@@ -111,7 +123,7 @@ def load_host_prefix(prefix, *, required_roles, host=None):
         root = canonical_existing(os.fspath(prefix))
         _require(os.path.isdir(root), 'host prefix must be a directory')
         _require(root != os.path.sep, 'host prefix must be a dedicated directory')
-        for name in ('bin', 'gnu/bin'):
+        for name in ('bin', 'gnu/bin', 'sbin'):
             directory = os.path.join(root, name)
             if os.path.lexists(directory):
                 real = canonical_existing(directory)

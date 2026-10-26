@@ -99,6 +99,67 @@ class HostPrefixTests(TemporaryCase):
         self.assertEqual(selected.tool('cat'), str(cat))
         self.assertIn(str(gnu), selected.path.split(os.pathsep))
 
+    def test_pkgsrc_installed_names_need_no_compatibility_links(self):
+        names = {'patch': 'bin/nbpatch', 'tar': 'bin/nbtar',
+                 'gzcat': 'bin/zcat', 'readelf': 'bin/llvm-readelf',
+                 'install_name_tool': 'bin/llvm-install-name-tool',
+                 'libtool_darwin': 'bin/llvm-libtool-darwin',
+                 'lipo': 'bin/llvm-lipo', 'llvm_readtapi': 'bin/llvm-readtapi',
+                 **{name: 'sbin/' + name for name in
+                    ('pkg_add', 'pkg_admin', 'pkg_create', 'pkg_delete', 'pkg_info')}}
+        for relative in names.values():
+            path = self.fixture.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(header(62, 2)); path.chmod(0o755)
+        selected = self.fixture.load(roles=tuple(names))
+        self.assertEqual(dict(selected.tools),
+                         {role: str(self.fixture.root / name) for role, name in names.items()})
+        self.assertIn(str(self.fixture.root / 'sbin'), selected.path.split(os.pathsep))
+        self.assertEqual(self.fixture.queries, [])
+
+    def test_named_command_has_priority_and_tar_accepts_bsdtar(self):
+        for name in ('patch', 'nbpatch', 'nbtar', 'bsdtar'):
+            self.fixture.write(name, header(62, 2))
+        self.assertEqual(self.fixture.load(roles=('patch',)).tool('patch'),
+                         str(self.fixture.root / 'bin/patch'))
+        self.assertEqual(self.fixture.load(roles=('tar',)).tool('tar'),
+                         str(self.fixture.root / 'bin/nbtar'))
+        (self.fixture.root / 'bin/nbtar').unlink()
+        self.assertEqual(self.fixture.load(roles=('tar',)).tool('tar'),
+                         str(self.fixture.root / 'bin/bsdtar'))
+
+    def test_pkgsrc_alias_cannot_escape_or_fall_back(self):
+        external = self.write('outside-patch', header(62, 2), 0o755)
+        (self.fixture.root / 'bin/nbpatch').symlink_to(external)
+        gnu = self.fixture.root / 'gnu/bin'; gnu.mkdir(parents=True)
+        fallback = gnu / 'patch'; fallback.write_bytes(header(62, 2)); fallback.chmod(0o755)
+        with self.assertRaisesRegex(SDKError, 'escapes host prefix'):
+            self.fixture.load(roles=('patch',))
+        self.assertEqual(self.fixture.queries, [])
+
+    def test_existing_gnu_command_spellings_remain_supported(self):
+        roles = ('patch', 'tar', 'gzcat', 'readelf', 'install_name_tool',
+                 'libtool_darwin', 'lipo', 'llvm_readtapi', 'pkg_add',
+                 'pkg_admin', 'pkg_create', 'pkg_delete', 'pkg_info')
+        gnu = self.fixture.root / 'gnu/bin'; gnu.mkdir(parents=True)
+        for role in roles:
+            path = gnu / role
+            path.write_bytes(header(62, 2)); path.chmod(0o755)
+        selected = self.fixture.load(roles=roles)
+        self.assertEqual(dict(selected.tools), {role: str(gnu / role) for role in roles})
+        for role in ('libtool_darwin', 'llvm_readtapi', 'pkg_add'):
+            path = self.fixture.write(role, header(62, 2))
+            self.assertEqual(self.fixture.load(roles=(role,)).tool(role), str(path))
+
+    def test_sbin_search_directory_cannot_leave_and_reenter_prefix(self):
+        external = self.root / 'outside-sbin'; external.mkdir()
+        tool = self.fixture.write('real-pkg-add', header(62, 2))
+        (external / 'pkg_add').symlink_to(tool)
+        (self.fixture.root / 'sbin').symlink_to(external)
+        with self.assertRaisesRegex(SDKError, 'PATH directory escapes'):
+            self.fixture.load(roles=('pkg_add',))
+        self.assertEqual(self.fixture.queries, [])
+
     def test_search_directory_cannot_be_an_external_link(self):
         (self.fixture.root / 'gnu').mkdir()
         external = self.root / 'outside-tools'; external.mkdir()
