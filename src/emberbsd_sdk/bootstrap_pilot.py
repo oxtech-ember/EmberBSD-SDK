@@ -10,11 +10,12 @@ import threading
 import time
 
 from .errors import CommandError, ProcessOwnershipError, SDKError
-from .bootstrap_binding import NETBSD_CONFIGURED_BASE_SEED, seed_external_tools
+from .bootstrap_binding import (DARWIN_LLVM_MC_LLD_SEED, NETBSD_CONFIGURED_BASE_SEED,
+                                _binding, _sdk_metadata, seed_external_tools)
 from .inventory import sha256_file, snapshot_tree
 from .jsonio import write_json
 from .native_toolset import (NATIVE_C_PROBE, NATIVE_CXX_PROBE, _absolute,
-                             _envelope, _native_image, _require, _source)
+                             _envelope, _json, _native_image, _require, _sha, _source)
 from .paths import canonical_existing, canonical_new, entry, inside, reject_overlap
 from .process import ContextLocks, run_logged
 
@@ -28,18 +29,67 @@ STATIC_RUNTIME_CXX_PROBE = (b'#include <iostream>\n'
 _STATIC_RUNTIME_PURPOSE = 'native-c-and-cxx-static-runtime-pilot'
 _LINKER_TRACE_PURPOSE = 'native-c-and-cxx-linker-trace-pilot'
 NETBSD_INITIAL_PILOT_PROFILE = 'netbsd11-amd64-first-native-pilot-v1'
+DARWIN_STATIC_FORMAT_CXX_PROBE = (b'#include <chrono>\n#include <format>\n'
+    b'#include <iostream>\n#include <locale>\n#include <string>\n'
+    b'int main() { std::string value = std::format(std::locale::classic(), '
+    b'"{:L%a}", std::chrono::Monday); if (value != "Mon") return 1; '
+    b'std::cout << "emberbsd-native-cxx-v1\\n"; return !std::cout; }\n')
+_DARWIN_FORMAT_PURPOSES = {
+    'native-darwin-static-format-pilot': 'baseline',
+    'native-darwin-static-format-iconv-pilot': 'sdk-iconv',
+}
 
 
-def _pilot_sources(static_runtime):
+def _pilot_sources(static_runtime, *, darwin_format=False):
+    if darwin_format:
+        return {**_SOURCE, 'cxx': ('native.cc', DARWIN_STATIC_FORMAT_CXX_PROBE)}
     return {**_SOURCE, 'cxx': ('native.cc', STATIC_RUNTIME_CXX_PROBE)} if static_runtime else _SOURCE
 
 
-def pilot_steps(descriptor, commands, flags, work_root, *, static_runtime=False, linker_trace=False):
+def _darwin_iconv_stub(descriptor, binding):
+    """Select the declared SDK alias from pinned metadata, without an ABI walk."""
+    _sdk_metadata(binding, descriptor, inspect_inputs=False)
+    root = os.path.dirname(_absolute(binding['sdk_metadata']['path']))
+    headers = [row for row in descriptor['host_abi']['headers'] if row['root'] == root]
+    libraries = [row for row in descriptor['host_abi']['libraries'] if row['root'] == root]
+    _require(len(headers) == len(libraries) == 1 and
+             headers[0]['inventory'] == libraries[0]['inventory'],
+             'format pilot needs one SDK root declared for both headers and libraries')
+    inventory = _json(libraries[0]['inventory'])
+    _require(all(inventory.get(name, {}).get('kind') == 'directory' for name in ('usr', 'usr/lib')),
+             'format pilot SDK iconv ancestors must be declared directories')
+    row = inventory.get('usr/lib/libiconv.tbd', {})
+    if row.get('kind') == 'link':
+        _require(row.get('target') == 'libiconv.2.tbd',
+                 'format pilot supports only the in-SDK libiconv.2.tbd alias')
+        row = inventory.get('usr/lib/libiconv.2.tbd', {})
+    _require(row.get('kind') == 'file' and type(row.get('size')) is int and row['size'] > 0,
+             'format pilot needs its regular nonempty SDK iconv target')
+    _sha(row.get('sha256'))
+    # The common loader checks the complete current ABI inventory before dispatch
+    # and after drainage. Historical plan checks must not open a retired SDK.
+    return os.path.join(root, 'usr/lib/libiconv.tbd')
+
+
+def pilot_steps(descriptor, commands, flags, work_root, *, static_runtime=False,
+                linker_trace=False, darwin_format=None):
     """Construct the complete supported argv and environment. Do not run it."""
     _require(type(static_runtime) is bool, 'pilot static-runtime selector must be a boolean')
     _require(type(linker_trace) is bool, 'pilot linker-trace selector must be a boolean')
     _require(not linker_trace or (not static_runtime and descriptor['host']['os'] == 'Darwin'),
              'linker-trace pilot needs Darwin and a separate non-static purpose')
+    _require(darwin_format is None or type(darwin_format) is str and
+             darwin_format in ('baseline', 'sdk-iconv'), 'unsupported Darwin format pilot selector')
+    _require(darwin_format is None or (not static_runtime and not linker_trace and
+             descriptor['host']['os'] == 'Darwin'),
+             'format pilot needs Darwin and its separate fixed purpose')
+    iconv = None
+    if darwin_format is not None:
+        value = _binding(descriptor, inspect_inputs=False)
+        _require(isinstance(value, dict) and value.get('kind') == DARWIN_LLVM_MC_LLD_SEED,
+                 'format pilot needs the fixed Darwin v2 SDK driver binding')
+        if darwin_format == 'sdk-iconv':
+            iconv = _darwin_iconv_stub(descriptor, value)
     work = _absolute(work_root)
     binding = descriptor.get('driver_binding')
     external_tools = (seed_external_tools(descriptor, inspect_inputs=False)
@@ -53,21 +103,28 @@ def pilot_steps(descriptor, commands, flags, work_root, *, static_runtime=False,
     steps = []
     netbsd_lto = (descriptor['host'] == {'os': 'NetBSD', 'cpu': 'amd64'} and
                   descriptor.get('admission') == 'netbsd11-amd64-first-native-v1')
-    for language, (name, source) in _pilot_sources(static_runtime).items():
+    for language, (name, source) in _pilot_sources(
+            static_runtime, darwin_format=darwin_format is not None).items():
         driver = commands['cc' if language == 'c' else 'cxx']
         language_flags = flags['cflags' if language == 'c' else 'cxxflags']
         src = os.path.join(work, name)
         obj = os.path.join(work, language + '.o')
         artifact = os.path.join(work, language + '-probe')
         base = [*driver, *flags['cppflags'], *language_flags, '-v']
+        if darwin_format is not None and language == 'cxx':
+            base.append('-std=c++23')
         if netbsd_lto:
             base.append('-flto')
         steps.append(dict(id=language + '-compile', phase='compile', cwd=work,
                           argv=[*base, '-c', src, '-o', obj], env=dict(environment)))
         link_flags = ['-Wl,--threads=1'] if descriptor['host']['os'] == 'Darwin' else []
-        if static_runtime:
+        if static_runtime or darwin_format is not None:
             link_flags += [flag for flag in ('-static-libstdc++', '-static-libgcc')
                            if flag not in base]
+        if darwin_format is not None:
+            link_flags.append('-nodefaultrpaths')
+            if language == 'cxx' and iconv is not None:
+                link_flags.append(iconv)
         if netbsd_lto and '-flto' not in base:
             link_flags.append('-flto')
         if linker_trace:
@@ -101,7 +158,7 @@ def validate_pilot_plan(plan, descriptor, commands, flags):
                  'netbsd11-configured-base-as-ld-seed-v1',
                  'NetBSD initial pilot needs its exact configured-base driver binding')
     _require(plan['purpose'] in (('native-c-and-cxx-pilot', _STATIC_RUNTIME_PURPOSE,
-                                  _LINKER_TRACE_PURPOSE) if not netbsd_initial else
+                                  _LINKER_TRACE_PURPOSE, *_DARWIN_FORMAT_PURPOSES) if not netbsd_initial else
                                  (_STATIC_RUNTIME_PURPOSE,)) and
              plan['host'] == descriptor['host'] and plan['sources'] == descriptor['sources'],
              'pilot source or host pins mismatch')
@@ -115,7 +172,8 @@ def validate_pilot_plan(plan, descriptor, commands, flags):
     _validate_resources(plan['resources'])
     _require(plan['commands'] == pilot_steps(descriptor, commands, flags, work,
              static_runtime=plan['purpose'] == _STATIC_RUNTIME_PURPOSE,
-             linker_trace=plan['purpose'] == _LINKER_TRACE_PURPOSE),
+             linker_trace=plan['purpose'] == _LINKER_TRACE_PURPOSE,
+             darwin_format=_DARWIN_FORMAT_PURPOSES.get(plan['purpose'])),
              'pilot commands differ from the source-owned finite route')
     return plan
 
@@ -328,7 +386,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
             sources = make_probe_sources(descriptor, selected.commands)
             outputs = (*sources, 'fixture.result')
         else:
-            sources = dict(_pilot_sources(plan['purpose'] == _STATIC_RUNTIME_PURPOSE).values())
+            sources = dict(_pilot_sources(plan['purpose'] == _STATIC_RUNTIME_PURPOSE,
+                darwin_format=plan['purpose'] in _DARWIN_FORMAT_PURPOSES).values())
             outputs = ('native.c', 'native.cc', 'c.o', 'cxx.o', 'c-probe', 'cxx-probe')
         if metadata:
             for path in metadata_paths(work).values():

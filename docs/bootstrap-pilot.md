@@ -19,7 +19,7 @@ scope `gcc16-bootstrap`. It has exactly these fields:
 
 | Field | Value |
 | --- | --- |
-| `purpose` | `native-c-and-cxx-pilot`, `native-c-and-cxx-static-runtime-pilot`, or `native-c-and-cxx-linker-trace-pilot` |
+| `purpose` | `native-c-and-cxx-pilot`, `native-c-and-cxx-static-runtime-pilot`, `native-c-and-cxx-linker-trace-pilot`, `native-darwin-static-format-pilot`, or `native-darwin-static-format-iconv-pilot` |
 | `seed_descriptor` | Exact `{path, sha256}` reference |
 | `host`, `sources` | Exact descriptor values |
 | `work_root` | Fresh absolute output directory with real ancestors |
@@ -74,6 +74,37 @@ No arbitrary driver arguments or ordinary ABI flag extension is accepted.
 These are command-reported diagnostics, not kernel execution tracing.
 Inspect the actual collect2 and Mach-O `ld64.lld` route before acceptance.
 The new purpose requires its own exact accepted plan and receipt.
+
+The two Darwin static-format purposes diagnose the initial GCC runtime's
+`std::format` dependency on platform iconv. Use `darwin_format='baseline'` or
+`darwin_format='sdk-iconv'` on `pilot_steps`, with its matching exact purpose.
+These selectors cannot combine with static-runtime or linker-trace selectors.
+They require the fixed Darwin v2 SDK driver binding. No other host is supported.
+
+Both routes keep the six commands and the original C source. Their fixed C++
+source formats `std::chrono::Monday` with the classic locale and `"{:L%a}"`.
+It requires `Mon` and prints `emberbsd-native-cxx-v1` followed by a newline.
+C++ compile and link commands add `-std=c++23`. Both links add
+`-static-libstdc++`, `-static-libgcc`, and `-nodefaultrpaths`. They retain `-v`,
+the selected ABI flags, and one Darwin link thread.
+
+Only the iconv purpose adds one argument to the C++ link: the canonical
+`usr/lib/libiconv.tbd` below the SDK root selected by the binding's
+`SDKSettings.json`. That root must be declared once for headers and once for
+libraries with the same pinned inventory. The alias must be a regular member or the pinned relative link
+`libiconv.2.tbd` to a regular nonempty member in that same SDK inventory.
+The current full ABI inventory checks reject changed bytes, links and missing
+files before dispatch and after drainage. Metadata-only historical plan checks
+read the pinned inventory without opening a retired SDK. A caller cannot supply another path,
+GNU iconv, an environment override, or extra linker flags.
+
+Each purpose needs a fresh plan, work directory, and independent input-route
+acceptance. The baseline can fail on an affected external GCC seed. Keep that
+actual result as `FAILED`; do not reinterpret it as six successful commands or
+skip its failed link. The corrected route uses the normal zero-exit contract
+for all six commands. Review the actual outputs and loader observations.
+These diagnostic purposes do not qualify a provider or repair the seed archive.
+The ordinary Ports GCC recipe owns the runtime's persistent linker option.
 
 The accepted seed receipt must add `evidence_level: input-and-route-only` and
 `input_route_audit`, an exact reference to independently accepted metadata.
