@@ -194,6 +194,33 @@ class HostPrefixTests(TemporaryCase):
                 path.unlink()
         self.assertEqual(self.fixture.queries, [])
 
+    def test_archive_and_patch_aliases_are_native_prefix_tools(self):
+        for role, names in (('tar', ('tar', 'nbtar', 'bsdtar')),
+                            ('patch', ('patch', 'nbpatch'))):
+            with self.subTest(role=role):
+                paths = [self.fixture.write(name, header(62, 2)) for name in names]
+                for path in paths:
+                    self.assertEqual(self.fixture.load(roles=(role,)).tool(role), str(path))
+                    path.unlink()
+        self.assertEqual(self.fixture.queries, [])
+
+    def test_archive_and_patch_invalid_alias_cannot_select_a_later_name(self):
+        external = self.write('outside-tool', header(62, 2), 0o755)
+        for role, names in (('tar', ('tar', 'nbtar', 'bsdtar')),
+                            ('patch', ('patch', 'nbpatch'))):
+            paths = [self.fixture.write(name, header(62, 2)) for name in names]
+            for path in paths:
+                with self.subTest(path=path.name):
+                    path.unlink(); path.symlink_to(external)
+                    with self.assertRaisesRegex(SDKError, 'escapes host prefix'):
+                        self.fixture.load(roles=(role,))
+                    path.unlink()
+                    self.fixture.write(path.name, header(183, 2))
+                    with self.assertRaisesRegex(SDKError, 'expected a native executable'):
+                        self.fixture.load(roles=(role,))
+                    path.unlink()
+        self.assertEqual(self.fixture.queries, [])
+
     def test_package_query_and_otool_aliases_reject_wrong_native_cpu(self):
         for role, name in (('pkg_info', 'sbin/pkg_info'), ('pkg_info', 'bin/pkg_info'),
                            ('otool', 'bin/otool'), ('otool', 'bin/llvm-otool')):
