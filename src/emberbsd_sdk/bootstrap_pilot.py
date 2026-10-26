@@ -523,11 +523,16 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
             if relocation:
                 result['relocation'] = verify_relocation_outputs(plan, descriptor, selected.commands)
             if recipe:
-                inventory = snapshot_tree(plan['output_bundle_root'])
-                _require(bool(inventory), 'the complete recipe plan produced no installed output')
-                path = os.path.join(work, 'output-inventory.json')
-                write_json(path, inventory)
-                result['output_inventory'] = dict(path=path, sha256=sha256_file(path))
+                if not netbsd_recipe and plan.get('purpose') == 'first-native-gcc16':
+                    from .bootstrap_output import _assemble
+                    result['output_assembly'] = _assemble(plan, os.path.join(work, 'output-assembly'))
+                    result['output_inventory'] = result['output_assembly']['output_inventory']
+                else:
+                    inventory = snapshot_tree(plan['output_bundle_root'])
+                    _require(bool(inventory), 'the complete recipe plan produced no installed output')
+                    path = os.path.join(work, 'output-inventory.json')
+                    write_json(path, inventory)
+                    result['output_inventory'] = dict(path=path, sha256=sha256_file(path))
                 if not netbsd_recipe and plan.get('purpose') == 'initial-darwin-tools':
                     from .bootstrap_recipe import (INITIAL_DARWIN_TARGETS,
                         initial_execution_order, initial_tool_outputs)

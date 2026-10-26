@@ -91,8 +91,38 @@ class RecipeTests(unittest.TestCase):
     def fake_command(self, argv, log, **kwargs):
         Path(log).write_bytes(b'synthetic complete recipe command\n')
         if argv[-1] == 'install':
-            (self.work / 'prefix/installed-fixture').write_bytes(b'synthetic output; not a native provider\n')
+            # Model installed package ownership, not a qualified native output.
+            name = Path(argv[argv.index('-C') + 1]).name
+            prefix = self.work / 'prefix'
+            member, alias = 'installed-' + name, 'alias-' + name
+            (prefix / member).write_bytes(b'synthetic output; not a native provider\n')
+            (prefix / alias).symlink_to(prefix / member)
+            package = self.work / 'pkgdb' / (name + '-fixture-1')
+            package.mkdir()
+            (package / '+CONTENTS').write_text(
+                f'@name {name}-fixture-1\n@cwd {prefix}\n{member}\n'
+                f'{alias}\n@comment Symlink:{prefix / member}\n')
         return subprocess.CompletedProcess(argv, 0)
+
+    def assert_assembled_output(self, result):
+        assembly = result['output_assembly']
+        self.assertEqual(result['output_inventory'], assembly['output_inventory'])
+        self.assertEqual(assembly['normalized_link_count'], 2)
+        self.assertEqual(assembly['registered_link_count'], 2)
+        self.assertEqual(assembly['unregistered_links'], [])
+        self.assertIs(assembly['ordinary_provider_qualified'], False)
+        self.assertIs(assembly['canonical_package_archives_modified'], False)
+        for field in ('assembly_plan', 'output_inventory', 'package_inventory'):
+            ref = assembly[field]
+            self.assertEqual(hashlib.sha256(Path(ref['path']).read_bytes()).hexdigest(), ref['sha256'])
+        inventory = json.loads(Path(assembly['output_inventory']['path']).read_text())
+        self.assertEqual(set(inventory), {'installed-gmp', 'alias-gmp', 'installed-gcc16', 'alias-gcc16'})
+        for name in ('gmp', 'gcc16'):
+            self.assertEqual(inventory['alias-' + name]['target'], 'installed-' + name)
+            self.assertEqual(os.readlink(self.work / 'prefix' / ('alias-' + name)), 'installed-' + name)
+            contents = (self.work / 'pkgdb' / (name + '-fixture-1') / '+CONTENTS').read_text()
+            self.assertIn(f'@comment Symlink:installed-{name}\n', contents)
+            self.assertNotIn(f'@comment Symlink:{self.work}', contents)
 
     def test_full_tuple_fixed_order_and_metadata_config_are_preserved(self):
         with patch('subprocess.Popen', side_effect=AssertionError('no native child')):
@@ -288,7 +318,7 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(result['stage'], 'full-recipe-bootstrap')
         self.assertNotIn('stage_comparison', result)
         self.assertNotIn('all_leases_closed', json.loads((self.work / 'result.json').read_text()))
-        self.assertEqual(len(json.loads(Path(result['output_inventory']['path']).read_text())), 1)
+        self.assert_assembled_output(result)
         for relative, ref in recipe.recipe_distfiles(self.plan).items():
             self.assertEqual((self.work / 'distfiles' / relative).read_bytes(), Path(ref['path']).read_bytes())
 
