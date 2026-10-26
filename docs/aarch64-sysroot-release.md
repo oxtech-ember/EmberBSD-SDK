@@ -2,7 +2,7 @@
 
 The [release tool](os-release.md) composes complete `base.tar.xz`, `comp.tar.xz`
 and `netbsd-EMBER64.gz` from one OS build. SDK owns composition and publication;
-OS owns the sets and kernel producers. Ports owns the GCC16 consumer/import
+OS owns the sets and kernel producers. Ports owns the selected compiler consumer/import
 contract. These development sets do not qualify installation media or boards.
 
 ## Target qualification
@@ -14,8 +14,11 @@ base. Run the fork CAS and bounded libc/loader regressions against those inputs.
 The target needs no compiler. Record actual library paths and SHA256 values.
 
 A qualification JSON binds `source_commit`, `base_sha256`, `comp_sha256` and
-`kernel_gzip_sha256`. It records the measured GCC16.2.0 banner in
-`consumer_compiler` and the execution platform as
+`kernel_gzip_sha256`. For a Clang schema 4 build profile, record
+`consumer_compiler_family: "clang"` and the measured Clang banner in
+`consumer_compiler`, with the same version as the SDK build receipt.
+The explicit GCC route and historical schemas retain the GCC16.2.0 consumer
+identity. Record the execution platform as
 `EmberBSD aarch64 full-system QEMU TCG`.
 Its `checks` object must contain true results for `libc_aliases`, `cross_c11`,
 `cross_cxx20`, `target_c11`, `target_cxx20`, `base_loader_smoke` and `fork_cas`.
@@ -37,7 +40,8 @@ python3 scripts/os-release.py --profile aarch64-sysroot verify /absolute/new-qua
 External CI pins the full OS source and accepted manifest SHA256.
 Use the Ports `profiles/common-build-tools/cross/fetch-sysroot.py` importer with
 an explicit SDK source. It checks HTTPS, hashes, paths and provenance before
-creating a new sysroot. GCC16 packages and compiler remain separate inputs.
+creating a new sysroot. The selected compiler and matching Ports runtime
+packages remain separate inputs.
 Do not extract development sets over a live system.
 
 ## Preserved historical evidence
@@ -46,7 +50,7 @@ The schema 1 source is `6dd57144183678938164b4c2dcfc370cdbde8473`.
 Its [complete producer](https://github.com/oxtech-ember/EmberBSD/actions/runs/38843939746)
 used the in-tree GCC12.5 bootstrap on Ubuntu 24.04. Native compiler commands
 were omitted; GCC16.2 consumers were tested separately. This receipt does not
-qualify the new common-GCC16 release producer.
+qualify the current Clang/LLVM release producer or the explicit GCC alternative.
 
 | Artifact | SHA256 |
 | --- | --- |

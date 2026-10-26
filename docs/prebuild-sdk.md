@@ -98,5 +98,6 @@ actual compilation inputs agree. Give each role a separate clean install stage
 and its ordinary package checks. A runtime package and developer package can
 share compilation without sharing installed-file ownership.
 
-Use one declared GCC runtime provider in each target closure. Build-only SDK
-headers and static libraries do not create a target compiler package identity.
+Use one coherent runtime selection for the chosen compiler family in each
+target closure. Build-only SDK headers and static libraries do not create a
+target compiler package identity.
