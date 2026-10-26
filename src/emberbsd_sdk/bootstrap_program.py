@@ -56,9 +56,12 @@ ID_MANIFEST_SHA256 = '7184d420bdd70778b1c290f028bc43df9441db16087657d06915c2b9d3
 _ID_GROUP_HEADER = 'common/include/libutil/compat_grouplist.h'
 EXPR_MANIFEST_SHA256 = '505c27cdc0db4b2d22b6f348559e91735bf723b1f47251d6e98fa3d979e71854'
 HEXDUMP_MANIFEST_SHA256 = '9fe663af4124f714bcac65dce3bb7666bef0af2f74a9f97fb638699c8c42d974'
+MKDIR_MANIFEST_SHA256 = '6d52c3dd9fe813f652e7d98110f56af8078b9617d6d1f3ca0b3b08edf73936a9'
+MKDIR_LEGACY_MANIFEST_SHA256 = '111fe0d327e4ccdc7de008ac3844e49893edfbd43d62400ef2dbc4ceb76c5453'
+MKDIR_MANIFEST_CASE_COUNTS = {MKDIR_MANIFEST_SHA256: 11, MKDIR_LEGACY_MANIFEST_SHA256: 10}
 _FILESYSTEM_MANIFESTS = {
     'chmod': '0139b41d150bb82e79a99547c4d3a6f5cac975152c32e850922af7bdb269e1ae',
-    'mkdir': '111fe0d327e4ccdc7de008ac3844e49893edfbd43d62400ef2dbc4ceb76c5453',
+    'mkdir': MKDIR_MANIFEST_SHA256,
     'ln': '3b3fc97c04775eb92f447b3b466b2f2867002fba2736da33971a441d630260e5',
     'rmdir': '22e24af317a8e1c18559c407f0497a18f24bfb9c88ff8a89b48a9aa09b3ae995',
     'rm': '8ae57707433b60bb726b4b070d3389abc775514fc663064dca75180b816342fc'}
@@ -80,7 +83,7 @@ _NATIVE_SOURCES = {**{name: ('bin/' + name + '/' + name + '.c',) for name in fil
                    'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'), 'pwd': ('bin/pwd/pwd.c',), 'cut': ('usr.bin/cut/cut.c', *_EFUN_SOURCES),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
                       for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf', 'env', 'uname', 'id')}}
-_LITERAL_CASE_COUNTS = dict(chmod=12, mkdir=10, ln=12, rmdir=9, rm=25, basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
+_LITERAL_CASE_COUNTS = dict(chmod=12, mkdir=11, ln=12, rmdir=9, rm=25, basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
 _ALIASES = {'grep': ('egrep', 'fgrep'), 'tail': ('tac',), 'id': ('groups', 'whoami'), 'hexdump': ('od',)}
@@ -163,6 +166,14 @@ def _profile(plan):
               'wc': WC_MANIFEST_SHA256, 'tr': TR_MANIFEST_SHA256,
               'printf': PRINTF_MANIFEST_SHA256, 'pwd': PWD_MANIFEST_SHA256, 'cut': CUT_MANIFEST_SHA256,
               'env': ENV_MANIFEST_SHA256, 'uname': UNAME_MANIFEST_SHA256, 'tail': TAIL_MANIFEST_SHA256, 'sort': SORT_MANIFEST_SHA256, 'date': DATE_MANIFEST_SHA256, 'id': ID_MANIFEST_SHA256, 'expr': EXPR_MANIFEST_SHA256}[name]
+    if name == 'mkdir' and 'program' in plan:
+        _require(isinstance(plan['program'], dict), 'unsupported mkdir program input')
+        if 'manifest' in plan['program']:
+            reference = plan['program']['manifest']
+            _require(isinstance(reference, dict), 'unsupported mkdir manifest reference')
+            digest = reference.get('sha256')
+            _require(isinstance(digest, str) and digest in MKDIR_MANIFEST_CASE_COUNTS,
+                     'unsupported mkdir manifest digest')
     return ('tools/' + name + '/bootstrap.json',
             digest, _NATIVE_SOURCES[name],
             ('tools/' + name + '/Makefile', 'tools/Makefile.host', directory + '/Makefile',
@@ -170,7 +181,7 @@ def _profile(plan):
              *(('tools/rm/test-source.py',) if name == 'rm' else ())))
 
 
-def _native_program_contract(manifest, name):
+def _native_program_contract(manifest, name, *, manifest_digest=None):
     cmp = name == 'cmp'
     efun = name in EFUN_PROGRAMS
     nbtool = name == 'date'
@@ -210,7 +221,13 @@ def _native_program_contract(manifest, name):
                          key != 'missing.txt' for key in files) and
                      sum(data_size(value) for value in files.values()) <= MAX_FILE_BYTES,
                      'filter programs need bounded immutable fixture files')
-        _literal_cases(manifest, _LITERAL_CASE_COUNTS[name], work_root_output=name == 'pwd', uname_output=name == 'uname', identity_oracle=name == 'id', filesystem_cases=name in filesystem.PROGRAMS)
+        case_count = _LITERAL_CASE_COUNTS[name]
+        if name == 'mkdir':
+            selected = MKDIR_MANIFEST_SHA256 if manifest_digest is None else manifest_digest
+            _require(isinstance(selected, str) and selected in MKDIR_MANIFEST_CASE_COUNTS,
+                     'unsupported mkdir manifest digest')
+            case_count = MKDIR_MANIFEST_CASE_COUNTS[selected]
+        _literal_cases(manifest, case_count, work_root_output=name == 'pwd', uname_output=name == 'uname', identity_oracle=name == 'id', filesystem_cases=name in filesystem.PROGRAMS)
     else:
         # These are the only accepted tails. No hostname operand can reach a child.
         _require(manifest['files'] == {} and manifest['runtime_cases'] == [
@@ -243,7 +260,7 @@ def program_manifest(plan):
              'unsupported source-owner bootstrap program manifest')
     manifest = _json(reference)
     if plan['stage'] != 'grep-bootstrap':
-        _native_program_contract(manifest, plan['stage'].removesuffix('-bootstrap'))
+        _native_program_contract(manifest, plan['stage'].removesuffix('-bootstrap'), manifest_digest=digest)
         if plan['stage'] in EFUN_PROGRAM_STAGES:
             from .bootstrap_compat import compat_manifest
             compat_manifest(plan, manifest)

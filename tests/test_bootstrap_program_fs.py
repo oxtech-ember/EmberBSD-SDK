@@ -178,7 +178,7 @@ class FileUtilityProfiles(unittest.TestCase):
         import hashlib
         source = Path(os.environ['EMBERBSD_TEST_FILEUTILS_SOURCE'])
         total = 0
-        for name, count in dict(chmod=12, mkdir=10, ln=12, rmdir=9).items():
+        for name, count in dict(chmod=12, mkdir=11, ln=12, rmdir=9).items():
             with self.subTest(name=name):
                 relative, digest, sources, provenance = program._profile({'stage': name + '-bootstrap'})
                 raw = (source / relative).read_bytes()
@@ -211,7 +211,7 @@ class FileUtilityProfiles(unittest.TestCase):
                                     *manifest['runtime_cases'][0]['args']])])
                     self.assertEqual(len([x for x in program.program_outputs(plan) if x.endswith('.filesystem.json')]), count + 1)
                 total += count
-        self.assertEqual(total, 43)
+        self.assertEqual(total, 44)
 
     @unittest.skipUnless(os.environ.get('EMBERBSD_TEST_FILEUTILS_SOURCE'), 'set EMBERBSD_TEST_FILEUTILS_SOURCE')
     def test_effect_failure_stops_before_the_next_owned_child(self):
