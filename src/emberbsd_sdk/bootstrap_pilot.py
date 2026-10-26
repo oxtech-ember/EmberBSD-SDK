@@ -203,7 +203,10 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
          bootstrap_plan, required_roles, profile):
     from .bootstrap_make import MAKE_PROBE_FORMAT, make_probe_sources, verify_make_step
     from .bootstrap_producer import PRODUCER_FORMAT, metadata_paths
-    from .bootstrap_program import (PROGRAM_STAGES, program_outputs, program_sources,
+    from .bootstrap_program_timing import (limits as elapsed_limits,
+                                           observation as elapsed_observation,
+                                           verify as verify_elapsed)
+    from .bootstrap_program import (PROGRAM_STAGES, program_elapsed_case, program_outputs, program_sources,
                                     verify_program_step, prepare_program_step, program_step_exits)
     from .bootstrap_gnu_program import GNU_PROGRAM_STAGES, prepare_gnu_work
     from .bootstrap_bsdinstall import prepare_bsdinstall_work
@@ -375,6 +378,11 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                     with ContextLocks(context, root):
                         remaining = deadline - time.monotonic()
                         _require(remaining > 0, 'pilot observation budget expired before next command')
+                        elapsed_case = program_elapsed_case(step, plan) if program else None
+                        elapsed = elapsed_limits(elapsed_case)
+                        if elapsed is not None:
+                            remaining = min(remaining, elapsed['max_ns'] / 1_000_000_000)
+                        started = time.monotonic_ns() if elapsed is not None else None
                         try:
                             returned = run_logged(step['argv'], log, cwd=step['cwd'], env=step['env'],
                                                   timeout_seconds=remaining)
@@ -394,6 +402,10 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                                 raise
                         else:
                             actual['actual_exit'] = returned.returncode
+                        finally:
+                            if started is not None and result['status'] != 'HOLD_UNPROVEN_DRAIN':
+                                actual['elapsed'] = elapsed_observation(started, time.monotonic_ns())
+                        verify_elapsed(elapsed_case, actual)
                         _require(actual['actual_exit'] in expected_exits,
                                  'finite command exit differs from its expected observation')
                         if make_probe:

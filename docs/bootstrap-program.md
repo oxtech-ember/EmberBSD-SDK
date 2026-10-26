@@ -24,7 +24,7 @@ The plan format is `emberbsd-native-gcc16-producer-plan`, version 1,
 scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`,
 `hostname-bootstrap`, `basename-bootstrap`, `dirname-bootstrap`, `cat-bootstrap`,
 `head-bootstrap`, `uniq-bootstrap`, `wc-bootstrap`, `tr-bootstrap`, `printf-bootstrap`,
-`pwd-bootstrap`, `cut-bootstrap`, `env-bootstrap`, `uname-bootstrap`, `tail-bootstrap`,
+`pwd-bootstrap`, `sleep-bootstrap`, `cut-bootstrap`, `env-bootstrap`, `uname-bootstrap`, `tail-bootstrap`,
 `sort-bootstrap`, `date-bootstrap`, `id-bootstrap`, `expr-bootstrap`, `hexdump-bootstrap`,
 `chmod-bootstrap`, `mkdir-bootstrap`, `ln-bootstrap`, and `rmdir-bootstrap`.
 The separate [OS file-time component](bootstrap-compat-component.md) uses
@@ -62,6 +62,35 @@ The resource object uses the finite pilot's exact five fields.
 It requires one CPU job, one linker slot, and an integer runtime observation
 budget from 1 through 120 seconds. Inputs must remain immutable under their
 shared leases. Work must be a fresh real path disjoint from every input.
+
+## Initial sleep and elapsed observations
+
+The fixed `sleep-bootstrap` profile uses the canonical OS `bin/sleep/sleep.c`
+and `sleep_darwin.h`, the common annotation header and the accounted host ABI.
+Its owner manifest is `tools/sleep/bootstrap.json`, SHA256
+`3df89c370882bfc0137b3bdf84c9aa4c0a853c6c981934e00843db322bae7433`.
+The normal `-lm` library remains explicit. The profile adds no private C implementation.
+Its 21 exact CLI/conversion cases produce 24 commands, including runtime observation of `sleep 0`.
+
+A literal case may contain optional `elapsed` with exactly integer `min_ns` and `max_ns`.
+The bounds require `0 <= min_ns <= max_ns <= 120000000000` and `max_ns > 0`.
+Booleans, floats, extra fields and caller hooks are refused. Only an exact pinned owner contract can select it.
+The sleep contract selects 500000000 through 5000000000 nanoseconds for its `0.5` case.
+The existing pilot records `elapsed` with exactly `clock`, `scope`, `start_ns`, `end_ns` and `elapsed_ns`.
+The clock is `monotonic_ns`; the scope is `owned-command-call`.
+Start is immediately before `run_logged`. End follows its proved process drainage and log completion.
+This includes the selected shell pipeline, redirections, startup and drainage.
+It excludes source checks, lock acquisition and later semantic verification.
+Polling uses the smaller of the case maximum and remaining epoch budget.
+Startup and drainage can exceed that timeout; the final interval check then refuses acceptance.
+This is not a hard wall-clock kill guarantee or an internal nanosleep measurement.
+Scheduling overhead can hide a short internal wait. No nanosleep precision claim follows.
+
+The shared validator checks integer timestamps, ordering, exact difference, scope and owner bounds.
+It applies during production and retained command-history validation.
+Timed records must contain consistent values for these fields; untimed records retain their previous shape.
+These observations are controller evidence, not independent proof of the process's internal clock or wait.
+Signal, fault-injection, alternate-locale, C analysis, memory and ordinary qualification remain pending.
 
 ## Fixed filesystem effects
 
