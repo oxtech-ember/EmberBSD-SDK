@@ -138,3 +138,46 @@ Normal OS routing can bind `yacc` to `HOST_YACC` through the pinned OS contract.
 The [native routing API](native-os-routing.md) still requires an accepted ordinary toolset.
 This finite profile does not grant ordinary tool qualification or run the normal build.
 Actual parser generation, GCC16 probes, semantic execution, C analysis and memory checks remain separate gates.
+
+
+## Initial listing component
+
+The separate `compat-listing-bootstrap` profile consumes the OS-owned
+`tools/compat/bootstrap-listing.json` contract, SHA256
+`f5aa9c1bacf2ecd3d4488b1506203919c5c348c5236daa7c03167196030b1cef`.
+The exact 28-member source proof includes four complete translation units,
+four headers, the shared normal build fragment, configuration sources,
+canonical declaration and test provenance, and source-owned controls and probes.
+The SDK contains no formatter, ACL implementation, capability preset or semantic table.
+
+There are 19 ordered commands:
+
+1. Compile, link and run the required native control with loader diagnostics.
+2. Observe six native declaration/link probes.
+3. Compile canonical getbsize, humanize_number, stat_flags and the shared ACL backend.
+4. Archive the four ordered objects with selected ar, then index with selected ranlib.
+5. Compile and link the OS-owned check, then run it normally and with loader diagnostics.
+
+The selected roles include `cc`, `ar`, `ranlib`, `sh` and the compiler driver roles.
+This finite route requires Darwin. It adds no generator or external-tool exception.
+Native formatter availability remains evidence; canonical prefixed implementations remain selected.
+The stat-flags and Darwin ACL probes must succeed. Every probe result remains recorded.
+The source-owned control verifies native string primitives and the Darwin ACL entry convention.
+The source-owned check covers formatting, flag parsing, real ACL-bearing and empty fixtures,
+no-follow symlink behavior, target preservation and missing-path errors.
+
+The existing bounded work roster, source-proof checks and before-child dependency hashes apply.
+The archive checker requires exactly `getbsize.o`, `humanize_number.o`, `stat_flags.o`
+and `compat_acl.o`, in that order, with unchanged bytes. Missing, extra, duplicate,
+reordered or changed members fail. Standard archive symbol indexes remain allowed.
+The semantic check must remove its private fixtures before the runner can continue.
+
+`validate_input(receipt_ref, descriptor, component='listing')` requires a separately
+reviewed listing receipt. It cannot consume filetime or parsedate acceptance.
+Its five read-only exports are `libnbcompat.a`, `nbtool_config.h`, `compat_listing.h`,
+`compat_acl.h` and `bootstrap_cdefs.h`. Their source and output evidence remain required.
+Existing filetime and parsedate manifests, command counts and receipts are unchanged.
+
+This addition does not add an ls consumer or qualify complete OS or Ports libnbcompat.
+Actual native controls, other filesystems, C analysis, memory validation and ordinary
+provider acceptance require separate evidence. Source and synthetic data checks do not replace them.

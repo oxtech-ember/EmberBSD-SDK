@@ -28,7 +28,8 @@ scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`,
 `sort-bootstrap`, `date-bootstrap`, `id-bootstrap`, `expr-bootstrap`, `hexdump-bootstrap`,
 `chmod-bootstrap`, `mkdir-bootstrap`, `ln-bootstrap`, and `rmdir-bootstrap`.
 The separate [OS file-time component](bootstrap-compat-component.md) uses
-`compat-filetime-bootstrap` and `compat-parsedate-bootstrap` with the same runner and an additional static archive output.
+`compat-filetime-bootstrap`, `compat-parsedate-bootstrap` and `compat-listing-bootstrap`
+with the same runner and an additional static archive output.
 Each stage selects one exact source-owner manifest.
 It has exactly `format`, `version`, `scope`, `stage`, `seed_descriptor`, `host`,
 `sources`, `work_root`, `required_roles`, `resources`, `program`, and `commands`.

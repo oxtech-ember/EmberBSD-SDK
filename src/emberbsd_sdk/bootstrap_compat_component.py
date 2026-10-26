@@ -25,7 +25,8 @@ PROVENANCE = ('tools/compat/Makefile', 'tools/compat/filetime.mk',
       ('filetime-control', 'filetime-check', *PROBES)))
 EXPORTS = ('libnbcompat.a', 'nbtool_config.h', 'compat_filetime.h', 'bootstrap_cdefs.h')
 PARSEDATE_STAGE = 'compat-parsedate-bootstrap'
-STAGES = (STAGE, PARSEDATE_STAGE)
+LISTING_STAGE = 'compat-listing-bootstrap'
+STAGES = (STAGE, PARSEDATE_STAGE, LISTING_STAGE)
 _PROFILES = {
     STAGE: dict(name='filetime', manifest=MANIFEST, digest=DIGEST, sources=SOURCES,
                 headers=HEADERS, probes=PROBES, provenance=PROVENANCE, exports=EXPORTS,
@@ -41,6 +42,25 @@ _PROFILES = {
               ('parsedate-control', 'parsedate-check', 'func-mktime_z', 'func-timegm'))),
         exports=('libnbcompat.a', 'nbtool_config.h', 'compat_parsedate.h',
                  'compat_parsedate_features.h', 'bootstrap_cdefs.h'), object='parsedate.o'),
+    LISTING_STAGE: dict(name='listing', manifest='tools/compat/bootstrap-listing.json',
+        digest='f5aa9c1bacf2ecd3d4488b1506203919c5c348c5236daa7c03167196030b1cef',
+        sources=('lib/libc/gen/getbsize.c', 'lib/libc/gen/humanize_number.c',
+                 'lib/libutil/stat_flags.c', 'tools/compat/compat_acl.c'),
+        headers=('tools/compat/compat_listing.h', 'tools/compat/compat_acl.h',
+                 'tools/compat/namespace.h', 'tools/compat/bootstrap_cdefs.h'),
+        probes=('listing-getbsize', 'listing-humanize', 'listing-native-flags',
+                'listing-stat-flags', 'listing-acl-bsd', 'listing-acl-darwin'),
+        provenance=('tools/compat/Makefile', 'tools/compat/listing.mk',
+            'tools/compat/configure.ac', 'tools/compat/configure', 'tools/compat/nbtool_config.h.in',
+            'tools/compat/compat_defs.h', 'tools/compat/README.listing.md',
+            'tools/compat/test-listing.py', 'include/stdlib.h', 'include/util.h',
+            'tests/lib/libc/gen/t_humanize_number.c',
+            *(f'tools/compat/probes/{name}.c' for name in
+              ('listing-control', 'listing-check', 'listing-getbsize', 'listing-humanize',
+               'listing-native-flags', 'listing-stat-flags', 'listing-acl-bsd', 'listing-acl-darwin'))),
+        exports=('libnbcompat.a', 'nbtool_config.h', 'compat_listing.h',
+                 'compat_acl.h', 'bootstrap_cdefs.h'),
+        objects=('getbsize.o', 'humanize_number.o', 'stat_flags.o', 'compat_acl.o')),
 }
 
 
@@ -48,6 +68,17 @@ def profile(plan):
     value = _PROFILES.get(plan.get('stage'))
     _require(value is not None, 'unsupported fixed OS component stage')
     return value
+
+
+def objects(fixed):
+    """Return the fixed, ordered archive roster; preserve old single-object profiles."""
+    return fixed['objects'] if 'objects' in fixed else (fixed['object'],)
+
+
+def _fixtures(fixed):
+    if fixed['name'] in ('filetime', 'listing'):
+        return tuple(fixed['name'] + suffix for suffix in ('-file', '-link', '-missing'))
+    return ()
 
 
 def manifest(plan):
@@ -61,8 +92,8 @@ def manifest(plan):
              value['name'] == fixed['name'] and value['initial_only'] is True and
              value['sources'] == list(fixed['sources']) and value['headers'] == list(fixed['headers']) and
              value['archive'] == 'libnbcompat.a' and
-             value['required_tool_roles'] == (['cc', 'ar', 'ranlib'] if fixed['name'] == 'filetime'
-                                             else ['cc', 'yacc', 'ar', 'ranlib']) and
+             value['required_tool_roles'] == (['cc', 'yacc', 'ar', 'ranlib'] if fixed['name'] == 'parsedate'
+                                             else ['cc', 'ar', 'ranlib']) and
              [row['name'] for row in value['probes']] == list(fixed['probes']),
              'unsupported fixed OS component fields')
     if fixed['name'] == 'parsedate':
@@ -84,7 +115,7 @@ def outputs(plan):
     manifest(plan)
     fixed = profile(plan)
     name = fixed['name']
-    return [*sources(plan), *fixed['exports'][:2], fixed['object'], name + '-control.o',
+    return [*sources(plan), *fixed['exports'][:2], *objects(fixed), name + '-control.o',
             name + '-control', name + '-check.o', name + '-check', *fixed['probes'],
             *(['parsedate.c'] if name == 'parsedate' else [])]
 
@@ -126,12 +157,13 @@ def steps(plan, descriptor, commands, flags):
         selected_yacc(descriptor, commands)
         result.append(row('generate-parsedate', 'generator', [*commands['yacc'], '-p', '__pd',
             '-o', path('parsedate.c'), os.path.join(plan['program']['source']['root'], fixed['sources'][0])]))
-    result.extend([
-        row('compile-' + Path(fixed['object']).stem, 'compile', [*cc, *config, '-c',
+    for source, object_name in zip(fixed['sources'], objects(fixed)):
+        result.append(row('compile-' + Path(object_name).stem, 'compile', [*cc, *config, '-c',
             (path('parsedate.c') if name == 'parsedate' else
-             os.path.join(plan['program']['source']['root'], fixed['sources'][0])), '-o', path(fixed['object'])]),
+             os.path.join(plan['program']['source']['root'], source)), '-o', path(object_name)]))
+    result.extend([
         row('archive-' + name, 'component-archive',
-            [*commands['ar'], 'rc', path('libnbcompat.a'), path(fixed['object'])]),
+            [*commands['ar'], 'rc', path('libnbcompat.a'), *map(path, objects(fixed))]),
         row('index-' + name, 'component-index', [*commands['ranlib'], path('libnbcompat.a')]),
         row('compile-' + name + '-check', 'compile',
             [*cc, *config, '-c', path(name + '-check.c'), '-o', path(name + '-check.o')]),
@@ -172,13 +204,14 @@ def _regular(path):
 
 
 def _archive(work, object_name='utimens.o'):
-    """Require one exact canonical object; permit only standard symbol indexes."""
+    """Require exact ordered canonical objects; permit only standard symbol indexes."""
     path = Path(work, 'libnbcompat.a')
     ref = _regular(path)
     data = _bytes(ref)
     from .bootstrap_archive import members as archive_members
     members = archive_members(data)
-    _require(members == [(object_name, Path(work, object_name).read_bytes())],
+    names = (object_name,) if isinstance(object_name, str) else object_name
+    _require(members == [(name, _bytes(_regular(Path(work, name)))) for name in names],
              'component archive has missing, changed or extra objects')
     return ref
 
@@ -226,9 +259,9 @@ def prepare(step, plan, completed):
     if step['id'] == 'archive-' + fixed['name']:
         _require(entry(os.path.join(plan['work_root'], 'libnbcompat.a')) is None,
                  'component archive already exists')
-    if fixed['name'] == 'filetime' and step['id'] in ('filetime-check', 'runtime-observation'):
+    if _fixtures(fixed) and step['id'] in (fixed['name'] + '-check', 'runtime-observation'):
         _require(all(entry(os.path.join(plan['work_root'], name)) is None
-                     for name in ('filetime-file', 'filetime-link', 'filetime-missing')),
+                     for name in _fixtures(fixed)),
                  'component semantic fixtures already exist')
 
 
@@ -251,10 +284,10 @@ def verify(step, work, plan, actual_exit, completed):
                 stream.write(data)
             result['configuration_header'] = _regular(path)
     elif step['phase'] in ('component-archive', 'component-index'):
-        result['output'] = _archive(work, fixed['object'])
-    elif fixed['name'] == 'filetime' and step['id'] in ('filetime-check', 'runtime-observation'):
+        result['output'] = _archive(work, objects(fixed))
+    elif _fixtures(fixed) and step['id'] in (fixed['name'] + '-check', 'runtime-observation'):
         _require(actual_exit == 0 and all(entry(os.path.join(work, name)) is None
-                 for name in ('filetime-file', 'filetime-link', 'filetime-missing')),
+                 for name in _fixtures(fixed)),
                  'component semantic test failed or left fixtures')
     return result
 
@@ -296,7 +329,7 @@ def candidate(plan_ref, result_ref):
              configuration(actual, manifest(plan)), 'OS component retained configuration differs')
     from .bootstrap_generated import verify_history
     verify_history(plan, result, track_modes=fixed['name'] == 'parsedate')
-    _archive(plan['work_root'], fixed['object'])
+    _archive(plan['work_root'], objects(fixed))
     exports = {name: _regular(Path(plan['work_root'], name)) for name in fixed['exports']}
     _require(all(result['outputs'].get(name) == ref['sha256'] for name, ref in exports.items()),
              'OS component retained output differs from producer')
@@ -310,7 +343,7 @@ def candidate(plan_ref, result_ref):
 
 def validate_input(reference, descriptor, *, component='filetime'):
     """Check a separately reviewed initial OS component. Never issue acceptance."""
-    _require(component in ('filetime', 'parsedate'), 'unsupported requested OS component')
+    _require(component in ('filetime', 'parsedate', 'listing'), 'unsupported requested OS component')
     receipt = _json(reference)
     _require(set(receipt) == {'format', 'version', 'scope', 'status', 'component',
         'candidate', 'independent_review', 'initial_only', 'ordinary_provider_qualified'} and
