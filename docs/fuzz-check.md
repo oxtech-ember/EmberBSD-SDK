@@ -7,9 +7,10 @@ Ports owns the source recipe, patches, fuzz harness, seed corpus and build adapt
 SDK owns process control and the common run/evidence contract.
 
 Clang can build diagnostic host fuzz programs with libFuzzer, ASan and UBSan.
-These executables must remain outside target packages and sysroots. Build all
-shipped EmberBSD objects with the common GCC16 compiler. A diagnostic replay
-executable also uses GCC16. A host replay does not qualify an EmberBSD binary,
+These executables must remain outside target packages and sysroots. Build shipped
+EmberBSD objects with the selected production toolchain: Clang by default, or
+GCC16 for an explicit platform exception. The diagnostic replay uses that same
+compiler family. A host replay does not qualify an EmberBSD binary,
 ABI, kernel, device or production package.
 
 LeakSanitizer uses ASan and requires an intentional-leak positive control.
@@ -17,14 +18,15 @@ The runner keeps the RSS-limited libFuzzer campaign on ASan/UBSan, then replays
 each initial and generated corpus file in a separate Clang LSan executable.
 This avoids treating libFuzzer's process-lifetime RSS monitor as an application
 leak. The LSan replay does not cover mutations that were not retained in either
-corpus. Memcheck uses a separate GCC16 replay binary without ASan or UBSan. Do
+corpus. Memcheck uses a separate production replay binary without ASan or UBSan. Do
 not run an ASan binary under Valgrind.
 
 ## Prepare and run
 
-The build adapter writes a version 1 JSON manifest. Use an explicit SDK source
+The build adapter writes a version 2 JSON manifest. Use an explicit SDK source
 and check `emberbsd_sdk.fuzz_check.FUZZ_CHECK_API == 1` in the adapter.
-`FUZZ_MANIFEST_VERSION` is `1`. The module exports `file_sha256(path)` and
+`FUZZ_MANIFEST_VERSION` is `2`. Existing version 1 GCC replay manifests remain
+readable with their original meaning. The module exports `file_sha256(path)` and
 `tree_files(root)` to hash inputs. The latter returns sorted `{path, sha256}`
 records with relative paths. It refuses symlinks and special files.
 
@@ -41,14 +43,14 @@ python3 scripts/fuzz-check.py verify --evidence /absolute/cairo-check \
 
 The output directory must not exist or overlap an input. `--timeout` bounds the
 fuzzer process in seconds. `--input-timeout` bounds a libFuzzer input and each
-GCC replay process. The SDK session backend drains owned child processes on
+production replay process. The SDK session backend drains owned child processes on
 failure or timeout. A failed run retains `INCOMPLETE` and its available logs.
 Do not treat a failed run or a successful process without a libFuzzer completion
 record as accepted. Run budgets are finite; a short run is not a soak test.
 
 The runner copies the initial seeds into its working corpus. It runs libFuzzer
 with the declared seed, run count, maximum input length and memory budget. It
-then executes the GCC16 replay binary once per file in both the initial and
+then executes the production replay binary once per file in both the initial and
 final corpus. The replay binary receives one filename as its only argument.
 It must execute the same harness on all bytes in that file and return nonzero
 on failure. Keep empty inputs in the seed corpus if that boundary matters.
@@ -59,14 +61,14 @@ When `ASAN_OPTIONS` enables leak detection, the runner first executes
 allocation. This positive control proves that the selected host runtime detects
 the test leak. The runner then executes `binaries.lsan_replay` once for every
 initial and generated corpus file with leak detection enabled. A nonzero replay
-fails the run. The RSS-limited libFuzzer and GCC16 ASan/UBSan replays use
+fails the run. The RSS-limited libFuzzer and production ASan/UBSan replays use
 `detect_leaks=0`; their retained inputs are covered by the separate LSan replay.
 
 `--memcheck off` skips Valgrind. `--memcheck optional` records `unsupported` or
 `unavailable` when the host cannot run it and does not call that a pass.
 `--memcheck required` refuses to start unless Valgrind is available on a
 supported platform. A Memcheck manifest supplies a separate
-`binaries.memcheck` replay built with GCC16 and without sanitizers. The runner
+`binaries.memcheck` replay built with the production compiler and without sanitizers. The runner
 uses full leak reports, origin tracking and a failing exit code for definite,
 indirect and possible leaks or memory errors. It replays every initial and
 generated corpus file. Still-reachable allocations are reported but are not
@@ -79,7 +81,7 @@ reuse the SDK host backend. This interface does not establish native Windows
 support or isolate arbitrary hostile executables. Use trusted local build
 adapters and a suitable external sandbox for untrusted code.
 
-## Manifest version 1
+## Manifest version 2
 
 Every object rejects unknown or missing keys. SHA256 strings contain 64 lower
 case hexadecimal characters. Artifact paths are absolute. Corpus entry paths
@@ -88,12 +90,12 @@ rejected. Required top-level fields are:
 
 | Field | Value |
 | --- | --- |
-| `schema` | Integer `1` |
+| `schema` | Integer `2` |
 | `name` | Nonempty target name |
 | `scope` | `diagnostic-host` |
 | `host` | `{system, machine}` from Python `platform` |
 | `sources` | Nonempty list of `{name, revision, path, sha256}` |
-| `tools` | Required `clang` and `gcc`; optional `clang_lsan` and `gcc_memcheck`; each `{path, sha256, version, flags}` |
+| `tools` | Required `clang` and `replay`; optional `clang_lsan` and `memcheck`; each `{path, sha256, family, version, flags}` |
 | `binaries` | Required `fuzzer` and `replay`; optional `lsan_probe`, `lsan_replay` and `memcheck`; each `{path, sha256}` |
 | `corpus` | `{path, files}`, where files are `{path, sha256}` records |
 | `build_logs` | Nonempty list of `{path, sha256}` |
@@ -111,9 +113,13 @@ execution. It cannot discover omitted build inputs or infer a complete source
 closure from a caller's manifest. Review and test the owning adapter.
 
 Compiler paths must refer to real files, not symlinks. Resolve a selected
-compiler before hashing it. GCC versions must be 16.x. Compiler flags are
+compiler before hashing it. Each tool declares `family: "clang"` or `"gcc"`.
+`clang` and `clang_lsan` require Clang; `replay` records the selected production
+family. GCC versions must be 16.x. Compiler flags are
 nonempty arrays. `clang_lsan` records the positive-control build flags;
-`gcc_memcheck` must have no `-fsanitize` flag. Target builds continue to require
+`memcheck` must match the replay family and version and have no `-fsanitize`
+flag. Version 1 retains its `gcc` and `gcc_memcheck` names and has no `family`
+field; these records always mean GCC16. Target builds continue to require
 the normal compiler, sysroot and release validation independently.
 
 `ASAN_OPTIONS` is exactly `abort_on_error=1:detect_leaks=1` with both

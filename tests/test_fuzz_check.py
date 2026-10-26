@@ -110,6 +110,56 @@ class FuzzChecks(unittest.TestCase):
         with self.assertRaises(SDKError):
             fuzz.verify(relocated, sha256='0' * 64)
 
+    def llvm_manifest(self):
+        self.manifest['schema'] = 2
+        self.manifest['tools']['clang']['family'] = 'clang'
+        self.manifest['tools']['replay'] = {
+            **self.manifest['tools'].pop('gcc'), 'family': 'clang',
+            'version': 'clang version 23.1.4'}
+
+    def test_clang_production_replay_does_not_require_gcc(self):
+        self.llvm_manifest()
+        self.save()
+        self.run_fixture()
+        fuzz.verify(self.output)
+        self.assertEqual(read_json(self.output / 'manifest.json')['tools']['replay']['family'], 'clang')
+
+    def test_new_manifest_can_select_explicit_gcc_replay(self):
+        self.llvm_manifest()
+        self.manifest['tools']['replay'].update(family='gcc', version='gcc 16.2.0')
+        self.save()
+        self.run_fixture()
+        fuzz.verify(self.output)
+
+    def test_replay_family_must_agree_with_compiler_version(self):
+        self.llvm_manifest()
+        self.manifest['tools']['replay']['version'] = 'gcc 16.2.0'
+        with self.assertRaisesRegex(SDKError, 'Clang'):
+            fuzz.validate_manifest(self.manifest)
+
+    def test_new_manifest_rejects_ambiguous_gcc_alias(self):
+        self.llvm_manifest()
+        self.manifest['tools']['gcc'] = dict(self.manifest['tools']['replay'])
+        with self.assertRaisesRegex(SDKError, 'unsupported fuzz compiler'):
+            fuzz.validate_manifest(self.manifest)
+
+    def test_new_memcheck_uses_the_production_family(self):
+        self.llvm_manifest()
+        binary = self.script('memcheck', 'print("uninstrumented replay fixture")\n')
+        self.manifest['binaries']['memcheck'] = self.artifact(binary)
+        self.manifest['tools']['memcheck'] = {
+            **self.manifest['tools']['replay'], 'flags': ['-g']}
+        fuzz.validate_manifest(self.manifest)
+        self.manifest['tools']['memcheck'].update(family='gcc', version='gcc 16.2.0')
+        with self.assertRaisesRegex(SDKError, 'production replay compilers differ'):
+            fuzz.validate_manifest(self.manifest)
+
+    def test_new_fuzzer_cannot_use_the_gcc_exception(self):
+        self.llvm_manifest()
+        self.manifest['tools']['clang'].update(family='gcc', version='gcc 16.2.0')
+        with self.assertRaisesRegex(SDKError, 'fuzzer and LeakSanitizer require Clang'):
+            fuzz.validate_manifest(self.manifest)
+
     def test_v1_evidence_remains_verifiable(self):
         self.run_fixture()
         self.rewrite_receipt(lambda receipt: (receipt.pop('memory_checks'),
@@ -228,7 +278,7 @@ class FuzzChecks(unittest.TestCase):
             self.run_fixture(memcheck='optional')
         memcheck = read_json(self.output / 'evidence.json')['memory_checks']['memcheck']
         self.assertEqual(memcheck['status'], 'unavailable')
-        self.assertIn('no uninstrumented GCC16', memcheck['reason'])
+        self.assertIn('no uninstrumented production', memcheck['reason'])
 
     def test_required_memcheck_refuses_unsupported_host_before_run(self):
         self.add_memcheck_binary()

@@ -20,7 +20,7 @@ from .paths import open_regular, verify_stable, reject_overlap
 from .stream import capture_streamed
 
 FUZZ_CHECK_API = 1
-FUZZ_MANIFEST_VERSION = 1
+FUZZ_MANIFEST_VERSION = 2
 HEX = re.compile(r'[0-9a-f]{64}')
 
 
@@ -95,7 +95,7 @@ def validate_manifest(value, current=False, *, legacy_lsan=False):
     keys(value, 'schema name scope host sources tools binaries corpus build_logs limitations sanitizer_options')
     if legacy_lsan and 'lsan_replay' in value.get('binaries', {}):
         raise SDKError('legacy LeakSanitizer evidence cannot attest per-input replay')
-    if value['schema'] != FUZZ_MANIFEST_VERSION or type(value['schema']) is not int:
+    if value['schema'] not in (1, FUZZ_MANIFEST_VERSION) or type(value['schema']) is not int:
         raise SDKError('unsupported fuzz manifest schema')
     text(value['name'])
     if value['scope'] != 'diagnostic-host':
@@ -119,25 +119,38 @@ def validate_manifest(value, current=False, *, legacy_lsan=False):
         names.add(source['name'])
         paths.add(source['path'])
         artifact(source, current)
-    if not isinstance(value['tools'], dict) or not {'clang', 'gcc'} <= set(value['tools']):
-        raise SDKError('tools must include clang and gcc')
-    if set(value['tools']) - {'clang', 'gcc', 'clang_lsan', 'gcc_memcheck'}:
+    legacy = value['schema'] == 1
+    replay_tool = 'gcc' if legacy else 'replay'
+    memcheck_tool = 'gcc_memcheck' if legacy else 'memcheck'
+    if not isinstance(value['tools'], dict) or not {'clang', replay_tool} <= set(value['tools']):
+        raise SDKError('tools must include clang and ' + replay_tool)
+    if set(value['tools']) - {'clang', replay_tool, 'clang_lsan', memcheck_tool}:
         raise SDKError('unsupported fuzz compiler tool')
     for name, tool in value['tools'].items():
-        keys(tool, 'path sha256 version flags')
+        keys(tool, 'path sha256 version flags' + ('' if legacy else ' family'))
         artifact(tool, current)
         if not isinstance(tool['version'], str) or not tool['version'].strip():
             raise SDKError('missing compiler version')
-        if name.startswith('gcc') and not re.search(r'\b16\.\d', tool['version']):
+        family = ('gcc' if name.startswith('gcc') else 'clang') if legacy else tool['family']
+        if family not in ('clang', 'gcc'):
+            raise SDKError('unsupported replay compiler family')
+        if name.startswith('clang') and family != 'clang':
+            raise SDKError('fuzzer and LeakSanitizer require Clang')
+        if family == 'gcc' and (not re.search(r'\b16\.\d', tool['version']) or
+                                'clang' in tool['version'].lower()):
             raise SDKError('replay requires GCC16')
-        if name.startswith('clang') and 'clang' not in tool['version'].lower():
-            raise SDKError('fuzzer requires Clang')
+        if family == 'clang' and 'clang' not in tool['version'].lower():
+            raise SDKError('selected compiler must identify Clang')
         if not isinstance(tool['flags'], list) or not tool['flags']:
             raise SDKError('missing compiler flags')
         for flag in tool['flags']:
             text(flag)
-        if name == 'gcc_memcheck' and any('-fsanitize=' in flag for flag in tool['flags']):
+        if name == memcheck_tool and any('-fsanitize=' in flag for flag in tool['flags']):
             raise SDKError('Memcheck replay must not use compiler sanitizers')
+    if not legacy and memcheck_tool in value['tools']:
+        if any(value['tools'][memcheck_tool][field] != value['tools'][replay_tool][field]
+               for field in ('family', 'version')):
+            raise SDKError('Memcheck and production replay compilers differ')
     if not isinstance(value['binaries'], dict) or not {'fuzzer', 'replay'} <= set(value['binaries']):
         raise SDKError('binaries must include fuzzer and replay')
     if set(value['binaries']) - {'fuzzer', 'replay', 'lsan_probe', 'lsan_replay', 'memcheck'}:
@@ -195,10 +208,10 @@ def validate_manifest(value, current=False, *, legacy_lsan=False):
             not any(flag.startswith('-fsanitize=address')
                     for flag in value['tools']['clang_lsan']['flags'])):
         raise SDKError('LeakSanitizer requires an address-sanitized Clang build')
-    if 'memcheck' in value['binaries'] and 'gcc_memcheck' not in value['tools']:
-        raise SDKError('Memcheck replay requires recorded GCC16 build flags')
-    if 'gcc_memcheck' in value['tools'] and 'memcheck' not in value['binaries']:
-        raise SDKError('gcc_memcheck tool record requires a memcheck replay binary')
+    if 'memcheck' in value['binaries'] and memcheck_tool not in value['tools']:
+        raise SDKError('Memcheck replay requires recorded production compiler build flags')
+    if memcheck_tool in value['tools'] and 'memcheck' not in value['binaries']:
+        raise SDKError(memcheck_tool + ' tool record requires a memcheck replay binary')
     if options['ASAN_OPTIONS'].endswith('=0') and not any('leak' in s.lower() for s in value['limitations']):
         raise SDKError('disabled leak detection requires an explicit limitation')
     return value
@@ -273,7 +286,7 @@ def _memcheck_preflight(mode, env, binaries):
     if reason is not None:
         status = 'unsupported'
     elif 'memcheck' not in binaries:
-        status, reason = 'unavailable', 'manifest has no uninstrumented GCC16 memcheck binary'
+        status, reason = 'unavailable', 'manifest has no uninstrumented production memcheck binary'
     else:
         found = shutil.which('valgrind', path=env.get('PATH'))
         if found is None:
@@ -361,7 +374,7 @@ def run(manifest_path, output, *, runs=1000, seed=1, max_len=65536,
     if memcheck_plan['status'] == 'ready':
         _copy(memcheck_plan['path'], output / 'tools/valgrind')
         (output / 'tools/valgrind').chmod(0o755)
-    # Keep RSS-limited libFuzzer and GCC replay free of its process-lifetime
+    # Keep RSS-limited libFuzzer and production replay free of its process-lifetime
     # RSS-monitor allocations. Check each retained input in a separate Clang
     # LSan replay process, which has no libFuzzer worker thread.
     lsan_enabled = manifest['sanitizer_options']['ASAN_OPTIONS'] == 'abort_on_error=1:detect_leaks=1'
