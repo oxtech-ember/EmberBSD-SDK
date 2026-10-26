@@ -23,7 +23,7 @@ BOOTSTRAP_FORMAT = 'emberbsd-native-gcc16-bootstrap-plan'
 # The Ports Darwin profile's make and shell handoff edge. See recipe_make().
 MAKE_PROVIDER = 'devel/bmake'
 INITIAL_DARWIN_PURPOSE = 'initial-darwin-tools'
-INITIAL_DARWIN_TARGETS = ('llvm-libtool-darwin', 'llvm-install-name-tool', 'llvm-readtapi', 'llvm-lipo')
+INITIAL_DARWIN_TARGETS = ('llvm-libtool-darwin', 'llvm-install-name-tool', 'llvm-readtapi', 'llvm-lipo', 'llvm-otool')
 
 
 def initial_darwin_plan(plan):
@@ -81,12 +81,14 @@ def initial_tool_outputs(plan):
         _require(mode & 0o111, 'initial LLVM tool is not executable')
         result[name] = dict(path=path, resolved_path=resolved,
                             sha256=sha256_file(resolved), mode=mode)
-    # The upstream recipe declares this spelling as an llvm-objcopy alias.
-    objcopy = canonical_existing(os.path.join(obj, 'bin', 'llvm-objcopy'))
-    _require(os.path.commonpath((objcopy, obj)) == obj and
-             sha256_file(objcopy) == result['llvm-install-name-tool']['sha256'],
-             'initial install-name tool differs from its owner-declared alias')
-    result['llvm-install-name-tool']['alias_of'] = 'llvm-objcopy'
+    # Upstream declares both tool spellings as aliases of these native images.
+    for alias, owner in (('llvm-install-name-tool', 'llvm-objcopy'),
+                         ('llvm-otool', 'llvm-objdump')):
+        owner_path = canonical_existing(os.path.join(obj, 'bin', owner))
+        _require(os.path.commonpath((owner_path, obj)) == obj and
+                 sha256_file(owner_path) == result[alias]['sha256'],
+                 f'initial {alias} differs from its owner-declared alias')
+        result[alias]['alias_of'] = owner
     return result
 
 

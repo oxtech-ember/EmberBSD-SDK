@@ -139,12 +139,12 @@ class InitialDarwinTests(unittest.TestCase):
         plan['recipes']['lang/llvm']['object_directory'] = str(case.work / 'obj/llvm/build')
         return case
 
-    def test_initial_commands_keep_dependency_prefix_and_exact_four_targets(self):
+    def test_initial_commands_keep_dependency_prefix_and_exact_five_targets(self):
         case = self.initial_recipe()
         steps = recipe.recipe_steps(case.plan, case.descriptor, case.commands, case.descriptor['abi_flags'])
         self.assertEqual([row['recipe'] for row in steps], ['devel/cmake', 'devel/cmake', 'lang/llvm'])
         self.assertEqual([row['phase'] for row in steps], ['build', 'install', 'build-tools'])
-        self.assertEqual(steps[-1]['argv'][-2:], ['BUILD_TARGET=llvm-libtool-darwin llvm-install-name-tool llvm-readtapi llvm-lipo', 'build'])
+        self.assertEqual(steps[-1]['argv'][-2:], ['BUILD_TARGET=llvm-libtool-darwin llvm-install-name-tool llvm-readtapi llvm-lipo llvm-otool', 'build'])
         self.assertNotIn('gcc16-compare', [row['id'] for row in steps])
         self.assertEqual(set(case.plan['recipes']), {'lang/gcc16', 'devel/cmake', 'lang/llvm', 'devel/lld'})
 
@@ -157,7 +157,7 @@ class InitialDarwinTests(unittest.TestCase):
                              [('devel/cmake', 'build'), ('devel/cmake', 'install'),
                               ('lang/llvm', 'build-tools')])
             self.assertEqual(steps[-1]['argv'][-2:], [
-                'BUILD_TARGET=llvm-libtool-darwin llvm-install-name-tool llvm-readtapi llvm-lipo',
+                'BUILD_TARGET=llvm-libtool-darwin llvm-install-name-tool llvm-readtapi llvm-lipo llvm-otool',
                 'build'])
             self.assertNotIn('gcc16-compare', [row['id'] for row in steps])
             for field, value in (('purpose', 'first-native-gcc16'), ('phase', 'full')):
@@ -281,10 +281,11 @@ class InitialDarwinTests(unittest.TestCase):
         root = Path(case.plan['recipes']['lang/llvm']['object_directory']) / 'bin'
         root.mkdir(parents=True)
         image = struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 2, 0, 0, 0, 0)
-        for name in ('llvm-libtool-darwin', 'llvm-objcopy', 'llvm-readtapi', 'llvm-lipo'):
+        for name in ('llvm-libtool-darwin', 'llvm-objcopy', 'llvm-readtapi', 'llvm-lipo', 'llvm-objdump'):
             (root / name).write_bytes(image)
             (root / name).chmod(0o755)
         (root / 'llvm-install-name-tool').symlink_to('llvm-objcopy')
+        (root / 'llvm-otool').symlink_to('llvm-objdump')
         return case, root
 
     def test_initial_outputs_bind_real_images_and_owner_declared_alias(self):
@@ -296,6 +297,8 @@ class InitialDarwinTests(unittest.TestCase):
         self.assertEqual(set(actual), set(recipe.INITIAL_DARWIN_TARGETS))
         self.assertEqual(actual['llvm-install-name-tool']['alias_of'], 'llvm-objcopy')
         self.assertEqual(actual['llvm-install-name-tool']['resolved_path'], str(root / 'llvm-objcopy'))
+        self.assertEqual(actual['llvm-otool']['alias_of'], 'llvm-objdump')
+        self.assertEqual(actual['llvm-otool']['resolved_path'], str(root / 'llvm-objdump'))
         for name, row in actual.items():
             self.assertEqual(Path(row['path']).name, name)
             self.assertEqual(row['sha256'], hashlib.sha256((root / name).read_bytes()).hexdigest())
@@ -312,10 +315,11 @@ class InitialDarwinTests(unittest.TestCase):
                 root = Path(case.plan['recipes']['lang/llvm']['object_directory']) / 'bin'
                 root.mkdir(parents=True)
                 image = struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 2, 0, 0, 0, 0)
-                for name in ('llvm-libtool-darwin', 'llvm-objcopy', 'llvm-readtapi', 'llvm-lipo'):
+                for name in ('llvm-libtool-darwin', 'llvm-objcopy', 'llvm-readtapi', 'llvm-lipo', 'llvm-objdump'):
                     (root / name).write_bytes(image)
                     (root / name).chmod(0o755)
                 (root / 'llvm-install-name-tool').symlink_to('llvm-objcopy')
+                (root / 'llvm-otool').symlink_to('llvm-objdump')
             return subprocess.CompletedProcess(argv, 0)
 
         # This isolates the unchanged executor after the separately tested plan gate.
@@ -341,6 +345,16 @@ class InitialDarwinTests(unittest.TestCase):
             recipe.initial_tool_outputs(case.plan)
         (root / 'llvm-lipo').unlink()
         with self.assertRaises(SDKError):
+            recipe.initial_tool_outputs(case.plan)
+
+    def test_otool_is_required_and_matches_the_upstream_objdump_alias(self):
+        case, root = self.outputs()
+        (root / 'llvm-otool').unlink()
+        with self.assertRaises(SDKError):
+            recipe.initial_tool_outputs(case.plan)
+        (root / 'llvm-otool').write_bytes((root / 'llvm-objdump').read_bytes() + b'unrelated')
+        (root / 'llvm-otool').chmod(0o755)
+        with self.assertRaisesRegex(SDKError, 'alias'):
             recipe.initial_tool_outputs(case.plan)
 
     def test_output_object_directory_cannot_escape_owned_work(self):

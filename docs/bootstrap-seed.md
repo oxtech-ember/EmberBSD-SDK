@@ -419,8 +419,8 @@ It filters the validated full order without removing any LLVM dependency.
 Unrelated future recipes remain recorded and do not execute.
 
 The controller builds and installs each dependency through the existing recipe route.
-Its final LLVM build has these four fixed targets, in this order:
-`llvm-libtool-darwin`, `llvm-install-name-tool`, `llvm-readtapi`, `llvm-lipo`.
+Its final LLVM build has these five fixed targets, in this order:
+`llvm-libtool-darwin`, `llvm-install-name-tool`, `llvm-readtapi`, `llvm-lipo`, `llvm-otool`.
 The make word is one `BUILD_TARGET` assignment, followed by `build`.
 Other targets, omitted dependencies and changed order are refused before execution.
 `comparison_command` is exactly `initial-llvm-tools`; no GCC comparison runs.
@@ -435,8 +435,9 @@ They do not acquire tools through `xcrun` or system discovery.
 Normal full plans still require the selected Darwin tools before execution.
 
 The result records installed dependency inventory and `initial_tool_output` separately.
-The latter binds the plan, profile, LLVM recipe and four actual native images.
-It checks the owner-declared `llvm-install-name-tool` alias against `llvm-objcopy`.
+The latter binds the plan, profile, LLVM recipe and five actual native images.
+It checks the owner-declared `llvm-install-name-tool` and `llvm-otool` aliases against `llvm-objcopy` and `llvm-objdump`.
+The `llvm-lipo` and `llvm-otool` tools support the shared Ports Mach-O metadata queries.
 It records uninstalled graph nodes, including the partial LLVM package.
 It does not qualify a full LLVM package, GCC comparison or ordinary provider.
 `graduate` refuses this purpose.
