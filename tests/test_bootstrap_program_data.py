@@ -4,6 +4,7 @@
 
 import importlib
 import unittest
+import test_core  # Adds the SDK source to sys.path.
 from emberbsd_sdk.errors import SDKError
 
 

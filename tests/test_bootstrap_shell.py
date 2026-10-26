@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import test_core  # Adds the SDK source to sys.path.
 from emberbsd_sdk import bootstrap_make, bootstrap_program, bootstrap_shell
 from emberbsd_sdk.errors import SDKError
 import test_bootstrap_program as programs

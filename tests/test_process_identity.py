@@ -9,6 +9,7 @@ import sys
 import time
 import unittest
 from unittest.mock import Mock
+import test_core  # Adds the SDK source to sys.path.
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.process_identity import _Darwin, _darwin_arguments, process_identity
 

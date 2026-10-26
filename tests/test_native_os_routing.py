@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import test_core  # Adds the SDK source to sys.path.
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.native_os_routing import (publish_native_os_routing,
                                             read_native_os_contract)

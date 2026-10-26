@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 import unittest
+import test_core  # Adds the SDK source to sys.path.
 from emberbsd_sdk import bootstrap_program as program
 from emberbsd_sdk import bootstrap_program_components as inputs
 from emberbsd_sdk.errors import SDKError

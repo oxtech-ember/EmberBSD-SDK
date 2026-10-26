@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+import test_core  # Adds the SDK source to sys.path.
 from emberbsd_sdk.bootstrap_netbsd_gcc16 import (
     BOOTSTRAP_NETBSD_GCC16_API,
     load_pkgsrc_bootstrap_tools,

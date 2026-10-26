@@ -2,6 +2,7 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Fixed cut/compat contracts. Compiler children are synthetic in unit tests."""
 import unittest
+import test_core  # Adds the SDK source to sys.path.
 from emberbsd_sdk import bootstrap_program as program
 
 

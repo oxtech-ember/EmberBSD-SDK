@@ -2,6 +2,7 @@
 """Check only the bound comparison environment. Do not load native inputs."""
 import unittest
 
+import test_core  # Adds the SDK source to sys.path.
 from emberbsd_sdk.bootstrap_producer import metadata_environment
 from emberbsd_sdk.errors import SDKError
 
