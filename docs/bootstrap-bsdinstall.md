@@ -42,6 +42,10 @@ The SDK compares all current bytes and timestamps. It executes no patch hook.
 
 ## Retained compatibility input
 
+Both consumers use the shared [Ports component validator](bootstrap-libnbcompat.md).
+It accepts the complete finite Ports stage or the exact historical receipt below.
+OS component archives are separate inputs and cannot replace this library.
+
 `program.compat` has exactly `root`, `inventory`, `producer_result`,
 `bootstrap_plan`, and `component_receipt`. Each reference has `path` and `sha256`.
 The real read-only root contains only regular headers under `include/`,

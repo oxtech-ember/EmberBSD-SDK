@@ -227,7 +227,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
     byacc = profile == 'producer' and plan.get('stage') == 'byacc-bootstrap'
     bsdinstall = profile == 'producer' and plan.get('stage') == 'bsdinstall-bootstrap'
     pkg_install = profile == 'producer' and plan.get('stage') == 'pkg-install-bootstrap'
-    program = profile == 'producer' and (gnu_program or bsdinstall or pkg_install or byacc or plan.get('stage') in
+    ports_library = profile == 'producer' and plan.get('stage') == 'ports-libnbcompat-bootstrap'
+    program = profile == 'producer' and (gnu_program or bsdinstall or pkg_install or byacc or ports_library or plan.get('stage') in
                                         PROGRAM_STAGES)
     relocation = profile == 'producer' and plan.get('stage') == 'utility-relocation'
     recipe = profile == 'bootstrap'
@@ -256,11 +257,13 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         roots += [plan['ports_export']['root'], plan['netbsd']['makeconf']['path']]
     if program:
         roots += [plan['program']['source']['root']]
-        if gnu_program or bsdinstall or pkg_install or byacc:
+        if gnu_program or bsdinstall or pkg_install or byacc or ports_library:
             roots += [plan['program']['owner']['root']]
         if bsdinstall or pkg_install:
-            roots += [plan['program']['compat']['root']]
-        if pkg_install:
+            from .bootstrap_libnbcompat import input_documents
+            compat_documents, compat_roots = input_documents(plan['program']['compat'])
+            roots += [plan['program']['compat']['root'], *compat_roots]
+        if pkg_install or ports_library:
             roots += [plan['program']['export']['root']]
     if relocation:
         roots += list(relocation_read_roots(plan))
@@ -281,14 +284,13 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         shared.update(_references(_json(plan['netbsd']['source_transfer_acceptance'])))
     if program:
         shared.update(_references(_json(plan['program']['source']['source_proof'])))
-        if gnu_program or bsdinstall or pkg_install or byacc:
+        if gnu_program or bsdinstall or pkg_install or byacc or ports_library:
             shared.update(_references(_json(plan['program']['owner']['source_proof'])))
-        if pkg_install:
+        if pkg_install or ports_library:
             shared.update(_references(_json(plan['program']['export']['source_proof'])))
         if bsdinstall or pkg_install:
-            component = _json(plan['program']['compat']['component_receipt'])
-            shared.update(_references(component))
-            shared.update(_references(_json(component['preparation'])['source_seed_descriptor']))
+            for document in compat_documents:
+                shared.update(_references(document))
     if relocation:
         shared.update(_references(_json(plan['relocation']['originals'])))
     control_python = None
@@ -334,6 +336,9 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
             prepare_gnu_work(plan, descriptor, selected.commands)
         if pkg_install:
             prepare_pkg_install_work(plan, selected.commands)
+        if ports_library:
+            from .bootstrap_libnbcompat import prepare_work
+            prepare_work(plan, selected.commands)
         result = dict(format=('emberbsd-native-gcc16-producer-result' if metadata or program or relocation or recipe else
                               'emberbsd-bootstrap-make-probe-result' if make_probe else
                               'emberbsd-native-gcc16-pilot-result'), version=1,
@@ -342,8 +347,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                       bootstrap_plan=bootstrap_plan, commands=[], all_commands_drained=False,
                       evidence_level='command-reported-routes-and-actual-exits',
                       ordinary_provider_qualified=False)
-        if pkg_install:
-            result['stage'] = 'pkg-install-bootstrap'
+        if pkg_install or ports_library:
+            result['stage'] = plan['stage']
         if relocation:
             result['stage'] = 'utility-relocation'
         if recipe:
@@ -370,7 +375,7 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
                         _native_image(step['argv'][0], descriptor['host'])
                     heavy = ((recipe and 'link_control' not in plan) or step['phase'] in ('link', 'compat-probe-link') or
                              gnu_program and step['phase'] in ('gnu-configure', 'gnu-build', 'gnu-bootstrap') or
-                             pkg_install and step['phase'] in ('pkg-configure', 'pkg-build'))
+                             pkg_install and step['phase'] in ('pkg-configure', 'pkg-build') or ports_library)
                     context = [resources['heavy_link_context']] if heavy else []
                     with ContextLocks(context, root):
                         remaining = deadline - time.monotonic()

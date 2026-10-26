@@ -10,6 +10,7 @@ import shlex
 import stat
 
 from .bootstrap_gnu_program import _tree
+from .bootstrap_libnbcompat import validate_input as _compat
 from .bootstrap_shell import literal_stdin
 from .inventory import sha256_file, snapshot_tree
 from .native_toolset import _absolute, _bytes, _envelope, _json, _native_image, _require
@@ -40,93 +41,6 @@ def bsdinstall_manifest(plan):
              manifest['selected_defines'] == dict(EMBERBSD_BSDINSTALL_SHELL='sh', TARGET_STRIP='strip') and
              len(manifest['runtime_cases']) == 19, 'unsupported fixed initial BSD install contract')
     return manifest
-
-
-def _compat(value, descriptor):
-    """Check one retained component, never the failed SDK's other outputs."""
-    _require(set(value) == {'root', 'inventory', 'producer_result', 'bootstrap_plan', 'component_receipt'},
-             'unsupported BSD install compatibility input fields')
-    root = _absolute(value['root'])
-    inventory = _json(value['inventory'])
-    _require(canonical_existing(root) == root and snapshot_tree(root) == inventory and
-             entry(root).st_mode & 0o222 == 0 and
-             all(row['kind'] in ('file', 'directory') and row['mode'] & 0o222 == 0
-                 for row in inventory.values()), 'initial libnbcompat snapshot changed or is not read-only')
-    files = {name for name, row in inventory.items() if row['kind'] == 'file'}
-    _require({'include/nbcompat.h', 'include/nbcompat/config.h', 'lib/libnbcompat.a'} <= files and
-             all(name.startswith('include/') or name == 'lib/libnbcompat.a' for name in files),
-             'initial libnbcompat needs only its complete headers and static library')
-    _require(_bytes(dict(path=os.path.join(root, 'lib/libnbcompat.a'),
-                         sha256=inventory['lib/libnbcompat.a']['sha256'])).startswith(b'!<arch>\n'),
-             'initial libnbcompat input is not a static archive')
-    receipt = _json(value['component_receipt'])
-    _require(set(receipt) == {'status', 'scope', 'recipe', 'root', 'inventory', 'producer_result',
-        'bootstrap_plan', 'preparation', 'independent_review', 'ordinary_provider_qualified', 'initial_only'} and
-        receipt['status'] == 'ACCEPTED_INITIAL_LIBNBCOMPAT_INPUT' and receipt['scope'] == 'gcc16-bootstrap' and
-        receipt['recipe'] == 'pkgtools/libnbcompat' and receipt['ordinary_provider_qualified'] is False and
-        receipt['initial_only'] is True and all(receipt[key] == value[key] for key in
-            ('root', 'inventory', 'producer_result', 'bootstrap_plan')),
-        'initial libnbcompat requires its separate accepted component input')
-    review = _json(receipt['independent_review'])
-    _require(review.get('status') == 'REVIEWED_INITIAL_LIBNBCOMPAT_INPUT_CANDIDATE' and
-             review.get('findings') == [] and review.get('all_review_leases_closed') is True and
-             review.get('preparation') == receipt['preparation'] and
-             review.get('ordinary_provider_qualified') is False,
-             'initial libnbcompat independent review differs from its accepted preparation')
-    preparation, result, plan = (_json(receipt['preparation']), _json(value['producer_result']),
-                                  _json(value['bootstrap_plan']))
-    _envelope(result, 'emberbsd-native-gcc16-producer-result', scope='gcc16-bootstrap')
-    _envelope(plan, 'emberbsd-native-gcc16-bootstrap-plan', scope='gcc16-bootstrap')
-    historical_ref = preparation['source_seed_descriptor']
-    historical = _json(historical_ref)
-    roles = {'cc', *descriptor['driver_components'].values()}
-    old_binding, new_binding = historical.get('driver_binding'), descriptor.get('driver_binding')
-    same_binding = old_binding is None and new_binding is None
-    if isinstance(old_binding, dict) and isinstance(new_binding, dict):
-        same_binding = (old_binding.get('ports_source') == historical['sources']['ports'] and
-            new_binding.get('ports_source') == descriptor['sources']['ports'] and
-            {key: val for key, val in old_binding.items() if key != 'ports_source'} ==
-            {key: val for key, val in new_binding.items() if key != 'ports_source'})
-    _require(historical_ref == result['seed_descriptor'] == plan['seed_descriptor'] and
-             all(historical[key] == descriptor[key] for key in
-                 ('host', 'compiler', 'host_abi', 'abi_flags', 'driver_components', 'driver_prefix')) and
-             same_binding and
-             all(historical['tools'][role] == descriptor['tools'][role] for role in roles),
-             'initial libnbcompat compiler or host ABI differs from its actual producer')
-    _require(result['status'] in ('FAILED', 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW') and
-             result['stage'] == 'full-recipe-bootstrap' and
-             result['ordinary_provider_qualified'] is False and result['bootstrap_plan'] == value['bootstrap_plan'] and
-             plan['host'] == descriptor['host'] and
-             all(result.get(key) is True for key in ('all_commands_drained',
-                 'inputs_revalidated_after_drain', 'all_leases_closed')),
-             'libnbcompat needs actual drained component evidence, not a successful SDK claim')
-    _require(len(plan['commands']) >= 2 and len(result['commands']) >= 2,
-             'libnbcompat actual component commands are missing')
-    for index, phase in enumerate(('build', 'install')):
-        expected, actual = plan['commands'][index], result['commands'][index]
-        _require(expected['id'] == 'r000-' + phase and expected['phase'] == phase and
-                 expected['recipe'] == 'pkgtools/libnbcompat' and
-                 set(actual) == set(expected) | {'actual_exit', 'log'} and
-                 all(actual[key] == val for key, val in expected.items()) and
-                 type(actual['actual_exit']) is int and actual['actual_exit'] == 0,
-                 'libnbcompat first actual build/install differs or failed')
-    _require(preparation['status'] == 'PREPARED_INITIAL_LIBRARY_INPUT_ONLY' and
-             preparation['native_or_ordinary_qualification'] is False and
-             preparation['component_recipe'] == 'pkgtools/libnbcompat' and
-             preparation['root'] == root and preparation['inventory'] == value['inventory'] and
-             preparation['source_producer_result'] == value['producer_result'] and
-             preparation['source_bootstrap_plan'] == value['bootstrap_plan'] and
-             preparation['actual_component_commands'] == result['commands'][:2],
-             'initial component preparation differs from its actual producer')
-    copies = preparation['copied_members']
-    by_name = {os.path.relpath(row['retained']['path'], root): row for row in copies}
-    _require(len(by_name) == len(copies) and set(by_name) == files,
-             'initial libnbcompat copy proof omits or adds files')
-    for name, row in by_name.items():
-        digest = inventory[name]['sha256']
-        _require(row['retained'] == dict(path=os.path.join(root, name), sha256=digest) and
-                 row['original'] == dict(path=os.path.join(plan['output_bundle_root'], name), sha256=digest),
-                 'initial libnbcompat retained bytes differ from the completed component')
 
 
 def bsdinstall_steps(plan, descriptor, commands, flags):
