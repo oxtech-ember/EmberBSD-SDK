@@ -1,6 +1,7 @@
 # Select the native Ports prefix
 
 The native toolset is the installed `host-pkg-g16` prefix.
+Use the [initial Darwin configuration](darwin-bootstrap.md) before that prefix exists.
 Ports builds its native packages with the host GCC16 from Ports.
 SDK uses that prefix to build the cross SDK and target outputs.
 No independent qualification, descriptor, acceptance receipt, or tool hash is required.

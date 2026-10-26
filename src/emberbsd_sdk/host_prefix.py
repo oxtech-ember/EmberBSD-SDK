@@ -89,8 +89,9 @@ def _member(path, root, host, *, search_path, binary=False, seen=()):
     """Check both path spellings and every script interpreter before execution."""
     real = canonical_existing(path)
     path = os.path.abspath(path)
-    _require(os.path.commonpath((path, root)) == root and path != root and
-             os.path.commonpath((real, root)) == root and real != root,
+    roots = (root,) if isinstance(root, str) else root
+    _require(all(any(os.path.commonpath((value, item)) == item and value != item
+                     for item in roots) for value in (path, real)),
              f'native tool escapes host prefix: {path}')
     _require(os.path.isfile(real) and os.access(path, os.X_OK), f'not executable: {path}')
     _require(real not in seen, f'cyclic native script interpreter: {path}')

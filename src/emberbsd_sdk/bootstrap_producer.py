@@ -236,21 +236,12 @@ def metadata_assignments(plan, descriptor, commands, flags):
 
 
 def metadata_makeconf(plan, descriptor, commands, flags):
+    from .darwin_makeconf import render_variables
     variables = metadata_assignments(plan, descriptor, commands, flags)
-    lines = ['# SPDX-License-Identifier: BSD-2-Clause',
-             '# Source-owned SDK metadata inputs. This file is not qualification.']
-    for name, value in sorted(variables.items()):
-        if name == 'LDFLAGS' and plan.get('format') == 'emberbsd-native-gcc16-bootstrap-plan':
-            # A nested BSD make inherits pkgsrc's ABI and dependency link flags.
-            lines += ['.if defined(BSD_PKG_MK)', name + '= ' + value, '.endif']
-        else:
-            lines += [name + '= ' + value]
-    lines += ['.include "' + _safe_path(plan['metadata']['profile']['path']) + '"']
-    if plan.get('format') == PRODUCER_FORMAT and plan.get('stage') == 'metadata':
-        # Parse-time submakes can run before MAKEFLAGS is exported.
-        make = variables['EMBERBSD_DARWIN_MAKE']
-        lines += ['_MAKE= ' + make, 'MAKE= ' + make]
-    return ('\n'.join(lines) + '\n').encode('ascii')
+    return render_variables(variables, plan['metadata']['profile']['path'],
+        nested_ldflags=plan.get('format') == 'emberbsd-native-gcc16-bootstrap-plan',
+        metadata_make=variables['EMBERBSD_DARWIN_MAKE'] if
+            plan.get('format') == PRODUCER_FORMAT and plan.get('stage') == 'metadata' else None)
 
 
 def metadata_environment(plan, commands):
