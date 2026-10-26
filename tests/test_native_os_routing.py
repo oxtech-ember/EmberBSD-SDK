@@ -140,6 +140,31 @@ class NativeOSRoutingTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'invalid or duplicate'):
             read_native_os_contract(self.contract, sha256=hashlib.sha256(unknown).hexdigest())
 
+    def test_mv_children_require_both_selected_roles(self):
+        data = CONTRACT + b'cp cp HOST_MV_CP\nrm rm HOST_MV_RM\n'
+        self.contract.write_bytes(data)
+        self.sha = hashlib.sha256(data).hexdigest()
+        for role in ('cp', 'rm'):
+            with self.assertRaisesRegex(SDKError, 'not selected'):
+                self.publish()
+            self.assertFalse((self.root / 'routing').exists())
+            member = self.bundle / ('selected-' + role)
+            member.write_bytes(b'Synthetic member; never executed.\n')
+            member.chmod(0o755)
+            self.toolset.tools[role] = str(member)
+        _, rows, roles = read_native_os_contract(self.contract, sha256=self.sha)
+        self.assertIn(('cp', 'cp', 'HOST_MV_CP'), rows)
+        self.assertIn(('rm', 'rm', 'HOST_MV_RM'), rows)
+        self.assertTrue({'cp', 'rm'} <= roles)
+        self.publish()
+        for role in ('cp', 'rm'):
+            self.assertEqual(os.readlink(self.root / 'routing' / role), self.toolset.tool(role))
+        for invalid in (data.replace(b'HOST_MV_RM', b'HOST_MV_CP'),
+                        data.replace(b'HOST_MV_CP', b'HOST_MV_ARBITRARY')):
+            self.contract.write_bytes(invalid)
+            with self.assertRaisesRegex(SDKError, 'invalid or duplicate'):
+                read_native_os_contract(self.contract, sha256=hashlib.sha256(invalid).hexdigest())
+
 
 if __name__ == '__main__':
     unittest.main()

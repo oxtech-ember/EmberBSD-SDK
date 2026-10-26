@@ -31,3 +31,7 @@ Users do not supply a separate contract receipt.
 
 `tests/test_native_os_routing.py` checks publication and refusal cases.
 `tests/test_native_consumers.py` checks prefix selection and producer wiring.
+
+The OS contract can bind selected `cp` and `rm` roles to `HOST_MV_CP` and
+`HOST_MV_RM`. Host `mv` uses these fixed children for cross-device moves.
+Missing roles fail mapping publication before any tool runs.
