@@ -70,8 +70,10 @@ def _tree_names(files, links):
 
 def validate_identity(record, *, target=None, required_components=()):
     """Check portable input and artifact declarations without reading local paths."""
-    _keys(record, 'format version compiler_family llvm_version components target triplet machine_arch '
-                  'elf_machine prefix source recipe base artifacts files symlinks', 'manifest fields')
+    fields = ('format version compiler_family llvm_version components target triplet machine_arch '
+              'elf_machine prefix source recipe base artifacts files symlinks')
+    _keys(record, fields + (' bootstrap' if isinstance(record, dict) and 'bootstrap' in record else ''),
+          'manifest fields')
     _require(record['format'] == 'emberbsd-llvm-runtime' and type(record['version']) is int and
              record['version'] == 1 and record['compiler_family'] == 'clang',
              'unsupported LLVM runtime format or compiler family')
@@ -90,6 +92,12 @@ def validate_identity(record, *, target=None, required_components=()):
         present.add('libunwind-static')
     _require(set(required_components) <= present, 'missing required runtime components')
     _require(record['prefix'] == 'usr/pkg/llvm', 'unsupported LLVM runtime install prefix')
+    if 'bootstrap' in record:
+        _keys(record['bootstrap'], 'manifest_sha256 files', 'bootstrap identity')
+        _digest(record['bootstrap']['manifest_sha256'], 64)
+        _files(record['bootstrap']['files'], nonempty=True)
+        _require(all(name.startswith(record['prefix'] + '/') for name in record['bootstrap']['files']),
+                 'LLVM bootstrap artifacts are outside the install prefix')
     _keys(record['source'], 'archive sha512', 'source identity')
     archive = _relative(record['source']['archive'])
     _require('/' not in archive, 'LLVM source archive must be a basename')

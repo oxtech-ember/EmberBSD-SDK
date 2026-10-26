@@ -46,6 +46,7 @@ SHA256 and SHA512 values use lowercase hexadecimal. The object has exactly:
 | `base` | `{os_revision, files, symlinks}` describing the actual base input tree |
 | `artifacts` | Measured stage-relative output paths, described below |
 | `files`, `symlinks` | Complete payload file SHA256 and relative symlink maps, excluding `runtime.json` |
+| Optional `bootstrap` | `{manifest_sha256, files}` for a consumed bootstrap stage; artifact paths remain stage-relative |
 
 The component profiles are:
 
@@ -61,6 +62,10 @@ Full `libunwind` also satisfies a caller requesting `libunwind-static`.
 Applications require all four full components. A preliminary archive does not
 claim to supply a shared runtime. Record PIC and other ABI options through the
 owning recipe and verify actual links; an ELF header alone cannot prove PIC.
+When a full build consumes the earlier bootstrap rather than producing its own
+builtins, the producer records `bootstrap` and verifies that stage's source,
+recipe, target and unchanged base inputs before copying its artifacts. A record
+without this field does not claim such an external dependency.
 
 ## Shared validator
 

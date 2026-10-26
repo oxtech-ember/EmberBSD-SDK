@@ -166,3 +166,15 @@ class LLVMRuntimeTests(TemporaryCase):
             llvm_runtime.validate_stage(self.stage, ports=self.root / 'ports')
         with self.assertRaisesRegex(SDKError, 'Ports revision changed'):
             llvm_runtime.validate_stage(self.stage, ports_revision='f' * 40)
+
+    def test_consumed_bootstrap_identity_has_no_local_path(self):
+        self.full()
+        self.record['bootstrap'] = dict(manifest_sha256='f' * 64,
+            files={self.builtins: self.record['files'][self.builtins]})
+        self.save()
+        llvm_runtime.validate_stage(self.stage)
+        for value in ({'manifest_sha256': 'not-a-digest', 'files': self.record['bootstrap']['files']},
+                      {'manifest_sha256': 'f' * 64, 'files': {'/private/stage/builtins.a': 'a' * 64}}):
+            self.record['bootstrap'] = value
+            with self.assertRaises(SDKError):
+                llvm_runtime.validate_identity(self.record)
