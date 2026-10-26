@@ -86,8 +86,8 @@ class CpProgramTests(unittest.TestCase):
         c = self.case
         self.assertIs(c.validate(), c.plan)
         self.assertEqual(_plan(c.f.document(c.plan), c.descriptor, c.commands, c.flags), c.plan)
-        self.assertEqual(len(c.manifest['runtime_cases']), 34)
-        self.assertEqual(len(c.plan['commands']), 41)
+        self.assertEqual(len(c.manifest['runtime_cases']), 35)
+        self.assertEqual(len(c.plan['commands']), 42)
         self.assertEqual([step['id'] for step in c.plan['commands'][:6]],
                          ['compile-program-control', 'link-program-control', 'run-program-control',
                           'compile-cp', 'compile-utils', 'link-cp'])
@@ -100,7 +100,7 @@ class CpProgramTests(unittest.TestCase):
                 self.assertIn(str(c.source/'tools/compat'), step['argv'])
                 self.assertFalse(any('SMALL' in word or 'NOCOMPATLIB' in word for word in step['argv']))
         self.assertEqual(len(json.loads(Path(c.proof['members']['path']).read_text())), 15)
-        self.assertEqual(len([x for x in program.program_outputs(c.plan) if x.endswith('.filesystem.json')]), 35)
+        self.assertEqual(len([x for x in program.program_outputs(c.plan) if x.endswith('.filesystem.json')]), 36)
 
     def test_missing_or_cross_paired_component_is_refused(self):
         c = self.case
@@ -179,3 +179,23 @@ class CpProgramTests(unittest.TestCase):
         self.assertEqual(calls, ['compile-program-control'])
         self.assertIn('synthetic retained component changed', result['error'])
         self.assertTrue(result['all_commands_drained'])
+
+    def test_preserve_existing_mode_has_a_different_initial_destination(self):
+        case = next(row for row in self.case.manifest['runtime_cases'] if row['name'] == 'preserve-existing-mode')
+        fs = case['filesystem']
+        self.assertEqual(case['args'], ['-p', 'src', 'dst'])
+        self.assertEqual(fs['fixtures']['src']['mode'], '0751')
+        self.assertEqual(fs['fixtures']['dst']['mode'], '0600')
+        self.assertEqual(fs['expect']['dst']['mode'], '0751')
+
+    def test_root_directory_link_is_explicitly_followed_with_H(self):
+        case = next((row for row in self.case.manifest['runtime_cases'] if row['name'] == 'recursive-command-root-link'), None)
+        self.assertIsNotNone(case, 'the -H root-directory link case is absent')
+        fs = case['filesystem']
+        self.assertEqual(case['args'], ['-R', '-H', '-p', 'root', 'dst'])
+        self.assertEqual(fs['fixtures']['root'], {'type': 'symlink', 'target': 'tree'})
+        self.assertEqual(fs['fixtures']['tree']['type'], 'directory')
+        self.assertEqual(fs['expect']['root'], fs['fixtures']['root'])
+        self.assertEqual(fs['expect']['dst']['type'], 'directory')
+        self.assertEqual(fs['expect']['dst/file']['data'], fs['fixtures']['tree/file']['data'])
+        self.assertEqual(fs['expect']['dst']['mode'], fs['fixtures']['tree']['mode'])

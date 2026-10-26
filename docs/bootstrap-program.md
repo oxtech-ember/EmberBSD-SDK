@@ -164,11 +164,11 @@ These tests use synthetic children and do not establish native ls execution.
 It selects exactly the independently accepted `filetime` and `filemeta` components.
 The shared selector retains both receipts, archives, public headers, and read leases.
 The owner manifest is `tools/cp/bootstrap.json`, SHA256
-`94482f0c991a0bd3178371b969e0b16dcb823d2a9c24479fa1860aad9617c675`.
+`66e7adefd8eafe0aac68aa50a080990a6997b59657c64cd89e364b72d4fd0453`.
 Its 15 source members include the common stat timestamp accessor and required control.
 The normal host target keeps the complete OS compatibility library and canonical options.
 
-There are 41 commands and 34 finite cases. The native control must succeed before
+There are 42 commands and 35 finite cases. The native control must succeed before
 production compilation. It checks descriptor zero, real stat nanoseconds, timestamps,
 flags, no-follow operations, and the public metadata API. Both control and cp loader
 traces belong to the output runtime audit. Only cp is provisionable.

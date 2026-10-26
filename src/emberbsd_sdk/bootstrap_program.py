@@ -62,7 +62,7 @@ MKDIR_MANIFEST_SHA256 = '6d52c3dd9fe813f652e7d98110f56af8078b9617d6d1f3ca0b3b08e
 MKDIR_LEGACY_MANIFEST_SHA256 = '111fe0d327e4ccdc7de008ac3844e49893edfbd43d62400ef2dbc4ceb76c5453'
 MKDIR_MANIFEST_CASE_COUNTS = {MKDIR_MANIFEST_SHA256: 11, MKDIR_LEGACY_MANIFEST_SHA256: 10}
 _FILESYSTEM_MANIFESTS = {
-    'cp': '94482f0c991a0bd3178371b969e0b16dcb823d2a9c24479fa1860aad9617c675',
+    'cp': '66e7adefd8eafe0aac68aa50a080990a6997b59657c64cd89e364b72d4fd0453',
     'ls': '2420af8c57c055764a2a691e0e5e0a4cc6055aabe02d65799422c832a5f64633',
     'touch': '096e55a50b02a993e465022733118c73cb3d9494c92a83b31b045b4a4b998542',
     'chmod': '0139b41d150bb82e79a99547c4d3a6f5cac975152c32e850922af7bdb269e1ae',
@@ -91,7 +91,7 @@ _NATIVE_SOURCES = {'sleep': ('bin/sleep/sleep.c',), **{name: ('bin/' + name + '/
                    'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'), 'pwd': ('bin/pwd/pwd.c',), 'cut': ('usr.bin/cut/cut.c', *_EFUN_SOURCES),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
                       for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf', 'env', 'uname', 'id')}}
-_LITERAL_CASE_COUNTS = dict(cp=34, ls=38, touch=36, sleep=21, chmod=12, mkdir=11, ln=12, rmdir=9, rm=25, basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
+_LITERAL_CASE_COUNTS = dict(cp=35, ls=38, touch=36, sleep=21, chmod=12, mkdir=11, ln=12, rmdir=9, rm=25, basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
 _REQUIRED_CONTROLS = {'cp': 'tools/cp/probes/control.c', 'ls': 'tools/ls/probes/control.c'}
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
