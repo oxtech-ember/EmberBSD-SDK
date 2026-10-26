@@ -65,11 +65,8 @@ class LLVMPhaseBuilder(SysrootBuilder):
                       scope='llvm-' + self.llvm_phase)
         result.pop('copy', None)
         if self.llvm_phase == 'headers':
-            self.build_command = self.build_command[:-2] + ['tools']
-            wrapper = os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine'])
-            self.phase_commands = [self.build_command] + [
-                [wrapper, '-C', self.paths['os'], '-j' + self.options['jobs'], goal]
-                for goal in ('obj', 'do-distrib-dirs', 'includes')]
+            self.build_command = self.build_command[:-2] + ['tools', 'bootstrap-headers']
+            self.phase_commands = [self.build_command]
         else:
             self.phase_commands = [self.build_command, self.loader_command, self.install_command]
         result['plan'] = self.phase_commands
@@ -82,7 +79,7 @@ class LLVMPhaseBuilder(SysrootBuilder):
     def inspect_payload(self):
         if self.llvm_phase == 'base':
             return super().inspect_payload()
-        for name in ('stdio.h', 'sys/types.h', 'math.h', 'pthread.h', 'unwind.h'):
+        for name in ('stdio.h', 'sys/types.h', 'sys/param.h', 'stdint.h', 'limits.h', 'math.h', 'pthread.h'):
             inventory.required_file(self.paths['destination'], 'usr/include/' + name)
         return inventory.snapshot_tree(self.paths['destination'],
             exclude=(self.RECEIPT, self.MARKER, self.LOG))

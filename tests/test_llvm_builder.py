@@ -11,7 +11,7 @@ from test_core import TemporaryCase
 from emberbsd_sdk import inventory, jsonio
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.sysroot_builder import SysrootBuilder
-from emberbsd_sdk.llvm_sysroot import runtime_paths, llvm_flags, LLVMCoordinator
+from emberbsd_sdk.llvm_sysroot import runtime_paths, llvm_flags, LLVMCoordinator, LLVMPhaseBuilder
 from emberbsd_sdk.libedit import prepare_source
 from emberbsd_sdk.target_toolchain import CLANG_BINARIES
 from emberbsd_sdk import sysroot_transfer
@@ -126,6 +126,18 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
             result = coordinator.run()
         self.assertEqual(events, ['headers', 'bootstrap', 'base', 'full', 'final'])
         self.assertEqual(result['runtime'], options['runtime-work'] + '/full-stage')
+
+    def test_headers_use_the_limited_os_operation_without_runtime_headers(self):
+        class Headers(LLVMPhaseBuilder, ClangBuilder):
+            pass
+        builder, _ = self.builder(builder_type=lambda options:Headers(options, 'headers'))
+        receipt = builder.preflight()
+        self.assertEqual(len(receipt['plan']), 1)
+        self.assertEqual(receipt['plan'][0][-2:], ['tools', 'bootstrap-headers'])
+        for name in ('stdio.h','sys/types.h','sys/param.h','stdint.h','limits.h','math.h','pthread.h'):
+            write(Path(builder.paths['destination'])/'usr/include'/name, '/* base header */\n')
+        builder.inspect_payload()
+        self.assertFalse((Path(builder.paths['destination'])/'usr/include/unwind.h').exists())
 
     def test_final_dispatch_copies_only_the_selected_llvm_runtime(self):
         builder, runtime = self.builder()
