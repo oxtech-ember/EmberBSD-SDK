@@ -2,13 +2,16 @@
 
 Ports owns LLVM runtime recipes, source preparation, compiler options and build
 orchestration. SDK provides the shared stage validator in
-`emberbsd_sdk.llvm_runtime`, with `LLVM_RUNTIME_API == 1`. OS integration uses
-the prepared common sources and measured stage artifacts. A runtime stage is
-not a completed SDK, an execution result, or an ABI compatibility claim.
+`emberbsd_sdk.llvm_runtime`, with `LLVM_RUNTIME_API == 1`. The
+[builtins producer](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/pkgsrc/lang/llvm/README.runtime.md)
+implements the first component stage. OS integration and the full runtime
+producer remain incomplete. A runtime stage is not a completed SDK, an
+execution result, or an ABI compatibility claim.
 
 ## Bootstrap order
 
-The first LLVM SDK cannot require an existing final LLVM SDK. Build in stages:
+The first LLVM SDK cannot require an existing final LLVM SDK. Complete the
+producer and OS integration in this order:
 
 1. Prepare the EmberBSD headers and common LLVM sources. A builtins-only stage
    consumes those actual inputs without requiring an application sysroot receipt.
@@ -23,10 +26,14 @@ does not replace them with objects from another OS. Compiler-rt builtins must
 be selected through the matching Clang NetBSD driver in its normal library
 ordering; placing an archive before driver-added C++ libraries is insufficient.
 
-The source path is `EMBER_LLVM_SOURCE`. A preliminary static unwind input uses
-`EMBER_LIBUNWIND_ARCHIVE`, taken from the stage artifact record. Final runtime
-integration additionally selects the measured target resource directory and
-keeps the selected compiler's matching resource headers separate.
+The proposed OS inputs are `EMBER_LLVM_SOURCE` for prepared common sources and
+`EMBER_LIBUNWIND_ARCHIVE` for the preliminary stage archive. These selectors
+are not implemented in the OS build yet. Its current libc build still refers
+to the bundled compiler-rt and libunwind sources. Replace those consumers
+before accepting a base built with the common LLVM runtime. Final integration
+must also select the target resource directory and keep the selected
+compiler's matching resource headers separate. The application sysroot and
+release builders continue to reject Clang until this integration is complete.
 
 ## Manifest
 
