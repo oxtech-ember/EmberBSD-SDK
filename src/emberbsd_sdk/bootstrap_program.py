@@ -62,6 +62,7 @@ MKDIR_MANIFEST_SHA256 = '6d52c3dd9fe813f652e7d98110f56af8078b9617d6d1f3ca0b3b08e
 MKDIR_LEGACY_MANIFEST_SHA256 = '111fe0d327e4ccdc7de008ac3844e49893edfbd43d62400ef2dbc4ceb76c5453'
 MKDIR_MANIFEST_CASE_COUNTS = {MKDIR_MANIFEST_SHA256: 11, MKDIR_LEGACY_MANIFEST_SHA256: 10}
 _FILESYSTEM_MANIFESTS = {
+    'ls': 'fd92ff6b309fa6ab793e2ee4b0ddd747961df2b22c9320387d5ad79af8ee478f',
     'touch': '096e55a50b02a993e465022733118c73cb3d9494c92a83b31b045b4a4b998542',
     'chmod': '0139b41d150bb82e79a99547c4d3a6f5cac975152c32e850922af7bdb269e1ae',
     'mkdir': MKDIR_MANIFEST_SHA256,
@@ -69,7 +70,7 @@ _FILESYSTEM_MANIFESTS = {
     'rmdir': '22e24af317a8e1c18559c407f0497a18f24bfb9c88ff8a89b48a9aa09b3ae995',
     'rm': '8ae57707433b60bb726b4b070d3389abc775514fc663064dca75180b816342fc'}
 _NBTOOL_CONFIG = 'tools/compat/bootstrap/nbtool_config.h'
-_NATIVE_LOCAL_HEADERS = {'sleep': ('sleep_darwin.h',), 'cmp': ('extern.h',), 'tr': ('extern.h',), 'tail': ('extern.h',), 'hexdump': ('hexdump.h',),
+_NATIVE_LOCAL_HEADERS = {'ls': ('ls.h', 'extern.h', 'ls_stat.h'), 'sleep': ('sleep_darwin.h',), 'cmp': ('extern.h',), 'tr': ('extern.h',), 'tail': ('extern.h',), 'hexdump': ('hexdump.h',),
                          'date': ('extern.h',), 'cut': ('x_cut.c',), 'sort': ('sort.h', 'fsort.h', 'pathnames.h')}
 _NATIVE_DIRECTORIES = {'sleep': 'bin/sleep', **{name: 'bin/' + name for name in filesystem.PROGRAMS}, 'touch': 'usr.bin/touch', 'hexdump': 'usr.bin/hexdump', 'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
                        'basename': 'usr.bin/basename', 'dirname': 'usr.bin/dirname',
@@ -77,6 +78,7 @@ _NATIVE_DIRECTORIES = {'sleep': 'bin/sleep', **{name: 'bin/' + name for name in 
                        'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut', 'env': 'usr.bin/env', 'uname': 'usr.bin/uname', 'tail': 'usr.bin/tail', 'sort': 'usr.bin/sort', 'date': 'bin/date', 'id': 'usr.bin/id', 'expr': 'bin/expr'}
 _NATIVE_SOURCES = {'sleep': ('bin/sleep/sleep.c',), **{name: ('bin/' + name + '/' + name + '.c',) for name in filesystem.PROGRAMS}, 'touch': ('usr.bin/touch/touch.c',), 'hexdump': (*('usr.bin/hexdump/' + name + '.c' for name in
                               ('conv', 'display', 'hexdump', 'hexsyntax', 'odsyntax', 'parse')), *_EFUN_SOURCES),
+                   'ls': tuple('bin/ls/' + name + '.c' for name in ('cmp', 'ls', 'main', 'print', 'util')),
                    'expr': ('bin/expr/expr.y',), 'date': ('bin/date/date.c',), 'sort': (*('usr.bin/sort/' + name + '.c' for name in
                            ('append', 'fields', 'files', 'fsort', 'init', 'msort', 'sort', 'tmp', 'radix_sort')),
                            *_EFUN_SOURCES),
@@ -86,7 +88,8 @@ _NATIVE_SOURCES = {'sleep': ('bin/sleep/sleep.c',), **{name: ('bin/' + name + '/
                    'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'), 'pwd': ('bin/pwd/pwd.c',), 'cut': ('usr.bin/cut/cut.c', *_EFUN_SOURCES),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
                       for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf', 'env', 'uname', 'id')}}
-_LITERAL_CASE_COUNTS = dict(touch=36, sleep=21, chmod=12, mkdir=11, ln=12, rmdir=9, rm=25, basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
+_LITERAL_CASE_COUNTS = dict(ls=38, touch=36, sleep=21, chmod=12, mkdir=11, ln=12, rmdir=9, rm=25, basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
+_REQUIRED_CONTROLS = {'ls': 'tools/ls/probes/control.c'}
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
 _ALIASES = {'grep': ('egrep', 'fgrep'), 'tail': ('tac',), 'id': ('groups', 'whoami'), 'hexdump': ('od',)}
@@ -185,7 +188,8 @@ def _profile(plan):
             digest, _NATIVE_SOURCES[name],
             ('tools/' + name + '/Makefile', 'tools/Makefile.host', directory + '/Makefile',
              'tools/' + name + '/README.md', *(_EFUN_PROVENANCE if name in EFUN_PROGRAMS else ()),
-             *(('tools/' + name + '/test-source.py',) if name in ('rm', 'touch') else ())))
+             *(('tools/' + name + '/test-source.py',) if name in ('rm', 'touch', 'ls') else ()),
+             *((_REQUIRED_CONTROLS[name], 'tools/Makefile') if name in _REQUIRED_CONTROLS else ())))
 
 
 def _native_program_contract(manifest, name, *, manifest_digest=None):
@@ -196,14 +200,14 @@ def _native_program_contract(manifest, name, *, manifest_digest=None):
     directory = _NATIVE_DIRECTORIES[name]
     _require(set(manifest) == {'format', 'version', 'name', 'origin', 'canonical_host_recipe', 'source_makefile',
         'compiler', 'sources', 'headers', 'include_dirs', 'cppflags', 'cflags', 'link_flags', 'libraries',
-        'invocations', 'files', 'runtime_cases'} | ({'compat'} if efun else set()) | ({'generation'} if name == 'expr' else set()) | ({'components'} if components else set()) and
+        'invocations', 'files', 'runtime_cases'} | ({'compat'} if efun else set()) | ({'generation'} if name == 'expr' else set()) | ({'components'} if components else set()) | ({'control'} if name in _REQUIRED_CONTROLS else set()) and
         manifest['format'] == 'emberbsd-native-bootstrap-program' and
         type(manifest['version']) is int and manifest['version'] == 1 and manifest['name'] == name and
         manifest['canonical_host_recipe'] == 'tools/' + name + '/Makefile' and
         manifest['source_makefile'] == directory + '/Makefile' and
         manifest['compiler'] == dict(family='gcc', major=16, abi='native') and
         manifest['sources'] == list(_NATIVE_SOURCES[name]) and
-        manifest['headers'] == ([] if components else [_ID_GROUP_HEADER, _BOOTSTRAP_CDEFS] if name == 'id' else [*(directory + '/' + header for header in _NATIVE_LOCAL_HEADERS.get(name, ())),
+        manifest['headers'] == ([directory + '/' + header for header in _NATIVE_LOCAL_HEADERS.get(name, ())] if components else [_ID_GROUP_HEADER, _BOOTSTRAP_CDEFS] if name == 'id' else [*(directory + '/' + header for header in _NATIVE_LOCAL_HEADERS.get(name, ())),
                                 _BOOTSTRAP_CDEFS, *(_EFUN_HEADERS if efun else (_NBTOOL_CONFIG,) if nbtool else ())]) and
         manifest['include_dirs'] == (['common/include'] if name == 'id' else [directory, 'tools/compat', 'common/lib/libc/stdlib'] if efun else [directory, 'tools/compat/bootstrap'] if nbtool else [directory] if name in _NATIVE_LOCAL_HEADERS else []) and
         manifest['cppflags'] == ([] if components else ['-DHAVE_NBTOOL_CONFIG_H=1', '-include', 'nbtool_config.h'] if efun else (['-DHAVE_NBTOOL_CONFIG_H=1'] if nbtool else []) + ['-include', _BOOTSTRAP_CDEFS]) and
@@ -213,6 +217,8 @@ def _native_program_contract(manifest, name, *, manifest_digest=None):
     if components:
         _require(manifest['components'] == list(component_inputs.CONSUMERS[name + '-bootstrap']),
                  'program component contract differs')
+    if name in _REQUIRED_CONTROLS:
+        _require(manifest['control'] == _REQUIRED_CONTROLS[name], 'program required control differs')
     if name == 'expr':
         _require(manifest['generation'] == dict(tool='yacc', source='bin/expr/expr.y',
                  output='expr.c', arguments=['-o', 'expr.c']), 'unsupported expr generator contract')
@@ -334,6 +340,8 @@ def program_outputs(plan):
         return gnu_outputs(plan)
     manifest = program_manifest(plan)
     extra = [manifest['generation']['output']] if manifest['name'] == 'expr' else []
+    if 'control' in manifest:
+        extra.extend(('program-control.o', 'program-control'))
     if plan.get('stage') in EFUN_PROGRAM_STAGES:
         from .bootstrap_compat import probe_outputs
         extra = [*program_sources(plan), *probe_outputs(plan, manifest)]
@@ -380,6 +388,26 @@ def program_steps(plan, descriptor, commands, flags):
     if plan['stage'] in component_inputs.CONSUMERS:
         cppflags, component_libraries = component_inputs.flags(plan, descriptor)
     includes = [word for directory in manifest['include_dirs'] for word in ('-I', os.path.join(source, directory))]
+
+    def compile_step(name, input_path):
+        output = os.path.join(work, name + '.o')
+        return dict(id='compile-' + name, phase='compile', cwd=work, env=dict(env), expected_exit=0,
+            argv=[*driver, *flags['cppflags'], *flags['cflags'], *manifest['cflags'], '-v', *cppflags,
+                  *includes, '-c', input_path, '-o', output])
+
+    def link_step(name, inputs):
+        return dict(id='link-' + name, phase='link', cwd=work, env=dict(env), expected_exit=0,
+            argv=[*driver, *flags['cflags'], *manifest['cflags'], '-v', *inputs, *flags['ldflags'], '-Wl,--threads=1',
+                  *(['-Wl,-v'] if descriptor['host']['os'] == 'Darwin' else []),
+                  *component_libraries, *('-l' + library for library in manifest['libraries']),
+                  '-o', os.path.join(work, name)])
+
+    if 'control' in manifest:
+        result += [compile_step('program-control', os.path.join(source, manifest['control'])),
+                   link_step('program-control', [os.path.join(work, 'program-control.o')]),
+                   dict(id='run-program-control', phase='run', cwd=work,
+                        env=dict(env, DYLD_PRINT_LIBRARIES='1'), expected_exit=0,
+                        argv=[os.path.join(work, 'program-control')])]
     if manifest['name'] == 'expr':
         from .bootstrap_generated import selected_yacc
         selected_yacc(descriptor, commands)
@@ -389,14 +417,9 @@ def program_steps(plan, descriptor, commands, flags):
         name = Path(relative).stem
         output = os.path.join(work, name + '.o')
         objects.append(output)
-        result.append(dict(id='compile-' + name, phase='compile', cwd=work, env=dict(env), expected_exit=0,
-            argv=[*driver, *flags['cppflags'], *flags['cflags'], *manifest['cflags'], '-v', *cppflags,
-                  *includes, '-c', (os.path.join(work, 'expr.c') if manifest['name'] == 'expr' else os.path.join(source, relative)), '-o', output]))
-    result.append(dict(id='link-' + manifest['name'], phase='link', cwd=work, env=dict(env), expected_exit=0,
-        argv=[*driver, *flags['cflags'], *manifest['cflags'], '-v', *objects, *flags['ldflags'], '-Wl,--threads=1',
-              *(['-Wl,-v'] if descriptor['host']['os'] == 'Darwin' else []),
-              *component_libraries, *('-l' + library for library in manifest['libraries']),
-              '-o', os.path.join(work, manifest['name'])]))
+        result.append(compile_step(name, os.path.join(work, 'expr.c') if manifest['name'] == 'expr'
+                                   else os.path.join(source, relative)))
+    result.append(link_step(manifest['name'], objects))
     for case in manifest['runtime_cases']:
         command = shlex.join([os.path.join(work, case['invocation']), *case['args']])
         command = literal_stdin(case['stdin']) + ' | ' + command

@@ -13,7 +13,7 @@ from .bootstrap_program_data import data_size, decode_data
 from .native_toolset import _json, _require
 from .jsonio import json_bytes
 
-PROGRAMS = ('chmod', 'mkdir', 'ln', 'rmdir', 'rm', 'touch')
+PROGRAMS = ('chmod', 'mkdir', 'ln', 'rmdir', 'rm', 'touch', 'ls')
 MAX_NODES = 64
 MAX_BYTES = 1024 * 1024
 _TIMES = ('atime_ns', 'mtime_ns')
@@ -35,7 +35,7 @@ def step_case(step, manifest):
 def _path(value):
     _require(isinstance(value, str) and len(value) <= 512 and
              1 <= len(value.split('/')) <= 8 and
-             all(re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._-]*', part) and
+             all(re.fullmatch(r'[a-zA-Z0-9.][a-zA-Z0-9._-]*', part) and
                  part not in ('.', '..') for part in value.split('/')),
              'filesystem case needs a bounded relative path')
     return value

@@ -74,6 +74,26 @@ class FilesystemCases(unittest.TestCase):
                 with self.assertRaises(SDKError):
                     fs.validate(case['filesystem'])
 
+    def test_safe_hidden_names_preserve_no_follow_and_identity_checks(self):
+        case = dict(name='hidden', filesystem=dict(umask='0022', fixtures={
+            '.dir': dict(type='directory', mode='0700'),
+            '.dir/.file': regular(),
+            '.peer': dict(type='hardlink', target='.dir/.file'),
+            '.link': dict(type='symlink', target='.dir/.file')}, expect={
+            '.dir': dict(type='directory', mode='0700'),
+            '.dir/.file': regular(),
+            '.peer': dict(regular(), same_inode_as='.dir/.file'),
+            '.link': dict(type='symlink', target='.dir/.file')}))
+        fs.prepare(self.work, case)
+        fs.verify_report(fs.observe(self.work, case), case)
+        for name in ('.', '..', '.dir/..', '.dir/../escape', '/.hidden', '.dir//.file'):
+            with self.subTest(name=name), self.assertRaises(SDKError):
+                fs._path(name)
+        altered = copy.deepcopy(case['filesystem'])
+        altered['expect']['.PEER'] = regular()
+        with self.assertRaises(SDKError):
+            fs.validate(altered)
+
     def test_symlink_parent_is_rejected_before_setup(self):
         (self.work / 'cases').symlink_to(self.work / 'outside')
         with self.assertRaises((SDKError, OSError)):

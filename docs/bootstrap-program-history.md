@@ -115,6 +115,9 @@ flag remains false. A failed or partially completed result cannot be accepted.
 
 The historical runtime metadata must bind the same executable hash and actual
 producer trace. Its complete closure must equal the graph derived from its audit.
+When the exact owner contract requires `control`, that linked diagnostic image and
+its own drained run trace must also occur in the same audit and observations.
+The accepted artifact remains the final program image. A control cannot be provisioned.
 This is retained evidence, not a fresh runtime audit of the provisioned layout.
 The next seed still needs its own complete inventory and current runtime graph.
 Compiler analysis, memory checks, ordinary qualification and release status remain

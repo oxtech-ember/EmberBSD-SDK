@@ -202,6 +202,20 @@ def _acceptance(reference, record, plan, result, image):
              rows[0]['trace'] == result['commands'][-1]['log'],
              'historical runtime observation differs from the actual producer trace')
     _file(rows[0]['trace'])
+    from .bootstrap_program import program_manifest
+    if 'control' in program_manifest(plan):
+        linked = [row for row in result['commands'] if row['id'] == 'link-program-control']
+        runs = [row for row in result['commands'] if row['id'] == 'run-program-control']
+        _require(len(linked) == len(runs) == 1, 'required control production is missing')
+        control = linked[0]['output']
+        node = nodes.get(control['path'], {})
+        _require(control in audit['output_runtime']['outputs'] and
+                 node.get('kind') == 'output-executable' and node.get('sha256') == control['sha256'],
+                 'required control image differs from the runtime audit')
+        rows = [row for row in observed['observations'] if row['output'] == control]
+        _require(len(rows) == 1 and rows[0]['trace'] == runs[0]['log'],
+                 'required control runtime observation differs from its actual trace')
+        _file(rows[0]['trace'])
 
 
 def verify_program_build_history(history, provider_name, descriptor, *, inspect_inputs=True):

@@ -141,6 +141,36 @@ class ProgramHistoryTests(unittest.TestCase):
             self.assertEqual(self.verify(), {'os-basename': []})
         self.assertEqual(self.descriptor['sources']['os']['commit'], '4' * 40)
 
+    def test_required_control_needs_its_exact_retained_runtime_trace(self):
+        from emberbsd_sdk.bootstrap_program_history import _acceptance
+        control = self.case.f.raw(b'synthetic diagnostic image')
+        trace = self.case.f.raw(b'synthetic diagnostic trace')
+        self.result['commands'][-1:-1] = [
+            dict(id='link-program-control', output=control),
+            dict(id='run-program-control', log=trace)]
+        def verify():
+            self.seal()
+            with patch('emberbsd_sdk.bootstrap_program.program_manifest', return_value={'control': 'owner/control.c'}):
+                _acceptance(self.record['output_acceptance'], self.record, self.case.plan,
+                            self.result, self.image)
+        with self.assertRaisesRegex(SDKError, 'control'):
+            verify()
+        self.audit['output_runtime']['outputs'].append(control)
+        self.audit['nodes'][control['path']] = dict(kind='output-executable', sha256=control['sha256'],
+                                                   image=dict(loads=[], implicit_loads=[]))
+        with self.assertRaisesRegex(SDKError, 'control'):
+            verify()
+        self.observations['observations'].append(dict(output=control, trace=trace, roots=[]))
+        verify()
+        for bad in (self.result['commands'][-1]['log'], dict(trace, sha256='0'*64)):
+            self.observations['observations'][-1]['trace'] = bad
+            with self.assertRaisesRegex(SDKError, 'control'):
+                verify()
+        self.observations['observations'][-1]['trace'] = trace
+        self.audit['nodes'][control['path']]['sha256'] = '0'*64
+        with self.assertRaisesRegex(SDKError, 'control'):
+            verify()
+
     def test_retired_seed_and_original_executable_are_not_reopened(self):
         # Read-only source and metadata evidence remain. Retire only old payloads.
         shutil.rmtree(self.case.f.bundle)

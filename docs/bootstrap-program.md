@@ -26,7 +26,7 @@ scope `gcc16-bootstrap`. The stages are `grep-bootstrap`, `cmp-bootstrap`,
 `head-bootstrap`, `uniq-bootstrap`, `wc-bootstrap`, `tr-bootstrap`, `printf-bootstrap`,
 `pwd-bootstrap`, `sleep-bootstrap`, `touch-bootstrap`, `cut-bootstrap`, `env-bootstrap`, `uname-bootstrap`, `tail-bootstrap`,
 `sort-bootstrap`, `date-bootstrap`, `id-bootstrap`, `expr-bootstrap`, `hexdump-bootstrap`,
-`chmod-bootstrap`, `mkdir-bootstrap`, `ln-bootstrap`, and `rmdir-bootstrap`.
+`chmod-bootstrap`, `mkdir-bootstrap`, `ln-bootstrap`, `rmdir-bootstrap`, `rm-bootstrap`, and `ls-bootstrap`.
 The separate [OS file-time component](bootstrap-compat-component.md) uses
 `compat-filetime-bootstrap`, `compat-parsedate-bootstrap` and `compat-listing-bootstrap`
 with the same runner and an additional static archive output.
@@ -127,6 +127,36 @@ Timestamp observation uses the common filesystem contract below.
 It does not measure current-time accuracy or qualify concurrent filesystem changes,
 locale behavior, C path analysis, memory safety, or ordinary host integration.
 
+## Initial ls and required API controls
+
+`ls-bootstrap` retains all five canonical `bin/ls` C files and three local headers.
+Its 16-member proof also includes the normal host route, owner checks, and required control.
+The owner manifest is `tools/ls/bootstrap.json`, SHA256
+`fd92ff6b309fa6ab793e2ee4b0ddd747961df2b22c9320387d5ad79af8ee478f`.
+The `program.components` map has exactly one independently accepted `listing` input.
+It uses the same shared component selector, read leases, and revalidation as touch.
+It links the accepted archive and includes its actual public headers and configuration.
+The normal host recipe keeps the full common libnbcompat. No reduced ls is built.
+
+An optional `control` field is permitted only by an exact pinned owner contract.
+It names a required canonical C source, never arbitrary commands or runtime hooks.
+The common compiler and linker steps build `program-control` before production sources.
+Its native exit must be zero. Failure stops before any ls translation unit compiles.
+The control uses the same selected compiler, ABI, component archive, and public headers.
+It checks native FTS, descriptor operations, stat nanoseconds, vis, mode, lookup, and wide-character APIs.
+Its actual loader trace must join the final ls trace in the output runtime audit.
+Only ls is a provisionable artifact. The control remains a diagnostic executable.
+Profiles without `control` retain their original command tuples and output rosters.
+
+There are 48 commands and 38 semantic cases. Exact outputs cover names, recursion,
+dotfiles, symlinks, hardlinks, size order, and high-resolution time order.
+Time fixtures distinguish timestamps within one second and include reverse and tie cases.
+Nonempty long-format metadata, ACL-bearing output, file flags, terminal layout, locales,
+nonprintable names, signals, and I/O faults are outside this finite semantic acceptance.
+C analysis, memory checks, and ordinary host qualification remain separate requirements.
+Run `test_bootstrap_program_ls` with `EMBERBSD_LS_SOURCE` set to the selected OS source.
+These tests use synthetic children and do not establish native ls execution.
+
 ## Fixed filesystem effects
 
 The `chmod`, `mkdir`, `ln`, and `rmdir` profiles each compile one canonical OS C file.
@@ -150,6 +180,8 @@ Each also has `filesystem`, with exactly `umask`, `fixtures`, and `expect`.
 Modes are four-digit octal strings from `0000` through `0777`.
 The selected shell sets the literal umask before the owned child.
 No case contains an executable hook or controller expression.
+Safe relative fixture segments may start with a dot. The exact names `.` and `..`,
+absolute paths, empty segments, traversal, and case-fold collisions remain forbidden.
 
 The fixed `rm-bootstrap` stage uses the same filesystem contract and executor.
 Its manifest SHA256 is `8ae57707433b60bb726b4b070d3389abc775514fc663064dca75180b816342fc`.
