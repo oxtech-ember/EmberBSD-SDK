@@ -49,7 +49,8 @@ _BASE_TOOL_PATHS.update({
     'pwd': '/bin/pwd', 'readelf': '/usr/bin/readelf', 'rm': '/bin/rm',
     'rmdir': '/bin/rmdir', 'sleep': '/bin/sleep', 'sort': '/usr/bin/sort',
     'tail': '/usr/bin/tail', 'tar': '/bin/tar', 'touch': '/usr/bin/touch',
-    'tr': '/usr/bin/tr', 'uname': '/usr/bin/uname', 'wc': '/usr/bin/wc',
+    'tr': '/usr/bin/tr', 'uname': '/usr/bin/uname', 'uniq': '/usr/bin/uniq',
+    'wc': '/usr/bin/wc',
     'xargs': '/usr/bin/xargs', 'xgettext': '/usr/bin/xgettext',
 })
 _R13_DIGEST_GOLDEN_FIXTURE_SHA256 = '39f4f0f48162c272a826d628eb22d134a91061e3d75c3736ef691c1ad0447d79'

@@ -100,7 +100,7 @@ class NetBSDRecipeStepTests(unittest.TestCase):
                         'pkgsrc_opsys_version': 110000},
             utility_tools={role: {'path': str(self.utility_bin / role), 'sha256': 'f' * 64}
                            for role in ('awk', 'pkg_add', 'pkg_admin', 'pkg_create',
-                                        'pkg_delete', 'pkg_info')})
+                                        'pkg_delete', 'pkg_info', 'uniq')})
 
         makeconf = bootstrap_netbsd_recipe.render_netbsd_makeconf(
             self.plan, self.descriptor, self.commands).decode('ascii')
@@ -112,6 +112,9 @@ class NetBSDRecipeStepTests(unittest.TestCase):
         self.assertIn('EMBERBSD_GCC16_SEED_CPP=' + self.commands['cpp'][0] +
                       ' -E -specs=' + specs, makeconf)
         self.assertIn('PKG_REGISTER_SHELLS=no', makeconf)
+        self.assertIn('EMBERBSD_NETBSD_NATIVE_TOOLS=awk pkg_add pkg_admin pkg_create pkg_delete pkg_info uniq',
+                      makeconf)
+        self.assertIn('EMBERBSD_NETBSD_TOOL.uniq=' + str(self.utility_bin / 'uniq'), makeconf)
         for role in ('pkg_add', 'pkg_admin', 'pkg_create', 'pkg_delete', 'pkg_info'):
             variable = 'NATIVE_PKG_' + role.removeprefix('pkg_').upper() + '_CMD='
             self.assertIn(variable + str(self.utility_bin / role), makeconf)
@@ -363,6 +366,24 @@ class NetBSDRecipeStepTests(unittest.TestCase):
              patch('emberbsd_sdk.bootstrap_netbsd_recipe.snapshot_tree',
                    side_effect=lambda path: export_inventory if path == str(export_root) else
                    snapshot_tree(path)):
+            self.assertIs(bootstrap_netbsd_recipe.validate_netbsd_recipe_plan(
+                plan, descriptor, commands, descriptor['abi_flags']), plan)
+            uniq = utility_bin / 'uniq'
+            uniq.write_text('#!/bin/sh\ncat\n', encoding='ascii')
+            uniq.chmod(0o755)
+            utility_tools['uniq'] = dict(path=str(uniq), sha256=sha256_file(str(uniq)))
+            makeconf.write_bytes(bootstrap_netbsd_recipe.render_netbsd_makeconf(
+                plan, descriptor, commands))
+            plan['netbsd']['makeconf']['sha256'] = sha256_file(str(makeconf))
+            routed = makeconf.read_text(encoding='ascii')
+            self.assertIn('EMBERBSD_NETBSD_NATIVE_TOOLS=awk pkg_add pkg_admin pkg_create pkg_delete pkg_info uniq',
+                          routed)
+            self.assertIn('EMBERBSD_NETBSD_TOOL.uniq=' + str(uniq), routed)
+            with self.assertRaisesRegex(SDKError, 'utility uniq differs from the accepted seed member'):
+                bootstrap_netbsd_recipe.validate_netbsd_recipe_plan(
+                    plan, descriptor, commands, descriptor['abi_flags'])
+            descriptor['tools']['uniq'] = dict(path=str(uniq), sha256=utility_tools['uniq']['sha256'],
+                                               provider='base')
             self.assertIs(bootstrap_netbsd_recipe.validate_netbsd_recipe_plan(
                 plan, descriptor, commands, descriptor['abi_flags']), plan)
             admitted_awk = descriptor['tools'].pop('awk')

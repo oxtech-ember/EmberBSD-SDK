@@ -348,7 +348,7 @@ class RetainedBaseHistoryTests(unittest.TestCase):
 
     def test_accepts_named_pkgsrc_recipe_utilities_from_exact_netbsd_paths(self):
         f = self.fixture
-        for role in ('cat', 'cp', 'install', 'mkdir', 'rm', 'find', 'bsdtar', 'pkg_delete'):
+        for role in ('cat', 'cp', 'install', 'mkdir', 'rm', 'find', 'bsdtar', 'pkg_delete', 'uniq'):
             selected = f.bundle / role
             selected.write_bytes(('retained NetBSD utility: ' + role).encode())
             selected.chmod(0o755)
@@ -357,6 +357,7 @@ class RetainedBaseHistoryTests(unittest.TestCase):
                 'cat': '/bin/cat', 'cp': '/bin/cp', 'install': '/usr/bin/install',
                 'mkdir': '/bin/mkdir', 'rm': '/bin/rm', 'find': '/usr/bin/find',
                 'bsdtar': '/bin/tar', 'pkg_delete': '/usr/sbin/pkg_delete',
+                'uniq': '/usr/bin/uniq',
             }[role]
             f.base_original_hashes[original] = digest
             f.tools[role] = dict(path=str(selected), sha256=digest, provider='base')
@@ -366,6 +367,23 @@ class RetainedBaseHistoryTests(unittest.TestCase):
                 sha256=digest))
 
         self.assertEqual(self.validate(), self.history['unknowns'])
+
+    def test_refuses_unadmitted_uniq_even_when_copied_and_hash_pinned(self):
+        f = self.fixture
+        selected = f.bundle / 'uniq'
+        selected.write_bytes(b'retained NetBSD uniq bytes\n')
+        selected.chmod(0o755)
+        digest = f.digest(selected)
+        original = '/tmp/unadmitted-uniq'
+        f.tools['uniq'] = dict(path=str(selected), sha256=digest, provider='base')
+        self.history['tool_members'].append(dict(role='uniq', original_path=original,
+            resolved_original_path=original, selected_path=str(selected), sha256=digest))
+
+        with patch('emberbsd_sdk.bootstrap_netbsd_seed_admission.canonical_existing',
+                   side_effect=lambda path: path), \
+             self.assertRaisesRegex(SDKError, 'exact release-tool route'):
+            validate_retained_base_history(self.history, 'base', f.descriptor, f.file,
+                                           inspect_inputs=True)
 
     def test_accepts_measured_base_command_when_fixed_alias_resolves_to_regular_executable(self):
         f = self.fixture
