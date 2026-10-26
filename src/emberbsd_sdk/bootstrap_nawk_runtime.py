@@ -8,15 +8,18 @@ reader binds that gate's observations. It does not issue acceptance or trace
 native children. Historical output and compiler payloads may be retired.
 """
 
+import hashlib
 import os
 import struct
 
 from .elf import MAX_HEADERS, parse_elf_header, read_elf_dynamic
-from .native_toolset import _absolute, _bytes, _envelope, _file, _json, _require, _sha
-from .paths import canonical_existing, entry, inside, open_regular, verify_stable
+from .native_toolset import _absolute, _envelope, _file, _json, _require, _sha
+from .paths import canonical_existing, entry, inside, open_regular, stable_identity, verify_stable
 
 LOADER_CONFIG = '/etc/ld.so.conf'
 AUDIT_FORMAT = 'emberbsd-netbsd-nawk-bootstrap-runtime-audit'
+MAX_TRACE_BYTES = 1024 * 1024 * 1024
+_TRACE_CHUNK = 1024 * 1024
 CHECKS = ['git-source-membership', 'native-compile-link', 'source-semantics',
           'reported-tool-routes', 'netbsd-output-runtime', 'selected-command-shell']
 _ELF_FIELDS = {'class', 'endian', 'machine', 'type', 'soname', 'needed', 'rpath', 'runpath', 'relro'}
@@ -91,6 +94,29 @@ def _verify_graph(nodes, roots):
     _require(reached == set(nodes), 'nawk runtime closure contains unrelated nodes')
 
 
+def _trace_reference(reference):
+    """Hash one nonempty trace in bounded chunks. Keep JSON limits separate."""
+    _require(isinstance(reference, dict) and set(reference) == {'path', 'sha256'},
+             'nawk trace needs an explicit path and SHA256 reference')
+    path, expected = _absolute(reference['path']), _sha(reference['sha256'])
+    digest, total = hashlib.sha256(), 0
+    handle, before = open_regular(path)
+    with handle:
+        _require(before.st_size > 0, 'nawk runtime trace evidence is empty')
+        _require(before.st_size <= MAX_TRACE_BYTES, 'nawk runtime trace exceeds size limit')
+        # One extra byte detects growth without following an unbounded writer.
+        while block := handle.read(min(_TRACE_CHUNK, before.st_size - total + 1)):
+            total += len(block)
+            digest.update(block)
+        _require(total == before.st_size and
+                 stable_identity(os.fstat(handle.fileno())) == stable_identity(before),
+                 'nawk runtime trace changed during inspection')
+    verify_stable(path, before)
+    _require(digest.hexdigest() == expected, 'nawk runtime trace SHA256 mismatch')
+    from .bootstrap_history_context import observe_file
+    observe_file(path, expected)
+
+
 def verify_acceptance(accepted, plan, result, image):
     from .bootstrap_nawk import manifest, selected_shell
     audit = _json(accepted['runtime_audit'])
@@ -128,7 +154,7 @@ def verify_acceptance(accepted, plan, result, image):
                  observed['undeclared_tools'] == [] and observed['unresolved_dsos'] == [],
                  'nawk semantic trace did not close its exact program and shell routes')
         for key in ('ktrace', 'decoded_trace'):
-            _require(bool(_bytes(observed[key])), 'nawk runtime trace evidence is empty')
+            _trace_reference(observed[key])
     _require(_json(accepted['runtime_closure']) == runtime_closure(audit, accepted['runtime_audit']),
              'nawk accepted runtime closure differs from its exact audit')
     return audit

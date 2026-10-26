@@ -138,6 +138,11 @@ explicitly selected observation tool. Record both files and their SHA256.
 The observer must establish all successful exec paths and loaded DSOs from the
 raw evidence. These JSON readers bind the observations; they do not decode a
 ktrace stream or establish its completeness.
+Each raw or decoded trace must be a nonempty regular file of at most 1 GiB.
+The reader checks its SHA256 in chunks of at most 1 MiB. It refuses symlinks,
+changed file identities, truncation, and growth during inspection. A shared
+trace reference can cover several observations. JSON metadata retains its
+separate 16 MiB limit. Historical reuse retains the same file guards.
 
 The runtime audit has format
 `emberbsd-netbsd-nawk-bootstrap-runtime-audit`, version 1, scope

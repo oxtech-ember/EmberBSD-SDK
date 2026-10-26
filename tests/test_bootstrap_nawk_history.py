@@ -79,6 +79,25 @@ class NawkHistoryTests(unittest.TestCase):
             runtime.validate_shell_selection(self.descriptor,self.c.commands)
         self.assertEqual(self.descriptor['tools']['awk']['version'],'nawk-20260426')
 
+    def test_large_shared_raw_trace_is_not_json_and_empty_decoded_trace_refuses(self):
+        from emberbsd_sdk.native_toolset import MAX_JSON, _bytes
+        trace = self.c.base / 'shared.ktrace'
+        with trace.open('wb') as stream:
+            block = b'\x00\xffraw ktrace\x00' * 4096
+            for _ in range(MAX_JSON // len(block) + 1):
+                stream.write(block)
+        reference = self.c.shell.ref(trace)
+        for row in self.audit['observations']:
+            row['ktrace'] = reference
+        with patch.object(runtime, '_trace_reference', side_effect=_bytes):
+            with self.assertRaisesRegex(SDKError, 'evidence exceeds size limit'):
+                self.verify()
+        with patch('subprocess.Popen', side_effect=AssertionError('no child')):
+            self.assertEqual(self.verify(), [])
+        self.audit['observations'][0]['decoded_trace'] = self.c.f.raw(b'')
+        with self.assertRaisesRegex(SDKError, 'trace evidence is empty'):
+            self.verify()
+
     def test_retired_compiler_and_original_output_are_not_reopened(self):
         shutil.rmtree(self.c.f.bundle)
         Path(self.image['path']).unlink()
