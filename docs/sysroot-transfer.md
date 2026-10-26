@@ -205,5 +205,6 @@ strict; do not rewrite a build receipt to accept changed files.
 
 This run did not execute the target programs, test a second Mac or Intel Mac,
 or qualify compiler relocation, package closure or a complete binary SDK.
-The bundle contains target files; each developer supplies a matching native
-GCC16 cross compiler for application builds.
+This historical bundle contains target files for the GCC16 runtime. Each
+developer supplies a matching host-executable GCC16 cross compiler for its
+application builds; it does not qualify the newer LLVM runtime.

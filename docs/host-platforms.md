@@ -110,7 +110,7 @@ omits SIDL embryos. A missing census row retains the active kernel lifetime.
 Cleanup defers its signal and retries within the existing drain deadline.
 It cannot establish emptiness or permit a signal without a matching UID/session.
 
-Before native acceptance, use host GCC16 to compile and run
+Before native acceptance, use the selected native compiler to compile and run
 `tests/netbsd_process_abi.c` against the actual host headers. Then run
 `PYTHONPATH=src:tests python3.15 -m unittest discover -s tests -p 'test_netbsd*.py'`.
 Tests cover gated launch, process-group changes, orphan writers, rapid
@@ -140,9 +140,9 @@ publication, transfer/import or the complete SDK host profile.
 ## Windows through WSL2
 
 The first Windows build path uses a Linux distribution under WSL2. Run the SDK,
-Python, Git, the common GCC16 cross compiler and OS/Ports build tools inside that
-distribution. The Linux process backend is available. This path still needs
-actual SDK build checks on the selected WSL2 distribution. Linux process tests
+Python, Git, the selected native Clang/LLVM prefix and OS/Ports build tools inside
+that distribution. Select GCC explicitly only for a platform exception.
+The Linux process backend is available. This path still needs actual SDK build checks on the selected WSL2 distribution. Linux process tests
 do not establish a complete WSL2 SDK build.
 
 Microsoft documents installation with `wsl --install` from an administrator

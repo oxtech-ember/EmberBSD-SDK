@@ -33,7 +33,7 @@
           "m4",
           "curl"
         ],
-        "base_compilers": "Use native Clang/LLVM from the selected Ports prefix for native tools. Select GCC only through an explicit platform profile. The current target runtime producer still uses the common cross GCC16 until the LLVM target runtime is available. Host ABI headers, libraries, loaders, and OS process services remain normal host inputs.",
+        "base_compilers": "Use native Clang/LLVM from the selected Ports prefix for native tools and select the target triplet explicitly. The default target route builds common LLVM builtins and C++ runtimes around the OS headers, libc and CRT in dependency order. Select GCC only through an explicit platform profile. Host ABI headers, libraries, loaders, and OS process services remain normal host inputs.",
         "ports_host_compilers": {
           "requirement": "Native Ports builds use Clang and clang++ from the selected prefix by default. An explicit GCC platform profile selects GCC and G++ major version 16 from its prefix.",
           "selectors": [
@@ -163,7 +163,7 @@
     "acceptance": "Keep filesystem/process contracts, actual compiler and sysroot builds, cross-link checks and EmberBSD target execution as separate evidence. A listed architecture or passing preflight is not complete build qualification.",
     "producers": {
       "os": "https://github.com/oxtech-ember/EmberBSD",
-      "compiler_and_runtime": "https://github.com/oxtech-ember/EmberBSD-Ports/tree/main/profiles/development-toolchain",
+      "compiler_and_runtime": "https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/pkgsrc/lang/llvm/README.runtime.md",
       "sdk": "scripts/build-sysroot.py",
       "workflow": "docs/build-workflow.md"
     }
@@ -252,7 +252,8 @@
         "system": "EmberBSD",
         "architecture": "aarch64",
         "triplet": "aarch64--netbsd",
-        "compiler": "GCC 16.2.0"
+        "compiler": "GCC 16.2.0",
+        "compiler_family": "gcc"
       },
       "qualification": {
         "process_backend": "Native Linux filesystem and process contracts passed with CPython 3.15.",
@@ -260,16 +261,17 @@
         "target_execution": "Separate acceptance on EmberBSD."
       },
       "dependencies": {
-        "base_compilers": "Historical observation only: Debian 13 GCC14 produced native bootstrap and CPython builds. This does not authorize new builds; the current policy requires the qualified SDK native GCC16 provider.",
+        "base_compilers": "Historical observation only: Debian 13 GCC14 produced native bootstrap and CPython builds. This reference records the explicit GCC alternative; it does not establish the default Clang/LLVM build on Debian. New builds select their native Ports prefix through the current SDK tool contract.",
         "ports_host_compilers": {
           "cc": "gcc-16",
           "cxx": "g++-16",
           "cpp": "cpp-16",
           "version": "16.2.0",
-          "os_bootstrap_cflags": "-O2 -std=gnu17"
+          "os_bootstrap_cflags": "-O2 -std=gnu17",
+          "compiler_family": "gcc"
         },
         "header_rpc_preprocessor": "The reference selects native cpp-16 during the includes step and records its wrapper, driver and cc1 hashes.",
-        "sdk_final_host_compilers": "Historical observation only: this reference used PATH cc and c++ from GCC14. It does not satisfy the current SDK tool policy. Replace this provider through the common SDK selector and verify native GCC16 before a new build.",
+        "sdk_final_host_compilers": "Historical observation only: this reference used PATH cc and c++ from GCC14. It does not satisfy the current SDK tool policy. New builds select native Clang/LLVM by default, or an explicit GCC platform prefix, through the common SDK selector.",
         "generated_make": "OS native tools provide nbmake and nbgmake. The reference nbgmake is GNU Make 3.81.",
         "private_debian_package_extraction": {
           "commands": [

@@ -14,8 +14,9 @@ They can contain absolute source paths and host configuration. They are useful
 for development reuse but are not automatically portable release inputs.
 
 A redistributable SDK should contain the selected target headers, CRT,
-development libraries and metadata; its supported host tools and GCC16
-compiler; licenses; and authenticated build and compatibility receipts.
+development libraries and metadata; its supported host tools and selected
+Clang/LLVM compiler, or explicit GCC platform compiler; licenses; and
+authenticated build and compatibility receipts.
 Package the required target runtime through its declared owner. Keep target
 compiler executables out of a runtime-only package.
 
@@ -34,7 +35,8 @@ Before publication, record:
 - SDK format/version, target architecture and exact GNU triplet.
 - Build-host operating system and architecture, with actual validation results.
 - Full OS, Ports and SDK source commits and recipe/configuration hashes.
-- GCC16 and Binutils identities, hashes and configuration.
+- Compiler family and compiler, linker and binary-tool identities, hashes
+  and configuration.
 - EmberBSD seed/sysroot provenance and the selected runtime provider.
 - Package-profile identity and hashes of the matching binary packages.
 - Output inventory, file/link hashes, licenses and relocation rules.
@@ -52,7 +54,7 @@ Check compiler subprocesses, linker scripts, CMake/pkg-config metadata, native
 generators and runtime searches. Build and execute the resulting consumers on
 the selected EmberBSD target. Compile success does not establish execution.
 
-A development compiler prefix can link to shared Binutils components.
+A development compiler prefix can link to shared LLVM or Binutils components.
 Record those resolved providers in build receipts. Include their required host
 payload in a release and validate its links after relocation. A reference to a
 developer's shared object tree is not a portable compiler distribution.

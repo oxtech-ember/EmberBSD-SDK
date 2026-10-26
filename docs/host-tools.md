@@ -388,5 +388,7 @@ For bounded Libtool configuration text, use the [scalar parser](libtool-config.m
 ## Run diagnostic fuzz checks
 
 `emberbsd_sdk.fuzz_check` provides `FUZZ_CHECK_API = 1`. It runs prepared host
-libFuzzer targets and GCC16 corpus replays through the shared process backend.
+libFuzzer targets and corpus replays with the explicitly recorded production
+compiler family through the shared process backend. Version 2 manifests record
+Clang or the explicit GCC alternative; version 1 retains GCC16 replay.
 See [diagnostic fuzz checks](fuzz-check.md) for manifests and evidence limits.
