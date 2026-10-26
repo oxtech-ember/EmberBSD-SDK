@@ -5,19 +5,17 @@ import copy
 import hashlib
 import json
 from pathlib import Path
-import tempfile
 import unittest
 from unittest.mock import patch
 
+from test_core import TemporaryCase
 from emberbsd_sdk.bootstrap_seed import _plan
 from emberbsd_sdk.errors import SDKError
 
 
-class AtimeAdmissionTests(unittest.TestCase):
+class AtimeAdmissionTests(TemporaryCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name).resolve()
+        super().setUp()
         self.manifest = {'runtime_cases': [{'filesystem': {'expect': {
             'file': {'kind': 'file', 'atime_ns': 0, 'mtime_ns': 1}}}}]}
         self.plan = dict(format='emberbsd-native-gcc16-producer-plan',
