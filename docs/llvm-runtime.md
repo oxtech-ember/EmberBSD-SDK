@@ -33,6 +33,34 @@ These interfaces still require actual end-to-end build and target checks;
 a runtime stage is not a completed SDK, an execution result, or an ABI
 compatibility claim.
 
+## Base install aliases
+
+`emberbsd_sdk.llvm_runtime_install` provides an opt-in base install adapter for
+a verified full runtime. `base_alias_plan(record)` derives relative leaf links
+from the existing artifact roles and payload inventory: C++ headers appear
+under `usr/include/c++`, and the selected static libraries, shared libraries,
+SONAME links and linker entries appear under `usr/lib`. The directories remain
+real directories. Library content and headers remain solely in `usr/pkg/llvm`;
+there is no second header inventory or copied runtime implementation.
+
+Call `preflight_base_aliases(sysroot, record)` before copying the runtime to
+refuse existing conflicts without modifying the destination. After importing
+the payload, `install_base_aliases(sysroot, record)` checks its bytes and target
+object metadata, repeats the complete preflight and creates the links. Hold the
+existing sysroot writer lock throughout both operations. Exact existing links
+and expected real directories can be reused; unrelated C++ header paths,
+different files, symlink ancestors and case-insensitive path collisions are
+errors. The adapter never removes conflicting files.
+
+`validate_base_aliases(sysroot, record)` checks the imported runtime and all
+derived base paths, including refusal of unlisted legacy C++ headers. These
+interfaces do not select a build configuration or change older sysroot records.
+Consumers must explicitly enable the adapter for their selected base libc++
+configuration; preliminary C-only and explicit GCC runtimes do not use it.
+The aliases preserve installation paths, not a claim of binary compatibility
+with the former libcxxrt implementation. Exceptions, TLS and shared-library
+execution still need target runtime checks.
+
 ## Bootstrap order
 
 The first LLVM SDK cannot require an existing final LLVM SDK. Its producers

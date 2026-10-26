@@ -33,7 +33,7 @@ def shared_elf(soname, *, needed=('libc.so.12',), runpath=None):
     return bytes(data)
 
 
-class LLVMRuntimeTests(TemporaryCase):
+class LLVMRuntimeFixture(TemporaryCase):
     def setUp(self):
         super().setUp()
         self.stage = self.root / 'stage'
@@ -73,6 +73,29 @@ class LLVMRuntimeTests(TemporaryCase):
             self.record['artifacts'][component] = dict(static=static, shared=shared)
             (self.prefix / ('lib/' + name + '.so')).symlink_to(name + '.so.1')
         self.save()
+
+
+class LLVMRuntimeTests(LLVMRuntimeFixture):
+    def test_shared_object_needs_its_recorded_soname_path(self):
+        self.full()
+        library = self.prefix / 'lib/libc++.so.1'
+        library.rename(library.with_name('libc++.so.1.0'))
+        self.record['artifacts']['libcxx']['shared'] = 'usr/pkg/llvm/lib/libc++.so.1.0'
+        (self.prefix / 'lib/libc++.so').unlink()
+        (self.prefix / 'lib/libc++.so').symlink_to('libc++.so.1.0')
+        self.save()
+        with self.assertRaisesRegex(SDKError, 'SONAME.*payload'):
+            llvm_runtime.validate_install(self.stage, self.record)
+
+    def test_shared_object_soname_cannot_resolve_to_another_role(self):
+        self.full()
+        library = self.prefix / 'lib/libc++.so.1'
+        library.rename(library.with_name('libc++.so.1.0'))
+        self.record['artifacts']['libcxx']['shared'] = 'usr/pkg/llvm/lib/libc++.so.1.0'
+        library.symlink_to('libunwind.so.1')
+        self.save()
+        with self.assertRaisesRegex(SDKError, 'SONAME.*payload'):
+            llvm_runtime.validate_install(self.stage, self.record)
 
     def test_builtins_does_not_require_a_final_sdk_or_cpp_runtime(self):
         self.assertEqual(llvm_runtime.validate_stage(self.stage, required_components=('builtins',)), self.record)

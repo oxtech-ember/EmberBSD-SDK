@@ -227,11 +227,16 @@ def _validate_artifacts(root, record):
             if 'shared' in artifacts[component]:
                 name = artifacts[component]['shared']
                 inventory.required_elf(root, name, record['elf_machine'], 3)
-                dynamic = read_elf_dynamic(inventory.required_file(root, name), machine=record['elf_machine'])
+                shared_path = inventory.required_file(root, name)
+                dynamic = read_elf_dynamic(shared_path, machine=record['elf_machine'])
                 soname = {'libunwind': 'libunwind', 'libcxxabi': 'libc++abi', 'libcxx': 'libc++'}[component]
                 _require(isinstance(dynamic['soname'], str) and
                          re.fullmatch(re.escape(soname) + r'\.so\.[0-9]+(?:\.[0-9]+)*', dynamic['soname']),
                          'LLVM runtime shared library has a different SONAME role')
+                loader_name = posixpath.join(posixpath.dirname(name), dynamic['soname'])
+                _require((loader_name in record['files'] or loader_name in record['symlinks']) and
+                         inventory.required_file(root, loader_name) == shared_path,
+                         'LLVM runtime SONAME does not select its shared artifact in the payload')
                 _require(all('/' not in name and not name.startswith(('libgcc_s.', 'libstdc++.', 'libsupc++.'))
                              for name in dynamic['needed']), 'LLVM runtime selects a foreign compiler runtime')
                 allowed = {'$ORIGIN', '${ORIGIN}', '/usr/pkg/llvm/lib', '/usr/lib', '/lib'}
