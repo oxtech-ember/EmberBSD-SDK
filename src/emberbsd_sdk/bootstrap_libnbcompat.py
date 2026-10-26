@@ -511,4 +511,3 @@ def input_documents(value):
         roots.append(plan['program'][name]['root'])
         documents.append(_json(plan['program'][name]['source_proof']))
     return documents, roots
-
