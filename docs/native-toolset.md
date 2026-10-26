@@ -64,6 +64,15 @@ The checks are limited to practical tool selection:
 - GCC16-selected compiler components, assembler, and linker remain inside the prefix.
 - Compiler queries and builds use prefix directories in `PATH`.
 
+Darwin executables can be thin or universal Mach-O images.
+Universal selection checks table bounds, alignment, nonoverlapping slices, and the selected image header and file type.
+It accepts generic x86_64, generic arm64, or versioned arm64e ABI 0 on the matching native host.
+Unknown CPU subtypes and feature combinations do not establish host compatibility.
+The fat formats and subtype values follow Apple's
+[Mach-O definitions](https://github.com/apple-oss-distributions/cctools/blob/main/include/mach-o/fat.h)
+and [CPU definitions](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/machine.h).
+This does not change prefix containment or the separate historical shared-library reader.
+
 The loader queries the selected drivers. Clang `-###` reports C and C++ routes without compilation.
 The final Clang recipe must select the prefix LLVM linker by default.
 The loader does not compile a test program or repair an external linker selection.

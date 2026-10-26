@@ -163,13 +163,66 @@ def _native_triplet(value, host):
              'compiler triplet does not describe the actual native host')
 
 
-def _darwin_slice(read, size, host, *, shared_library=False):
-    """Select only a thin image or one observed arm64 shared-library slice."""
+def _darwin_executable_slice(read, size, host, header):
+    """Select a supported native executable from a bounded universal image."""
+    # mach-o/fat.h stores both fat_arch formats in big-endian order.
+    wide = header[:4] == b'\xca\xfe\xba\xbf'
+    _require(host['os'] == 'Darwin' and len(header) >= 8 and
+             header[:4] in (b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf'),
+             'unsupported native Mach-O fat image')
+    count = struct.unpack_from('>I', header, 4)[0]
+    entry_size = 32 if wide else 20
+    table_end = 8 + count * entry_size
+    _require(0 < count <= 128 and table_end <= size,
+             'invalid native Mach-O fat table')
+    table = read(8, count * entry_size)
+    _require(len(table) == count * entry_size, 'truncated native Mach-O fat table')
+    cpu = {'arm64': 0x100000c, 'aarch64': 0x100000c,
+           'x86_64': 0x1000007, 'amd64': 0x1000007}.get(host['cpu'])
+    # Use the generic x86_64/arm64 ABI, or the versioned arm64e ABI 0 used
+    # by native macOS tools. Do not treat unknown feature bits as compatible.
+    subtypes = (0, 0x80000002) if cpu == 0x100000c else (3,)
+    selected = []
+    extents = []
+    identities = set()
+    for index in range(count):
+        fields = struct.unpack_from('>IIQQII' if wide else '>5I', table,
+                                    index * entry_size)
+        member_cpu, subtype, offset, extent, alignment = fields[:5]
+        _require((not wide or fields[5] == 0) and alignment <= 31 and
+                 table_end <= offset <= size and 0 < extent <= size - offset and
+                 offset % (1 << alignment) == 0,
+                 'invalid native Mach-O fat slice bounds')
+        _require((member_cpu, subtype) not in identities,
+                 'duplicate native Mach-O fat architecture')
+        identities.add((member_cpu, subtype))
+        extents.append((offset, offset + extent))
+        if member_cpu == cpu and subtype in subtypes:
+            _require(extent >= 32, 'truncated native Mach-O executable slice')
+            image = read(offset, 32)
+            _require(len(image) == 32 and struct.unpack_from('<4I', image) ==
+                     (0xfeedfacf, member_cpu, subtype, 2),
+                     'Mach-O fat executable slice identity mismatch')
+            selected.append((subtypes.index(subtype), offset, extent, subtype, alignment))
+    extents.sort()
+    _require(all(left[1] <= right[0] for left, right in zip(extents, extents[1:])),
+             'overlapping native Mach-O fat slices')
+    _require(selected, 'no supported native Mach-O executable slice')
+    _, offset, extent, subtype, alignment = min(selected)
+    return offset, extent, dict(format='fat64-big-endian' if wide else 'fat32-big-endian',
+                                cpu=cpu, subtype=subtype, offset=offset, size=extent,
+                                alignment=alignment)
+
+
+def _darwin_slice(read, size, host, *, shared_library=False, executable=False):
+    """Select a native executable or the historical arm64 library wrapper."""
     header = read(0, min(size, 32))
     fat = header[:4] in (b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca',
                          b'\xca\xfe\xba\xbf', b'\xbf\xba\xfe\xca')
     if not fat:
         return 0, size, None
+    if executable:
+        return _darwin_executable_slice(read, size, host, header)
     _require(shared_library and host['os'] == 'Darwin' and
              host['cpu'] in ('arm64', 'aarch64') and len(header) >= 28 and
              header[:4] == b'\xca\xfe\xba\xbe', 'unsupported native Mach-O fat image')
@@ -194,7 +247,8 @@ def _native_image(path, host, *, object_file=False, shared_library=False):
             return handle.read(size)
         if host['os'] == 'Darwin':
             offset, extent, wrapper = _darwin_slice(read, before.st_size, host,
-                                                  shared_library=shared_library and not object_file)
+                                                  shared_library=shared_library and not object_file,
+                                                  executable=not (shared_library or object_file))
             header = read(offset, min(extent, 64))
         else:
             header = handle.read(64)

@@ -10,6 +10,7 @@ import io
 import json
 import os
 from pathlib import Path
+import platform
 import struct
 import sys
 import tempfile
@@ -43,10 +44,10 @@ class DarwinSharedHeaderTests(unittest.TestCase):
     def test_one_matching_slice_is_only_a_shared_library(self):
         self.path.write_bytes(self.data)
         _native_image(str(self.path), self.host, shared_library=True)
-        for options in ({}, dict(object_file=True)):
-            with self.subTest(options=options):
-                with self.assertRaisesRegex(SDKError, 'unsupported native Mach-O fat image'):
-                    _native_image(str(self.path), self.host, **options)
+        with self.assertRaisesRegex(SDKError, 'fat executable slice identity mismatch'):
+            _native_image(str(self.path), self.host)
+        with self.assertRaisesRegex(SDKError, 'unsupported native Mach-O fat image'):
+            _native_image(str(self.path), self.host, object_file=True)
 
     def test_multiple_wrong_arch_or_unbounded_fat_members_are_refused(self):
         for offset, value in ((4, 2), (8, 0x1000007), (12, 2), (16, 16),
@@ -66,6 +67,122 @@ class DarwinSharedHeaderTests(unittest.TestCase):
                 self.path.write_bytes(data)
                 with self.assertRaisesRegex(SDKError, 'fat slice identity mismatch'):
                     _native_image(str(self.path), self.host, shared_library=True)
+
+
+class DarwinExecutableHeaderTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.path = Path(temporary.name) / 'tool'
+        self.host = dict(os='Darwin', cpu='arm64')
+
+    def image(self, *, wide=False):
+        # Include an unknown arm64 subtype as current macOS universal tools do.
+        members = ((0x1000007, 3), (0x100000c, 0x80000002),
+                   (0x100000c, 0x8000000c))
+        data = bytearray(0x3020)
+        struct.pack_into('>II', data, 0, 0xcafebabf if wide else 0xcafebabe, len(members))
+        for index, (cpu, subtype) in enumerate(members):
+            offset = (index + 1) * 0x1000
+            entry = (cpu, subtype, offset, 32, 12)
+            if wide:
+                struct.pack_into('>IIQQII', data, 8 + index * 32, *entry, 0)
+            else:
+                struct.pack_into('>5I', data, 8 + index * 20, *entry)
+            struct.pack_into('<8I', data, offset, 0xfeedfacf, cpu, subtype, 2, 0, 0, 0, 0)
+        return data
+
+    def check(self, data, host=None):
+        self.path.write_bytes(data)
+        _native_image(str(self.path), host or self.host)
+
+    def test_selects_native_arm64e_and_x86_64_from_both_fat_tables(self):
+        for wide in (False, True):
+            for cpu in ('arm64', 'aarch64', 'x86_64', 'amd64'):
+                with self.subTest(wide=wide, cpu=cpu):
+                    self.check(self.image(wide=wide), dict(os='Darwin', cpu=cpu))
+
+    def test_generic_arm64_slice_is_supported(self):
+        data = self.image()
+        struct.pack_into('>I', data, 32, 0)
+        struct.pack_into('<I', data, 0x2008, 0)
+        self.check(data)
+
+    def test_zero_excessive_and_truncated_tables_are_refused(self):
+        for count in (0, 129, 0xffffffff):
+            with self.subTest(count=count):
+                data = self.image()
+                struct.pack_into('>I', data, 4, count)
+                with self.assertRaisesRegex(SDKError, 'fat table'):
+                    self.check(data)
+        with self.assertRaisesRegex(SDKError, 'fat table'):
+            self.check(self.image()[:40])
+
+    def test_bounds_and_alignment_of_every_slice_are_checked(self):
+        # Mutate the unselected last member, after a valid native slice.
+        for field, value in ((56, 16), (56, 0x3001), (56, 0xffffffff),
+                             (60, 0), (60, 33), (60, 0xffffffff), (64, 32)):
+            with self.subTest(field=field, value=value):
+                data = self.image()
+                struct.pack_into('>I', data, field, value)
+                with self.assertRaisesRegex(SDKError, 'fat slice bounds'):
+                    self.check(data)
+
+    def test_overlap_and_duplicate_architectures_are_refused(self):
+        data = self.image()
+        struct.pack_into('>I', data, 56, 0x2000)
+        with self.assertRaisesRegex(SDKError, 'overlapping'):
+            self.check(data)
+        data = self.image()
+        struct.pack_into('>I', data, 52, 0x80000002)
+        with self.assertRaisesRegex(SDKError, 'duplicate'):
+            self.check(data)
+
+    def test_missing_native_cpu_and_unsupported_subtypes_are_refused(self):
+        data = self.image()
+        struct.pack_into('>I', data, 4, 1)  # The table now contains x86_64 only.
+        with self.assertRaisesRegex(SDKError, 'no supported native'):
+            self.check(data)
+        with self.assertRaisesRegex(SDKError, 'no supported native'):
+            self.check(self.image(), dict(os='Darwin', cpu='riscv64'))
+        for subtype in (1, 2, 0x81000002, 0x40000002):
+            with self.subTest(subtype=subtype):
+                data = self.image()
+                struct.pack_into('>I', data, 32, subtype)
+                struct.pack_into('<I', data, 0x2008, subtype)
+                with self.assertRaisesRegex(SDKError, 'no supported native'):
+                    self.check(data)
+
+    def test_native_slice_header_and_type_must_match(self):
+        for field, value in ((0, 0xfeedface), (4, 0x1000007), (8, 0), (12, 6), (12, 1)):
+            with self.subTest(field=field, value=value):
+                data = self.image()
+                struct.pack_into('<I', data, 0x2000 + field, value)
+                with self.assertRaisesRegex(SDKError, 'executable slice identity mismatch'):
+                    self.check(data)
+
+    def test_fat64_reserved_field_and_full_width_bounds_are_checked(self):
+        data = self.image(wide=True)
+        struct.pack_into('>I', data, 100, 1)
+        with self.assertRaisesRegex(SDKError, 'fat slice bounds'):
+            self.check(data)
+        data = self.image(wide=True)
+        struct.pack_into('>Q', data, 80, 1 << 40)
+        with self.assertRaisesRegex(SDKError, 'fat slice bounds'):
+            self.check(data)
+
+    def test_swapped_fat_headers_are_not_a_native_disk_format(self):
+        data = self.image()
+        data[:4] = b'\xbe\xba\xfe\xca'
+        with self.assertRaisesRegex(SDKError, 'unsupported native Mach-O fat image'):
+            self.check(data)
+
+    @unittest.skipUnless(platform.system() == 'Darwin', 'requires native macOS tools')
+    def test_actual_macos_uname_and_cat_are_native_executables(self):
+        host = dict(os=platform.system(), cpu=platform.machine())
+        for path in ('/usr/bin/uname', '/bin/cat'):
+            with self.subTest(path=path):
+                _native_image(path, host)
 
 
 class Fixture:
