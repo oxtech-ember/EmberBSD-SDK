@@ -147,6 +147,33 @@ class DarwinMakeconfTests(TemporaryCase):
         with self.assertRaises((SDKError, OSError)):
             self.render()
 
+    def test_accepts_internal_abi_alias_without_changing_link_flags(self):
+        alias = Path(self.options['macos_sdk'], 'usr/lib/libiconv.tbd')
+        self.render(ldflags=(str(alias),))
+        original = Path(self.options['output']).read_bytes()
+        alias.rename(alias.with_name('libiconv.2.tbd'))
+        alias.symlink_to('libiconv.2.tbd')
+        self.render(ldflags=(str(alias),))
+        self.assertEqual(Path(self.options['output']).read_bytes(), original)
+        self.assertEqual(os.readlink(alias), 'libiconv.2.tbd')
+
+    def test_rejects_broken_abi_alias_without_outputs(self):
+        alias = Path(self.options['macos_sdk'], 'usr/lib/libiconv.tbd')
+        alias.unlink(); alias.symlink_to('missing.tbd')
+        with self.assertRaises(SDKError):
+            self.render()
+        self.assertFalse(Path(self.options['output']).exists())
+        self.assertFalse(Path(self.options['utility_bin']).exists())
+
+    def test_rejects_external_abi_alias_without_outputs(self):
+        alias = Path(self.options['macos_sdk'], 'usr/lib/libiconv.tbd')
+        outside = self.write('external.tbd', 'outside ABI\n')
+        alias.unlink(); alias.symlink_to(outside)
+        with self.assertRaises(SDKError):
+            self.render()
+        self.assertFalse(Path(self.options['output']).exists())
+        self.assertFalse(Path(self.options['utility_bin']).exists())
+
     def test_shared_format_preserves_historical_nested_flags(self):
         self.assertEqual(render_variables({'Z': 'last', 'LDFLAGS': '-L/abi'}, '/profile',
                                          nested_ldflags=True, metadata_make='/make'),

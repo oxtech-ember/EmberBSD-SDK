@@ -143,7 +143,9 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
         sdk_version = plistlib.load(stream).get('Version')
     _require(isinstance(sdk_version, str) and re.fullmatch(r'[0-9]+(?:\.[0-9]+){0,2}', sdk_version),
              'missing native SDK version')
-    regular_file(os.path.join(sdk, 'usr/lib/libiconv.tbd'))
+    iconv = canonical_existing(os.path.join(sdk, 'usr/lib/libiconv.tbd'))
+    _require(_inside(iconv, sdk), 'native libiconv target escapes the selected SDK')
+    regular_file(iconv)
     make = [tools['make'], '-m', makefiles, 'SHELL=' + tools['sh'], 'MAKECONF=' + output]
     gmake = [tools['gmake'], 'SHELL=' + tools['sh'], 'MAKECONF=' + output]
     utilities = {name: path for name, path in tools.items() if name not in BOUND}
