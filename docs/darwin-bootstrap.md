@@ -35,6 +35,13 @@ The renderer checks executable paths and CPU. It does not query compilers or com
 The caller must select complete native compiler commands, including their driver routes.
 It emits `EMBERBSD_COMPILER_FAMILY` and generic `EMBERBSD_DARWIN_*` tool variables.
 
+For Clang, put a link-only `--ld-path=/absolute/linker` argument between
+`--start-no-unused-arguments` and `--end-no-unused-arguments`.
+This keeps the selected linker for link commands. Compile-only configure probes
+can then use `-Werror` without rejecting that intentionally unused linker argument.
+Keep the scope limited to that argument. Do not disable the warning category
+or the package's compiler checks.
+
 `--makefiles` selects the complete initial system-makefile tree.
 Its `sys.mk` must select the same shell with `.SHELL: name=sh path=/absolute/shell`.
 Use the common Ports [make binding](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/common-build-tools/bootstrap/README.md).
