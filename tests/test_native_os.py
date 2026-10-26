@@ -42,7 +42,8 @@ class NativeOSRunnerTests(TemporaryCase):
             self.run_os('-m', 'evbarm', '-V', 'EMBER_COMPILER_FAMILY=gcc', 'tools',
                 build_sh=True, log=self.root/'build.log', append=True,
                 environment={'CC':'/ambient/target', 'CXX':'/ambient/cxx', 'CFLAGS':'-target',
-                             'HOST_CC':'/foreign/host', 'PATH':'/usr/bin', 'HOME':str(self.root)})
+                             'HOST_CC':'/foreign/host', 'HOST_SH':'/foreign/sh',
+                             'PATH':'/usr/bin', 'HOME':str(self.root)})
         argv = run.call_args.args[0]
         self.assertEqual(argv[:2], [self.native.tool('sh'), str(self.source/'build.sh')])
         self.assertIn('EMBER_COMPILER_FAMILY=gcc', argv)
@@ -52,6 +53,7 @@ class NativeOSRunnerTests(TemporaryCase):
         env = run.call_args.kwargs['env']
         self.assertEqual(env['EMBER_NATIVE_TOOLS'], str(self.routing))
         self.assertEqual(env['EMBER_HOST_COMPILER_FAMILY'], 'clang')
+        self.assertEqual(env.get('HOST_SH'), self.native.tool('sh'))
         self.assertEqual(env['PATH'], str(self.routing)+os.pathsep+self.native.path)
         for name in ('CC','CXX','CPP','CFLAGS','CXXFLAGS','CPPFLAGS','LDFLAGS','HOST_CC'):
             self.assertNotIn(name, env)
@@ -79,6 +81,7 @@ class NativeOSRunnerTests(TemporaryCase):
 
     def test_build_sh_cannot_override_selected_host_variables(self):
         for args in (('-V','HOST_CC=/foreign'), ('-VHOST_CFLAGS=-bad',),
+                     ('-V', 'HOST_SH=/foreign/sh'),
                      ('-V','EMBER_HOST_COMPILER_FAMILY=gcc'), ('-V','PATH=/usr/bin')):
             with self.subTest(args=args), self.assertRaisesRegex(SDKError, 'selected native'):
                 self.run_os(*args, 'tools', build_sh=True, log=self.root/'build.log')

@@ -27,6 +27,8 @@ through build.sh `-V`, preserving them in generated make wrappers. Caller
 arguments cannot override these selected native variables. The environment
 contains native routing and `HOST_*` flags, without setting target `CC`, `CXX`,
 `CPP`, `CFLAGS`, `CXXFLAGS`, `CPPFLAGS` or `LDFLAGS`.
+`HOST_SH` always names the selected native shell, including for direct make
+metadata queries; an inherited shell selection cannot replace it.
 
 Use `--shell -- /absolute/nbmake ...` for generated make wrappers. Without a
 command mode, the first argument must be an explicit executable path, for

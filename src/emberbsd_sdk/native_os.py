@@ -31,7 +31,8 @@ def native_os_environment(native, routing, *, environment=None):
     """Expose HOST_* only; target compiler variables belong to the OS caller."""
     result = process.sanitized_environment(environment)
     result.update(PATH=os.fspath(routing) + os.pathsep + native.path,
-                  EMBER_NATIVE_TOOLS=os.fspath(routing), PYTHONDONTWRITEBYTECODE='1')
+                  EMBER_NATIVE_TOOLS=os.fspath(routing), HOST_SH=native.tool('sh'),
+                  PYTHONDONTWRITEBYTECODE='1')
     for flag in native_os_routing.native_host_flags(native.as_dict()):
         name, value = flag.split('=', 1)
         result[name] = value
