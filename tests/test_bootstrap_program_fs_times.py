@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -28,6 +29,78 @@ class FilesystemTimes(unittest.TestCase):
     def case(self, fixtures, expected=None, name='times'):
         return dict(name=name, filesystem=dict(umask='0022', fixtures=fixtures,
             expect=copy.deepcopy(fixtures if expected is None else expected)))
+
+    def test_mismatch_error_keeps_pre_read_times_and_full_entry_facts(self):
+        case = self.case({'file': dict(type='file', mode='0600', data='private fixture',
+                                      atime_ns=ATIME, mtime_ns=MTIME)})
+        fs.prepare(self.work, case)
+        case['filesystem']['expect']['file']['atime_ns'] += 1
+        real_fstat = os.fstat
+
+        def later_metadata(fd):
+            value = real_fstat(fd)
+            fields = {name: getattr(value, name) for name in dir(value) if name.startswith('st_')}
+            fields['st_atime_ns'] = ATIME + 999
+            return SimpleNamespace(**fields)
+
+        with patch.object(fs.os, 'fstat', side_effect=later_metadata):
+            with self.assertRaises(SDKError) as caught:
+                fs.observe(self.work, case)
+        message = str(caught.exception)
+        self.assertIn(': {', message)
+        detail = json.loads(message.split(': ', 1)[1])
+        expected = fs._expected(fs.validate(case['filesystem']))['file']
+        observed = dict(expected, atime_ns=ATIME)
+        self.assertEqual(detail, {'file': {'expected': expected, 'observed': observed}})
+        self.assertNotIn('private fixture', message)
+        self.assertFalse((self.work / 'times.filesystem.json').exists())
+        self.assertEqual(json.loads(json.dumps({'error': message}))['error'], message)
+
+    def test_mismatch_error_keeps_all_differing_fields_and_absent_entry(self):
+        case = self.case({'file': dict(type='file', mode='0600', data='observed')})
+        fs.prepare(self.work, case)
+        case['filesystem']['expect'].update(
+            file=dict(type='file', mode='0640', data='expected data'),
+            missing=dict(type='file', mode='0600', data=''))
+        with self.assertRaises(SDKError) as caught:
+            fs.observe(self.work, case)
+        message = str(caught.exception)
+        self.assertIn(': {', message)
+        detail = json.loads(message.split(': ', 1)[1])
+        self.assertEqual(detail['file']['expected'], fs._expected(case['filesystem'])['file'])
+        self.assertEqual(detail['file']['observed'], dict(type='file', mode='0600', size=8,
+                         sha256=hashlib.sha256(b'observed').hexdigest()))
+        self.assertEqual(detail['missing']['observed'], dict(type='absent'))
+        self.assertFalse((self.work / 'times.filesystem.json').exists())
+
+    def test_mismatch_error_is_bounded_by_the_existing_entry_budget(self):
+        fixtures = {f'f{index}': dict(type='file', mode='0600', data='') for index in range(fs.MAX_NODES)}
+        case = self.case(fixtures)
+        fs.prepare(self.work, case)
+        for value in case['filesystem']['expect'].values():
+            value['mode'] = '0640'
+        with self.assertRaises(SDKError) as caught:
+            fs.observe(self.work, case)
+        message = str(caught.exception)
+        self.assertIn(': {', message)
+        detail = json.loads(message.split(': ', 1)[1])
+        self.assertEqual(set(detail), set(fixtures))
+        self.assertLess(len(message), 65536)
+        self.assertFalse((self.work / 'times.filesystem.json').exists())
+
+    def test_mismatch_error_hashes_an_oversized_observed_link_target(self):
+        case = self.case({'link': dict(type='symlink', target='missing')})
+        root = fs.prepare(self.work, case)
+        (root / 'link').unlink()
+        target = 'x' * 600
+        (root / 'link').symlink_to(target)
+        with self.assertRaises(SDKError) as caught:
+            fs.observe(self.work, case)
+        detail = json.loads(str(caught.exception).split(': ', 1)[1])
+        self.assertEqual(detail['link']['observed']['target'],
+                         dict(size=600, sha256=hashlib.sha256(os.fsencode(target)).hexdigest()))
+        self.assertEqual(detail['link']['expected']['target'], 'missing')
+        self.assertFalse((self.work / 'times.filesystem.json').exists())
 
     def test_file_directory_and_symlink_roundtrip_without_following_target(self):
         fixtures = {

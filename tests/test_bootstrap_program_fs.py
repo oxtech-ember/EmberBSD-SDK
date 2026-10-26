@@ -250,6 +250,11 @@ class FileUtilityProfiles(unittest.TestCase):
             result = fixture.invoke()
         self.assertEqual(result['status'], 'FAILED')
         self.assertIn('filesystem actual state', result['error'])
+        self.assertEqual(result['commands'][-1]['error'], result['error'])
+        differences = json.loads(result['error'].split(': ', 1)[1])
+        self.assertEqual(differences['file']['expected']['mode'], '0640')
+        self.assertEqual(differences['file']['observed']['mode'], '0600')
+        self.assertFalse((fixture.work / 'numeric.filesystem.json').exists())
         self.assertEqual(seen, ['compile-chmod', 'link-chmod', 'case-numeric'])
         self.assertFalse((fixture.work / 'cases/symbolic-add').exists())
 

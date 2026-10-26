@@ -332,7 +332,20 @@ def observe(work, case, *, key=None):
                          identities.get(name) is not None and identities[name] == identities.get(peer),
                          'filesystem inode relation differs without following links')
                 entries[name]['same_inode_as'] = peer
-        _require(entries == _expected(value), 'filesystem actual state differs from its source contract')
+        expected = _expected(value)
+        if entries != expected:
+            # Retain the bounded pre-read facts in the producer's failure record.
+            # File contents stay represented by size and hash, never raw data.
+            differences = {name: dict(expected=expected[name], observed=entries[name])
+                           for name in sorted(expected) if entries[name] != expected[name]}
+            for row in differences.values():
+                observed = row['observed']
+                if observed['type'] == 'symlink' and len(observed['target']) > 512:
+                    target = os.fsencode(observed['target'])
+                    row['observed'] = dict(observed, target=dict(
+                        size=len(target), sha256=hashlib.sha256(target).hexdigest()))
+            _require(False, 'filesystem actual state differs from its source contract: ' +
+                     json_bytes(differences).decode('utf-8').strip())
         report = dict(format='emberbsd-bootstrap-filesystem-observation', version=1,
                       case=key, contract_sha256=hashlib.sha256(json_bytes(value)).hexdigest(), entries=entries)
         raw = json_bytes(report)
