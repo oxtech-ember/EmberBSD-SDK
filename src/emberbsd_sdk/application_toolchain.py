@@ -7,7 +7,7 @@ import os
 from . import compiler_bindings, jsonio, llvm_runtime, llvm_runtime_install, paths, sysroot_transfer, target_toolchain
 from .errors import SDKError
 
-APPLICATION_TOOLCHAIN_API = 1
+APPLICATION_TOOLCHAIN_API = 2
 IMPORT_RECORD = '.prebuild-sdk-import.json'
 
 
@@ -110,15 +110,22 @@ def clang_application_link_flags(compiler, sysroot, runtime_record, *, runtime_r
     return flags
 
 
-def bind_clang_application_commands(destination, compiler, sysroot, runtime_record, *, python, runtime_root=None):
+def bind_clang_application_commands(destination, compiler, sysroot, runtime_record, *, python,
+                                    runtime_root=None, include_auxiliary=False):
     """Bind CC/CXX/CPP for builders that have no separate C++ link interface.
 
     python is the selected native-prefix interpreter. Existing compiler input
     argv are preserved, while measured runtime flags are attached only at link.
     """
+    if type(include_auxiliary) is not bool:
+        raise SDKError('auxiliary command selection must be boolean')
     commands = clang_application_commands(compiler, sysroot, runtime_record, runtime_root=runtime_root)
+    roles = ['cc', 'cxx', 'cpp']
+    if include_auxiliary:
+        roles += ['as', 'ld']
+        commands['ld'] += ['--sysroot=' + paths.canonical_existing(sysroot)]
     return compiler_bindings.bind_compilers(destination,
-        commands={role:commands[role] for role in ('cc','cxx','cpp')}, python=python,
+        commands={role:commands[role] for role in roles}, python=python,
         flags={name:[] for name in ('cppflags','cflags','cxxflags','ldflags')},
         link_flags={role:clang_application_link_flags(compiler, sysroot, runtime_record,
             runtime_root=runtime_root, language=language) for role,language in (('cc','c'), ('cxx','c++'))})

@@ -13,8 +13,11 @@ import tempfile
 from . import jsonio, paths, publication
 from .errors import SDKError
 
-COMPILER_BINDINGS_API = 1
-_ROLES = {'cc', 'cxx', 'cpp', 'csa'}
+COMPILER_BINDINGS_API = 2
+# Keep compiler-only mappings byte-compatible with existing bindings.
+_FORMAT_VERSION = 1
+_DIRECT_ROLES = {'as', 'ld'}
+_ROLES = {'cc', 'cxx', 'cpp', 'csa'} | _DIRECT_ROLES
 _FLAGS = {'cppflags', 'cflags', 'cxxflags', 'ldflags'}
 _COMPILE_ONLY = {'-c', '-S', '-E', '-M', '-MM', '-fsyntax-only', '--analyze', '-emit-ast'}
 
@@ -48,6 +51,10 @@ def compiler_argv(record, role, arguments):
     """Attach selected native flags without shell evaluation or lost argument words."""
     command = _words(record['commands'][role])
     arguments = _words(arguments)
+    if role in _DIRECT_ROLES:
+        # Assembler and linker arguments have their own syntax and response
+        # files. Their selected argv already contains the target policy.
+        return command + arguments
     operation = _operation_words(arguments)
     terminated = '--' in operation
     if terminated:
@@ -97,7 +104,7 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
     destination = paths.canonical_new(destination)
     parent = os.path.dirname(destination)
     paths.real_directory(parent)
-    record = dict(format='emberbsd-compiler-binding', version=COMPILER_BINDINGS_API,
+    record = dict(format='emberbsd-compiler-binding', version=_FORMAT_VERSION,
                   commands=commands, flags=flags, aliases=aliases)
     if link_flags is not None:
         record['link_flags'] = link_flags

@@ -1,6 +1,6 @@
 # LLVM application compiler commands
 
-`emberbsd_sdk.application_toolchain`, `APPLICATION_TOOLCHAIN_API == 1`, reads
+`emberbsd_sdk.application_toolchain`, `APPLICATION_TOOLCHAIN_API == 2`, reads
 the existing completed or imported sysroot record and checks the installed
 LLVM runtime. It does not create another qualification record. Additional
 packages outside `usr/pkg/llvm` are permitted; their contents are not verified
@@ -45,6 +45,14 @@ only for link operations. Do not add the same runtime flags again through
 global LDFLAGS. Selected bindings are immutable and reused only for identical
 commands. The shared binding's POSIX response-file and option-terminator
 limits are documented in [native checks](native-checks.md).
+
+Set `include_auxiliary=True` to also bind executable `as` and `ld` paths.
+The assembler uses the selected Clang target. The linker uses the selected
+ELF linker with the application sysroot. Direct linker calls do not add
+C or C++ runtime libraries; the caller selects them. These two bindings pass
+tool arguments and response files unchanged, without compiler flags.
+Compiler binding API 2 preserves the existing version 1 mapping format,
+so unchanged compiler-only bindings remain reusable.
 
 For a staging probe, an explicit `runtime_root` can select an already
 validated separate runtime stage; no completed application receipt is needed

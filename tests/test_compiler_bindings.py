@@ -36,6 +36,7 @@ class CompilerBindingTests(TemporaryCase):
     def test_c_link_preserves_quoting_and_places_libraries_after_inputs(self):
         result, args = self.invoke('cc', ['source with space.c', '-o', 'output name', '-Werror'])
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads((self.destination / 'commands.json').read_text())['version'], 1)
         self.assertEqual(args, ['--selected-cc','-I','/include path','-DNAME=a b',
             'source with space.c','-o','output name','-Werror','-L','/library path','-lnative'])
 
@@ -60,6 +61,18 @@ class CompilerBindingTests(TemporaryCase):
         self.assertEqual(args, ['--selected-cc','-print-resource-dir'])
         result, _ = self.invoke('cc', ['--fail'])
         self.assertEqual(result.returncode, 7)
+
+    def test_assembler_and_linker_preserve_only_their_selected_arguments(self):
+        self.commands['as'] = [str(self.compiler), '--target=aarch64--netbsd', '-c', '-x', 'assembler']
+        self.commands['ld'] = [str(self.compiler), '--sysroot=/selected target']
+        for role in ('as', 'ld'):
+            with self.subTest(role=role):
+                # These response files belong to the selected tool. The compiler
+                # binding must not parse them or attach C/C++ ABI/link flags.
+                arguments = ['@tool-specific.rsp', '--', 'input with space.o']
+                result, args = self.invoke(role, arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(args, self.commands[role][1:] + arguments)
 
     def test_existing_binding_must_match_and_is_not_overwritten(self):
         self.invoke('cc', ['-c', 'x.c'])
@@ -101,6 +114,28 @@ class CompilerBindingTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, 'link.*role'):
             compiler_bindings.bind_compilers(self.destination, commands=self.commands,
                 flags=self.flags, python=sys.executable, link_flags={'cpp':['-stdlib=libc++']})
+
+    @unittest.skipUnless(os.environ.get('EMBER_TEST_CLANG'), 'requires explicitly selected Clang driver')
+    def test_real_target_assembler_and_relocatable_linker(self):
+        clang = os.environ['EMBER_TEST_CLANG']
+        linker = str(Path(clang).parent / 'ld.lld')
+        source = self.root / 'input.s'; source.write_text('.text\n.globl probe\nprobe:\nret\n')
+        for target, machine in (('aarch64--netbsd', 183), ('x86_64--netbsd', 62)):
+            with self.subTest(target=target):
+                commands = {role:[clang, '--target='+target] for role in ('cc','cxx','cpp')}
+                commands['as'] = [clang, '--target='+target, '-c', '-x', 'assembler']
+                commands['ld'] = [linker, '--sysroot='+str(self.root)]
+                tools = compiler_bindings.bind_compilers(self.root/target,
+                    commands=commands, flags=self.flags, python=sys.executable)
+                obj, output = self.root/(target+'.o'), self.root/(target+'-linked.o')
+                for argv in ([tools['as'], '-Werror', str(source), '-o', str(obj)],
+                             [tools['ld'], '-r', str(obj), '-o', str(output)]):
+                    result = subprocess.run(argv, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                header = output.read_bytes()[:20]
+                self.assertEqual(header[:6], b'\x7fELF\x02\x01')
+                self.assertEqual(int.from_bytes(header[16:18], 'little'), 1)
+                self.assertEqual(int.from_bytes(header[18:20], 'little'), machine)
 
     @unittest.skipUnless(os.environ.get('EMBER_TEST_CLANG'), 'requires explicitly selected Clang driver')
     def test_real_clang_compile_diagnostics_and_cxx_link_selection(self):

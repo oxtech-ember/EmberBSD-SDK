@@ -76,6 +76,23 @@ class ApplicationToolchainTests(TemporaryCase):
         self.assertEqual(compile['as'], self.compiler['commands']['as'])
         self.assertIn('-stdlib=libc++',link['cxx'])
 
+    def test_auxiliary_commands_bind_target_assembler_and_linker_without_cxx_policy(self):
+        destination = self.root / 'application-tools'
+        with self.assertRaisesRegex(SDKError, 'auxiliary.*boolean'):
+            application_toolchain.bind_clang_application_commands(destination,
+                self.compiler, self.sysroot, self.runtime, python=sys.executable,
+                include_auxiliary='yes')
+        tools = application_toolchain.bind_clang_application_commands(destination,
+            self.compiler, self.sysroot, self.runtime, python=sys.executable,
+            include_auxiliary=True)
+        self.assertEqual(set(tools), {'cc', 'cxx', 'cpp', 'as', 'ld'})
+        record = jsonio.read_json(destination / 'commands.json')
+        arguments = ['-o', 'output.o', 'input.s']
+        self.assertEqual(compiler_bindings.compiler_argv(record, 'as', arguments),
+            self.compiler['commands']['as'] + arguments)
+        self.assertEqual(compiler_bindings.compiler_argv(record, 'ld', arguments),
+            self.compiler['commands']['ld'] + ['--sysroot=' + str(self.sysroot)] + arguments)
+
     def test_runtime_must_match_selected_compiler_and_target(self):
         different = copy.deepcopy(self.compiler); different['version']='22.1.0'
         with self.assertRaisesRegex(SDKError, 'compiler.*runtime'):
