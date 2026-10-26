@@ -26,7 +26,8 @@ PROVENANCE = ('tools/compat/Makefile', 'tools/compat/filetime.mk',
 EXPORTS = ('libnbcompat.a', 'nbtool_config.h', 'compat_filetime.h', 'bootstrap_cdefs.h')
 PARSEDATE_STAGE = 'compat-parsedate-bootstrap'
 LISTING_STAGE = 'compat-listing-bootstrap'
-STAGES = (STAGE, PARSEDATE_STAGE, LISTING_STAGE)
+FILEMETA_STAGE = 'compat-filemeta-bootstrap'
+STAGES = (STAGE, PARSEDATE_STAGE, LISTING_STAGE, FILEMETA_STAGE)
 _PROFILES = {
     STAGE: dict(name='filetime', manifest=MANIFEST, digest=DIGEST, sources=SOURCES,
                 headers=HEADERS, probes=PROBES, provenance=PROVENANCE, exports=EXPORTS,
@@ -64,11 +65,44 @@ _PROFILES = {
         exports=('libnbcompat.a', 'nbtool_config.h', 'compat_listing.h',
                  'compat_acl.h', 'bootstrap_cdefs.h'),
         objects=('getbsize.o', 'humanize_number.o', 'stat_flags.o', 'compat_acl.o')),
+    FILEMETA_STAGE: dict(name='filemeta', manifest='tools/compat/bootstrap-filemeta.json',
+        digest='6812198e05d18005962b48f7520635d89612b91609d85ebed0571bcb36583946',
+        sources=('tools/compat/compat_filemeta.c',),
+        headers=('tools/compat/compat_filemeta.h', 'tools/compat/compat_filemeta_features.h',
+                 'tools/compat/compat_native_features.h', 'tools/compat/compat_acl_features.h',
+                 'tools/compat/compat_native_acl.h', 'tools/compat/probes/filemeta-xattr-bsd-probe.h',
+                 'tools/compat/bootstrap_cdefs.h'),
+        probes=('filemeta-open', 'filemeta-regular-open', 'filemeta-acl-darwin', 'filemeta-acl-bsd',
+                'filemeta-xattr-darwin', 'filemeta-xattr-bsd-int', 'filemeta-xattr-bsd-ssize',
+                'filemeta-representation-darwin'),
+        provenance=('tools/compat/Makefile', 'tools/compat/filemeta.mk',
+            'tools/compat/README.filemeta.md', 'tools/compat/test-filemeta.py',
+            'tools/compat/configure.ac', 'tools/compat/configure', 'tools/compat/nbtool_config.h.in',
+            'tools/compat/compat_defs.h', 'lib/libc/gen/extattr.c', 'sys/sys/extattr.h',
+            'sys/sys/fcntl.h', 'sys/sys/acl.h', 'sys/sys/featuretest.h',
+            *(f'tools/compat/probes/{name}.c' for name in
+              ('filemeta-control', 'filemeta-check', 'filemeta-open', 'filemeta-regular-open',
+               'filemeta-acl-darwin', 'filemeta-acl-bsd', 'filemeta-xattr-darwin',
+               'filemeta-xattr-bsd-int', 'filemeta-xattr-bsd-ssize', 'filemeta-representation-darwin'))),
+        exports=('libnbcompat.a', 'nbtool_config.h', 'compat_filemeta.h', 'bootstrap_cdefs.h'),
+        object='compat_filemeta.o'),
 }
+
+# Retain only exact historical source contracts, not another C implementation.
+_HISTORICAL_PROFILES = {
+    (LISTING_STAGE, _PROFILES[LISTING_STAGE]['digest']): _PROFILES[LISTING_STAGE],
+}
+_PROFILES[LISTING_STAGE] = dict(_PROFILES[LISTING_STAGE], version=2,
+    digest='36ca6cc22e1b86a48c010f2e000aee4f55cc047503ba888ca57fb525dc1390f6',
+    headers=(*_PROFILES[LISTING_STAGE]['headers'][:3],
+             'tools/compat/compat_native_features.h', 'tools/compat/compat_native_acl.h',
+             *_PROFILES[LISTING_STAGE]['headers'][3:]))
 
 
 def profile(plan):
-    value = _PROFILES.get(plan.get('stage'))
+    stage = plan.get('stage')
+    digest = plan.get('program', {}).get('manifest', {}).get('sha256')
+    value = _HISTORICAL_PROFILES.get((stage, digest), _PROFILES.get(stage))
     _require(value is not None, 'unsupported fixed OS component stage')
     return value
 
@@ -81,6 +115,10 @@ def objects(fixed):
 def _fixtures(fixed):
     if fixed['name'] in ('filetime', 'listing'):
         return tuple(fixed['name'] + suffix for suffix in ('-file', '-link', '-missing'))
+    if fixed['name'] == 'filemeta':
+        return tuple('filemeta-' + suffix for suffix in
+            ('source', 'destination', 'source-directory', 'destination-directory',
+             'source-link', 'destination-link', 'special', 'missing'))
     return ()
 
 
@@ -91,7 +129,7 @@ def manifest(plan):
     _require(plan['program']['manifest'] == ref, 'unsupported OS component manifest')
     value = _json(ref)
     _require(value['format'] == 'emberbsd-native-bootstrap-component' and
-             type(value['version']) is int and value['version'] == 1 and
+             type(value['version']) is int and value['version'] == fixed.get('version', 1) and
              value['name'] == fixed['name'] and value['initial_only'] is True and
              value['sources'] == list(fixed['sources']) and value['headers'] == list(fixed['headers']) and
              value['archive'] == 'libnbcompat.a' and
@@ -346,7 +384,8 @@ def candidate(plan_ref, result_ref):
 
 def validate_input(reference, descriptor, *, component='filetime'):
     """Check a separately reviewed initial OS component. Never issue acceptance."""
-    _require(component in ('filetime', 'parsedate', 'listing'), 'unsupported requested OS component')
+    _require(component in ('filetime', 'parsedate', 'listing', 'filemeta'),
+             'unsupported requested OS component')
     receipt = _json(reference)
     _require(set(receipt) == {'format', 'version', 'scope', 'status', 'component',
         'candidate', 'independent_review', 'initial_only', 'ordinary_provider_qualified'} and

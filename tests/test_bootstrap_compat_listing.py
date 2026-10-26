@@ -2,6 +2,8 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Listing component source and data checks. No native compiler execution."""
 import copy
+import hashlib
+import json
 import os
 import struct
 import subprocess
@@ -50,8 +52,12 @@ class ListingDispatchTests(unittest.TestCase):
 
 
 class ListingComponentTests(unittest.TestCase):
+    source_variable = 'EMBERBSD_LISTING_SOURCE'
+    member_count = 37
+    manifest_version = 2
+
     def setUp(self):
-        source = os.environ.get('EMBERBSD_LISTING_SOURCE')
+        source = os.environ.get(self.source_variable)
         if not source:
             self.skipTest('select the canonical listing owner source')
         self.owner = Path(source)
@@ -61,6 +67,9 @@ class ListingComponentTests(unittest.TestCase):
         c.source = c.base / 'listing-source'
         c.inputs['root'] = str(c.source)
         c.plan['stage'] = component.LISTING_STAGE
+        relative = 'tools/compat/bootstrap-listing.json'
+        c.plan['program']['manifest'] = dict(path=str(c.source / relative),
+            sha256=hashlib.sha256((self.owner / relative).read_bytes()).hexdigest())
         fixed = component.profile(c.plan)
         for name in {fixed['manifest'], *fixed['sources'], *fixed['headers'], *fixed['provenance']}:
             path = c.source / name
@@ -115,8 +124,24 @@ class ListingComponentTests(unittest.TestCase):
         expected = {fixed['manifest'], value['source_makefile'], value['source_fragment'],
                     *value['sources'], *value['headers'], *value['provenance'],
                     value['control'], value['check'], *(p['source'] for p in value['probes'])}
-        self.assertEqual(len(expected), 35)
+        self.assertEqual(value['version'], self.manifest_version)
+        self.assertEqual(len(expected), self.member_count)
         self.assertEqual(expected, {fixed['manifest'], *fixed['sources'], *fixed['headers'], *fixed['provenance']})
+
+    def test_profile_selection_does_not_accept_an_unknown_manifest(self):
+        c = self.case
+        c.plan['program']['manifest']['sha256'] = 'f' * 64
+        with self.assertRaisesRegex(SDKError, 'unsupported OS component manifest'):
+            component.manifest(c.plan)
+
+    def test_changed_version_cannot_reuse_a_pinned_source_contract(self):
+        c = self.case
+        path = Path(c.plan['program']['manifest']['path'])
+        value = json.loads(path.read_text())
+        value['version'] = 99
+        path.write_text(json.dumps(value))
+        with self.assertRaises(SDKError):
+            component.manifest(c.plan)
 
     def test_actual_probe_observations_are_retained_without_native_formatter_substitution(self):
         c = self.case

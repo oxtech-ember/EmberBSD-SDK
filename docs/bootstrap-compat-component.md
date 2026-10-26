@@ -148,11 +148,18 @@ Actual parser generation, GCC16 probes, semantic execution, C analysis and memor
 
 ## Initial listing component
 
+The retained version 1 manifest has SHA256
+`5dbdf88505b5c30d3c29ed7cebfc0209244eecae714baf4a7ca492b3e9266666`.
+Only that exact source-bound profile keeps its 35-member roster. Historical
+receipts retain their original sources and checks. Version 2 requires new native
+acceptance; it does not relabel an older archive or modify an earlier receipt.
+
 The separate `compat-listing-bootstrap` profile consumes the OS-owned
 `tools/compat/bootstrap-listing.json` contract, SHA256
-`5dbdf88505b5c30d3c29ed7cebfc0209244eecae714baf4a7ca492b3e9266666`.
-The exact 35-member source proof includes four complete translation units,
-five headers, the shared normal build fragment, configuration sources,
+`36ca6cc22e1b86a48c010f2e000aee4f55cc047503ba888ca57fb525dc1390f6`.
+Version 2 adds shared internal native-header and Darwin ACL helpers.
+The exact 37-member source proof includes four complete translation units,
+seven headers, the shared normal build fragment, configuration sources,
 canonical declaration and test provenance, and source-owned controls and probes.
 The SDK contains no formatter, ACL implementation, capability preset or semantic table.
 The OS owns a scoped NetBSD ACL header adapter and its source-order checks.
@@ -189,3 +196,36 @@ Existing filetime and parsedate manifests, command counts and receipts are uncha
 This addition does not add an ls consumer or qualify complete OS or Ports libnbcompat.
 Actual native controls, other filesystems, C analysis, memory validation and ordinary
 provider acceptance require separate evidence. Source and synthetic data checks do not replace them.
+
+## Initial file metadata component
+
+`compat-filemeta-bootstrap` consumes `tools/compat/bootstrap-filemeta.json`, SHA256
+`6812198e05d18005962b48f7520635d89612b91609d85ebed0571bcb36583946`.
+The 32-member source proof binds one complete OS-owned metadata implementation,
+seven headers, the normal build fragment and configuration, native declaration
+provenance, eight probes, and the native control and semantic check.
+
+The shared runner executes 18 commands. It compiles, links, and runs the control,
+observes eight probes, compiles `compat_filemeta.c`, archives and indexes its one
+object, then compiles, links, runs, and observes the semantic check. Both executable
+runs retain separate complete loader traces. No generator or configure child runs.
+
+The OS manifest requires actual Darwin directory-open, ACL, xattr, and representation
+capabilities. Optional BSD and regular-only-open results remain recorded. Required
+probe failure stops before implementation compilation. No host capability is preset.
+
+The component copies requested ACLs and xattrs through public native APIs. The OS
+owns endpoint, namespace, ordering, partial-error, and no-follow policies. Its check
+uses native getters to verify fixed private fixtures. SDK refuses leftover files,
+directories, or links before another child. It contains no metadata implementation.
+
+The candidate has four exports: `libnbcompat.a`, `nbtool_config.h`,
+`compat_filemeta.h`, and `bootstrap_cdefs.h`. The archive contains exactly
+`compat_filemeta.o`. Shared native adapters are bound internal source inputs.
+`validate_input(receipt_ref, descriptor, component='filemeta')` uses the unchanged
+component acceptance schema. It rechecks the exact source, result, archive, read-only
+exports, independent review, compiler tuple, and ABI. Other component receipts fail.
+
+This route adds no cp/mv consumer, EXDEV handling, ordinary provider qualification,
+or external tool exception. Actual filesystem capabilities, native tests, C analysis,
+memory checks, and non-Darwin builds require separate evidence.
