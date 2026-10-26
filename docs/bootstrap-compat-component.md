@@ -148,11 +148,18 @@ Actual parser generation, GCC16 probes, semantic execution, C analysis and memor
 
 ## Initial listing component
 
+The retained version 1 manifest has SHA256
+`5dbdf88505b5c30d3c29ed7cebfc0209244eecae714baf4a7ca492b3e9266666`.
+Only that exact source-bound profile keeps its 35-member roster. Historical
+receipts retain their original sources and checks. Version 2 requires new native
+acceptance; it does not relabel an older archive or modify an earlier receipt.
+
 The separate `compat-listing-bootstrap` profile consumes the OS-owned
 `tools/compat/bootstrap-listing.json` contract, SHA256
-`5dbdf88505b5c30d3c29ed7cebfc0209244eecae714baf4a7ca492b3e9266666`.
-The exact 35-member source proof includes four complete translation units,
-five headers, the shared normal build fragment, configuration sources,
+`36ca6cc22e1b86a48c010f2e000aee4f55cc047503ba888ca57fb525dc1390f6`.
+Version 2 adds shared internal native-header and Darwin ACL helpers.
+The exact 37-member source proof includes four complete translation units,
+seven headers, the shared normal build fragment, configuration sources,
 canonical declaration and test provenance, and source-owned controls and probes.
 The SDK contains no formatter, ACL implementation, capability preset or semantic table.
 The OS owns a scoped NetBSD ACL header adapter and its source-order checks.

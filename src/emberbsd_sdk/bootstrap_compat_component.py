@@ -66,9 +66,21 @@ _PROFILES = {
         objects=('getbsize.o', 'humanize_number.o', 'stat_flags.o', 'compat_acl.o')),
 }
 
+# Retain only exact historical source contracts, not another C implementation.
+_HISTORICAL_PROFILES = {
+    (LISTING_STAGE, _PROFILES[LISTING_STAGE]['digest']): _PROFILES[LISTING_STAGE],
+}
+_PROFILES[LISTING_STAGE] = dict(_PROFILES[LISTING_STAGE], version=2,
+    digest='36ca6cc22e1b86a48c010f2e000aee4f55cc047503ba888ca57fb525dc1390f6',
+    headers=(*_PROFILES[LISTING_STAGE]['headers'][:3],
+             'tools/compat/compat_native_features.h', 'tools/compat/compat_native_acl.h',
+             *_PROFILES[LISTING_STAGE]['headers'][3:]))
+
 
 def profile(plan):
-    value = _PROFILES.get(plan.get('stage'))
+    stage = plan.get('stage')
+    digest = plan.get('program', {}).get('manifest', {}).get('sha256')
+    value = _HISTORICAL_PROFILES.get((stage, digest), _PROFILES.get(stage))
     _require(value is not None, 'unsupported fixed OS component stage')
     return value
 
@@ -91,7 +103,7 @@ def manifest(plan):
     _require(plan['program']['manifest'] == ref, 'unsupported OS component manifest')
     value = _json(ref)
     _require(value['format'] == 'emberbsd-native-bootstrap-component' and
-             type(value['version']) is int and value['version'] == 1 and
+             type(value['version']) is int and value['version'] == fixed.get('version', 1) and
              value['name'] == fixed['name'] and value['initial_only'] is True and
              value['sources'] == list(fixed['sources']) and value['headers'] == list(fixed['headers']) and
              value['archive'] == 'libnbcompat.a' and
