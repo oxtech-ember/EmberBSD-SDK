@@ -239,9 +239,15 @@ class BSDInstallTests(unittest.TestCase):
             self.validate()
 
     def test_binding_source_provenance_can_advance_but_specs_cannot(self):
+        from test_bootstrap_pilot import FixedLLDBindingTests
+        binding_case = FixedLLDBindingTests(methodName='runTest')
+        binding_case.setUp()
+        self.addCleanup(binding_case.doCleanups)
         historical = copy.deepcopy(self.descriptor)
-        historical['driver_binding'] = dict(ports_source=copy.deepcopy(historical['sources']['ports']),
-            instantiated=self.f.raw(b'synthetic unchanged accepted specs'), deployment='26.0')
+        for field in ('driver_binding', 'driver_prefix', 'bundle_root', 'host_abi'):
+            historical[field] = copy.deepcopy(binding_case.descriptor[field])
+        historical['sources']['ports'] = copy.deepcopy(binding_case.descriptor['sources']['ports'])
+        historical['tools']['ld'] = copy.deepcopy(binding_case.descriptor['tools']['ld'])
         reference = self.f.document(historical)
         self.old_plan['seed_descriptor'] = self.old_result['seed_descriptor'] = reference
         self.preparation['source_seed_descriptor'] = reference
@@ -249,6 +255,8 @@ class BSDInstallTests(unittest.TestCase):
         current = copy.deepcopy(historical)
         current['sources']['ports']['commit'] = '2' * 40
         current['driver_binding']['ports_source'] = copy.deepcopy(current['sources']['ports'])
+        # The template's retained digest is unchanged at a different checkout.
+        current['driver_binding']['template']['path'] = str(self.base / 'new-ports/specs.in')
         value = self.plan['program']['compat']
         bsd._compat(value, current)
         for kind in ('specs', 'old-source', 'new-source'):

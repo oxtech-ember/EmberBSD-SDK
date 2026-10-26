@@ -81,6 +81,12 @@ Status is `REVIEWED_INITIAL_OS_COMPAT_COMPONENT`; findings must be empty.
 Leases must be closed; ordinary qualification must be false.
 The review binds the same candidate. All exported files must be read-only.
 The compiler, native ABI, driver binding and driver tools must match the consumer.
+OS and Ports component consumers share `bootstrap_binding.same_driver_binding`.
+It validates both fixed binding records without reopening retired tool or ABI payloads.
+Each record must match its own Ports source. The repository must remain the same.
+Ports commits and template checkout paths can differ when the fixed template digest matches.
+All effective fields stay exact, including instantiated specs paths and hashes, deployment,
+SDK metadata and reported programs. The current full input loader still checks live bytes.
 Retained artifacts and original evidence remain required; this interface does not relocate them.
 
 This is an OS file-time subset. It is not the complete OS library or the

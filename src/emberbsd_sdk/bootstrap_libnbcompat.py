@@ -347,17 +347,11 @@ def _legacy_input(value, descriptor):
     historical_ref = preparation['source_seed_descriptor']
     historical = _json(historical_ref)
     roles = {'cc', *descriptor['driver_components'].values()}
-    old_binding, new_binding = historical.get('driver_binding'), descriptor.get('driver_binding')
-    same_binding = old_binding is None and new_binding is None
-    if isinstance(old_binding, dict) and isinstance(new_binding, dict):
-        same_binding = (old_binding.get('ports_source') == historical['sources']['ports'] and
-            new_binding.get('ports_source') == descriptor['sources']['ports'] and
-            {key: val for key, val in old_binding.items() if key != 'ports_source'} ==
-            {key: val for key, val in new_binding.items() if key != 'ports_source'})
+    from .bootstrap_binding import same_driver_binding
     _require(historical_ref == result['seed_descriptor'] == plan['seed_descriptor'] and
              all(historical[key] == descriptor[key] for key in
                  ('host', 'compiler', 'host_abi', 'abi_flags', 'driver_components', 'driver_prefix')) and
-             same_binding and
+             same_driver_binding(historical, descriptor) and
              all(historical['tools'][role] == descriptor['tools'][role] for role in roles),
              'initial libnbcompat compiler or host ABI differs from its actual producer')
     _require(result['status'] in ('FAILED', 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW') and
@@ -487,14 +481,8 @@ def validate_input(value, descriptor):
         ('host', 'compiler', 'host_abi', 'abi_flags', 'driver_components', 'driver_prefix')) and
         all(historical['tools'][role] == descriptor['tools'][role] for role in
             {'cc', *descriptor['driver_components'].values()}), 'Ports library compiler or host ABI changed')
-    old, new = historical.get('driver_binding'), descriptor.get('driver_binding')
-    same = old is None and new is None
-    if isinstance(old, dict) and isinstance(new, dict):
-        same = (old.get('ports_source') == historical['sources']['ports'] and
-                new.get('ports_source') == descriptor['sources']['ports'] and
-                {k: v for k, v in old.items() if k != 'ports_source'} ==
-                {k: v for k, v in new.items() if k != 'ports_source'})
-    _require(same, 'Ports library driver binding changed')
+    from .bootstrap_binding import same_driver_binding
+    _require(same_driver_binding(historical, descriptor), 'Ports library driver binding changed')
 
 
 def input_documents(value):

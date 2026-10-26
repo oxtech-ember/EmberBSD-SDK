@@ -333,9 +333,10 @@ def validate_input(reference, descriptor, *, component='filetime'):
              review['all_leases_closed'] is True and review['ordinary_provider_qualified'] is False,
              'initial OS component needs its independent review')
     historical = _json(saved['seed_descriptor'])
+    from .bootstrap_binding import same_driver_binding
     _require(all(historical.get(key) == descriptor.get(key) for key in
                  ('host', 'compiler', 'host_abi', 'abi_flags', 'driver_components',
-                  'driver_prefix', 'driver_binding')) and
+                  'driver_prefix')) and same_driver_binding(historical, descriptor) and
              all(historical['tools'][role] == descriptor['tools'][role] for role in
                  {'cc', *descriptor['driver_components'].values()}),
              'initial OS component compiler or ABI differs')
