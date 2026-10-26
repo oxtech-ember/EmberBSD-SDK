@@ -55,6 +55,8 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
         f'KERNOBJDIR={paths["objects"]}/kernels'] + (native_host_flags(native_selection) if native_selection is not None else [])
     if compiler_family == 'gcc':
         flags.append('EMBER_COMPILER_FAMILY=' + compiler_family)
+        if 'llvm-source' in paths:
+            flags.append('EMBER_LLVM_SOURCE=' + paths['llvm-source'])
     check(compiler_family in (None, 'gcc', 'clang'), 'Unsupported release compiler family')
     if native_selection is None or native_selection['format'] != 'emberbsd-host-prefix':
         position = flags.index(f'MKREPRO_TIMESTAMP={timestamp}')

@@ -134,6 +134,15 @@ if c.get('runtime_fail'): raise SystemExit('Injected verifier failure')
 print((Path(sys.argv[2]) / 'report.json').read_text())
 '''
     write(ports / B.VERIFIER, verifier)
+    llvm_source = root / 'llvm-source'
+    write(llvm_source / 'llvm-source.json', json.dumps(dict(format='emberbsd-llvm-source',
+        version=1, llvm_version='23.1.4', source=dict(archive='llvm-fixture.tar.xz', sha512='a' * 128))))
+    write(ports / 'pkgsrc/lang/compiler-rt/files/runtime.py', '''import sys
+from pathlib import Path
+a=sys.argv[1:]
+if 'verify-source' not in a: raise SystemExit('Expected common source verification')
+print((Path(a[a.index('--source')+1])/'llvm-source.json').read_text())
+''')
     wrapper = f'''#!{sys.executable}
 import json, sys
 from pathlib import Path
@@ -200,13 +209,25 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
         write(native / name, '#!/bin/sh\nexit 0\n', 0o755)
     (native / 'python').symlink_to(os.path.realpath(sys.executable))
     (native / 'sh').symlink_to(os.path.realpath(shutil.which('sh')))
-    return {key: str(value) for key, value in ({'compiler-family': 'gcc', 'sdk': sdk, 'os': os_source, 'ports': ports, 'compiler': compiler, 'runtime-work': work, 'gcc-archive': root / 'gcc.tar.xz', 'pkgsrc': root / 'pkgsrc', 'target': target, 'jobs': '2', 'python': sys.executable, 'sdk-source': root / 'sdk-source', 'libedit-source': root / 'libedit-source', 'host-prefix': native} | {'host-cc': native / 'cc', 'host-cxx': native / 'cxx'}).items()}
+    return {key: str(value) for key, value in ({'compiler-family': 'gcc', 'sdk': sdk, 'os': os_source, 'ports': ports, 'compiler': compiler, 'runtime-work': work, 'gcc-archive': root / 'gcc.tar.xz', 'pkgsrc': root / 'pkgsrc', 'target': target, 'jobs': '2', 'python': sys.executable, 'sdk-source': root / 'sdk-source', 'libedit-source': root / 'libedit-source', 'llvm-source': llvm_source, 'host-prefix': native} | {'host-cc': native / 'cc', 'host-cxx': native / 'cxx'}).items()}
 
 
 class BuilderTests(TemporaryCase):
     def setUp(self):
         super().setUp()
         self.options = fixture(self.root)
+
+    def test_gcc_selects_common_llvm_sources_independently_of_its_runtime(self):
+        builder = B(self.options | {'plan': True})
+        result = builder.run()
+        self.assertEqual(result['signature']['compiler']['version'], '16.2.0')
+        self.assertEqual(result['signature']['llvm_source']['llvm_version'], '23.1.4')
+        self.assertIn('EMBER_LLVM_SOURCE=' + self.options['llvm-source'], result['signature']['flags'])
+        self.assertTrue(result['signature']['runtime_prefix'].endswith('/usr/pkg/gcc16'))
+        self.assertFalse(any(v.startswith('EMBER_EXTERNAL_LLVM_RUNTIME=') for v in result['signature']['flags']))
+        missing = self.options.copy(); del missing['llvm-source']
+        with self.assertRaisesRegex(SDKError, '--llvm-source'):
+            B(missing).preflight()
 
     def control(self, **changes):
         write(self.root / 'control.json', json.dumps(changes))

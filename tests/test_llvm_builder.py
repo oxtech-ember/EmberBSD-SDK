@@ -41,7 +41,7 @@ class ClangBuilder(B):
 class LLVMBuilderTests(TemporaryCase):
     def builder(self, options=None, builder_type=ClangBuilder):
         options = fixture(self.root) if options is None else options
-        source = self.root / 'llvm-source'; source.mkdir()
+        source = self.root / 'llvm-selected-source'; source.mkdir()
         runtime = runtime_tests.LLVMRuntimeTests()
         runtime.setUp(); self.addCleanup(runtime.doCleanups)
         runtime.full()

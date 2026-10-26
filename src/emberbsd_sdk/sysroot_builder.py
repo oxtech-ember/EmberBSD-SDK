@@ -409,7 +409,8 @@ class SysrootBuilder:
         result = process.capture(self.llvm_source_command, env=self.environment)
         record = jsonio.loads_json(result.stdout)
         if (not isinstance(record, dict) or record.get('format') != 'emberbsd-llvm-source' or
-                record.get('version') != 1 or record.get('llvm_version') != self.compiler_record['version']):
+                record.get('version') != 1 or
+                (self.compiler_family() == 'clang' and record.get('llvm_version') != self.compiler_record['version'])):
             raise SDKError('common LLVM source and selected compiler differ')
         return record
 
@@ -448,9 +449,9 @@ class SysrootBuilder:
         layout = workspace.inspect_layout(self.options['sdk'])
         workspace.require_target(layout, self.options['target'])
         self.llvm_phase = getattr(self, 'llvm_phase', 'final')
+        if not self.options.get('llvm-source'):
+            raise SDKError('--llvm-source is required: prepare the common Ports LLVM source')
         if clang:
-            if not self.options.get('llvm-source'):
-                raise SDKError('--llvm-source is required: prepare the common Ports LLVM source')
             if self.llvm_phase != 'headers' and not self.options.get('llvm-runtime-stage'):
                 raise SDKError('--llvm-runtime-stage is required for direct final preflight; run() builds its prerequisites')
         elif not self.options.get('gcc-archive') or not self.options.get('pkgsrc'):
@@ -463,8 +464,8 @@ class SysrootBuilder:
         self.process_inspector = process.SessionInspector(env=self.environment, empty_snapshot_timeout=120)
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
-        input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source']
-        input_names += (['llvm-source'] + ([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
+        input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source']
+        input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
                         if clang else ['runtime-work', 'gcc-archive', 'pkgsrc'])
         for name in input_names:
             self.paths[name] = paths.build_path(paths.canonical_existing(self.options[name]))
@@ -502,25 +503,27 @@ class SysrootBuilder:
             paths.real_directory(os.path.join(self.paths['os'], name))
         for name in ('build.sh', 'Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk'):
             paths.regular_file(os.path.join(self.paths['os'], name))
+        from .llvm_sysroot import PRODUCER, runtime_paths, llvm_flags
         if clang:
-            from .llvm_sysroot import PRODUCER, runtime_paths, llvm_flags
             verifier = PRODUCER
         else:
             verifier = self.VERIFIER
         paths.regular_file(os.path.join(self.paths['ports'], verifier))
+        paths.regular_file(os.path.join(self.paths['ports'], PRODUCER))
         self.sources = {name: self.source(self.paths[name], name) for name in ('os', 'ports')}
         self.sources['sdk'] = self.source(self.paths['sdk-source'], 'sdk')
         self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'])
         self.python = self.python_identity()
         self.git(self.paths['os'], 'ls-files', '--error-unmatch', 'build.sh', 'Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk')
         self.git(self.paths['ports'], 'ls-files', '--error-unmatch', verifier)
+        self.git(self.paths['ports'], 'ls-files', '--error-unmatch', PRODUCER)
         self.compiler_record = self.compiler()
+        producer = [self.paths['python'], '-B', os.path.join(self.paths['ports'], PRODUCER),
+                    '--sdk-source', self.paths['sdk-source']]
+        self.llvm_source_command = producer + ['verify-source', '--source', self.paths['llvm-source'],
+                                               '--git', self.git_command]
+        self.llvm_source_record = self.verify_llvm_source()
         if clang:
-            producer = [self.paths['python'], '-B', os.path.join(self.paths['ports'], verifier),
-                        '--sdk-source', self.paths['sdk-source']]
-            self.llvm_source_command = producer + ['verify-source', '--source', self.paths['llvm-source'],
-                                                   '--git', self.git_command]
-            self.llvm_source_record = self.verify_llvm_source()
             self.runtime_command = self.llvm_source_command
             prefix = None
             if self.llvm_phase != 'headers':
@@ -542,14 +545,14 @@ class SysrootBuilder:
                 raise SDKError('runtime prefix must be the real WORK/stage/usr/pkg/gcc16 tree')
             self.paths['runtime-prefix'] = prefix
             self.runtime_command = [self.paths['python'], '-B', os.path.join(self.paths['ports'], verifier), 'check', self.paths['runtime-work'], self.paths['gcc-archive'], self.paths['pkgsrc'], '--sdk-source', self.paths['sdk-source']]
-            self.flags = self.FLAGS + ['EMBER_COMPILER_FAMILY=gcc', f'EXTERNAL_TOOLCHAIN={self.paths["compiler"]}', f'EMBER_EXTERNAL_GCC_RUNTIME={prefix}']
+            self.flags = self.FLAGS + ['EMBER_COMPILER_FAMILY=gcc', f'EXTERNAL_TOOLCHAIN={self.paths["compiler"]}', f'EMBER_EXTERNAL_GCC_RUNTIME={prefix}', f'EMBER_LLVM_SOURCE={self.paths["llvm-source"]}']
         self.runtime_record = self.verify_runtime()
         self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}'] + native_host_flags(self.native_selection)
         self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, native_toolset=self.native_selection, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
         self.signature['native_inputs'] = self.native_inputs
         self.signature['compiler_family'] = self.compiler_family()
+        self.signature['llvm_source'] = self.llvm_source_record
         if clang:
-            self.signature['llvm_source'] = self.llvm_source_record
             self.signature['llvm_phase'] = self.llvm_phase
         self.configure_signature()
         self.contexts = {name: self.inspect_context(self.paths[name]) for name in ('objects', 'tools')}
@@ -768,7 +771,7 @@ class SysrootBuilder:
                 raise SDKError('compiler changed during build')
             if self.python_identity() != self.python:
                 raise SDKError('Python or SDK implementation changed during build')
-            if self.compiler_family() == 'clang' and self.verify_llvm_source() != self.llvm_source_record:
+            if self.verify_llvm_source() != self.llvm_source_record:
                 raise SDKError('common LLVM source changed during build')
             self.verify_native_toolset()
             self.receipt['outputs'] = self.inspect_payload()

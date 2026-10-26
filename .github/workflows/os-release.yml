@@ -48,8 +48,8 @@ name: Complete OS release producer
         description: LLVM work directory inside SDK/obj, or existing GCC runtime work
         required: true
       llvm_source:
-        description: Common prepared LLVM source (required for Clang)
-        required: false
+        description: Common prepared LLVM source for libc and kernel builtins
+        required: true
       llvm_runtime_stage:
         description: Optional completed full LLVM stage to reuse
         required: false
@@ -117,11 +117,11 @@ jobs:
             --os-source "$OS_SOURCE" --ports "$PORTS_SOURCE" --compiler "$COMPILER" \
             --host-prefix "$HOST_PREFIX" --libedit-source "$LIBEDIT_SOURCE" \
             --compiler-family "$COMPILER_FAMILY" --host-compiler-family "$HOST_COMPILER_FAMILY" \
+            --llvm-source "$LLVM_SOURCE" \
             --runtime-work "$RUNTIME_WORK" \
             --destination "$DESTINATION" --jobs 4
           case "$COMPILER_FAMILY" in
             clang)
-              set -- "$@" --llvm-source "$LLVM_SOURCE"
               if [ -n "$LLVM_RUNTIME_STAGE" ]; then
                 set -- "$@" --llvm-runtime-stage "$LLVM_RUNTIME_STAGE"
               fi ;;

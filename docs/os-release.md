@@ -93,8 +93,9 @@ Portable verification binds the native selection,
 input pins, tool paths, ABI flags, and environment. It does not read the original compiler files.
 Historical schema 2 profiles retain their original command contract and acquire no native-toolset qualification.
 For GCC, add `--compiler-family gcc`, select the GCC16 cross prefix and runtime
-work tree, and supply its `--gcc-archive` and `--pkgsrc` inputs. That path does not
-consume `--llvm-source` or an LLVM stage.
+work tree, and supply its `--gcc-archive` and `--pkgsrc` inputs. That path still
+uses `--llvm-source` for libc and kernel builtins; it does not consume an LLVM
+application runtime stage or require the GCC and LLVM version numbers to match.
 
 ## Prepare a kit
 

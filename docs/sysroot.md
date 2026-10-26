@@ -34,6 +34,8 @@ Provide:
 - A new runtime work path below the SDK object directory, or an explicitly
   selected completed full `--llvm-runtime-stage`.
 
+The prepared common LLVM source is also required with GCC: libc and kernel
+builtins use that source independently of the application runtime choice.
 For the GCC exception, select `--compiler-family gcc`, the common GCC16.2.0
 application cross compiler with the selected triplet and POSIX threads, its
 Ports runtime work tree, original `--gcc-archive` and prepared `--pkgsrc` export.
