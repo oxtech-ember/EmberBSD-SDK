@@ -605,6 +605,20 @@ The local `security/mozilla-rootcerts-openssl` wrapper requires its complete
 `Makefile`, `DESCR` and `PLIST` subtree. Its certificate data still comes from
 the archived `security/mozilla-rootcerts` recipe. The parent archive is not a
 local-source exception.
+The local `archivers/bsdtar` recipe requires its complete `Makefile`, `DESCR`
+and `PLIST` subtree and exact named empty `DISTFILES` and `PATCHFILES`.
+Its `do-extract` copies the canonical `archivers/libarchive/files` source tree.
+The same complete export inventory must bind all shared source bytes. Fixed
+layout checks also require regular configure, build, tar parser and bsdtar
+sources under real directory ancestors. These checks do not replace complete
+export validation. They do not accept a second parser or another source root.
+The recipe can also copy `archivers/bzip2/files` when builtin bzip2 is not used.
+Require that shared source tree conservatively: the fixed metadata fields do
+not observe `USE_BUILTIN.bzip2`. This source requirement does not change the
+recipe's builtin selection or add a library dependency. Missing, linked or
+changed inputs fail before a build. Local-source recognition does not qualify
+the archive parser or an installed bsdtar executable.
+
 The accepted initial mksh activates the canonical final-prefix shell selection
 in bmake, GNU make and Ninja. Check those configure and installed child routes.
 

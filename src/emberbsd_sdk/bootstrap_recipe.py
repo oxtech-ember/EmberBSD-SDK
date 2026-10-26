@@ -14,7 +14,7 @@ import sys
 from .bootstrap_binding import DARWIN_LLVM_MC_LLD_SEED
 from .bootstrap_make import _safe_path
 from .bootstrap_producer import (RECIPE_LIMIT, _recipe_name, darwin_tool_phase, metadata_environment,
-                                 metadata_paths, metadata_values, validate_metadata_inputs)
+                                 metadata_paths, metadata_values, validate_metadata_inputs, _inventory)
 from .inventory import sha256_file
 from .native_toolset import _file, _json, _native_image, _require, _sha
 from .paths import canonical_existing, canonical_new, reject_overlap
@@ -248,6 +248,7 @@ _LOCAL_SOURCE_FILES = {
     'pkgtools/pkg_install': ('Makefile', 'files/configure', 'files/Makefile.in',
                             'files/lib/version.h', 'files/add/main.c', 'files/create/main.c',
                             'files/admin/main.c', 'files/info/main.c'),
+    'archivers/bsdtar': ('Makefile', 'DESCR', 'PLIST'),
     'archivers/bzip2': ('Makefile', 'files/Makefile', 'files/bzip2.c', 'files/bzlib.c'),
     'archivers/libarchive': ('Makefile', 'Makefile.common', 'files/configure', 'files/Makefile.in',
                            'files/libarchive/archive_read.c', 'files/libarchive/archive.h'),
@@ -266,7 +267,24 @@ _LOCAL_SOURCE_FILES = {
 }
 
 
-def _local_source_distfiles(recipe, row, inventory=None):
+# The canonical bsdtar recipe copies these shared Ports source trees.
+# Keep both branches: USE_BUILTIN.bzip2 is not a fixed metadata observation.
+_BSDTAR_SHARED_SOURCE_FILES = (
+    'archivers/libarchive/Makefile.common',
+    'archivers/libarchive/files/configure',
+    'archivers/libarchive/files/Makefile.in',
+    'archivers/libarchive/files/libarchive/archive.h',
+    'archivers/libarchive/files/libarchive/archive_read.c',
+    'archivers/libarchive/files/libarchive/archive_read_support_format_tar.c',
+    'archivers/libarchive/files/tar/bsdtar.c',
+    'archivers/libarchive/files/tar/bsdtar.h',
+    'archivers/bzip2/files/Makefile',
+    'archivers/bzip2/files/bzlib.c',
+    'archivers/bzip2/files/bzlib.h',
+)
+
+
+def _local_source_distfiles(recipe, row, inventory=None, *, export_inventory=None):
     """Check the fixed local layouts. The caller also binds the complete subtree."""
     _require(recipe in _LOCAL_SOURCE_FILES and row['distfiles'] == [] and
              'distfile_metadata' in row, 'empty distfiles need recognized local-source observations')
@@ -276,6 +294,15 @@ def _local_source_distfiles(recipe, row, inventory=None):
              'local-source recipe omits a required regular source file')
     for name in _LOCAL_SOURCE_FILES[recipe]:
         _sha(inventory[name].get('sha256'))
+    if recipe == 'archivers/bsdtar':
+        _require(isinstance(export_inventory, dict), 'bsdtar needs its complete source export inventory')
+        for name in _BSDTAR_SHARED_SOURCE_FILES:
+            parts = name.split('/')
+            _require(all(export_inventory.get('/'.join(parts[:count]), {}).get('kind') == 'directory'
+                         for count in range(1, len(parts))) and
+                     export_inventory.get(name, {}).get('kind') == 'file',
+                     'bsdtar omits a required regular shared source or real ancestor directory')
+            _sha(export_inventory[name].get('sha256'))
     values = metadata_values(row['distfile_metadata'])
     _require(values['PKGPATH'] == recipe and values['DISTFILES'] == '' and values['PATCHFILES'] == '',
              'local-source metadata must name this recipe and no distfiles or patchfiles')
@@ -284,12 +311,14 @@ def _local_source_distfiles(recipe, row, inventory=None):
 def recipe_distfiles(plan):
     """Map explicit DIST_SUBDIR-relative destinations to pinned original files."""
     files = {}
+    export_inventory = (_inventory(plan['ports_export']['inventory'])
+                        if 'archivers/bsdtar' in plan['recipes'] else None)
     for recipe in recipe_order(plan):
         recipe_row = plan['recipes'][recipe]
         rows = recipe_row['distfiles']
         _require(isinstance(rows, list) and len(rows) <= 128, 'invalid bound recipe distfiles')
         if not rows:
-            _local_source_distfiles(recipe, recipe_row)
+            _local_source_distfiles(recipe, recipe_row, export_inventory=export_inventory)
             continue
         _require('distfile_metadata' not in recipe_row,
                  'distfile observations only belong to an empty local-source recipe')

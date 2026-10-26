@@ -434,7 +434,7 @@ def _plan(reference, descriptor, commands=None, flags=None, *, inspect_inputs=Tr
         else:
             _require(bound, 'recipe distfiles are required')
             from .bootstrap_recipe import _local_source_distfiles
-            _local_source_distfiles(name, row, recipe_inventory)
+            _local_source_distfiles(name, row, recipe_inventory, export_inventory=export_inventory)
         for distfile in row['distfiles']:
             _text(distfile['url'], 'distfile URL')
             if inspect_inputs:
