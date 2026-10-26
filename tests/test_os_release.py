@@ -321,7 +321,7 @@ class BuilderReleaseTests(TemporaryCase):
         historical = copy.deepcopy(profile)
         historical['schema'] = historical['sdk_receipt']['version'] = 2
         signature = historical['sdk_receipt']['signature']
-        del signature['native_toolset']; del signature['native_inputs']
+        del signature['native_toolset']; del signature['native_inputs']; del signature['compiler_family']
         for key in ('host-cc', 'host-cxx', 'host-prefix', 'native-routing'):
             del historical['sdk_receipt']['paths'][key]
         signature['host_tools'] = {name: dict(path='/usr/bin/' + name, sha256='0' * 64,

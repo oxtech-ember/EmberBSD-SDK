@@ -63,6 +63,29 @@ def _compiler(value, host):
         _native_triplet(value['triplet'], host)
 
 
+def _clang_linker(driver, root, host, env, language, arguments=()):
+    """Check a Clang frontend and actual link route without executing either."""
+    result = process.capture([driver, *arguments, '-###', '-x', language, os.devnull,
+                              '-o', os.devnull], env=env)
+    commands = [shlex.split(line) for line in result.stderr.decode('utf-8', 'strict').splitlines()
+                if line.lstrip().startswith('"')]
+    linker, frontend = None, False
+    for command in commands:
+        _require(bool(command) and os.path.isabs(command[0]), 'implicit Clang driver component')
+        path = _member(command[0], root, host, search_path=env['PATH'])
+        if '-cc1' in command or '-cc1as' in command:
+            _require(canonical_existing(path) == canonical_existing(driver),
+                     'Clang selects a different frontend')
+            frontend = True
+        else:
+            _require(os.path.basename(path) in ('ld.lld', 'ld64.lld', 'lld'),
+                     'Clang must select the prefix LLVM linker')
+            _require(linker is None, 'multiple Clang linker routes')
+            linker = path
+    _require(frontend and linker is not None, 'Clang did not report compiler and linker routes')
+    return linker
+
+
 def _clang(tools, root, host, env, query):
     """Inspect the real Clang routes without producing compilation outputs."""
     def identity(driver):
@@ -79,23 +102,7 @@ def _clang(tools, root, host, env, query):
              os.path.commonpath((resource, root)) == root, 'Clang resource directory escapes host prefix')
     components = {'resource-dir': resource}
     for role, language in (('cc', 'c'), ('cxx', 'c++')):
-        result = process.capture([tools[role], '-###', '-x', language, os.devnull, '-o', os.devnull], env=env)
-        commands = [shlex.split(line) for line in result.stderr.decode('utf-8', 'strict').splitlines()
-                    if line.lstrip().startswith('"')]
-        _require(len(commands) >= 2, 'Clang did not report compiler and linker routes')
-        linker = None
-        for command in commands:
-            _require(bool(command) and os.path.isabs(command[0]), 'implicit Clang driver component')
-            path = _member(command[0], root, host, search_path=env['PATH'])
-            if '-cc1' in command or '-cc1as' in command:
-                _require(canonical_existing(path) == canonical_existing(tools[role]),
-                         'Clang selects a different frontend')
-            else:
-                _require(os.path.basename(path) in ('ld.lld', 'ld64.lld', 'lld'),
-                         'Clang must select the prefix LLVM linker')
-                _require(linker is None, 'multiple Clang linker routes')
-                linker = path
-        _require(linker is not None, 'Clang did not report an LLVM linker')
+        linker = _clang_linker(tools[role], root, host, env, language)
         if 'ld' in components:
             _require(canonical_existing(linker) == canonical_existing(components['ld']),
                      'native C and C++ linkers differ')

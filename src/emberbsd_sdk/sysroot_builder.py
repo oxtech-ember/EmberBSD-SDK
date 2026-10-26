@@ -275,6 +275,9 @@ class SysrootBuilder:
 
     def compiler(self):
         prefix, triplet = self.paths['compiler'], self.target['triplet']
+        if self.compiler_family() == 'clang':
+            from .target_toolchain import clang_compiler
+            return clang_compiler(prefix, triplet, host=self.native.host, env=self.environment)
         binaries = {}
         for name in ('gcc', 'g++', 'cpp', 'ar', 'as', 'ld', 'nm', 'objcopy', 'objdump', 'ranlib', 'readelf', 'strip'):
             selected = os.path.join(prefix, 'bin', triplet + '-' + name)
@@ -301,6 +304,12 @@ class SysrootBuilder:
                 raise SDKError(f'compiler subprocess escapes prefix: {path}')
             binaries['resolved-' + name] = dict(reported_path=reported, path=path, sha256=inventory.sha256_file(path))
         return dict(version='16.2.0', triplet=triplet, threads='posix', binaries=binaries)
+
+    def compiler_family(self):
+        family = self.options.get('compiler-family', 'clang')
+        if family not in ('clang', 'gcc'):
+            raise SDKError('unsupported target compiler family')
+        return family
 
     def verify_runtime(self):
         result = process.capture(self.runtime_command, env=self.environment)
@@ -390,6 +399,11 @@ class SysrootBuilder:
 
     def preflight(self):
         process.require_posix()
+        if self.compiler_family() == 'clang':
+            raise SDKError('LLVM target runtime producer integration is not implemented; '
+                           'a GCC runtime stage cannot be used for a Clang sysroot')
+        if not self.options.get('gcc-archive'):
+            raise SDKError('--gcc-archive is required for the explicit GCC runtime')
         self.target = target_definition(self.options.get('target'))
         jobs = self.options.get('jobs')
         if not isinstance(jobs, str) or re.fullmatch('[1-9][0-9]*', jobs) is None:
@@ -452,9 +466,10 @@ class SysrootBuilder:
         self.runtime_command = [self.paths['python'], '-B', os.path.join(self.paths['ports'], self.VERIFIER), 'check', self.paths['runtime-work'], self.paths['gcc-archive'], self.paths['pkgsrc'], '--sdk-source', self.paths['sdk-source']]
         self.compiler_record = self.compiler()
         self.runtime_record = self.verify_runtime()
-        self.flags = self.FLAGS + [f'EXTERNAL_TOOLCHAIN={self.paths["compiler"]}', f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}', f'EMBER_EXTERNAL_GCC_RUNTIME={prefix}'] + native_host_flags(self.native_selection)
+        self.flags = self.FLAGS + ['EMBER_COMPILER_FAMILY=gcc', f'EXTERNAL_TOOLCHAIN={self.paths["compiler"]}', f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}', f'EMBER_EXTERNAL_GCC_RUNTIME={prefix}'] + native_host_flags(self.native_selection)
         self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, native_toolset=self.native_selection, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
         self.signature['native_inputs'] = self.native_inputs
+        self.signature['compiler_family'] = self.compiler_family()
         self.configure_signature()
         self.contexts = {name: self.inspect_context(self.paths[name]) for name in ('objects', 'tools')}
         self.build_command = [self.shell, os.path.join(self.paths['os'], 'build.sh'), '-U', '-u', '-j' + jobs, '-m', self.target['machine'], '-a', self.target['arch'], '-O', self.paths['objects'], '-T', self.paths['tools'], '-D', self.paths['destination']]

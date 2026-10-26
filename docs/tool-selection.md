@@ -70,6 +70,11 @@ They are not part of the normal `host-pkg-llvm` workflow.
 ## Migration boundary
 
 Native prefix selection and the Darwin configuration support LLVM and explicit GCC.
+The sysroot and release CLIs default `--compiler-family` to `clang`, independently
+of `--host-compiler-family`. Until the common LLVM runtime producer is connected,
+they refuse a Clang application build before creating outputs. They never import
+the old GCC runtime or choose GCC automatically. Use `--compiler-family gcc`
+only when intentionally building the supported GCC alternative.
 The current target runtime import and release schemas still describe GCC16 artifacts.
 They do not establish LLVM target runtime support. Update these producers and
 their matching Ports/OS runtime interfaces before a Clang SDK release.

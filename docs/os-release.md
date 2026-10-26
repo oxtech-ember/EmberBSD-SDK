@@ -24,7 +24,11 @@ Read [sysroot inputs](sysroot.md#required-inputs) and
 [host requirements](host-platforms.md). Use CPython 3.15+, Git, the OS host
 build prerequisites and an ISO-capable libarchive `tar`. Each source checkout
 must be clean and fully materialized. Select exact OS, Ports and SDK commits.
-The common compiler must be GCC 16.2.0 with POSIX threads for the selected ABI.
+This example explicitly selects the implemented GCC alternative. Its target
+compiler must be GCC 16.2.0 with POSIX threads for the selected ABI.
+Clang is the default family; the [LLVM runtime migration boundary](tool-selection.md#migration-boundary)
+currently prevents a Clang application/release build. Native compilation uses
+the independently selected host prefix.
 The normal Ports verifier must accept its runtime stage and source inputs.
 
 Select `aarch64-sysroot` for complete base/comp sets and an EMBER64 test kernel.
@@ -43,6 +47,7 @@ Canonical version behavior follows OS commit
 ```sh
 python3 scripts/build-os-release.py --help
 python3 scripts/build-os-release.py \
+  --compiler-family gcc \
   --profile aarch64-sysroot \
   --sdk-source /absolute/EmberBSD-SDK \
   --sdk /absolute/prebuild-sdk-aarch64 \

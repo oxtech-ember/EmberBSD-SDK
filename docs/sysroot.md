@@ -3,6 +3,10 @@
 Use the native Ports tool prefix with `--host-prefix`.
 The builder checks prefix paths and host architecture, then uses the OS command mapping.
 No independent native-tool qualification or admission receipt is required.
+Host and target compiler families are independent. Clang is the default for
+both; `--compiler-family gcc` selects the implemented GCC target runtime route
+explicitly. The [LLVM target migration boundary](tool-selection.md#migration-boundary)
+applies until its common runtime producer is connected.
 
 The recorded producer sequence covers target headers, OS CRT and libraries,
 the dynamic loader, and audited GCC16 developer support. It does not install
@@ -15,7 +19,7 @@ the selected OS/Ports builders. Process adapters are available for Darwin and Li
 See [host platforms](host-platforms.md).
 Apply the [SDK tool selection policy](tool-selection.md).
 Use SDK native Clang/LLVM for host programs, or GCC through an explicit platform profile.
-The current target runtime producer still uses the SDK cross GCC16.
+The implemented GCC target route uses the matching SDK cross GCC16 and runtime.
 Keep host tools and target inputs separate.
 Select the [native Ports prefix](native-toolset.md).
 The loader selects the roles required by the OS contract plus Python.
@@ -52,6 +56,7 @@ Use the implemented script's help for the exact options:
 ```sh
 python3 scripts/build-sysroot.py --help
 python3 scripts/build-sysroot.py \
+  --compiler-family gcc \
   --sdk-source /absolute/EmberBSD-SDK \
   --sdk /absolute/prebuild-sdk-aarch64 \
   --os /absolute/EmberBSD \

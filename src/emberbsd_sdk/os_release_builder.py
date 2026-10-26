@@ -32,7 +32,8 @@ def flags_for(target):
     return common + [f'{k}={v}' for k, v in replacements.items()]
 
 
-def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_selection=None):
+def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_selection=None,
+                      compiler_family=None):
     definition = target_definition(target)
     # Only portable historical validation uses the original command contract.
     cc = host['cc']['path'] if native_selection is None else native_selection['tools']['cc']
@@ -42,6 +43,9 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
         f'EMBER_LIBEDIT_SOURCE={paths["libedit-source"]}',
         f'MKREPRO_TIMESTAMP={timestamp}', f'EMBER_BUILD_ID={sha}', f'BUILDINFO=EmberBSD:{sha}',
         f'KERNOBJDIR={paths["objects"]}/kernels'] + (native_host_flags(native_selection) if native_selection is not None else [])
+    if compiler_family is not None:
+        check(compiler_family == 'gcc', 'LLVM target runtime integration is not implemented')
+        flags.append('EMBER_COMPILER_FAMILY=' + compiler_family)
     if native_selection is None or native_selection['format'] != 'emberbsd-host-prefix':
         position = flags.index(f'MKREPRO_TIMESTAMP={timestamp}')
         flags[position:position] = [f'HOST_CC={cc}', f'HOST_CXX={cxx}']
@@ -116,7 +120,8 @@ def validate_profile(profile, sha, target):
     if explicit_native:
         validate_native_binding(signature, paths, profile['shell'])
         native = signature['native_toolset']
-    flags, commands = producer_commands(target, paths, signature['host_tools'], sha, profile['source_timestamp'], profile['jobs'], profile['shell'], native)
+    flags, commands = producer_commands(target, paths, signature['host_tools'], sha, profile['source_timestamp'], profile['jobs'], profile['shell'], native,
+                                       signature.get('compiler_family'))
     check(signature['flags'] == flags and profile['commands'] == commands, 'Build command does not select the exact required profile')
     executed = [r for r in receipt['commands'] if r.get('scope') != 'runtime-check']
     check([r['argv'] for r in executed] == commands and all(r['status'] == 'passed' and r['exit_status'] == 0 for r in executed),
@@ -142,7 +147,8 @@ class OSReleaseBuilder(SysrootBuilder):
         self.product_version = source_version(Path(self.paths['os'], 'share/mk/bsd.own.mk').read_text())
         self.signature['product_version'] = self.product_version
         self.flags, self.release_commands = producer_commands(self.options['target'], self.paths, self.host_tools,
-            self.sources['os']['commit'], self.timestamp, self.options['jobs'], self.shell, self.native_selection)
+            self.sources['os']['commit'], self.timestamp, self.options['jobs'], self.shell, self.native_selection,
+            self.compiler_family())
         self.signature['flags'] = self.flags
         self.signature['release_profile'] = self.options['target']
 
