@@ -291,3 +291,12 @@ Ports recipe keeps that optional feature available with an explicit qualified
 `DTRACE` provider. The SDK does not supply a DTrace executable or accept a path
 as provider qualification. Historical profile identities and their emitted
 command/ABI mappings remain unchanged.
+
+The additive `ICONV_PROFILE_SHA256` identity,
+`e6fa6a573e39cbe581b4fa697b4e77e213ea73b072d75acd8761c999396204d7`, pins the
+current Ports bootstrap runtime link policy, including the macOS SDK
+`libiconv` import library. It is recognized by metadata and full-plan
+validation. It does not extend the initial Darwin profile allowlist. The
+initial route continues to accept only its two explicit profile identities
+above. Earlier profile identities remain valid for their recorded source
+inputs.

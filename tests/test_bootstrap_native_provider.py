@@ -41,6 +41,34 @@ class NativeProviderTests(unittest.TestCase):
         return producer.metadata_assignments(case.plan, case.descriptor, case.commands,
                                              case.descriptor['abi_flags'])
 
+    def test_iconv_profile_is_admitted_by_metadata_and_refused_for_initial(self):
+        case = self.case
+        self.assertEqual(producer.ICONV_PROFILE_SHA256,
+                         'e6fa6a573e39cbe581b4fa697b4e77e213ea73b072d75acd8761c999396204d7')
+        with patch.object(producer, 'ICONV_PROFILE_SHA256', case.profile_sha), \
+                patch.object(producer, 'PROFILE_SHA256', '0' * 64):
+            self.assertTrue(producer._recognized_profile(case.profile_sha))
+            case.plan['resources']['cpu_jobs'] = 1
+            conf = case.plan['metadata']['makeconf']
+            raw = producer.metadata_makeconf(case.plan, case.descriptor, case.commands,
+                                             case.descriptor['abi_flags'])
+            Path(conf['path']).write_bytes(raw)
+            conf['sha256'] = hashlib.sha256(raw).hexdigest()
+            case.descriptor['make_binding']['makeconf'] = copy.deepcopy(conf)
+            case.plan['commands'] = producer.producer_steps(case.plan, case.descriptor, case.commands,
+                                                            case.descriptor['abi_flags'])
+            with patch('subprocess.Popen', side_effect=AssertionError('no native child')):
+                self.assertIs(case.validate(), case.plan)
+
+                full = test_bootstrap_recipe.RecipeTests()
+                full.setUp()
+                self.addCleanup(full.doCleanups)
+                self.assertEqual(full.plan['metadata']['profile']['sha256'], case.profile_sha)
+                with patch.object(producer, 'PROFILE_SHA256', '0' * 64):
+                    full.plan['metadata']['darwin_tool_phase'] = 'initial'
+                    with self.assertRaisesRegex(SDKError, 'initial.*profile'):
+                        full.validate()
+
     def test_archive_role_is_explicit_without_replacing_raw_libtool(self):
         self.case.plan['metadata']['profile']['sha256'] = producer.NATIVE_PROVIDER_PROFILE_SHA256
         before = self.values()
@@ -148,9 +176,6 @@ class NativeProviderTests(unittest.TestCase):
         profile = Path(case.plan['metadata']['profile']['path'])
         profile.write_bytes(b'# Synthetic native provider profile; never executed.\n')
         digest = hashlib.sha256(profile.read_bytes()).hexdigest()
-        guard = patch.object(producer, 'NATIVE_PROVIDER_PROFILE_SHA256', digest)
-        guard.start()
-        self.addCleanup(guard.stop)
         case.plan['metadata']['profile']['sha256'] = digest
         for role in ('libtool_darwin', 'install_name_tool', 'llvm_readtapi'):
             path = case.f.bundle / role
@@ -180,9 +205,13 @@ class NativeProviderTests(unittest.TestCase):
         proof.update(ports_manifest=case.f.document(manifest), inventory=data['export']['inventory'])
         data['export']['source_proof'] = case.f.document(proof)
         case.plan['ports_export'] = dict(source=case.descriptor['sources']['ports'], **data['export'])
-        case.refresh()
-        with patch('subprocess.Popen', side_effect=AssertionError('no native process')):
-            self.assertEqual(case.validate(), case.plan)
+        for profile_constant in ('NATIVE_PROVIDER_PROFILE_SHA256', 'ICONV_PROFILE_SHA256'):
+            with self.subTest(profile=profile_constant), \
+                    patch.object(producer, 'PROFILE_SHA256', '0' * 64), \
+                    patch.object(producer, profile_constant, digest):
+                case.refresh()
+                with patch('subprocess.Popen', side_effect=AssertionError('no native process')):
+                    self.assertEqual(case.validate(), case.plan)
         order = recipe.recipe_order(case.plan)
         self.assertLess(order.index('lang/llvm'), order.index('devel/lld'))
         self.assertLess(order.index('devel/lld'), order.index('lang/gcc16'))
@@ -192,14 +221,16 @@ class NativeProviderTests(unittest.TestCase):
             python=dict(path=sys.executable, sha256=hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest()),
             launcher=dict(path=str(launcher), sha256=hashlib.sha256(launcher.read_bytes()).hexdigest()))
         case.plan['resources']['cpu_jobs'] = 18
-        case.refresh()
-        with patch.object(recipe.os, 'cpu_count', return_value=18), \
+        with patch.object(producer, 'ICONV_PROFILE_SHA256', digest), \
+                patch.object(producer, 'PROFILE_SHA256', '0' * 64):
+            case.refresh()
+            with patch.object(recipe.os, 'cpu_count', return_value=18), \
                 patch('subprocess.Popen', side_effect=AssertionError('no native process')):
-            self.assertEqual(case.validate(), case.plan)
-        values = producer.metadata_assignments(case.plan, case.descriptor, case.commands,
-                                             case.descriptor['abi_flags'])
-        self.assertEqual(values['EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER'].split(';'),
-                         shlex.split(values['EMBERBSD_GCC16_LINKER_LAUNCHER']))
+                self.assertEqual(case.validate(), case.plan)
+            values = producer.metadata_assignments(case.plan, case.descriptor, case.commands,
+                                                  case.descriptor['abi_flags'])
+            self.assertEqual(values['EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER'].split(';'),
+                             shlex.split(values['EMBERBSD_GCC16_LINKER_LAUNCHER']))
 
     def test_new_full_profile_cannot_omit_source_built_llvm_providers(self):
         case = test_bootstrap_recipe.RecipeTests()
@@ -228,7 +259,8 @@ class NativeProviderTests(unittest.TestCase):
                        producer.SOURCE_GZIP_MAKE_SPLIT_PROFILE_SHA256,
                        producer.RUNTIME_FLAGS_REAPPLY_PROFILE_SHA256,
                        producer.NATIVE_RUNTIME_SHELL_PROFILE_SHA256,
-                       producer.PERL_DTRACE_PROFILE_SHA256):
+                       producer.PERL_DTRACE_PROFILE_SHA256,
+                       producer.ICONV_PROFILE_SHA256):
             with self.subTest(profile=digest):
                 case.plan['metadata']['profile']['sha256'] = digest
                 self.assertTrue(producer._recognized_profile(digest))
@@ -247,7 +279,8 @@ class NativeProviderTests(unittest.TestCase):
                        producer.SOURCE_GZIP_MAKE_SPLIT_PROFILE_SHA256,
                        producer.RUNTIME_FLAGS_REAPPLY_PROFILE_SHA256,
                        producer.NATIVE_RUNTIME_SHELL_PROFILE_SHA256,
-                       producer.PERL_DTRACE_PROFILE_SHA256):
+                       producer.PERL_DTRACE_PROFILE_SHA256,
+                       producer.ICONV_PROFILE_SHA256):
             with self.subTest(profile=digest):
                 self.case.plan['metadata']['recipes'] = ['lang/gcc16', 'lang/llvm']
                 self.case.plan['metadata']['profile']['sha256'] = digest
