@@ -11,7 +11,7 @@ import re
 import shutil
 
 from .errors import SDKError
-from . import inventory, jsonio, libedit, llvm_runtime
+from . import inventory, jsonio, libedit, llvm_runtime, llvm_runtime_install
 from .target_toolchain import validate_clang_identity
 from .sysroot_builder import (SysrootBuilder, native_host_flags, check_native_command_identity,
                               validate_native_binding)
@@ -36,7 +36,11 @@ def flags_for(target, compiler_family=None):
 
 
 def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_selection=None,
-                      compiler_family=None):
+                      compiler_family=None, base_cxx=False):
+    if type(base_cxx) is not bool:
+        raise SDKError('base C++ selection must be boolean')
+    if base_cxx and compiler_family != 'clang':
+        raise SDKError('base C++ aliases require the selected Clang runtime')
     definition = target_definition(target)
     # Only portable historical validation uses the original command contract.
     cc = host['cc']['path'] if native_selection is None else native_selection['tools']['cc']
@@ -46,7 +50,7 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
     common = flags_for(target, compiler_family)
     if compiler_family == 'clang':
         from .llvm_sysroot import llvm_flags
-        runtime_flags = llvm_flags(paths, phase='final')
+        runtime_flags = llvm_flags(paths, phase='final', base_cxx=base_cxx)
         replaced = {flag.split('=', 1)[0] for flag in runtime_flags}
         common = [flag for flag in common if flag.split('=', 1)[0] not in replaced]
     flags = common + runtime_flags + [
@@ -113,6 +117,7 @@ def validate_profile(profile, sha, target):
           'Incomplete native libedit installation receipt')
     compiler = signature['compiler']
     clang = profile['schema'] == 4
+    base_cxx = llvm_runtime_install.base_cxx_enabled(signature.get('flags', []))
     if clang:
         check(signature['compiler_family'] == 'clang', 'Mixed release compiler family')
         validate_clang_identity(compiler, target_definition(target)['triplet'])
@@ -123,6 +128,7 @@ def validate_profile(profile, sha, target):
               runtime['source'] == {key: signature['llvm_source']['source'][key] for key in ('archive', 'sha512')},
               'Mixed common LLVM runtime identity')
     else:
+        check(not base_cxx, 'GCC release cannot select the LLVM libc++ base aliases')
         check(signature.get('compiler_family', 'gcc') == 'gcc', 'Mixed historical compiler family')
         check(compiler['version'] == '16.2.0' and compiler['threads'] == 'posix' and
           compiler['triplet'] == target_definition(target)['triplet'], 'Unverified common GCC16 compiler')
@@ -145,7 +151,7 @@ def validate_profile(profile, sha, target):
         validate_native_binding(signature, paths, profile['shell'])
         native = signature['native_toolset']
     flags, commands = producer_commands(target, paths, signature['host_tools'], sha, profile['source_timestamp'], profile['jobs'], profile['shell'], native,
-                                       signature.get('compiler_family'))
+                                       signature.get('compiler_family'), base_cxx=base_cxx)
     check(signature['flags'] == flags and profile['commands'] == commands, 'Build command does not select the exact required profile')
     executed = [r for r in receipt['commands'] if r.get('scope') != 'runtime-check']
     check([r['argv'] for r in executed] == commands and all(r['status'] == 'passed' and r['exit_status'] == 0 for r in executed),
@@ -167,12 +173,16 @@ class OSReleaseBuilder(SysrootBuilder):
         super().__init__(options)
 
     def configure_signature(self):
+        if type(self.options.get('base-cxx', False)) is not bool:
+            raise SDKError('base C++ selection must be boolean')
+        if self.options.get('base-cxx', False) and self.compiler_family() != 'clang':
+            raise SDKError('base C++ aliases require the selected Clang runtime')
         self.timestamp = int(self.git(self.paths['os'], 'show', '-s', '--format=%ct', self.sources['os']['commit']))
         self.product_version = source_version(Path(self.paths['os'], 'share/mk/bsd.own.mk').read_text())
         self.signature['product_version'] = self.product_version
         self.flags, self.release_commands = producer_commands(self.options['target'], self.paths, self.host_tools,
             self.sources['os']['commit'], self.timestamp, self.options['jobs'], self.shell, self.native_selection,
-            self.compiler_family())
+            self.compiler_family(), base_cxx=self.options.get('base-cxx', False))
         self.signature['flags'] = self.flags
         self.signature['release_profile'] = self.options['target']
 

@@ -127,6 +127,10 @@ inventory in `runtime`, bound to `provenance.runtime_sha256`. Its complete
 prefix subtree must equal the payload subtree, including directories and
 links; unrecorded additions within the runtime are refused. The imported
 record retains measured runtime paths for [application tool selection](application-toolchain.md).
+When a Clang build opts into the base libc++ aliases, provenance includes the
+optional `base_cxx: libcxx` value and inventory validation binds the selected
+header and linker aliases. Older manifests omit this field and keep their
+existing interpretation.
 It omits the original host paths, environment and command logs. Files themselves
 can still contain build paths or private content. The producer must control
 which files it installs. Export is not a secret scanner or a relocation fix.

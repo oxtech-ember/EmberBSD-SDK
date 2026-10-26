@@ -10,6 +10,16 @@ from emberbsd_sdk.errors import SDKError
 
 
 class LLVMRuntimeInstallTests(LLVMRuntimeFixture):
+    def test_base_cxx_selection_is_derived_from_recorded_flags(self):
+        self.assertTrue(llvm_runtime_install.base_cxx_enabled(['MKCXX=yes', 'MKLIBCXX=yes']))
+        self.assertFalse(llvm_runtime_install.base_cxx_enabled(['MKCXX=yes', 'MKLIBCXX=no']))
+        self.assertFalse(llvm_runtime_install.base_cxx_enabled([]))
+        for flags in (['MKLIBCXX=yes', 'MKCXX=no'], ['MKCXX=maybe'],
+                      ['MKCXX=yes', 'MKCXX=no'], ['MKLIBCXX=yes', 'MKLIBCXX=no'],
+                      ['MKCXX+=yes'], ['MKCXX =yes']):
+            with self.subTest(flags=flags), self.assertRaises(SDKError):
+                llvm_runtime_install.base_cxx_enabled(flags)
+
     def test_header_and_library_leaves_are_relative_and_relocatable(self):
         self.full()
         self.write('stage/usr/pkg/llvm/include/c++/v1/__detail/nested.h', '// nested\n')

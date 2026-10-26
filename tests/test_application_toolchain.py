@@ -28,6 +28,29 @@ class ApplicationToolchainTests(TemporaryCase):
         sysroot_transfer.import_sysroot(bundle, restored, target='aarch64', manifest_sha256=exported['manifest_sha256'])
         self.assertEqual(application_toolchain.load_clang_runtime(restored, target='aarch64'), self.runtime)
 
+    def test_opted_in_build_and_import_require_base_aliases(self):
+        isolated = self.root / 'opted-in-fixture'
+        isolated.mkdir()
+        original_root = self.root
+        self.root = isolated
+        try:
+            builder, runtime = llvm_tests.LLVMBuilderTests.builder(self, options=llvm_tests.fixture(isolated))
+        finally:
+            self.root = original_root
+        builder.options['base-cxx'] = True
+        builder.run()
+        root = Path(builder.paths['destination'])
+        self.assertEqual(application_toolchain.load_clang_runtime(root, target='aarch64'), runtime.record)
+        bundle, restored = self.root / 'opted-in-bundle', self.root / 'opted-in-restored'
+        exported = sysroot_transfer.export_sysroot(root, bundle, target='aarch64')
+        sysroot_transfer.import_sysroot(bundle, restored, target='aarch64',
+            manifest_sha256=exported['manifest_sha256'])
+        self.assertEqual(application_toolchain.load_clang_runtime(restored, target='aarch64'), runtime.record)
+        alias = restored / 'usr/include/c++/vector'
+        alias.unlink()
+        with self.assertRaisesRegex(SDKError, 'base alias'):
+            application_toolchain.load_clang_runtime(restored, target='aarch64')
+
     def test_added_package_files_do_not_replace_or_invalidate_the_runtime(self):
         package = self.sysroot/'usr/pkg/include/package.h'; package.parent.mkdir(parents=True, exist_ok=True)
         package.write_text('/* separate package input */\n')

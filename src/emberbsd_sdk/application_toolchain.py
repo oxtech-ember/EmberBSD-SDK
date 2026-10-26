@@ -4,7 +4,7 @@
 
 import os
 
-from . import compiler_bindings, jsonio, llvm_runtime, paths, sysroot_transfer, target_toolchain
+from . import compiler_bindings, jsonio, llvm_runtime, llvm_runtime_install, paths, sysroot_transfer, target_toolchain
 from .errors import SDKError
 
 APPLICATION_TOOLCHAIN_API = 1
@@ -31,6 +31,7 @@ def load_clang_runtime(sysroot, *, target):
         if receipt['version'] != 3:
             raise SDKError('application runtime requires an LLVM sysroot')
         record = receipt['signature']['runtime']['manifest']
+        base_cxx = llvm_runtime_install.base_cxx_enabled(receipt['signature'].get('flags', []))
     elif os.path.isfile(imported):
         receipt = jsonio.read_json(imported)
         if (not isinstance(receipt, dict) or set(receipt) != {'format','version','manifest_sha256','manifest'} or
@@ -42,9 +43,13 @@ def load_clang_runtime(sysroot, *, target):
         if manifest['version'] != 2:
             raise SDKError('application runtime requires an LLVM sysroot')
         record = manifest['runtime']['manifest']
+        base_cxx = manifest['provenance'].get('base_cxx') == 'libcxx'
     else:
         raise SDKError('select a completed or imported SDK sysroot')
-    return llvm_runtime.validate_install(root, record, target=target)
+    selected = llvm_runtime.validate_install(root, record, target=target)
+    if base_cxx:
+        llvm_runtime_install.validate_base_aliases(root, record)
+    return selected
 
 
 def clang_application_commands(compiler, sysroot, runtime_record, *, runtime_root=None, link=False):

@@ -19,6 +19,11 @@ the prerequisite coordinator. Its LLVM version, target, source archive,
 recipe files and OS revision must match the selected inputs. The final SDK
 copies `usr/pkg/llvm`; it does not substitute a GCC runtime. GCC retains its
 explicit `--compiler-family gcc --gcc-archive ... --pkgsrc ...` path.
+The final Clang build can opt into the base libc++ install paths with
+`--base-cxx` on `build-sysroot.py` or `build-os-release.py`. This selects
+`MKCXX=yes` and `MKLIBCXX=yes`, and installs relative aliases from the measured
+runtime into `usr/include/c++` and `usr/lib`. The default remains
+`MKLIBCXX=no`; bootstrap phases and GCC builds never install these aliases.
 The runtime manifest keeps the Ports revision that produced it. A later
 unrelated Ports commit does not invalidate that origin when the relevant
 recipe files still match; changing a recorded recipe file does invalidate it.
@@ -54,9 +59,10 @@ errors. The adapter never removes conflicting files.
 
 `validate_base_aliases(sysroot, record)` checks the imported runtime and all
 derived base paths, including refusal of unlisted legacy C++ headers. These
-interfaces do not select a build configuration or change older sysroot records.
-Consumers must explicitly enable the adapter for their selected base libc++
-configuration; preliminary C-only and explicit GCC runtimes do not use it.
+checks are enabled for build/import records that select base libc++. Transfer
+provenance records the optional value `base_cxx: libcxx`; older manifests and
+build records without the selection retain their existing format and behavior.
+Preliminary C-only and explicit GCC runtimes do not use the adapter.
 The aliases preserve installation paths, not a claim of binary compatibility
 with the former libcxxrt implementation. Exceptions, TLS and shared-library
 execution still need target runtime checks.

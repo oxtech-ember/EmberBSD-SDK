@@ -11,6 +11,37 @@ from . import llvm_runtime, paths
 from .errors import SDKError
 
 
+def base_cxx_enabled(flags):
+    """Decode the recorded OS C++ selection without changing old records."""
+    if not isinstance(flags, (list, tuple)):
+        raise SDKError('invalid OS compiler flag record')
+    selected = {}
+    for flag in flags:
+        if not isinstance(flag, str):
+            raise SDKError('invalid OS compiler flag record')
+        if '=' not in flag:
+            continue
+        name, value = flag.split('=', 1)
+        raw_name = name
+        name = name.strip()
+        if name not in ('MKCXX', 'MKLIBCXX'):
+            if any(name.startswith(key) and name[len(key):].strip() in ('+', '?', ':')
+                   for key in ('MKCXX', 'MKLIBCXX')):
+                key = next(key for key in ('MKCXX', 'MKLIBCXX') if name.startswith(key))
+                raise SDKError('invalid or conflicting ' + key + ' assignments')
+            continue
+        if raw_name != name:
+            raise SDKError('invalid or conflicting ' + name + ' assignments')
+        if name in selected or value not in ('yes', 'no'):
+            raise SDKError('invalid or conflicting ' + name + ' assignments')
+        selected[name] = value
+    cxx = selected.get('MKCXX', 'no')
+    libcxx = selected.get('MKLIBCXX', 'no')
+    if libcxx == 'yes' and cxx != 'yes':
+        raise SDKError('MKLIBCXX=yes requires MKCXX=yes')
+    return cxx == 'yes' and libcxx == 'yes'
+
+
 def _directories(leaves):
     result = set()
     for name in leaves:
@@ -93,6 +124,24 @@ def base_alias_plan(record):
             add('usr/lib/' + posixpath.basename(name), name)
     _portable_names(plan)
     return dict(sorted(plan.items()))
+
+
+def validate_base_alias_inventory(rows, record):
+    """Validate the reserved portable alias namespace from sysroot rows."""
+    plan = base_alias_plan(record)
+    directories = _directories(plan)
+    for name in directories:
+        row = rows.get(name)
+        if not isinstance(row, dict) or row.get('kind') != 'directory':
+            raise SDKError('LLVM base alias directory is missing or changed: ' + name)
+    for name, target in plan.items():
+        row = rows.get(name)
+        if not isinstance(row, dict) or row.get('kind') != 'link' or row.get('target') != target:
+            raise SDKError('LLVM base alias is missing or changed: ' + name)
+    for name in rows:
+        if name.startswith('usr/include/c++/') and name not in directories and name not in plan:
+            raise SDKError('unlisted path in LLVM base C++ namespace: ' + name)
+    return plan
 
 
 def _root(root):

@@ -17,7 +17,7 @@ import stat
 import tarfile
 import tempfile
 
-from . import inventory, jsonio, paths, publication, tarstream, llvm_runtime
+from . import inventory, jsonio, paths, publication, tarstream, llvm_runtime, llvm_runtime_install
 from .target_toolchain import CLANG_BINARIES, validate_clang_identity
 from .errors import SDKError
 from .sysroot_builder import validate_native_binding
@@ -189,6 +189,7 @@ def _provenance(receipt, target):
                 or receipt['signature']['target'] != definition):
             raise SDKError('export requires a completed matching SDK sysroot build')
         signature = receipt['signature']
+        base_cxx = llvm_runtime_install.base_cxx_enabled(signature.get('flags', []))
         if receipt['version'] >= 2:
             validate_native_binding(signature, receipt['paths'])
         compiler = signature['compiler']
@@ -206,6 +207,8 @@ def _provenance(receipt, target):
             compiler_identity = dict(family='clang', version=compiler['version'], triplet=definition['triplet'],
                 binaries={name: _digest(compiler['binaries'][name]['sha256']) for name in CLANG_BINARIES})
         else:
+            if base_cxx:
+                raise SDKError('GCC sysroot cannot select LLVM libc++ base aliases')
             if (signature.get('compiler_family', 'gcc') != 'gcc' or compiler['version'] != '16.2.0' or
                     compiler['triplet'] != definition['triplet'] or compiler['threads'] != 'posix'):
                 raise SDKError('export requires the common GCC16 compiler receipt')
@@ -216,11 +219,14 @@ def _provenance(receipt, target):
         host = signature['host']
         if not isinstance(host, str) or re.fullmatch('[A-Za-z0-9_.+-]{1,160}', host) is None:
             raise SDKError('invalid build host identity')
-        return dict(sources=sources, build_host=host,
+        result = dict(sources=sources, build_host=host,
                     compiler=compiler_identity,
                     runtime_sha256=_hash_json(signature['runtime']),
                     build_context_sha256=_hash_json(signature),
                     build_receipt_sha256=_hash_json(receipt))
+        if receipt['version'] == 3 and base_cxx:
+            result['base_cxx'] = 'libcxx'
+        return result
     except (KeyError, TypeError) as exc:
         raise SDKError('missing sysroot build provenance') from exc
 
@@ -284,6 +290,9 @@ def export_sysroot(source, output, *, target):
     receipt = jsonio.loads_json(_read(receipt_path, MAX_MANIFEST), max_bytes=MAX_MANIFEST)
     provenance = _provenance(receipt, target)
     rows = inventory.sysroot(source, definition['elf'], exclude=EXCLUDED)
+    if provenance.get('base_cxx') == 'libcxx':
+        llvm_runtime_install.validate_base_aliases(source, receipt['signature']['runtime']['manifest'])
+        llvm_runtime_install.validate_base_alias_inventory(rows, receipt['signature']['runtime']['manifest'])
     if receipt.get('outputs') != rows:
         raise SDKError('sysroot differs from the completed build receipt')
     total = _validate_rows(rows, MAX_BYTES)
@@ -377,8 +386,10 @@ def validate_manifest(m, *, target, max_bytes=MAX_BYTES):
         raise SDKError('invalid transfer payload metadata')
     _digest(p['sha256'])
     provenance = m['provenance']
-    if not isinstance(provenance, dict) or set(provenance) != {
-            'sources', 'build_host', 'compiler', 'runtime_sha256', 'build_context_sha256', 'build_receipt_sha256'}:
+    provenance_keys = {'sources', 'build_host', 'compiler', 'runtime_sha256', 'build_context_sha256', 'build_receipt_sha256'}
+    if (not isinstance(provenance, dict) or
+            set(provenance) not in (provenance_keys, provenance_keys | {'base_cxx'}) or
+            ('base_cxx' in provenance and (m['version'] != 2 or provenance['base_cxx'] != 'libcxx'))):
         raise SDKError('invalid transfer provenance')
     try:
         host = provenance['build_host']
@@ -424,6 +435,8 @@ def validate_manifest(m, *, target, max_bytes=MAX_BYTES):
             if (m['inventory'].get(prefix) != {'kind':'directory', 'mode':runtime['root_mode']} or
                     subtree != runtime['inventory']):
                 raise SDKError('transfer runtime differs from the sysroot payload')
+            if provenance.get('base_cxx') == 'libcxx':
+                llvm_runtime_install.validate_base_alias_inventory(m['inventory'], runtime['manifest'])
             files = {prefix+'/'+name:row['sha256'] for name,row in runtime['inventory'].items() if row['kind']=='file'}
             links = {prefix+'/'+name:row['target'] for name,row in runtime['inventory'].items() if row['kind']=='link'}
             if files != record['files'] or links != record['symlinks']:
@@ -519,6 +532,8 @@ def import_sysroot(bundle, destination, *, target, manifest_sha256, max_bytes=MA
         _restore(payload, tree, manifest['inventory'])
         if inventory.sysroot(tree, target_definition(target)['elf']) != manifest['inventory']:
             raise SDKError('restored inventory or filesystem metadata mismatch')
+        if manifest['version'] == 2 and manifest['provenance'].get('base_cxx') == 'libcxx':
+            llvm_runtime_install.validate_base_aliases(tree, manifest['runtime']['manifest'])
         # Preserve portable provenance, not the builder's host paths or logs.
         jsonio.write_json(os.path.join(tree, '.prebuild-sdk-import.json'),
                           dict(format='emberbsd-sysroot-import', version=1,

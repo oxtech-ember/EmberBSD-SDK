@@ -301,6 +301,31 @@ else: raise SystemExit('unexpected operation')
 
 
 class BuilderReleaseTests(TemporaryCase):
+    def test_producer_commands_reject_invalid_or_non_clang_base_cxx(self):
+        with self.assertRaisesRegex(SDKError, 'must be boolean'):
+            producer_commands('aarch64', {}, {}, 'a' * 40, 1, '2', '/bin/sh',
+                compiler_family='clang', base_cxx='false')
+        with self.assertRaisesRegex(SDKError, 'require the selected Clang'):
+            producer_commands('aarch64', {}, {}, 'a' * 40, 1, '2', '/bin/sh',
+                compiler_family='gcc', base_cxx=True)
+
+    def test_clang_release_base_cxx_selection_is_reconstructed_from_flags(self):
+        class ClangRelease(OSReleaseBuilder):
+            compiler = llvm_fixtures.ClangBuilder.compiler
+        options = release_fixture(self.root, 'aarch64')
+        builder, _ = llvm_fixtures.LLVMBuilderTests.builder(self, options, ClangRelease)
+        builder.options['base-cxx'] = True
+        receipt = builder.run()
+        output = Path(builder.paths['destination'])
+        profile = jsonio.read_json(output / 'build-profile.json')
+        self.assertIn('MKLIBCXX=yes', receipt['signature']['flags'])
+        validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
+        forged = copy.deepcopy(profile)
+        flags = forged['sdk_receipt']['signature']['flags']
+        flags[flags.index('MKCXX=yes')] = 'MKCXX=no'
+        with self.assertRaisesRegex(SDKError, 'MKLIBCXX=yes requires MKCXX=yes'):
+            validate_profile(forged, receipt['sources']['os']['commit'], 'aarch64')
+
     def test_clang_release_uses_versioned_runtime_and_qualification(self):
         class ClangRelease(OSReleaseBuilder):
             compiler = llvm_fixtures.ClangBuilder.compiler

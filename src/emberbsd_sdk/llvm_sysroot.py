@@ -12,12 +12,15 @@ from .llvm_runtime import runtime_paths
 PRODUCER = 'pkgsrc/lang/compiler-rt/files/runtime.py'
 
 
-def llvm_flags(selected, *, phase):
+def llvm_flags(selected, *, phase, base_cxx=False):
     if phase not in ('headers', 'base', 'final'):
         raise SDKError('unsupported LLVM OS phase')
+    if type(base_cxx) is not bool:
+        raise SDKError('base C++ selection must be boolean')
     flags = ['EMBER_COMPILER_FAMILY=clang', 'EXTERNAL_TOOLCHAIN=' + selected['compiler'],
              'EMBER_LLVM_SOURCE=' + selected['llvm-source'],
-             'MKCXX=' + ('yes' if phase == 'final' else 'no'), 'MKLIBCXX=no']
+             'MKCXX=' + ('yes' if phase == 'final' else 'no'),
+             'MKLIBCXX=' + ('yes' if phase == 'final' and base_cxx else 'no')]
     if phase != 'headers':
         flags += ['EMBER_LIBUNWIND_ARCHIVE=' + selected['llvm-unwind'],
                   'EMBER_LLVM_RUNTIME_PHASE=' + ('full' if phase == 'final' else 'bootstrap'),
@@ -103,6 +106,8 @@ class LLVMCoordinator:
                                   'objects': os.path.join(self.object_root, phase),
                                   'tools': self.tools}
         options.pop('llvm-runtime-stage', None)
+        if phase != 'final':
+            options['base-cxx'] = False
         if phase == 'base':
             options['llvm-runtime-stage'] = os.path.join(self.work, 'bootstrap-stage')
         return options

@@ -411,7 +411,11 @@ class SysrootBuilder:
 
     def preflight(self):
         process.require_posix()
+        if type(self.options.get('base-cxx', False)) is not bool:
+            raise SDKError('base C++ selection must be boolean')
         clang = self.compiler_family() == 'clang'
+        if self.options.get('base-cxx', False) and not clang:
+            raise SDKError('base C++ aliases require the selected Clang runtime')
         self.target = target_definition(self.options.get('target'))
         jobs = self.options.get('jobs')
         if not isinstance(jobs, str) or re.fullmatch('[1-9][0-9]*', jobs) is None:
@@ -506,7 +510,8 @@ class SysrootBuilder:
                 prefix = self.paths['runtime-prefix']
                 self.runtime_command = producer + ['verify', '--stage', stage, '--target', self.options['target'],
                     '--phase', 'full' if self.llvm_phase == 'final' else 'bootstrap', '--git', self.git_command]
-            selected_flags = llvm_flags(self.paths, phase=self.llvm_phase)
+            selected_flags = llvm_flags(self.paths, phase=self.llvm_phase,
+                                        base_cxx=self.options.get('base-cxx', False))
             replaced = {value.split('=', 1)[0] for value in selected_flags}
             common_flags = [value for value in self.FLAGS if value.split('=', 1)[0] not in replaced]
             self.flags = common_flags + selected_flags
@@ -650,11 +655,19 @@ class SysrootBuilder:
                 signal.signal(number, previous)
 
     def copy_runtime(self):
+        clang = self.compiler_family() == 'clang'
+        from . import llvm_runtime_install
+        base_cxx = llvm_runtime_install.base_cxx_enabled(self.flags)
+        if base_cxx and (not clang or self.llvm_phase != 'final'):
+            raise SDKError('base C++ aliases require the final Clang producer profile')
         if self.verify_runtime() != self.runtime_record:
             raise SDKError('runtime changed since preflight')
         source = self.paths['runtime-prefix']
-        clang = self.compiler_family() == 'clang'
         destination = os.path.join(self.paths['destination'], 'usr/pkg/llvm' if clang else 'usr/pkg/gcc16')
+        alias_plan = None
+        if base_cxx:
+            alias_plan = llvm_runtime_install.preflight_base_aliases(
+                self.paths['destination'], self.runtime_record['manifest'])
         self.mkdirs(os.path.dirname(destination), self.paths['destination'])
         os.mkdir(destination)
         rows = self.runtime_record['inventory']
@@ -684,6 +697,9 @@ class SysrootBuilder:
             raise SDKError('copied runtime differs from the verified payload')
         if self.verify_runtime() != self.runtime_record:
             raise SDKError('runtime inputs changed during copy')
+        if alias_plan is not None:
+            llvm_runtime_install.install_base_aliases(self.paths['destination'],
+                self.runtime_record['manifest'])
 
     def configure_signature(self):
         """Allow a producer profile to bind its flags before object reuse checks."""

@@ -95,6 +95,13 @@ class SysrootTransferTests(TemporaryCase):
         pin = self.export()['manifest_sha256']
         self.restore(pin)
 
+    def test_gcc_build_receipt_cannot_claim_libcxx_base_aliases(self):
+        changed = json.loads((self.source / Builder.RECEIPT).read_text())
+        flags = changed['signature']['flags']
+        flags[flags.index('MKLIBCXX=no')] = 'MKLIBCXX=yes'
+        with self.assertRaisesRegex(SDKError, 'GCC sysroot cannot select'):
+            transfer._provenance(changed, 'aarch64')
+
     def repin(self, mutate):
         path = self.bundle / 'manifest.json'
         manifest = json.loads(path.read_text())
