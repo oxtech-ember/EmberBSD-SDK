@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import test_core  # Adds the SDK source to sys.path.
 from emberbsd_sdk import bootstrap_history_context as context
 from emberbsd_sdk import jsonio, native_toolset
 from emberbsd_sdk.errors import SDKError

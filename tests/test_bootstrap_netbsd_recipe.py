@@ -9,6 +9,7 @@ import unittest
 import subprocess
 from unittest.mock import patch
 
+import test_core  # Adds the SDK source to sys.path.
 from emberbsd_sdk import bootstrap_netbsd_recipe, bootstrap_seed, bootstrap_pilot
 from emberbsd_sdk.errors import CommandError, SDKError
 from emberbsd_sdk.inventory import sha256_file, snapshot_tree

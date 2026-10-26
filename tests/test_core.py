@@ -282,5 +282,33 @@ class CaseIdentityTests(TemporaryCase):
         self.assertFalse(paths.inside(alias, source))
 
 
+class TestModuleImportTests(TemporaryCase):
+    def test_each_test_module_imports_without_prior_modules(self):
+        # Discovery imports modules in sorted order in one interpreter. Import
+        # each module in a fresh module and path state, as if it sorted first.
+        code = '''
+import importlib, os, sys, traceback
+tests = sys.argv[1]
+base = [entry for entry in sys.path if entry != tests]
+local = ('emberbsd_sdk', 'test_')
+names = sorted(name[:-3] for name in os.listdir(tests)
+               if name.startswith('test_') and name.endswith('.py'))
+failures = []
+for name in names:
+    sys.path[:] = [tests] + base
+    for module in [m for m in sys.modules if m.startswith(local) or m.endswith('_fixture')]:
+        del sys.modules[module]
+    try:
+        importlib.import_module(name)
+    except BaseException:
+        failures.append(name + ': ' + traceback.format_exc(limit=-1))
+sys.stdout.write(''.join(failures))
+raise SystemExit(1 if failures else 0)
+'''
+        result = subprocess.run([sys.executable, '-B', '-I', '-S', '-c', code, str(SDK_SOURCE / 'tests')],
+                                cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 if __name__ == '__main__':
     unittest.main()

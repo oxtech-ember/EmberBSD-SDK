@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+import test_core  # Adds the SDK source to sys.path.
 from emberbsd_sdk.process import SessionInspector, OwnedProcessGroup, run_logged, sanitized_environment
 
 

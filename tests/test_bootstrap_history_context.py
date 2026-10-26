@@ -3,6 +3,7 @@
 """Bounded synthetic history DAGs. No native subprocesses or acceptance."""
 import unittest
 from unittest.mock import patch
+import test_core  # Adds the SDK source to sys.path.
 from emberbsd_sdk.bootstrap_seed import _history
 
 

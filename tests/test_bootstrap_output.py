@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 
+import test_core  # Adds the SDK source to sys.path.
 from emberbsd_sdk import bootstrap_output
 from emberbsd_sdk.bootstrap_output import (_planned_links as planned,
     _contents_changes as contents, _equal_except_links as compare,

@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import test_core  # Adds the SDK source to sys.path.
 from emberbsd_sdk.bootstrap_netbsd_seed_admission import (
     validate_retained_base_history, validate_retained_local_history,
 )
