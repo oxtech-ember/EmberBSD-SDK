@@ -194,6 +194,8 @@ def metadata_assignments(plan, descriptor, commands, flags):
         _require(len(commands[role]) == 1, 'metadata utility must have one selected invocation')
         variables['EMBERBSD_GCC16_' + key] = _safe_path(commands[role][0])
     if _native_provider_profile(data['profile']['sha256']):
+        variables['EMBERBSD_DARWIN_DSYMUTIL'] = variables['EMBERBSD_GCC16_DSYMUTIL']
+    if _native_provider_profile(data['profile']['sha256']):
         for key, role in _DARWIN_CMAKE_TOOLS:
             if role in plan['required_roles']:
                 _require(len(commands.get(role, ())) == 1 and

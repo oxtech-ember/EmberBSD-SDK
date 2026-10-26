@@ -41,6 +41,13 @@ class NativeProviderTests(unittest.TestCase):
         return producer.metadata_assignments(case.plan, case.descriptor, case.commands,
                                              case.descriptor['abi_flags'])
 
+    def test_dsymutil_has_native_provider_selector_and_keeps_legacy_name(self):
+        self.case.plan['metadata']['profile']['sha256'] = producer.NATIVE_PROVIDER_PROFILE_SHA256
+        values = self.values()
+        selected = self.case.commands['dsymutil'][0]
+        self.assertEqual(values['EMBERBSD_GCC16_DSYMUTIL'], selected)
+        self.assertEqual(values['EMBERBSD_DARWIN_DSYMUTIL'], selected)
+
     def test_iconv_profile_is_admitted_by_metadata_and_refused_for_initial(self):
         case = self.case
         for constant, expected in (

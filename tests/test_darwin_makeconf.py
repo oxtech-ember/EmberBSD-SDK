@@ -74,6 +74,7 @@ class DarwinMakeconfTests(TemporaryCase):
         data = Path(self.options['output']).read_text()
         self.assertIn('EMBERBSD_COMPILER_FAMILY= clang\n', data)
         self.assertIn('EMBERBSD_DARWIN_LD64_LLD= ' + self.tools['ld'], data)
+        self.assertIn('EMBERBSD_DARWIN_DSYMUTIL= ' + self.tools['dsymutil'], data)
         self.assertIn('EMBERBSD_DARWIN_SEED_AS= ' + self.tools['cc'], data)
         self.assertIn(' -c -x assembler\n', data)
         self.assertNotIn('EMBERBSD_GCC16_', data)
