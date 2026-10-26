@@ -84,6 +84,25 @@ class NawkHistoryTests(unittest.TestCase):
         Path(self.image['path']).unlink()
         self.assertEqual(self.verify(),[])
 
+    def test_later_seed_keeps_loader_policy_and_rejects_new_configuration(self):
+        c = self.c
+        self.assertEqual(runtime.policy_read_paths(self.descriptor), [str(c.loader_config)])
+        unrelated = copy.deepcopy(self.descriptor)
+        unrelated['providers']['nawk']['recipe'] = 'other/bootstrap.json'
+        self.assertEqual(runtime.policy_read_paths(unrelated), [])
+        for kind in ('file', 'directory', 'symlink', 'dangling-symlink'):
+            with self.subTest(kind=kind):
+                if kind == 'file': c.loader_config.write_text('/changed/search/path\n')
+                elif kind == 'directory': c.loader_config.mkdir()
+                else: c.loader_config.symlink_to(c.shell.mksh if kind == 'symlink' else c.base / 'absent')
+                try:
+                    with self.assertRaisesRegex(SDKError, 'requires absent loader configuration'):
+                        self.verify()
+                    self.assertEqual(self.verify(inspect_inputs=False), [])
+                finally:
+                    if kind == 'directory': c.loader_config.rmdir()
+                    else: c.loader_config.unlink()
+
     def test_selected_shell_remains_a_live_dependency(self):
         self.c.shell.mksh.write_bytes(elf()+b'changed shell')
         with self.assertRaises(SDKError):self.verify()

@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 from test_bootstrap_seed import SeedFixture
 from test_bootstrap_netbsd_gcc16 import PkgsrcToolsFixture
-from emberbsd_sdk import bootstrap_nawk as nawk, bootstrap_pilot, bootstrap_program as program
+from emberbsd_sdk import bootstrap_nawk as nawk, bootstrap_nawk_runtime as runtime, bootstrap_pilot, bootstrap_program as program
 from emberbsd_sdk.bootstrap_producer import validate_producer_plan
 from emberbsd_sdk.bootstrap_seed import _history, load_bootstrap_seed
 from emberbsd_sdk.errors import SDKError
@@ -50,6 +50,9 @@ class NawkFixture:
         temporary = tempfile.TemporaryDirectory()
         case.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name).resolve()
+        self.loader_config = self.base / 'ld.so.conf'
+        loader_config = patch.object(runtime, 'LOADER_CONFIG', str(self.loader_config))
+        loader_config.start(); case.addCleanup(loader_config.stop)
         self.seed = SeedFixture(self.base)
         self.f, self.descriptor = self.seed.native, self.seed.descriptor
         self.descriptor['host'] = dict(os='NetBSD', cpu='amd64')
@@ -160,7 +163,10 @@ class NawkFixture:
                 return dict(plan=case.validate())
         self.plan_ref = self.f.document(self.plan)
         self.accepted_ref = self.f.document(dict(input_route_audit=self.f.raw(b'synthetic acceptance')))
-        with patch('emberbsd_sdk.bootstrap_seed.load_bootstrap_seed', side_effect=lambda *a, **kw: Selection()), \
+        def select(*args, **kwargs):
+            case.validate()
+            return Selection()
+        with patch('emberbsd_sdk.bootstrap_seed.load_bootstrap_seed', side_effect=select), \
              patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=self.fake):
             return bootstrap_pilot.run_producer(self.descriptor_ref['path'], descriptor_sha256=self.descriptor_ref['sha256'],
                 accepted_seed_receipt=self.accepted_ref, bootstrap_plan=self.plan_ref, required_roles=self.plan['required_roles'])
@@ -255,7 +261,44 @@ class NawkProducerTests(unittest.TestCase):
             result = c.run()
         self.assertEqual(result['status'], 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW')
         shared = next(paths for paths, mode in calls if mode)
-        self.assertTrue({str(alias), str(loader), str(sf.mksh)} <= shared)
+        self.assertTrue({str(alias), str(loader), str(sf.mksh), str(c.loader_config)} <= shared)
+
+    def test_any_loader_configuration_entry_refuses_before_any_child(self):
+        c = self.c
+        for kind in ('file', 'directory', 'symlink', 'dangling-symlink'):
+            with self.subTest(kind=kind):
+                if kind == 'file':
+                    c.loader_config.write_text('/unaccepted/library/path\n')
+                elif kind == 'directory':
+                    c.loader_config.mkdir()
+                else:
+                    target = c.shell.mksh if kind == 'symlink' else c.base / 'absent'
+                    c.loader_config.symlink_to(target)
+                try:
+                    with patch.object(c, 'fake', side_effect=AssertionError('no child')), \
+                         self.assertRaisesRegex(SDKError, 'requires absent loader configuration'):
+                        c.run()
+                    self.assertFalse(c.work.exists())
+                finally:
+                    if kind == 'directory': c.loader_config.rmdir()
+                    else: c.loader_config.unlink()
+
+    def test_loader_configuration_appearance_after_commands_refuses_result(self):
+        c = self.c
+        original = c.fake
+        def create_after_last_command(argv, log, **kwargs):
+            result = original(argv, log, **kwargs)
+            if Path(log).stem == c.plan['commands'][-1]['id']:
+                c.loader_config.symlink_to(c.base / 'absent')
+            return result
+        with patch.object(c, 'fake', side_effect=create_after_last_command):
+            result = c.run()
+        self.assertEqual(result['status'], 'FAILED')
+        self.assertIn('requires absent loader configuration', result['error'])
+        self.assertFalse(result['inputs_revalidated_after_drain'])
+        self.assertFalse(result['ordinary_provider_qualified'])
+        self.assertTrue(result['all_commands_drained'])
+        self.assertTrue(result['all_leases_closed'])
 
     def test_input_shell_runtime_is_required_and_live_before_any_child(self):
         c=self.c

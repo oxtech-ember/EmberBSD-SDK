@@ -50,6 +50,12 @@ shell; include every library and interpreter target. The plan validator checks
 these current bytes and ELF metadata before any producer child. The independent
 input gate must establish that this graph is complete.
 
+This fixed profile requires `/etc/ld.so.conf` to be absent. A file, directory,
+symlink, or dangling symlink causes refusal. The runner takes a read lease on
+that exact path. It checks absence before any child and after all children
+drain. It does not read or inventory the rest of `/etc`. A host that needs this
+loader configuration requires a supported contract extension before use.
+
 Use the selected SDK control Python:
 
 ```sh
@@ -170,8 +176,10 @@ semantic review and qualification limits. A producer must not issue its own
 independent acceptance.
 
 The next seed loader verifies the exact history and current copied ELF bytes.
-It rechecks the shell, loader aliases, and all runtime library bytes. It refuses
-a selected `sh` route that differs from the path compiled into nawk.
+It rechecks the shell, loader aliases, and all runtime library bytes.
+It also requires `/etc/ld.so.conf` to remain absent. The next bootstrap runner
+retains the exact read lease for that path when it reuses this nawk provider.
+It refuses a selected `sh` route that differs from the path compiled into nawk.
 The original compiler bundle and original output may be retired after their
 required evidence is retained. The selected shell and runtime remain live
 inputs. A shell-path change requires a new nawk build and acceptance.

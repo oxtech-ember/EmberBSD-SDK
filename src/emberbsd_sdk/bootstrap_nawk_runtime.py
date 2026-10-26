@@ -13,8 +13,9 @@ import struct
 
 from .elf import MAX_HEADERS, parse_elf_header, read_elf_dynamic
 from .native_toolset import _absolute, _bytes, _envelope, _file, _json, _require, _sha
-from .paths import canonical_existing, inside, open_regular, verify_stable
+from .paths import canonical_existing, entry, inside, open_regular, verify_stable
 
+LOADER_CONFIG = '/etc/ld.so.conf'
 AUDIT_FORMAT = 'emberbsd-netbsd-nawk-bootstrap-runtime-audit'
 CHECKS = ['git-source-membership', 'native-compile-link', 'source-semantics',
           'reported-tool-routes', 'netbsd-output-runtime', 'selected-command-shell']
@@ -133,7 +134,24 @@ def verify_acceptance(accepted, plan, result, image):
     return audit
 
 
+def validate_loader_config():
+    """This initial profile does not support a loader configuration entry."""
+    _require(entry(LOADER_CONFIG) is None,
+             'initial NetBSD nawk requires absent loader configuration: ' + LOADER_CONFIG)
+
+
+def policy_read_paths(descriptor):
+    """Keep the fixed loader policy leased when a later seed reuses nawk."""
+    from .bootstrap_nawk import MANIFEST_RELATIVE
+    if any(row.get('origin') == 'source-build' and row.get('recipe') == MANIFEST_RELATIVE
+           for row in descriptor['providers'].values()):
+        validate_loader_config()
+        return [LOADER_CONFIG]
+    return []
+
+
 def _revalidate_graph(nodes, root_paths, descriptor):
+    validate_loader_config()
     roots = [row['root'] for row in descriptor['host_abi']['libraries']]
     for path, node in nodes.items():
         actual = root_paths.get(path, path)

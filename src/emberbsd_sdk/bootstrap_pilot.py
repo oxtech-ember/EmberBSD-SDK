@@ -322,6 +322,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         roots = [descriptor['bundle_root']] + [row['root'] for kind in ('headers', 'libraries')
             for row in descriptor['host_abi'][kind]]
         roots += [plan['ports_export']['root'], plan['netbsd']['makeconf']['path']]
+    from .bootstrap_nawk_runtime import policy_read_paths
+    roots += policy_read_paths(descriptor)
     if nawk:
         from .bootstrap_nawk import read_inputs
         nawk_roots, nawk_documents = read_inputs(plan)

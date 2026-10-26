@@ -205,7 +205,9 @@ def read_inputs(plan):
     selected = documents[1]
     runtime = _json(plan['program']['shell_runtime'])
     documents.append(runtime)
-    paths = {selected['work_root'], *runtime['nodes']}
+    from .bootstrap_nawk_runtime import LOADER_CONFIG, validate_loader_config
+    validate_loader_config()
+    paths = {selected['work_root'], *runtime['nodes'], LOADER_CONFIG}
     for row in runtime['nodes'].values():
         for key in ('interpreter', 'interpreter_target'):
             if row[key] is not None:
