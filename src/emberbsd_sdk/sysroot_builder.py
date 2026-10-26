@@ -654,7 +654,7 @@ class SysrootBuilder:
             for number, previous in self.signal_handlers.items():
                 signal.signal(number, previous)
 
-    def copy_runtime(self):
+    def copy_runtime(self, *, destination=None, installer=None):
         clang = self.compiler_family() == 'clang'
         from . import llvm_runtime_install
         base_cxx = llvm_runtime_install.base_cxx_enabled(self.flags)
@@ -662,19 +662,42 @@ class SysrootBuilder:
             raise SDKError('base C++ aliases require the final Clang producer profile')
         if self.verify_runtime() != self.runtime_record:
             raise SDKError('runtime changed since preflight')
+        root = self.paths['destination'] if destination is None else paths.path_string(destination)
+        paths.real_directory(root)
+        if ((root != self.paths['destination'] and not paths.inside(root, self.paths['destination'])) or
+                paths.canonical_existing(root) != root):
+            raise SDKError('runtime destination must stay within the owned producer output')
+        if installer is not None and getattr(installer, 'root', None) != root:
+            raise SDKError('runtime installer does not match its destination')
         source = self.paths['runtime-prefix']
-        destination = os.path.join(self.paths['destination'], 'usr/pkg/llvm' if clang else 'usr/pkg/gcc16')
+        destination = os.path.join(root, 'usr/pkg/llvm' if clang else 'usr/pkg/gcc16')
+        if paths.entry(destination) is not None:
+            raise SDKError('runtime destination already exists')
         alias_plan = None
         if base_cxx:
             alias_plan = llvm_runtime_install.preflight_base_aliases(
-                self.paths['destination'], self.runtime_record['manifest'])
-        self.mkdirs(os.path.dirname(destination), self.paths['destination'])
-        os.mkdir(destination)
+                root, self.runtime_record['manifest'])
+        if installer is None:
+            self.mkdirs(os.path.dirname(destination), root)
+            os.mkdir(destination)
+        else:
+            parent = root
+            for name in os.path.relpath(os.path.dirname(destination), root).split(os.sep):
+                parent = os.path.join(parent, name)
+                installer.directory(parent, 0o755)
+            installer.directory(destination, self.runtime_record['root_mode'])
         rows = self.runtime_record['inventory']
         for relative, row in rows.items():
             self.interrupted()
             src, dst = os.path.join(source, relative), os.path.join(destination, relative)
-            if row['kind'] == 'directory':
+            if installer is not None:
+                if row['kind'] == 'directory':
+                    installer.directory(dst, row['mode'])
+                elif row['kind'] == 'link':
+                    installer.link(row['target'], dst, row['mode'])
+                else:
+                    installer.file(src, dst, row['mode'])
+            elif row['kind'] == 'directory':
                 os.mkdir(dst)
             elif row['kind'] == 'link':
                 os.symlink(row['target'], dst)
@@ -698,8 +721,8 @@ class SysrootBuilder:
         if self.verify_runtime() != self.runtime_record:
             raise SDKError('runtime inputs changed during copy')
         if alias_plan is not None:
-            llvm_runtime_install.install_base_aliases(self.paths['destination'],
-                self.runtime_record['manifest'])
+            llvm_runtime_install.install_base_aliases(root,
+                self.runtime_record['manifest'], installer=installer)
 
     def configure_signature(self):
         """Allow a producer profile to bind its flags before object reuse checks."""

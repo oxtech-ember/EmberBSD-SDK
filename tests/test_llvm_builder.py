@@ -5,6 +5,8 @@
 from pathlib import Path
 import json
 import copy
+import os
+import shutil
 from unittest.mock import patch
 
 from test_core import TemporaryCase
@@ -233,6 +235,44 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
             builder.llvm_phase = 'base'
             with self.assertRaisesRegex(SDKError, 'final Clang'):
                 builder.copy_runtime()
+
+    def test_release_destination_uses_one_installer_for_payload_and_aliases(self):
+        builder, runtime = self.builder()
+        builder.options['base-cxx'] = True
+        builder.preflight()
+        output = Path(builder.paths['destination']); output.mkdir(parents=True)
+        destination = output / 'dest'; destination.mkdir()
+        events = []
+
+        class Installer:
+            root = str(destination)
+            def directory(self, path, mode):
+                events.append(('directory', path))
+                Path(path).mkdir(exist_ok=True)
+            def file(self, source, path, mode):
+                events.append(('file', path))
+                shutil.copyfile(source, path)
+                os.chmod(path, mode)
+            def link(self, target, path, mode):
+                events.append(('link', path))
+                os.symlink(target, path)
+
+        builder.copy_runtime(destination=destination, installer=Installer())
+        self.assertFalse((output / 'usr').exists())
+        self.assertTrue((destination / 'usr/include/c++/vector').is_symlink())
+        self.assertIn(('link', str(destination / 'usr/lib/libc++.so')), events)
+        self.assertIn(('file', str(destination / 'usr/pkg/llvm/lib/libc++.so.1')), events)
+        self.assertEqual(inventory.snapshot_tree(destination / 'usr/pkg/llvm', machine=183),
+                         builder.runtime_record['inventory'])
+
+    def test_runtime_destination_cannot_escape_the_owned_output(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        output = Path(builder.paths['destination']); output.mkdir(parents=True)
+        outside = self.root / 'outside'; outside.mkdir()
+        with self.assertRaisesRegex(SDKError, 'owned producer output'):
+            builder.copy_runtime(destination=outside)
+        self.assertEqual(list(outside.iterdir()), [])
 
     def test_runtime_of_another_llvm_version_fails_before_outputs(self):
         builder, runtime = self.builder()

@@ -172,6 +172,40 @@ real directory. `runtime_paths(root, record)` derives the target resource and
 static unwind paths from measured artifact locations. Completed application
 consumers use the [shared compiler commands](application-toolchain.md).
 
+## Native base installation and set lists
+
+`SysrootBuilder.copy_runtime(destination=..., installer=...)` uses the same
+verified inventory and final byte/mode checks as an ordinary sysroot copy.
+The optional destination must be inside the producer's owned output. Base
+aliases use the same installer through
+`llvm_runtime_install.install_base_aliases(root, record, installer=...)`.
+Omitting these arguments preserves the existing Python copy operation.
+
+`native_runtime_install.NativeRuntimeInstaller(destination, tools, os_source,
+run)` supplies the three operations `directory(path, mode)`,
+`file(source, destination, mode)` and `link(literal_target, destination, mode)`.
+`tools['install']` is the already selected native OS `TOOL_INSTALL` executable;
+`run(argv)` executes it in that native environment and reports failures. The
+adapter requires the existing distribution `METALOG`, uses native `-U/-M/-D/-N`
+metadata handling and literal `-l s` links, and preserves existing directories.
+It does not select tools again for each file or implement an mtree serializer.
+
+`llvm_runtime_sets.prepare_sets_overlay(source_lists, destination, record)`
+creates a complete list root from the OS `distrib/sets` root and the verified
+runtime record (manifest, observed inventory and root mode). The original
+lists remain unchanged; only the overlay's base/comp `mi` lists gain derived
+payload and alias rows, including observed empty directories. ET_DYN files
+and links resolving to them belong to base, including unversioned links that
+may also serve the loader. Licenses belong to base. Headers, static archives,
+text linker scripts and other development files belong to comp. An alias
+inherits its runtime leaf's set. Native list syntax cannot represent whitespace,
+backslash or `#` in these paths; such an input is refused before creating output.
+
+Enable the returned root with `EMBER_SETS_SOURCE` only after a clean distribution
+has been checked and the runtime imported. Final checkflist and packaging must
+use that same root. The helpers provide installation and list mechanisms;
+they do not establish C++ ABI or target execution acceptance.
+
 ## Shared source extraction
 
 `sourceprep.apply_patch` can keep BSD patch backups outside prepared sources

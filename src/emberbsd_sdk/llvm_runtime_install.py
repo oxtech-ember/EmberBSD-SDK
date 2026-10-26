@@ -182,17 +182,26 @@ def preflight_base_aliases(root, record):
     return plan
 
 
-def install_base_aliases(root, record):
+def install_base_aliases(root, record, *, installer=None):
     """Install relative leaf aliases after verifying the imported runtime bytes."""
     root = _root(root)
+    if installer is not None and getattr(installer, 'root', None) != root:
+        raise SDKError('LLVM alias installer does not match its destination')
     llvm_runtime.validate_install(root, record)
     plan = preflight_base_aliases(root, record)
     for name in sorted(_directories(plan), key=lambda name: (name.count('/'), name)):
-        os.makedirs(os.path.join(root, name), mode=0o755, exist_ok=True)
+        path = os.path.join(root, name)
+        if installer is None:
+            os.makedirs(path, mode=0o755, exist_ok=True)
+        else:
+            installer.directory(path, 0o755)
     for name, target in plan.items():
         path = os.path.join(root, name)
         if paths.entry(path) is None:
-            os.symlink(target, path)
+            if installer is None:
+                os.symlink(target, path)
+            else:
+                installer.link(target, path, 0o755)
     return plan
 
 
