@@ -95,8 +95,8 @@ Signal, fault-injection, alternate-locale, C analysis, memory and ordinary quali
 ## Initial touch and named component inputs
 
 The fixed `touch-bootstrap` profile retains the complete canonical `usr.bin/touch/touch.c`.
-Its seven-member source proof includes the normal host recipe, target Makefile,
-manual, owner README, source checks, and manifest.
+Its seven-member source proof includes the C file, normal host recipe,
+shared host Makefile, target Makefile, owner README, source checks, and manifest.
 The `tools/touch/bootstrap.json` SHA256 is
 `096e55a50b02a993e465022733118c73cb3d9494c92a83b31b045b4a4b998542`.
 It has 36 fixed filesystem cases and 39 commands, including a separate runtime observation.
