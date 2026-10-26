@@ -399,18 +399,17 @@ class SysrootBuilder:
 
     def preflight(self):
         process.require_posix()
-        self.target = target_definition(self.options.get('target'))
-        jobs = self.options.get('jobs')
-        if not isinstance(jobs, str) or re.fullmatch('[1-9][0-9]*', jobs) is None:
-            raise SDKError('jobs must be a positive integer')
-        # Check the workspace target first, then refuse the runtime producer.
-        layout = workspace.inspect_layout(self.options['sdk'])
-        workspace.require_target(layout, self.options['target'])
         if self.compiler_family() == 'clang':
             raise SDKError('LLVM target runtime producer integration is not implemented; '
                            'a GCC runtime stage cannot be used for a Clang sysroot')
         if not self.options.get('gcc-archive'):
             raise SDKError('--gcc-archive is required for the explicit GCC runtime')
+        self.target = target_definition(self.options.get('target'))
+        jobs = self.options.get('jobs')
+        if not isinstance(jobs, str) or re.fullmatch('[1-9][0-9]*', jobs) is None:
+            raise SDKError('jobs must be a positive integer')
+        layout = workspace.inspect_layout(self.options['sdk'])
+        workspace.require_target(layout, self.options['target'])
         self.select_native_toolset()
         # Git is a source-inspection service. It is not a build-tool provider.
         self.git_command = self.find_command('git')
