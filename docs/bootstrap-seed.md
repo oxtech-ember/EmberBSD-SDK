@@ -536,6 +536,54 @@ This removes no output gate: graduation still needs the actual stage2/stage3
 comparison and production execution audit below. Ordinary NativeToolset
 selection remains unchanged.
 
+## Installed output assembly
+
+The complete Darwin recipe runner normalizes absolute symlinks whose targets
+remain inside its output prefix. It uses the existing prefix-link normalizer.
+Each changed link must have exactly one installed package owner. Its immediately
+paired `@comment Symlink:` record must match the original literal target.
+The assembler changes that record to the new relative target. It leaves all
+other package metadata and canonical package archives unchanged.
+
+Before mutation, the assembler checks the complete prefix and package database.
+It records both inventories, every selected link, and the original and replacement
+`+CONTENTS` bytes in a durable PLANNED ledger. External or missing destinations,
+unregistered links, duplicate owners, and mismatched comments fail before mutation.
+The final strict inventory must preserve the roster and all regular-file bytes.
+A partial failure retains the ledger and backups. It does not retry or roll back
+automatically. Canonical package archives retain their original package payload;
+the assembly receipt describes the installed SDK layout, not rebuilt packages.
+Initial-tool and NetBSD recipe paths retain their existing completion behavior.
+
+For a closed full-plan run that failed only on the strict link inventory check,
+use `emberbsd_sdk.bootstrap_output.assemble_completed_bootstrap_output`.
+`BOOTSTRAP_OUTPUT_ASSEMBLY_API` is 1. Pass the pinned `bootstrap_plan` and
+`completed_result` file references, a fresh absolute `evidence_root`, and the
+separate finalizer `finalizer_source` repository/commit pin.
+The helper verifies every planned command, successful actual exit, and combined
+log. It preserves the original returned and persisted FAILED results.
+It executes no producer commands and does not select a historical SDK.
+
+The caller must validate the original inputs with the original producer SDK
+before and after assembly. Keep its shared input leases through the whole call.
+Verify the finalizer source independently. The helper takes shared plan, result,
+and finalizer source leases plus exclusive work and evidence leases in the plan's
+lock namespace. Evidence may be below that namespace root; it must not contain
+it or overlap work and source inputs. Retain corresponding fences if the caller
+uses additional namespaces.
+
+The separate `emberbsd-bootstrap-output-finalization-result` receipt uses version
+1 and status `OUTPUT_ASSEMBLED_PENDING_INDEPENDENT_REVIEW`. It binds the original
+FAILED result, plan, finalizer source and module hash, assembly ledger, strict
+output inventory, and package inventory. It records `commands_reexecuted: false`,
+`original_producer_inputs_revalidated_here: false`, and
+`ordinary_provider_qualified: false`. The persisted receipt precedes lease closure;
+the returned object adds `all_leases_closed: true`. Ordinary exceptions preserve
+a FAILED assembly receipt. Interrupts preserve that receipt when possible and
+propagate to the caller. Independent acceptance must bind the original-loader
+revalidation and this separate assembly evidence. Output graduation and ordinary
+qualification below remain required.
+
 ## Output graduation
 
 Keep `accepted_input_scope: bootstrap-seed` in the native provider-build record.
