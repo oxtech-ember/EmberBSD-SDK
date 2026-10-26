@@ -20,8 +20,8 @@ conditional code path or successful syntax check is not platform acceptance.
 
 The OS and Ports producers use POSIX shell, make and their documented native
 tools. SDK calls those producers and records their actual inputs. Upstream
-CMake projects keep their CMake build interfaces. All target compilation uses
-the common GCC16 cross compiler.
+CMake projects keep their CMake build interfaces. Target compilation uses
+the selected Clang/LLVM prefix, or GCC for an explicit platform exception.
 
 The Darwin process backend uses `ps`, Python's session APIs and the public
 `proc_pid_rusage` interface through standard-library `ctypes`. The Linux backend

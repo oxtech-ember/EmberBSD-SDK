@@ -69,9 +69,14 @@ class NativeConsumerTests(TemporaryCase):
 
     def test_sysroot_and_release_do_not_have_unconditional_gate(self):
         for cls in (SysrootBuilder, OSReleaseBuilder):
-            builder = cls(self.options() | {'target': 'aarch64'})
+            builder = cls(self.options() | {'target': 'aarch64', 'llvm-runtime-stage': '/selected-stage'})
             with self.subTest(cls=cls), patch.object(builder, 'preflight', side_effect=SDKError('reached preflight')):
                 with self.assertRaisesRegex(SDKError, '^reached preflight$'):
+                    builder.run()
+            builder = cls(self.options() | {'target': 'aarch64'})
+            with self.subTest(cls=cls), patch('emberbsd_sdk.llvm_sysroot.LLVMCoordinator',
+                    side_effect=SDKError('reached bootstrap coordinator')):
+                with self.assertRaisesRegex(SDKError, '^reached bootstrap coordinator$'):
                     builder.run()
 
     def test_routing_publishes_real_selection_without_receipts(self):

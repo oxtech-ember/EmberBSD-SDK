@@ -19,13 +19,17 @@ class UniqueOption(argparse.Action):
 
 def main():
     parser = argparse.ArgumentParser(description='Build an EmberBSD OS sysroot with a native Ports prefix.')
-    for name in ('sdk', 'os', 'ports', 'compiler', 'runtime-work', 'pkgsrc', 'target', 'jobs', 'sdk-source', 'libedit-source', 'host-prefix'):
+    for name in ('sdk', 'os', 'ports', 'compiler', 'runtime-work', 'target', 'jobs', 'sdk-source', 'libedit-source', 'host-prefix'):
         parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix'}.get(name))
     parser.add_argument('--host-compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
                         help='Clang by default; select GCC explicitly for a platform exception')
     parser.add_argument('--compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
                         help='target compiler family, independent of host; defaults to Clang')
     parser.add_argument('--gcc-archive', action=UniqueOption, help='required only for an explicit GCC runtime')
+    parser.add_argument('--pkgsrc', action=UniqueOption, help='exported catalog for the explicit GCC runtime')
+    parser.add_argument('--llvm-source', action=UniqueOption, help='common Ports prepared LLVM source')
+    parser.add_argument('--llvm-runtime-stage', action=UniqueOption,
+                        help='reuse a completed common LLVM runtime; otherwise build its prerequisites')
     for name in ('destination', 'objects', 'tools'):
         parser.add_argument('--' + name, action=UniqueOption)
     for name in ('host-cc', 'host-cxx', 'python'):

@@ -10,6 +10,8 @@ from test_host_clang import ClangFixture
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.sysroot_builder import SysrootBuilder
 from emberbsd_sdk.targets import target_definition
+from emberbsd_sdk.workspace import create
+from emberbsd_sdk.target_toolchain import validate_clang_identity
 
 
 class TargetClangTests(TemporaryCase):
@@ -40,6 +42,7 @@ class TargetClangTests(TemporaryCase):
 
     def test_default_selects_clang_and_explicit_target(self):
         record = self.compiler()
+        validate_clang_identity(record, 'aarch64--netbsd')
         self.assertEqual(record['family'], 'clang')
         self.assertEqual(record['triplet'], 'aarch64--netbsd')
         self.assertEqual(record['reported_triplet'], 'aarch64-unknown-netbsd')
@@ -48,6 +51,14 @@ class TargetClangTests(TemporaryCase):
         self.assertEqual(record['binaries']['ar']['selected_path'], str(self.fixture.root / 'bin/llvm-ar'))
         self.assertEqual(record['commands']['as'], [str(self.fixture.root / 'bin/clang'),
             '--target=aarch64--netbsd', '-c', '-x', 'assembler'])
+
+    def test_portable_clang_identity_rejects_mixed_commands_without_reading_tools(self):
+        record = self.compiler()
+        with patch('emberbsd_sdk.paths.entry', side_effect=AssertionError('mutable tool inspection')):
+            validate_clang_identity(record, 'aarch64--netbsd')
+        record['commands']['cc'][-1] = '--ld-path=/other/ld.lld'
+        with self.assertRaisesRegex(SDKError, 'compiler command'):
+            validate_clang_identity(record, 'aarch64--netbsd')
 
     def test_missing_llvm_tool_does_not_fall_back_to_gnu(self):
         (self.fixture.root / 'bin/llvm-ar').unlink()
@@ -60,16 +71,22 @@ class TargetClangTests(TemporaryCase):
             self.compiler()
 
     def test_default_runtime_cannot_reuse_gcc_stage(self):
-        with self.assertRaisesRegex(SDKError, 'LLVM target runtime'):
-            SysrootBuilder({}).preflight()
+        sdk = self.root / 'sdk'; create(sdk, target='aarch64')
+        with self.assertRaisesRegex(SDKError, '--llvm-source'):
+            SysrootBuilder({'sdk': str(sdk), 'target': 'aarch64', 'jobs': '1',
+                            'runtime-work': '/gcc-stage'}).preflight()
 
     def test_unknown_family_is_rejected_before_selecting_inputs(self):
+        sdk = self.root / 'sdk'; create(sdk, target='aarch64')
         with self.assertRaisesRegex(SDKError, 'compiler family'):
-            SysrootBuilder({'compiler-family': 'automatic'}).preflight()
+            SysrootBuilder({'compiler-family': 'automatic', 'sdk': str(sdk),
+                            'target': 'aarch64', 'jobs': '1'}).preflight()
 
     def test_explicit_gcc_requires_its_runtime_archive(self):
+        sdk = self.root / 'sdk'; create(sdk, target='aarch64')
         with self.assertRaisesRegex(SDKError, '--gcc-archive'):
-            SysrootBuilder({'compiler-family': 'gcc'}).preflight()
+            SysrootBuilder({'compiler-family': 'gcc', 'sdk': str(sdk),
+                            'target': 'aarch64', 'jobs': '1'}).preflight()
 
     def test_wrong_target_is_not_a_native_fallback(self):
         capture = self.capture

@@ -4,16 +4,15 @@
 
 Read the [SDK tool selection policy](tool-selection.md) before any build.
 Select SDK native Clang/LLVM for host programs, or GCC through an explicit platform profile.
-The current target runtime producer still uses the SDK cross GCC16.
+Select Clang/LLVM for the target by default; GCC is an explicit platform exception.
 Keep native generators separate from target files. Reject implicit system tools.
-The policy also identifies the current sysroot/release selector enforcement gap.
 The current backend uses POSIX shell and make; CMake remains the build system
 for dependencies which use it upstream. The workspace tools use Python's standard
 library for paths, JSON and process invocation.
 The current process adapters support Darwin and Linux. See
 [host platforms](host-platforms.md) for qualification and WSL2/Windows boundaries.
 
-Select the target through the actual producer. The current common GCC16 paths
+Select the target through the actual producer. The common compiler routes
 use `aarch64--netbsd` or `x86_64--netbsd`. Preserve those fork ABI identifiers.
 A target selector or a passing layout check does not qualify an architecture.
 
@@ -26,11 +25,11 @@ third-party Python packages, `pip` installation or virtual environment.
 | --- | --- |
 | Create or inspect a workspace | CPython 3.15 with its standard library |
 | Prepare libedit sources | Python with zlib support, Git and patch; see [libedit preparation](libedit.md) |
-| Build the core sysroot | The qualified host process adapter, Python, Git, POSIX shell, the OS/Ports native build prerequisites, the common GCC16 and its verified runtime stage |
+| Build the core sysroot | Host process adapter, Python, Git, native Ports tools, target Clang/LLVM, prepared common LLVM and libedit sources; the explicit GCC route uses its matching runtime stage |
 | Build an optional package profile | The selected Ports recipe's documented prerequisites |
 
-The GCC16 sysroot profile uses Python for host control. Optional LLVM profiles
-also use upstream Python build tools and `lit`. Installed upstream utilities
+The sysroot profiles use Python for host control. LLVM recipes also use
+upstream Python build tools and `lit`. Installed upstream utilities
 retain their own package dependencies. Record host and target Python roles
 separately. A target device does not need the host controller to run prepared
 acceptance programs.
@@ -92,12 +91,19 @@ CLIs below, record selected source and tool identities, and verify their outputs
 
 ## Build the compiler with Ports
 
-Use the [GCC16 cross profile](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/cross/README.md).
-It owns source pins, Binutils, compiler options and compiler checks.
+Use the common Ports `lang/clang`, `lang/llvm` and `devel/lld` recipes for the
+native executable prefix. Clang selects the target explicitly with `--target`;
+the target headers, CRT and runtime are separate inputs. The
+[LLVM runtime producer](https://github.com/oxtech-ember/EmberBSD-Ports/tree/main/pkgsrc/lang/compiler-rt)
+owns the shared source preparation and runtime builds.
+
+For an explicit GCC platform exception, use the
+[GCC16 cross profile](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/cross/README.md).
+It owns GCC source pins, Binutils, compiler options and compiler checks.
 Select its kernel-only mode only for artifacts which do not require a userland
 sysroot. Application builds need the matching EmberBSD headers, CRT and runtime.
 
-Use the [runtime bootstrap](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/bootstrap/README.md)
+On that GCC route, use the [runtime bootstrap](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/bootstrap/README.md)
 for the target runtime and build-time C++ support. Its explicit
 [existing-compiler mode](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/bootstrap/external-compiler.md)
 records the common POSIX GCC16 without rebuilding compiler frontends.
@@ -109,8 +115,7 @@ Use the [SDK sysroot procedure](sysroot.md). It calls the fork's own build rules
 and selects the verified Ports runtime stage and [prepared libedit source](libedit.md). Keep source revisions, compiler
 hashes, runtime receipts and output hashes together.
 
-The [OS external-runtime adapter](https://github.com/oxtech-ember/EmberBSD/blob/main/tools/docs/external-gcc-runtime.md)
-provides build-time paths. It does not install a target runtime provider or
+The OS external-runtime adapter provides build-time paths. It does not install a target runtime provider or
 qualify a release. Follow the producer's current checks; SDK must not replace
 EmberBSD headers or libraries with upstream NetBSD files.
 

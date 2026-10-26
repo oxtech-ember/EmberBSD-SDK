@@ -23,10 +23,20 @@ name: Complete OS release producer
         description: Existing target-declared shared SDK workspace
         required: true
       compiler:
-        description: Common verified GCC16 compiler prefix
+        description: Common Ports target compiler prefix
+        required: true
+      compiler_family:
+        type: choice
+        options: [clang, gcc]
+        default: clang
         required: true
       host_prefix:
-        description: Absolute native Ports tool prefix built with host GCC16
+        description: Absolute native Ports tool prefix
+        required: true
+      host_compiler_family:
+        type: choice
+        options: [clang, gcc]
+        default: clang
         required: true
       sdk_python:
         description: Absolute Python 3.15+ interpreter inside host_prefix
@@ -35,14 +45,20 @@ name: Complete OS release producer
         description: Prepared libedit source for the selected Ports recipe
         required: true
       runtime_work:
-        description: Verified Ports runtime work directory
+        description: LLVM work directory inside SDK/obj, or existing GCC runtime work
         required: true
+      llvm_source:
+        description: Common prepared LLVM source (required for Clang)
+        required: false
+      llvm_runtime_stage:
+        description: Optional completed full LLVM stage to reuse
+        required: false
       gcc_archive:
         description: Original GCC source archive used by the runtime
-        required: true
+        required: false
       pkgsrc:
         description: Exact prepared pkgsrc input for runtime verification
-        required: true
+        required: false
 
 permissions:
   contents: read
@@ -63,10 +79,14 @@ jobs:
       PORTS_COMMIT: ${{ inputs.ports_commit }}
       SDK_WORKSPACE: ${{ inputs.workspace }}
       COMPILER: ${{ inputs.compiler }}
+      COMPILER_FAMILY: ${{ inputs.compiler_family }}
       HOST_PREFIX: ${{ inputs.host_prefix }}
+      HOST_COMPILER_FAMILY: ${{ inputs.host_compiler_family }}
       SDK_PYTHON: ${{ inputs.sdk_python }}
       LIBEDIT_SOURCE: ${{ inputs.libedit_source }}
       RUNTIME_WORK: ${{ inputs.runtime_work }}
+      LLVM_SOURCE: ${{ inputs.llvm_source }}
+      LLVM_RUNTIME_STAGE: ${{ inputs.llvm_runtime_stage }}
       GCC_ARCHIVE: ${{ inputs.gcc_archive }}
       PKGSRC: ${{ inputs.pkgsrc }}
     steps:
@@ -96,8 +116,18 @@ jobs:
             --sdk-source "$GITHUB_WORKSPACE" --sdk "$SDK_WORKSPACE" \
             --os-source "$OS_SOURCE" --ports "$PORTS_SOURCE" --compiler "$COMPILER" \
             --host-prefix "$HOST_PREFIX" --libedit-source "$LIBEDIT_SOURCE" \
-            --runtime-work "$RUNTIME_WORK" --gcc-archive "$GCC_ARCHIVE" --pkgsrc "$PKGSRC" \
+            --compiler-family "$COMPILER_FAMILY" --host-compiler-family "$HOST_COMPILER_FAMILY" \
+            --runtime-work "$RUNTIME_WORK" \
             --destination "$DESTINATION" --jobs 4
+          case "$COMPILER_FAMILY" in
+            clang)
+              set -- "$@" --llvm-source "$LLVM_SOURCE"
+              if [ -n "$LLVM_RUNTIME_STAGE" ]; then
+                set -- "$@" --llvm-runtime-stage "$LLVM_RUNTIME_STAGE"
+              fi ;;
+            gcc) set -- "$@" --gcc-archive "$GCC_ARCHIVE" --pkgsrc "$PKGSRC" ;;
+            *) exit 2 ;;
+          esac
           "$SDK_PYTHON" -B scripts/build-os-release.py "$@" --plan
           "$SDK_PYTHON" -B scripts/build-os-release.py "$@"
       - name: Preserve producer evidence

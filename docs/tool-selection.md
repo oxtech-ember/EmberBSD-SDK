@@ -71,13 +71,14 @@ They are not part of the normal `host-pkg-llvm` workflow.
 
 Native prefix selection and the Darwin configuration support LLVM and explicit GCC.
 The sysroot and release CLIs default `--compiler-family` to `clang`, independently
-of `--host-compiler-family`. Until the common LLVM runtime producer is connected,
-they refuse a Clang application build before creating outputs. They never import
-the old GCC runtime or choose GCC automatically. Use `--compiler-family gcc`
-only when intentionally building the supported GCC alternative.
-The current target runtime import and release schemas still describe GCC16 artifacts.
-They do not establish LLVM target runtime support. Update these producers and
-their matching Ports/OS runtime interfaces before a Clang SDK release.
+of `--host-compiler-family`. Their [LLVM coordinator](llvm-runtime.md) obtains the
+first runtime from OS headers, then builds libc/CRT and the full C++ runtime.
+It never imports the GCC runtime or chooses GCC automatically. Use
+`--compiler-family gcc` only when intentionally building the GCC alternative.
+Clang sysroot receipts use version 3, transfer manifests version 2, and OS release
+profiles version 4. Historical GCC schemas retain their original meaning.
+These format checks establish input consistency, not target execution or ABI
+acceptance; the completed build still needs the relevant target checks.
 Changing the compiler does not by itself change the C++ library or target ABI.
 The [common LLVM runtime stage contract](llvm-runtime.md) defines the initial
 builtins/static-unwind inputs and the subsequent full C++ runtime.

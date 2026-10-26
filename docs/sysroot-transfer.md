@@ -118,7 +118,9 @@ are bounded. Import requires local free space for the compressed archive and
 the restored tree at the same time.
 
 Provenance records full OS, Ports and SDK source commits, build-host identity,
-GCC16 binary hashes, and hashes of the runtime, build context and receipt.
+selected compiler binary hashes, and hashes of the runtime, build context and
+receipt. Version 2 explicitly records the Clang family and version; version 1
+retains the historical GCC16 contract. Import supports both formats.
 It omits the original host paths, environment and command logs. Files themselves
 can still contain build paths or private content. The producer must control
 which files it installs. Export is not a secret scanner or a relocation fix.

@@ -131,7 +131,8 @@ def extract_file(archive, member, destination):
 
 def check_native_compiler(archive):
     names = [n.removeprefix('./') for n in archive_names(archive)]
-    forbidden = {'usr/bin/cc', 'usr/bin/c++', 'usr/bin/gcc', 'usr/bin/g++', 'usr/bin/cpp'}
+    forbidden = {'usr/bin/cc', 'usr/bin/c++', 'usr/bin/gcc', 'usr/bin/g++', 'usr/bin/cpp',
+                 'usr/bin/clang', 'usr/bin/clang++', 'usr/bin/clang-cpp'}
     check(not forbidden.intersection(names) and not any(re.fullmatch(r'usr/libexec/(?:gcc/.*?/)?cc1(?:plus|obj)?', n) for n in names),
           'comp contains native bootstrap compiler commands')
 
@@ -219,7 +220,14 @@ def require_qualification(manifest, profile):
     else:
         bindings = {'base_sha256': SYSROOT_SETS[0], 'comp_sha256': SYSROOT_SETS[1], 'kernel_gzip_sha256': KERNEL}
         checks = SYSROOT_CHECKS
-        check(isinstance(q.get('consumer_compiler'), str) and '16.2.0' in q['consumer_compiler'], 'Qualification must identify actual GCC16 consumers')
+        if manifest['build_profile'].get('schema') == 4:
+            version = manifest['build_profile']['sdk_receipt']['signature']['compiler']['version']
+            check(q.get('consumer_compiler_family') == 'clang' and
+                  isinstance(q.get('consumer_compiler'), str) and 'clang' in q['consumer_compiler'].lower() and
+                  re.search(r'\b' + re.escape(version) + r'\b', q['consumer_compiler']),
+                  'Qualification must identify the selected Clang consumers')
+        else:
+            check(isinstance(q.get('consumer_compiler'), str) and '16.2.0' in q['consumer_compiler'], 'Qualification must identify actual GCC16 consumers')
         check(q.get('execution') == 'EmberBSD aarch64 full-system QEMU TCG', 'Unrecorded target execution platform')
         check(EVIDENCE in files and q.get('evidence_sha256', {}).get(EVIDENCE) == files[EVIDENCE]['sha256'], 'Qualification lacks bound target evidence')
     for field, name in bindings.items():
@@ -238,9 +246,11 @@ def _verify(directory, profile):
     check(m['repository'] == REPOSITORY and m['release_tag'] == tag(sha, profile), 'Wrong repository or release tag')
     version = product_version(m['product_version'])
     check(m['base_version'] == '11.0', 'Wrong base version')
-    modern = m['schema'] in ('emberbsd.aarch64.sysroot.v2', 'emberbsd.amd64.release.v2')
+    llvm = m['schema'] in ('emberbsd.aarch64.sysroot.v3', 'emberbsd.amd64.release.v3')
+    modern = llvm or m['schema'] in ('emberbsd.aarch64.sysroot.v2', 'emberbsd.amd64.release.v2')
     if profile == 'amd64':
-        check(((type(m['schema']) is int and m['schema'] == 1) or m['schema'] == 'emberbsd.amd64.release.v2') and m['architecture'] == 'amd64', 'Wrong installation identity')
+        check(((type(m['schema']) is int and m['schema'] == 1) or m['schema'] in
+               ('emberbsd.amd64.release.v2', 'emberbsd.amd64.release.v3')) and m['architecture'] == 'amd64', 'Wrong installation identity')
         check([m['profile'][n] for n in ('MKX11', 'MKRUMP', 'MKGCCCMDS', 'KERNEL_SETS')] == ['no', 'no', 'no', 'GENERIC'], 'Wrong release profile')
         check(full_hash(m['source_archive_sha256']), 'Missing source archive hash')
         for name in ('image', 'kernel', 'modules', 'base'):
@@ -256,7 +266,7 @@ def _verify(directory, profile):
             required += ['build-profile.json', 'source-export.sha256']
         allowed = required + [n + '.tar.xz' for n in OPTIONAL_SETS] + ['SHA512', 'qualification.json']
     else:
-        check(m['schema'] in ('emberbsd.aarch64.sysroot.v1', 'emberbsd.aarch64.sysroot.v2') and
+        check(m['schema'] in ('emberbsd.aarch64.sysroot.v1', 'emberbsd.aarch64.sysroot.v2', 'emberbsd.aarch64.sysroot.v3') and
               m['architecture'] == 'aarch64' and m['machine'] == 'evbarm', 'Wrong sysroot identity')
         required = SYSROOT_REQUIRED
         allowed = required + ['qualification.json', 'build-run.json', EVIDENCE]
@@ -274,7 +284,7 @@ def _verify(directory, profile):
     check((directory / 'SHA256').read_text() == checksum_text(directory, names + ['manifest.json']), 'Checksum manifest changed')
     if profile != 'amd64' or modern:
         p = read_json(directory / 'build-profile.json')
-        check(type(p['schema']) is int and p['schema'] in ((2, 3) if modern else (1,)), 'Manifest and build profile schema differ')
+        check(type(p['schema']) is int and p['schema'] in ((4,) if llvm else (2, 3) if modern else (1,)), 'Manifest and build profile schema differ')
         profile_check(p, sha, version, 'amd64' if profile == 'amd64' else 'aarch64')
         check(m['source_archive_sha256'] == p['source_sha256'] and m['build_profile'] == p, 'Source/build receipt changed')
         check((directory / 'source-export.sha256').read_text() == p['source_sha256'] + '  source.tar.gz\n', 'Source export hash receipt changed')
@@ -327,24 +337,26 @@ def prepare_sysroot(build, directory, qualification):
     q = None
     if qualification:
         raw = read_json(qualification)
-        fields = ('source_commit base_sha256 comp_sha256 kernel_gzip_sha256 consumer_compiler execution checks runtime_libraries evidence_sha256').split()
+        fields = ('source_commit base_sha256 comp_sha256 kernel_gzip_sha256 consumer_compiler consumer_compiler_family execution checks runtime_libraries evidence_sha256').split()
         q = {k: raw[k] for k in fields if k in raw}
         q['checks'] = {k: raw['checks'][k] for k in SYSROOT_CHECKS if k in raw['checks']}
         write_json(directory / 'qualification.json', q)
         shutil.copyfile(build / EVIDENCE, directory / EVIDENCE)
         names += ['qualification.json', EVIDENCE]
-    modern = p.get('schema') in (2, 3)
-    compiler = 'the verified common GCC16 and runtime' if modern else 'the historical in-tree GCC12.5 bootstrap'
+    modern = p.get('schema') in (2, 3, 4)
+    llvm = p.get('schema') == 4
+    compiler = ('the common Clang/LLVM compiler and runtime' if llvm else
+                'the verified common GCC16 and runtime' if modern else 'the historical in-tree GCC12.5 bootstrap')
     (directory / 'release-notes.md').write_text(
         f'# EmberBSD {version} AArch64 development sysroot\n\nSource: `{sha}`. Compatibility base: NetBSD 11.0.\n'
         f'The complete base and comp sets use {compiler}.\n'
         'Native bootstrap compiler commands are excluded. Build commands and hashes are in build-profile.json.\n'
         'source-export.sha256 identifies the git archive, not the GitHub generated source archive.\n'
         f'Source: https://github.com/{REPOSITORY}/tree/{sha}.\n\n'
-        + ('The bound target receipt records finite GCC16 C/C++ and libc checks.\n' if q else 'Target qualification is pending. Do not publish this candidate.\n')
+        + ('The bound target receipt records finite C/C++ and libc checks with the selected compiler.\n' if q else 'Target qualification is pending. Do not publish this candidate.\n')
         + 'This kit does not qualify installation media or physical hardware. Firmware and source licences remain in the sets.\n'
         'Verify SHA256 and provenance before extracting into an empty sysroot. Do not install over a live system.\n')
-    m = dict(schema='emberbsd.aarch64.sysroot.v2' if modern else 'emberbsd.aarch64.sysroot.v1', repository=REPOSITORY,
+    m = dict(schema='emberbsd.aarch64.sysroot.v3' if llvm else 'emberbsd.aarch64.sysroot.v2' if modern else 'emberbsd.aarch64.sysroot.v1', repository=REPOSITORY,
              source_commit=sha, release_tag=tag(sha, 'aarch64-sysroot'), source_archive_sha256=p['source_sha256'],
              architecture='aarch64', machine='evbarm', product_version=version, base_version='11.0', build_profile=p,
              files=[asset(directory, n) for n in names], qualification=q, hardware_qualification='not-tested')
@@ -412,7 +424,9 @@ def prepare_amd64(build, directory, qualification, os_source):
     (directory / 'release-notes.md').write_text(
         f'# EmberBSD {version} amd64 UEFI installation candidate\n\nSource: `{sha}`. Compatibility base: NetBSD 11.0.\n'
         'Profile: no X11, no rump, GENERIC kernel and matching modules/base. Native bootstrap compiler commands are excluded.\n'
-        + ('The build uses the common verified GCC16 compiler and runtime.\n' if p else 'This historical build uses the in-tree bootstrap compiler; it does not qualify a GCC16 userland.\n')
+        + ('The build uses the common Clang/LLVM compiler and runtime.\n' if p and p.get('schema') == 4 else
+           'The build uses the common verified GCC16 compiler and runtime.\n' if p else
+           'This historical build uses the in-tree bootstrap compiler; it does not qualify a GCC16 userland.\n')
         + ('The bound VM receipt records installation, persistence and TLS rejection checks.\n' if q else 'VM qualification is pending. Do not publish this candidate.\n')
         + 'Physical machines are not qualified. GitHub-native installation requires a separate post-publication check.\n'
         'Verify SHA256 before use. Select the 13 required sets; skip only an absent optional set after its explicit HTTP 404.\n'
@@ -421,7 +435,7 @@ def prepare_amd64(build, directory, qualification, os_source):
         'Source archives are not in this binary channel.\n')
     components = {n: {'source_commit': sha} for n in ('image', 'kernel', 'modules', 'base')}
     components['kernel'].update(buildinfo=buildinfo, sha256=kernel_sha)
-    m = dict(schema='emberbsd.amd64.release.v2' if p else 1, repository=REPOSITORY, source_commit=sha,
+    m = dict(schema='emberbsd.amd64.release.v3' if p and p.get('schema') == 4 else 'emberbsd.amd64.release.v2' if p else 1, repository=REPOSITORY, source_commit=sha,
              source_archive_sha256=p['source_sha256'] if p else sha256_file(build / 'source.tar'),
              release_tag=tag(sha, 'amd64'), architecture='amd64', product_version=version, base_version='11.0',
              profile=dict(MKX11='no', MKRUMP='no', MKGCCCMDS='no', KERNEL_SETS='GENERIC', BUILD_KERNELS='INSTALL'),

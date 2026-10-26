@@ -8,6 +8,44 @@ import re
 from . import inventory, paths, process
 from .host_prefix import _clang_linker, _member, _require
 
+CLANG_BINARIES = ('cc', 'cxx', 'cpp', 'as', 'ld', 'ar', 'ranlib', 'nm', 'strip',
+                  'objcopy', 'objdump', 'readelf', 'size', 'strings')
+
+
+def validate_clang_identity(record, triplet):
+    """Validate a saved compiler route without consulting mutable executables."""
+    _require(isinstance(record, dict) and set(record) == {'family', 'version', 'triplet',
+        'reported_triplet', 'resource_dir', 'binaries', 'commands'}, 'invalid Clang compiler identity')
+    _require(record['family'] == 'clang' and isinstance(record['version'], str) and
+             re.fullmatch(r'[1-9][0-9]*\.[0-9]+\.[0-9]+', record['version']) and
+             record['triplet'] == triplet and record['reported_triplet'] in
+             (triplet, triplet.replace('--', '-unknown-', 1)), 'mixed Clang compiler identity')
+    binaries, commands = record['binaries'], record['commands']
+    _require(isinstance(binaries, dict) and set(binaries) == set(CLANG_BINARIES) and
+             isinstance(commands, dict) and set(commands) == set(CLANG_BINARIES),
+             'missing Clang compiler routes')
+    for role, row in binaries.items():
+        _require(isinstance(row, dict) and set(row) == {'selected_path', 'path', 'sha256'} and
+                 all(isinstance(row[name], str) and os.path.isabs(row[name]) for name in ('selected_path', 'path')) and
+                 isinstance(row['sha256'], str) and re.fullmatch('[0-9a-f]{64}', row['sha256']),
+                 'invalid Clang compiler executable identity')
+        expected = [row['selected_path']]
+        if role in ('cc', 'cxx'):
+            expected += ['--target=' + triplet, '--ld-path=' + binaries['ld']['selected_path']]
+        elif role == 'cpp':
+            expected += ['-E', '--target=' + triplet]
+        elif role == 'as':
+            expected += ['--target=' + triplet, '-c', '-x', 'assembler']
+        _require(commands[role] == expected, 'mixed Clang compiler command')
+    root = os.path.dirname(os.path.dirname(binaries['cc']['selected_path']))
+    def contained(value):
+        return (isinstance(value, str) and os.path.isabs(value) and os.path.normpath(value) == value and
+                value.startswith(root + '/'))
+    _require(all(contained(row[name]) for row in binaries.values() for name in ('selected_path', 'path')) and
+             contained(record['resource_dir']),
+             'Clang compiler route escapes its prefix')
+    return record
+
 
 def clang_compiler(prefix, triplet, *, host, env):
     """Record native executables and explicit target argv without compiling."""

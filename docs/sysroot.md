@@ -4,12 +4,11 @@ Use the native Ports tool prefix with `--host-prefix`.
 The builder checks prefix paths and host architecture, then uses the OS command mapping.
 No independent native-tool qualification or admission receipt is required.
 Host and target compiler families are independent. Clang is the default for
-both; `--compiler-family gcc` selects the implemented GCC target runtime route
-explicitly. The [LLVM target migration boundary](tool-selection.md#migration-boundary)
-applies until its common runtime producer is connected.
+both; `--compiler-family gcc` selects the GCC target runtime route explicitly.
+The [common LLVM runtime contract](llvm-runtime.md) describes the Clang phases.
 
 The recorded producer sequence covers target headers, OS CRT and libraries,
-the dynamic loader, and audited GCC16 developer support. It does not install
+the dynamic loader, and the selected compiler's developer runtime. It does not install
 a system on a board.
 
 ## Required inputs
@@ -30,21 +29,22 @@ Provide:
 
 - A version 2 Prebuild SDK workspace with the selected target and a new or empty destination.
 - Clean, fully materialized EmberBSD and Ports Git superprojects at recorded commits.
-- The common GCC16.2.0 application cross compiler with the selected triplet and POSIX threads.
-- An accepted Ports runtime bootstrap work tree and its original GCC archive.
-- The exact prepared pkgsrc input used by that runtime build.
+- A Ports Clang/LLVM prefix with the selected target backend and LLD.
+- The prepared common Ports LLVM source, passed as `--llvm-source`.
+- A new runtime work path below the SDK object directory, or an explicitly
+  selected completed full `--llvm-runtime-stage`.
 
-The normal
-[Ports runtime verifier](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/runtime/README.md)
-must accept that stage. A kernel-only compiler or an arbitrary copy of GCC
-libraries cannot replace those inputs. Record the seed provenance separately
-from the newly produced sysroot.
+For the GCC exception, select `--compiler-family gcc`, the common GCC16.2.0
+application cross compiler with the selected triplet and POSIX threads, its
+Ports runtime work tree, original `--gcc-archive` and prepared `--pkgsrc` export.
+The [GCC runtime verifier](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/runtime/README.md)
+checks that route. Neither family accepts arbitrary copied runtime libraries.
 
 Sparse checkout, skip-worktree and assume-unchanged entries are rejected.
 Tracked files and links must be present with their recorded types.
 The Ports `upstream/pkgsrc` gitlink is recorded as an external pin without
 claiming its payload is qualified. The selected runtime verifier uses the
-explicit `--pkgsrc` export instead. No recursive pkgsrc checkout is required
+explicit `--pkgsrc` export on the GCC route instead. No recursive pkgsrc checkout is required
 for that unused gitlink. Other gitlinks are rejected by this backend.
 
 See [libedit preparation](libedit.md) for the mandatory `--libedit-source` input.
@@ -56,17 +56,16 @@ Use the implemented script's help for the exact options:
 ```sh
 python3 scripts/build-sysroot.py --help
 python3 scripts/build-sysroot.py \
-  --compiler-family gcc \
   --sdk-source /absolute/EmberBSD-SDK \
   --sdk /absolute/prebuild-sdk-aarch64 \
   --os /absolute/EmberBSD \
   --ports /absolute/EmberBSD-Ports \
   --libedit-source /absolute/prepared-libedit \
   --host-prefix /absolute/host-pkg-llvm \
-  --compiler /absolute/gcc16-cross \
-  --runtime-work /absolute/gcc16-runtime-work \
-  --gcc-archive /absolute/gcc-16.2.0.tar.xz \
-  --pkgsrc /absolute/prepared-pkgsrc \
+  --compiler /absolute/host-pkg-llvm \
+  --llvm-source /absolute/prepared-llvm \
+  --runtime-work /absolute/prebuild-sdk-aarch64/obj/llvm-runtime \
+  --destination /absolute/prebuild-sdk-aarch64/stages/sysroot-next \
   --target aarch64 --jobs 2 --plan
 ```
 
@@ -80,8 +79,8 @@ available to inspection and existing external producers. This builder does not
 infer its target or migrate it. Create a separate version 2 workspace for new
 builds; keep active build trees unchanged.
 
-The default destination is the workspace's `sysroot`. A nonempty destination
-is rejected before build writes. For an update, select an explicit new stage
+Select an explicit new destination stage. A nonempty destination
+is rejected before build writes. For an update, select a new stage
 such as `--destination /absolute/prebuild-sdk-aarch64/stages/sysroot-next` inside the
 same shared workspace. A destination inside the active `sysroot` is rejected.
 Keep the active sysroot unchanged while other consumers use it.
@@ -103,20 +102,29 @@ New build records bind selected paths and commands. Historical records remain re
 The [OS command mapping](native-os-routing.md) supplies native make, shell, compilers, and utilities.
 The builder does not use the old implicit make bootstrap.
 
-The selected OS source provides these operations:
+The Clang path first uses `tools`, then the generated OS make wrapper's `obj`,
+`do-distrib-dirs` and `includes` goals. Ports builds compiler-rt builtins and PIC
+static libunwind against those headers. A C-only OS stage then supplies libc,
+the remaining C libraries, the loader and fork-owned CRT. That stage selects
+the initial LLVM runtime for C links; it never asks for `libgcc`. Ports can then
+link libc++, libc++abi and shared libunwind against the actual base.
 
-1. `build.sh -U -u` selects the common external GCC16 and the audited runtime.
+With the full selected runtime, the OS source provides these operations:
+
+1. `build.sh -U -u` selects the external compiler family and its matching runtime.
 2. `tools libs` builds native tools, creates object directories and installs
    target headers, CRT and libraries through the fork's own rules.
 3. The same generated make wrapper builds and installs `libexec/ld.elf_so`.
-4. The builder copies the verified GCC16 developer stage into `usr/pkg/gcc16`.
+4. The builder copies the verified developer stage into `usr/pkg/llvm` for
+   Clang, or `usr/pkg/gcc16` for the explicit GCC alternative.
 5. It verifies the copied inventory and runs the normal runtime verifier again.
 
 The `libs` operation exists in the fork's
 [`build.sh`](https://github.com/oxtech-ember/EmberBSD/blob/main/build.sh).
 Its `buildlibs` implementation invokes `do-distrib-dirs`, `includes` and
-`do-lib`. The [OS runtime adapter](https://github.com/oxtech-ember/EmberBSD/blob/main/tools/docs/external-gcc-runtime.md)
-selects external GCC headers, CRT and libraries during compilation.
+`do-lib`. The OS runtime adapters select the matching compiler runtime during
+compilation. Clang keeps the fork's CRT and uses the common Ports LLVM source
+for the builtins incorporated into libc.
 The SDK does not duplicate their source recipes.
 
 The copied developer stage has no fabricated target package registration.

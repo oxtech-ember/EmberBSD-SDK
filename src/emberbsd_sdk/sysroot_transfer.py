@@ -17,7 +17,8 @@ import stat
 import tarfile
 import tempfile
 
-from . import inventory, jsonio, paths, publication, tarstream
+from . import inventory, jsonio, paths, publication, tarstream, llvm_runtime
+from .target_toolchain import CLANG_BINARIES, validate_clang_identity
 from .errors import SDKError
 from .sysroot_builder import validate_native_binding
 from .targets import target_definition
@@ -181,29 +182,42 @@ def _provenance(receipt, target):
     definition = target_definition(target)
     try:
         if (receipt['format'] != 'emberbsd-sysroot-build' or type(receipt['version']) is not int
-                or receipt['version'] not in (1, 2) or receipt['qualification'] != 'built-and-inspected'
+                or receipt['version'] not in (1, 2, 3) or receipt['qualification'] != 'built-and-inspected'
                 or receipt['workspace']['layout_version'] != 2
                 or receipt['workspace']['target'] != target
                 or receipt['workspace']['triplet'] != definition['triplet']
                 or receipt['signature']['target'] != definition):
             raise SDKError('export requires a completed matching SDK sysroot build')
         signature = receipt['signature']
-        if receipt['version'] == 2:
+        if receipt['version'] >= 2:
             validate_native_binding(signature, receipt['paths'])
         compiler = signature['compiler']
-        if (compiler['version'] != '16.2.0' or compiler['triplet'] != definition['triplet']
-                or compiler['threads'] != 'posix'):
-            raise SDKError('export requires the common GCC16 compiler receipt')
-        binaries = {name: _digest(compiler['binaries'][name]['sha256'])
-                    for name in COMPILER_BINARIES}
+        if receipt['version'] == 3:
+            if signature['compiler_family'] != 'clang':
+                raise SDKError('export compiler family differs from the build receipt')
+            validate_clang_identity(compiler, definition['triplet'])
+            runtime = llvm_runtime.validate_identity(signature['runtime']['manifest'], target=target,
+                                                     required_components=llvm_runtime.FULL_COMPONENTS)
+            if (runtime['llvm_version'] != compiler['version'] or
+                    runtime['base']['os_revision'] != receipt['sources']['os']['commit'] or
+                    runtime['source'] != {key: signature['llvm_source']['source'][key]
+                                         for key in ('archive', 'sha512')}):
+                raise SDKError('export LLVM runtime differs from its compiler or source inputs')
+            compiler_identity = dict(family='clang', version=compiler['version'], triplet=definition['triplet'],
+                binaries={name: _digest(compiler['binaries'][name]['sha256']) for name in CLANG_BINARIES})
+        else:
+            if (signature.get('compiler_family', 'gcc') != 'gcc' or compiler['version'] != '16.2.0' or
+                    compiler['triplet'] != definition['triplet'] or compiler['threads'] != 'posix'):
+                raise SDKError('export requires the common GCC16 compiler receipt')
+            compiler_identity = dict(version='16.2.0', triplet=definition['triplet'], threads='posix',
+                binaries={name: _digest(compiler['binaries'][name]['sha256']) for name in COMPILER_BINARIES})
         sources = {name: _digest(receipt['sources'][name]['commit'], 40)
                    for name in ('os', 'ports', 'sdk')}
         host = signature['host']
         if not isinstance(host, str) or re.fullmatch('[A-Za-z0-9_.+-]{1,160}', host) is None:
             raise SDKError('invalid build host identity')
         return dict(sources=sources, build_host=host,
-                    compiler=dict(version='16.2.0', triplet=definition['triplet'],
-                                  threads='posix', binaries=binaries),
+                    compiler=compiler_identity,
                     runtime_sha256=_hash_json(signature['runtime']),
                     build_context_sha256=_hash_json(signature),
                     build_receipt_sha256=_hash_json(receipt))
@@ -303,7 +317,7 @@ def export_sysroot(source, output, *, target):
             or paths.entry(os.path.join(source, INCOMPLETE)) is not None
             or stat.S_IMODE(os.stat(source).st_mode) != root_mode):
         raise SDKError('sysroot changed during export')
-    manifest = dict(format=FORMAT, version=1, scope='sysroot-transfer', target=target,
+    manifest = dict(format=FORMAT, version=2 if receipt['version'] == 3 else 1, scope='sysroot-transfer', target=target,
                     triplet=definition['triplet'], provenance=provenance,
                     qualification='built-and-inspected', relocation='not-assessed',
                     execution_acceptance='not-assessed', root_mode=root_mode,
@@ -335,7 +349,7 @@ def _manifest(bundle, target, digest, max_bytes):
     keys = {'format', 'version', 'scope', 'target', 'triplet', 'provenance', 'qualification',
             'relocation', 'execution_acceptance', 'root_mode', 'inventory', 'unpacked_bytes', 'payload'}
     if (not isinstance(m, dict) or set(m) != keys or m['format'] != FORMAT
-            or type(m['version']) is not int or m['version'] != 1
+            or type(m['version']) is not int or m['version'] not in (1, 2)
             or m['scope'] != 'sysroot-transfer' or m['target'] != target
             or m['triplet'] != definition['triplet'] or m['qualification'] != 'built-and-inspected'
             or m['relocation'] != 'not-assessed' or m['execution_acceptance'] != 'not-assessed'):
@@ -365,10 +379,18 @@ def _manifest(bundle, target, digest, max_bytes):
         for key in ('runtime_sha256', 'build_context_sha256', 'build_receipt_sha256'):
             _digest(provenance[key])
         compiler = provenance['compiler']
-        if (set(compiler) != {'version', 'triplet', 'threads', 'binaries'}
+        if m['version'] == 2:
+            valid = (set(compiler) == {'family', 'version', 'triplet', 'binaries'} and
+                compiler['family'] == 'clang' and isinstance(compiler['version'], str) and
+                re.fullmatch(r'[1-9][0-9]*\.[0-9]+\.[0-9]+', compiler['version']) and
+                compiler['triplet'] == definition['triplet'] and isinstance(compiler['binaries'], dict) and
+                set(compiler['binaries']) == set(CLANG_BINARIES))
+        else:
+            valid = not (set(compiler) != {'version', 'triplet', 'threads', 'binaries'}
                 or compiler['version'] != '16.2.0' or compiler['triplet'] != definition['triplet']
                 or compiler['threads'] != 'posix' or not isinstance(compiler['binaries'], dict)
-                or set(compiler['binaries']) != set(COMPILER_BINARIES)):
+                or set(compiler['binaries']) != set(COMPILER_BINARIES))
+        if not valid:
             raise SDKError('invalid transfer compiler')
         for value in compiler['binaries'].values():
             _digest(value)

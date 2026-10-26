@@ -113,15 +113,26 @@ class TargetWorkspaceTests(TemporaryCase):
             self.assertEqual(snapshot(root), before)
 
     def test_builder_refuses_unknown_before_host_queries_or_writes(self):
-        # The explicit GCC route reaches the workspace check; Clang refuses earlier.
         for version in (None, 1):
             root = self.legacy(version)
             before = snapshot(root)
-            builder = SysrootBuilder({'compiler-family': 'gcc', 'gcc-archive': '/unused/gcc.tgz', 'sdk': str(root), 'target': 'aarch64', 'jobs': '1'})
-            with patch.object(builder, 'find_command', side_effect=AssertionError('host query')):
-                with self.assertRaisesRegex(SDKError, 'unknown'):
-                    builder.preflight()
+            for family in ('gcc', 'clang'):
+                builder = SysrootBuilder({'compiler-family': family, 'gcc-archive': '/unused/gcc.tgz',
+                                         'sdk': str(root), 'target': 'aarch64', 'jobs': '1'})
+                with patch.object(builder, 'find_command', side_effect=AssertionError('host query')):
+                    with self.assertRaisesRegex(SDKError, 'unknown'):
+                        builder.preflight()
             self.assertEqual(snapshot(root), before)
+
+    def test_clang_builder_requires_common_source_after_target_before_queries(self):
+        root = self.root / 'clang'
+        workspace.create(root, target='aarch64')
+        before = snapshot(root)
+        builder = SysrootBuilder({'sdk': str(root), 'target': 'aarch64', 'jobs': '1'})
+        with patch.object(builder, 'find_command', side_effect=AssertionError('host query')):
+            with self.assertRaisesRegex(SDKError, '--llvm-source'):
+                builder.preflight()
+        self.assertEqual(snapshot(root), before)
 
     def test_builder_refuses_mismatch_through_alias_before_queries(self):
         root = self.root / 'canonical'
@@ -129,8 +140,10 @@ class TargetWorkspaceTests(TemporaryCase):
         alias = self.root / 'prebuild-sdk-amd64'
         alias.symlink_to(root)
         before = snapshot(root), snapshot(alias)
-        builder = SysrootBuilder({'compiler-family': 'gcc', 'gcc-archive': '/unused/gcc.tgz', 'sdk': str(alias), 'target': 'amd64', 'jobs': '1'})
-        with patch.object(builder, 'find_command', side_effect=AssertionError('host query')):
-            with self.assertRaisesRegex(SDKError, 'target mismatch'):
-                builder.preflight()
+        for family in ('gcc', 'clang'):
+            builder = SysrootBuilder({'compiler-family': family, 'gcc-archive': '/unused/gcc.tgz',
+                                     'sdk': str(alias), 'target': 'amd64', 'jobs': '1'})
+            with patch.object(builder, 'find_command', side_effect=AssertionError('host query')):
+                with self.assertRaisesRegex(SDKError, 'target mismatch'):
+                    builder.preflight()
         self.assertEqual((snapshot(root), snapshot(alias)), before)

@@ -1,5 +1,28 @@
 # Common LLVM runtime stages
 
+The Clang `build-sysroot.py` path builds its first base in dependency order.
+Supply `--llvm-source` prepared by the common Ports producer and a new
+`--runtime-work` below the SDK object directory. The builder installs OS
+headers, asks Ports for builtins and PIC static libunwind, builds the OS C
+libraries and CRT, asks Ports for the full C++ runtime, and then builds the
+final sysroot. This path does not require a previous application SDK.
+
+The headers, C base and final target objects have separate configurations.
+They share the selected native tools tree; subsequent `tools` operations are
+incremental. Completed bootstrap stages are checked against their inputs and
+payload before reuse. Failed or incompatible stages are left intact for
+diagnosis. `--plan` describes the dependency order without creating outputs;
+later commands depend on the artifacts measured by their producers.
+
+`--llvm-runtime-stage` explicitly reuses a completed full runtime and skips
+the prerequisite coordinator. Its LLVM version, target, source archive,
+recipe files and OS revision must match the selected inputs. The final SDK
+copies `usr/pkg/llvm`; it does not substitute a GCC runtime. GCC retains its
+explicit `--compiler-family gcc --gcc-archive ... --pkgsrc ...` path.
+The runtime manifest keeps the Ports revision that produced it. A later
+unrelated Ports commit does not invalidate that origin when the relevant
+recipe files still match; changing a recorded recipe file does invalidate it.
+
 Ports owns LLVM runtime recipes, source preparation, compiler options and build
 orchestration. SDK provides the shared stage validator in
 `emberbsd_sdk.llvm_runtime`, with `LLVM_RUNTIME_API == 1`. The

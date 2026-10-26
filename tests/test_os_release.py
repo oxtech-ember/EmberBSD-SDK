@@ -22,6 +22,7 @@ from emberbsd_sdk import os_release as kit, jsonio
 from emberbsd_sdk.os_release_builder import OSReleaseBuilder as ProductionReleaseBuilder, validate_profile, producer_commands
 from emberbsd_sdk.os_release_github import GitHub
 from emberbsd_sdk.errors import SDKError
+import test_llvm_builder as llvm_fixtures
 
 
 class OSReleaseBuilder(ProductionReleaseBuilder):
@@ -300,6 +301,36 @@ else: raise SystemExit('unexpected operation')
 
 
 class BuilderReleaseTests(TemporaryCase):
+    def test_clang_release_uses_versioned_runtime_and_qualification(self):
+        class ClangRelease(OSReleaseBuilder):
+            compiler = llvm_fixtures.ClangBuilder.compiler
+        builder, runtime = llvm_fixtures.LLVMBuilderTests.builder(self,
+            release_fixture(self.root, 'aarch64'), ClangRelease)
+        receipt = builder.run()
+        output = Path(builder.paths['destination'])
+        profile = jsonio.read_json(output / 'build-profile.json')
+        self.assertEqual((profile['schema'], receipt['version']), (4, 4))
+        self.assertIn('EMBER_COMPILER_FAMILY=clang', receipt['signature']['flags'])
+        self.assertFalse(any(v.startswith(('EMBER_EXTERNAL_GCC_RUNTIME=', 'MKLIBSTDCXX='))
+                             for v in receipt['signature']['flags']))
+        directory = self.root / 'llvm-kit'
+        manifest = kit.prepare(output, directory, 'aarch64-sysroot')
+        self.assertEqual(manifest['schema'], 'emberbsd.aarch64.sysroot.v3')
+        self.assertEqual(kit.verify(directory, 'aarch64-sysroot'), manifest)
+        advanced = copy.deepcopy(profile)
+        advanced['sdk_receipt']['sources']['ports']['commit'] = '1' * 40
+        advanced['sdk_receipt']['signature']['libedit']['recipe']['ports_commit'] = '1' * 40
+        validate_profile(advanced, receipt['sources']['os']['commit'], 'aarch64')
+        qualification = qualify(output, manifest, 'aarch64-sysroot')
+        data = jsonio.read_json(qualification)
+        data.update(consumer_compiler_family='clang', consumer_compiler='fixture clang version 23.1.4')
+        jsonio.write_json(qualification, data, exclusive=False)
+        qualified = kit.prepare(output, self.root / 'llvm-qualified', 'aarch64-sysroot', qualification)
+        kit.require_qualification(qualified, 'aarch64-sysroot')
+        qualified['qualification']['consumer_compiler_family'] = 'gcc'
+        with self.assertRaisesRegex(SDKError, 'Clang consumers'):
+            kit.require_qualification(qualified, 'aarch64-sysroot')
+
     def test_native_schema3_identity_and_historical_schema2(self):
         options = release_fixture(self.root, 'aarch64')
         receipt = OSReleaseBuilder(options).run()

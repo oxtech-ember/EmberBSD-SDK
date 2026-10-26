@@ -11,14 +11,15 @@ import re
 import shutil
 
 from .errors import SDKError
-from . import inventory, jsonio, libedit
+from . import inventory, jsonio, libedit, llvm_runtime
+from .target_toolchain import validate_clang_identity
 from .sysroot_builder import (SysrootBuilder, native_host_flags, check_native_command_identity,
                               validate_native_binding)
 from .targets import target_definition
 from .os_release import check, full_hash, tag, images, product_version, source_version, KERNEL, SYSROOT_SETS
 
 
-def flags_for(target):
+def flags_for(target, compiler_family=None):
     # OS make owns the toolchain and staged runtime integration. HAVE_GCC stays
     # an upstream source selector; it must not be set to 16 for an external GCC.
     common = list(SysrootBuilder.FLAGS)
@@ -29,6 +30,8 @@ def flags_for(target):
         replacements.update(MKKMOD='yes', MKMAN='yes', MKHTML='yes', MKDOC='yes',
                             MKINFO='yes', MKATF='yes', MKKYUA='yes', MKLINT='yes')
     common = [v for v in common if v.split('=', 1)[0] not in replacements]
+    if compiler_family == 'clang':
+        replacements.pop('MKLIBSTDCXX')
     return common + [f'{k}={v}' for k, v in replacements.items()]
 
 
@@ -38,14 +41,21 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
     # Only portable historical validation uses the original command contract.
     cc = host['cc']['path'] if native_selection is None else native_selection['tools']['cc']
     cxx = host['c++']['path'] if native_selection is None else native_selection['tools']['cxx']
-    flags = flags_for(target) + [f'EXTERNAL_TOOLCHAIN={paths["compiler"]}',
-        f'EMBER_EXTERNAL_GCC_RUNTIME={paths["runtime-prefix"]}',
+    runtime_flags = [f'EXTERNAL_TOOLCHAIN={paths["compiler"]}',
+                     f'EMBER_EXTERNAL_GCC_RUNTIME={paths["runtime-prefix"]}']
+    common = flags_for(target, compiler_family)
+    if compiler_family == 'clang':
+        from .llvm_sysroot import llvm_flags
+        runtime_flags = llvm_flags(paths, phase='final')
+        replaced = {flag.split('=', 1)[0] for flag in runtime_flags}
+        common = [flag for flag in common if flag.split('=', 1)[0] not in replaced]
+    flags = common + runtime_flags + [
         f'EMBER_LIBEDIT_SOURCE={paths["libedit-source"]}',
         f'MKREPRO_TIMESTAMP={timestamp}', f'EMBER_BUILD_ID={sha}', f'BUILDINFO=EmberBSD:{sha}',
         f'KERNOBJDIR={paths["objects"]}/kernels'] + (native_host_flags(native_selection) if native_selection is not None else [])
-    if compiler_family is not None:
-        check(compiler_family == 'gcc', 'LLVM target runtime integration is not implemented')
+    if compiler_family == 'gcc':
         flags.append('EMBER_COMPILER_FAMILY=' + compiler_family)
+    check(compiler_family in (None, 'gcc', 'clang'), 'Unsupported release compiler family')
     if native_selection is None or native_selection['format'] != 'emberbsd-host-prefix':
         position = flags.index(f'MKREPRO_TIMESTAMP={timestamp}')
         flags[position:position] = [f'HOST_CC={cc}', f'HOST_CXX={cxx}']
@@ -75,8 +85,8 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
 
 def validate_profile(profile, sha, target):
     """Validate current and historical profiles without reading mutable tool paths."""
-    check(type(profile['schema']) is int and profile['schema'] in (2, 3) and profile['status'] == 'built', 'Incomplete release build profile')
-    explicit_native = profile['schema'] == 3
+    check(type(profile['schema']) is int and profile['schema'] in (2, 3, 4) and profile['status'] == 'built', 'Incomplete release build profile')
+    explicit_native = profile['schema'] >= 3
     check(profile['source_commit'] == sha and full_hash(sha, 40), 'Build receipt belongs to another source')
     check(profile['source_repository'] == 'https://github.com/oxtech-ember/EmberBSD', 'Wrong source repository')
     check(profile['architecture'] == target and profile['machine'] == target_definition(target)['machine'], 'Wrong release target')
@@ -100,17 +110,29 @@ def validate_profile(profile, sha, target):
           re.fullmatch(r'(?:lib|usr/lib)/libedit\.so\.3(?:\.[0-9]+)?', installed['library']) is not None,
           'Incomplete native libedit installation receipt')
     compiler = signature['compiler']
-    check(compiler['version'] == '16.2.0' and compiler['threads'] == 'posix' and
+    clang = profile['schema'] == 4
+    if clang:
+        check(signature['compiler_family'] == 'clang', 'Mixed release compiler family')
+        validate_clang_identity(compiler, target_definition(target)['triplet'])
+        runtime = llvm_runtime.validate_identity(signature['runtime']['manifest'], target=target,
+                                                 required_components=llvm_runtime.FULL_COMPONENTS)
+        check(runtime['llvm_version'] == compiler['version'] and
+              runtime['base']['os_revision'] == sha and
+              runtime['source'] == {key: signature['llvm_source']['source'][key] for key in ('archive', 'sha512')},
+              'Mixed common LLVM runtime identity')
+    else:
+        check(signature.get('compiler_family', 'gcc') == 'gcc', 'Mixed historical compiler family')
+        check(compiler['version'] == '16.2.0' and compiler['threads'] == 'posix' and
           compiler['triplet'] == target_definition(target)['triplet'], 'Unverified common GCC16 compiler')
-    binaries = compiler['binaries']
-    expected_binaries = {'gcc', 'g++', 'cpp', 'ar', 'as', 'ld', 'nm', 'objcopy', 'objdump', 'ranlib', 'readelf', 'strip',
+        binaries = compiler['binaries']
+        expected_binaries = {'gcc', 'g++', 'cpp', 'ar', 'as', 'ld', 'nm', 'objcopy', 'objdump', 'ranlib', 'readelf', 'strip',
                          'resolved-cc1', 'resolved-cc1plus', 'resolved-collect2', 'resolved-lto1', 'resolved-as', 'resolved-ld'}
-    check(set(binaries) == expected_binaries and all(full_hash(b['sha256']) for b in binaries.values()), 'Missing compiler identity hashes')
-    metadata = signature['runtime']['report']['metadata']
-    check(metadata['GCC_VERSION'] == '16.2.0' and metadata['GCC_RUNTIME_TRIPLET'] == compiler['triplet'] and
+        check(set(binaries) == expected_binaries and all(full_hash(b['sha256']) for b in binaries.values()), 'Missing compiler identity hashes')
+        metadata = signature['runtime']['report']['metadata']
+        check(metadata['GCC_VERSION'] == '16.2.0' and metadata['GCC_RUNTIME_TRIPLET'] == compiler['triplet'] and
           metadata['GCC_RUNTIME_TARGET'] == target and full_hash(metadata['EMBERBSD_SEED_SOURCE'], 40), 'Mixed GCC16 runtime receipt')
-    for key in ('GCC_RUNTIME_INPUTS_SHA256', 'GCC_RUNTIME_STAGE_SHA256', 'GCC_RUNTIME_LINKS_SHA256'):
-        check(full_hash(metadata[key]), 'Missing runtime receipt hash')
+        for key in ('GCC_RUNTIME_INPUTS_SHA256', 'GCC_RUNTIME_STAGE_SHA256', 'GCC_RUNTIME_LINKS_SHA256'):
+            check(full_hash(metadata[key]), 'Missing runtime receipt hash')
     paths = receipt['paths']
     for key in ('os', 'ports', 'sdk-source', 'compiler', 'runtime-prefix', 'objects', 'tools', 'destination', 'libedit-source'):
         check(isinstance(paths[key], str) and paths[key].startswith('/') and not re.search(r'\s', paths[key]), 'Invalid producer path')
@@ -139,7 +161,7 @@ def validate_profile(profile, sha, target):
 class OSReleaseBuilder(SysrootBuilder):
     def __init__(self, options):
         target = options.get('target')
-        self.FLAGS = flags_for(target)
+        self.FLAGS = flags_for(target, options.get('compiler-family', 'clang'))
         super().__init__(options)
 
     def configure_signature(self):
@@ -155,7 +177,7 @@ class OSReleaseBuilder(SysrootBuilder):
     def preflight(self):
         check('destination' in self.options, 'OS release requires an explicit destination stage')
         super().preflight()
-        self.receipt.update(format='emberbsd-os-release-build', version=3, scope='os-release-build',
+        self.receipt.update(format='emberbsd-os-release-build', version=4 if self.compiler_family() == 'clang' else 3, scope='os-release-build',
                             previous_contexts=self.contexts, plan=[self.runtime_command, *self.release_commands, self.runtime_command],
                             not_checked=['target execution', 'VM installation', 'physical hardware', 'binary publication'])
         self.receipt.pop('copy', None)
@@ -192,10 +214,13 @@ class OSReleaseBuilder(SysrootBuilder):
 
     def run(self):
         receipt = super().run()
-        if self.options.get('plan'):
+        if self.options.get('plan') or receipt['format'] != 'emberbsd-os-release-build':
+            return receipt
+        # The coordinator's final child already wrote and checked this profile.
+        if not hasattr(self, 'source_sha256'):
             return receipt
         output = Path(self.paths['destination'])
-        profile = dict(schema=3, status='built', source_repository='https://github.com/oxtech-ember/EmberBSD',
+        profile = dict(schema=receipt['version'], status='built', source_repository='https://github.com/oxtech-ember/EmberBSD',
                        source_commit=self.sources['os']['commit'], source_timestamp=self.timestamp, product_version=self.product_version,
                        source_sha256=self.source_sha256, architecture=self.options['target'], machine=self.target['machine'],
                        jobs=self.options['jobs'], shell=self.shell, commands=self.release_commands,

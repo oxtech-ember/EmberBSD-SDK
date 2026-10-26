@@ -31,8 +31,10 @@ name, alias or build-host architecture does not declare them. The sysroot builde
 refuses a legacy or version 1 workspace whose target is unknown. These tools do
 not migrate an active build tree or change its existing producer commands.
 
-The sysroot builder uses clean OS/Ports sources and the accepted GCC16 runtime
-stage. Start with its help and the documented preflight:
+The sysroot builder uses clean OS/Ports sources and the common Clang/LLVM
+toolchain. It builds headers, the initial runtime, OS libc/CRT and the full C++
+runtime in dependency order. GCC is an explicit platform alternative.
+Start with its help and the documented preflight:
 
 ```sh
 python3 scripts/build-sysroot.py --help
@@ -91,7 +93,8 @@ The [native prefix API](docs/native-toolset.md) checks contained executable path
 host CPU, compiler driver routes, Clang resource files, and script interpreters.
 The [OS command mapping](docs/native-os-routing.md) selects those tools for nested builds.
 Select native and target compilers separately. Clang is the default family.
-The [migration boundary](docs/tool-selection.md#migration-boundary) identifies target runtime work that remains.
+The [runtime boundary](docs/tool-selection.md#migration-boundary) describes the
+phased LLVM producer and separates build records from target acceptance.
 Reject implicit system build-tool selection.
 The selected target architecture, ABI and runtime must agree. Build-host tools
 remain host executables. Boards and VMs execute prepared acceptance programs.

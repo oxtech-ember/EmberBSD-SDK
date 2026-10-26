@@ -6,7 +6,7 @@ No independent native-tool qualification or admission receipt is required.
 
 SDK owns release orchestration, kit composition and immutable publication.
 The OS owns `build.sh`, distribution rules, media layout and installer checks.
-Ports owns the common GCC16 compiler and its verified runtime.
+Ports owns the common Clang/LLVM compiler and runtime, and the explicit GCC alternative.
 Use [release tags](release-tags.md) for coordinated OS/Ports/SDK version preparation;
 that command does not publish binary OS kits.
 
@@ -24,12 +24,11 @@ Read [sysroot inputs](sysroot.md#required-inputs) and
 [host requirements](host-platforms.md). Use CPython 3.15+, Git, the OS host
 build prerequisites and an ISO-capable libarchive `tar`. Each source checkout
 must be clean and fully materialized. Select exact OS, Ports and SDK commits.
-This example explicitly selects the implemented GCC alternative. Its target
-compiler must be GCC 16.2.0 with POSIX threads for the selected ABI.
-Clang is the default family; the [LLVM runtime migration boundary](tool-selection.md#migration-boundary)
-currently prevents a Clang application/release build. Native compilation uses
-the independently selected host prefix.
-The normal Ports verifier must accept its runtime stage and source inputs.
+Clang is the default target family. Native compilation uses the independently
+selected host prefix. Prepare `--llvm-source` with the common Ports source
+producer. Without `--llvm-runtime-stage`, the [LLVM coordinator](llvm-runtime.md)
+builds headers, the initial runtime, C base and full C++ runtime before the
+release. An explicitly supplied full stage is checked against these same inputs.
 
 Select `aarch64-sysroot` for complete base/comp sets and an EMBER64 test kernel.
 Select `amd64` for the reduced UEFI ISO, USB image and installation sets.
@@ -47,7 +46,6 @@ Canonical version behavior follows OS commit
 ```sh
 python3 scripts/build-os-release.py --help
 python3 scripts/build-os-release.py \
-  --compiler-family gcc \
   --profile aarch64-sysroot \
   --sdk-source /absolute/EmberBSD-SDK \
   --sdk /absolute/prebuild-sdk-aarch64 \
@@ -55,10 +53,9 @@ python3 scripts/build-os-release.py \
   --ports /absolute/EmberBSD-Ports \
   --libedit-source /absolute/prepared-libedit \
   --host-prefix /absolute/host-pkg-llvm \
-  --compiler /absolute/gcc16-cross \
-  --runtime-work /absolute/gcc16-runtime-work \
-  --gcc-archive /absolute/gcc-16.2.0.tar.xz \
-  --pkgsrc /absolute/prepared-pkgsrc \
+  --compiler /absolute/host-pkg-llvm \
+  --llvm-source /absolute/prepared-llvm \
+  --runtime-work /absolute/prebuild-sdk-aarch64/obj/llvm-runtime \
   --destination /absolute/prebuild-sdk-aarch64/stages/release-candidate \
   --jobs 4 --plan
 ```
@@ -80,7 +77,7 @@ then `iso-image`. It retains GENERIC kernel and modules, with the INSTALL boot
 kernel profile selected through command variables. Both profiles omit native
 bootstrap compiler commands, X11 and rump. The external runtime is a build-only
 input. OS distribution rules maintain METALOG and strict set-list checks;
-OS sets do not own the external SDK or GCC16 package payload. Select one matching
+OS sets do not own the external SDK or compiler-runtime package payload. Select one matching
 Ports runtime provider separately and check image dependency closure before
 VM qualification. The adapter alone does not compose that runtime package.
 
@@ -90,10 +87,14 @@ The common SDK log and incomplete receipt remain on failure. `build-success`
 appears only after all producer operations and receipt checks succeed.
 A build result is not a VM, hardware or publication qualification.
 
-New release profiles and SDK release receipts use schema 3. Their portable verification binds the native selection,
+Clang release profiles and SDK release receipts use schema 4, with version 3 kit
+wrappers. The explicit GCC alternative retains schema 3 and version 2 wrappers.
+Portable verification binds the native selection,
 input pins, tool paths, ABI flags, and environment. It does not read the original compiler files.
 Historical schema 2 profiles retain their original command contract and acquire no native-toolset qualification.
-The kit wrapper remains version 2 for both profile schemas.
+For GCC, add `--compiler-family gcc`, select the GCC16 cross prefix and runtime
+work tree, and supply its `--gcc-archive` and `--pkgsrc` inputs. That path does not
+consume `--llvm-source` or an LLVM stage.
 
 ## Prepare a kit
 
@@ -174,23 +175,24 @@ needs its own accepted HTTPS frontend; a DNS alias alone is insufficient.
 
 Existing schema 1 amd64 and `emberbsd.aarch64.sysroot.v1` manifests remain
 verifiable without rewriting their receipts. Their bootstrap GCC12 provenance
-stays explicit. It is not evidence for today's common GCC16 build profile.
+stays explicit. It is not evidence for the current compiler/runtime profiles.
 Historical schema 2 receipts retain their source, compiler, runtime and command
-checks. They do not establish native toolset qualification. New plans use
-schema 3 and bind the selected native prefix. Builds use the OS native command mapping. Existing immutable tags must not
+checks. They do not establish native toolset qualification. New Clang plans use
+schema 4 and bind the selected native prefix. Builds use the OS native command mapping. Existing immutable tags must not
 be repurposed.
 
 Run `python3 -B -m unittest discover -s tests -p 'test_*.py'`.
 The release tests exercise archive composition, qualification binding, actual
 fixture command dispatch, failure isolation and immutable remote-state refusals.
 They do not build an OS, run a VM, inspect hardware or write GitHub releases.
-The new GCC16 complete-release sequence needs an actual full build and target
+The Clang complete-release sequence needs an actual full build and target
 acceptance before its binaries can be called qualified.
 
 The automatic SDK workflow runs host contracts only. The manual
 [OS release workflow](../.github/workflows/os-release.yml) requires a prepared
 self-hosted runner labelled `emberbsd-release`. It requires explicit clean
-source pins, workspace, GCC16, runtime, archive and pkgsrc inputs. Missing
-inputs fail; the job does not substitute a GCC12 build or report a skipped
+source pins, workspace, independent host/target compiler families, and the
+matching LLVM source or GCC runtime/archive/pkgsrc inputs. Missing
+inputs fail; the job does not substitute another compiler or report a skipped
 producer as a successful binary build. This migration does not establish that
 such a runner exists or qualify its complete producer pipeline.
