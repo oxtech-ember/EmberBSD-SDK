@@ -144,11 +144,13 @@ Actual parser generation, GCC16 probes, semantic execution, C analysis and memor
 
 The separate `compat-listing-bootstrap` profile consumes the OS-owned
 `tools/compat/bootstrap-listing.json` contract, SHA256
-`f5aa9c1bacf2ecd3d4488b1506203919c5c348c5236daa7c03167196030b1cef`.
-The exact 28-member source proof includes four complete translation units,
-four headers, the shared normal build fragment, configuration sources,
+`5dbdf88505b5c30d3c29ed7cebfc0209244eecae714baf4a7ca492b3e9266666`.
+The exact 35-member source proof includes four complete translation units,
+five headers, the shared normal build fragment, configuration sources,
 canonical declaration and test provenance, and source-owned controls and probes.
 The SDK contains no formatter, ACL implementation, capability preset or semantic table.
+The OS owns a scoped NetBSD ACL header adapter and its source-order checks.
+This adapter is a bound build input. The five public exports remain unchanged.
 
 There are 19 ordered commands:
 

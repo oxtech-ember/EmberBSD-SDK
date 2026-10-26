@@ -115,7 +115,7 @@ class ListingComponentTests(unittest.TestCase):
         expected = {fixed['manifest'], value['source_makefile'], value['source_fragment'],
                     *value['sources'], *value['headers'], *value['provenance'],
                     value['control'], value['check'], *(p['source'] for p in value['probes'])}
-        self.assertEqual(len(expected), 28)
+        self.assertEqual(len(expected), 35)
         self.assertEqual(expected, {fixed['manifest'], *fixed['sources'], *fixed['headers'], *fixed['provenance']})
 
     def test_actual_probe_observations_are_retained_without_native_formatter_substitution(self):
@@ -188,6 +188,24 @@ class ListingComponentTests(unittest.TestCase):
         self.assertEqual(result['status'], 'FAILED')
         self.assertIn('work roster', result['error'])
         self.assertNotIn('compile-humanize_number', calls)
+
+    def test_acl_feature_adapter_is_a_bound_build_input_not_a_public_export(self):
+        c = self.case
+        fixed = component.profile(c.plan)
+        self.assertIn('tools/compat/compat_acl_features.h', fixed['headers'])
+        self.assertNotIn('compat_acl_features.h', fixed['exports'])
+        self.assertEqual(component.sources(c.plan)['compat_acl_features.h'],
+            (self.owner / 'tools/compat/compat_acl_features.h').read_bytes())
+        calls = []
+        def child(argv, log, **kwargs):
+            calls.append(Path(log).stem)
+            result = self.fake(argv, log, **kwargs)
+            if Path(log).stem == 'listing-stat-flags':
+                (c.work / 'compat_acl_features.h').write_text('changed adapter')
+            return result
+        result = self.run_fixture(child)
+        self.assertEqual(result['status'], 'FAILED')
+        self.assertNotIn('listing-acl-bsd', calls)
 
     def test_retained_archive_rejects_reorder_duplicate_missing_extra_and_changed_member(self):
         c = self.case
