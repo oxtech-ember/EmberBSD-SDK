@@ -102,6 +102,24 @@ class FilesystemTimes(unittest.TestCase):
         self.assertEqual(detail['link']['expected']['target'], 'missing')
         self.assertFalse((self.work / 'times.filesystem.json').exists())
 
+    def test_mismatch_error_hashes_an_undecodable_observed_link_target(self):
+        case = self.case({'link': dict(type='symlink', target='missing')})
+        root = fs.prepare(self.work, case)
+        (root / 'link').unlink()
+        target = b'\xff'
+        os.symlink(target, os.fsencode(root / 'link'))
+        self.assertEqual(os.readlink(os.fsencode(root / 'link')), target)
+        with self.assertRaises(SDKError) as caught:
+            fs.observe(self.work, case)
+        message = str(caught.exception)
+        self.assertTrue(message.startswith('filesystem actual state differs from its source contract: '))
+        detail = json.loads(message.split(': ', 1)[1])
+        self.assertEqual(detail['link']['observed']['target'],
+                         dict(size=1, sha256=hashlib.sha256(target).hexdigest()))
+        self.assertEqual(detail['link']['expected']['target'], 'missing')
+        self.assertEqual(json.loads(fs.json_bytes({'error': message}))['error'], message)
+        self.assertFalse((self.work / 'times.filesystem.json').exists())
+
     def test_file_directory_and_symlink_roundtrip_without_following_target(self):
         fixtures = {
             'dir': dict(type='directory', mode='0700', atime_ns=ATIME, mtime_ns=MTIME),

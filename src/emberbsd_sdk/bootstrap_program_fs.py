@@ -340,7 +340,14 @@ def observe(work, case, *, key=None):
                            for name in sorted(expected) if entries[name] != expected[name]}
             for row in differences.values():
                 observed = row['observed']
-                if observed['type'] == 'symlink' and len(observed['target']) > 512:
+                if observed['type'] != 'symlink':
+                    continue
+                try:
+                    observed['target'].encode('utf-8', 'strict')
+                    literal_target = len(observed['target']) <= 512
+                except UnicodeEncodeError:
+                    literal_target = False
+                if not literal_target:
                     target = os.fsencode(observed['target'])
                     row['observed'] = dict(observed, target=dict(
                         size=len(target), sha256=hashlib.sha256(target).hexdigest()))

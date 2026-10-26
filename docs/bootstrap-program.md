@@ -206,6 +206,7 @@ It rejects unexpected entries, special files, changed types, wrong modes, and di
 If the final entry comparison fails, the retained producer error includes each differing expected and observed entry.
 Observed timestamps come from the pre-read snapshots. File contents appear only as size and hash.
 Observed link targets longer than the contract's 512-character limit also appear as byte size and hash.
+The same summary preserves targets with filesystem bytes that cannot be encoded as UTF-8 JSON.
 The existing entry and path limits bound this diagnostic. It creates no accepted report on failure.
 It creates a flat `<case-name>.filesystem.json` observation in the finite output roster.
 Historical validation checks that hash-bound report with the same source-owned contract.
