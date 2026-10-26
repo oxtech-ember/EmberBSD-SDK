@@ -220,7 +220,7 @@ def require_qualification(manifest, profile):
     else:
         bindings = {'base_sha256': SYSROOT_SETS[0], 'comp_sha256': SYSROOT_SETS[1], 'kernel_gzip_sha256': KERNEL}
         checks = SYSROOT_CHECKS
-        if manifest['build_profile'].get('schema') == 4:
+        if manifest['build_profile'].get('schema') in (4, 5):
             version = manifest['build_profile']['sdk_receipt']['signature']['compiler']['version']
             check(q.get('consumer_compiler_family') == 'clang' and
                   isinstance(q.get('consumer_compiler'), str) and 'clang' in q['consumer_compiler'].lower() and
@@ -284,7 +284,7 @@ def _verify(directory, profile):
     check((directory / 'SHA256').read_text() == checksum_text(directory, names + ['manifest.json']), 'Checksum manifest changed')
     if profile != 'amd64' or modern:
         p = read_json(directory / 'build-profile.json')
-        check(type(p['schema']) is int and p['schema'] in ((4,) if llvm else (2, 3) if modern else (1,)), 'Manifest and build profile schema differ')
+        check(type(p['schema']) is int and p['schema'] in ((4, 5) if llvm else (2, 3) if modern else (1,)), 'Manifest and build profile schema differ')
         profile_check(p, sha, version, 'amd64' if profile == 'amd64' else 'aarch64')
         check(m['source_archive_sha256'] == p['source_sha256'] and m['build_profile'] == p, 'Source/build receipt changed')
         check((directory / 'source-export.sha256').read_text() == p['source_sha256'] + '  source.tar.gz\n', 'Source export hash receipt changed')
@@ -343,8 +343,8 @@ def prepare_sysroot(build, directory, qualification):
         write_json(directory / 'qualification.json', q)
         shutil.copyfile(build / EVIDENCE, directory / EVIDENCE)
         names += ['qualification.json', EVIDENCE]
-    modern = p.get('schema') in (2, 3, 4)
-    llvm = p.get('schema') == 4
+    modern = p.get('schema') in (2, 3, 4, 5)
+    llvm = p.get('schema') in (4, 5)
     compiler = ('the common Clang/LLVM compiler and runtime' if llvm else
                 'the verified common GCC16 and runtime' if modern else 'the historical in-tree GCC12.5 bootstrap')
     (directory / 'release-notes.md').write_text(
@@ -424,7 +424,7 @@ def prepare_amd64(build, directory, qualification, os_source):
     (directory / 'release-notes.md').write_text(
         f'# EmberBSD {version} amd64 UEFI installation candidate\n\nSource: `{sha}`. Compatibility base: NetBSD 11.0.\n'
         'Profile: no X11, no rump, GENERIC kernel and matching modules/base. Native bootstrap compiler commands are excluded.\n'
-        + ('The build uses the common Clang/LLVM compiler and runtime.\n' if p and p.get('schema') == 4 else
+        + ('The build uses the common Clang/LLVM compiler and runtime.\n' if p and p.get('schema') in (4, 5) else
            'The build uses the common verified GCC16 compiler and runtime.\n' if p else
            'This historical build uses the in-tree bootstrap compiler; it does not qualify a GCC16 userland.\n')
         + ('The bound VM receipt records installation, persistence and TLS rejection checks.\n' if q else 'VM qualification is pending. Do not publish this candidate.\n')
@@ -435,7 +435,7 @@ def prepare_amd64(build, directory, qualification, os_source):
         'Source archives are not in this binary channel.\n')
     components = {n: {'source_commit': sha} for n in ('image', 'kernel', 'modules', 'base')}
     components['kernel'].update(buildinfo=buildinfo, sha256=kernel_sha)
-    m = dict(schema='emberbsd.amd64.release.v3' if p and p.get('schema') == 4 else 'emberbsd.amd64.release.v2' if p else 1, repository=REPOSITORY, source_commit=sha,
+    m = dict(schema='emberbsd.amd64.release.v3' if p and p.get('schema') in (4, 5) else 'emberbsd.amd64.release.v2' if p else 1, repository=REPOSITORY, source_commit=sha,
              source_archive_sha256=p['source_sha256'] if p else sha256_file(build / 'source.tar'),
              release_tag=tag(sha, 'amd64'), architecture='amd64', product_version=version, base_version='11.0',
              profile=dict(MKX11='no', MKRUMP='no', MKGCCCMDS='no', KERNEL_SETS='GENERIC', BUILD_KERNELS='INSTALL'),

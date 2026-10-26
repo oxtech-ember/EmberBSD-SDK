@@ -107,6 +107,48 @@ def reseal(directory, change=None):
     kit.seal(directory, m)
 
 
+class FixtureNativeRuntimeInstaller:
+    """Filesystem-only stand-in for install(1); not native install evidence."""
+
+    def __init__(self, destination, tools, os_source, run):
+        self.root = os.fspath(destination)
+        self.metalog = Path(self.root) / 'METALOG'
+        if not self.metalog.is_file() or not Path(os_source, 'etc').is_dir():
+            raise SDKError('fixture distribution lacks METALOG or OS database')
+        selected = tools.get('install')
+        if not isinstance(selected, str) or not selected.endswith('-install'):
+            raise SDKError('fixture did not select the target OS install tool')
+        self.run = run
+
+    def _record(self, path, kind, mode, extra=''):
+        name = './' + Path(path).relative_to(self.root).as_posix()
+        with self.metalog.open('a') as stream:
+            stream.write(f'{name}\ttype={kind}\tmode={mode:04o}\tuid=0\tgid=0{extra}\n')
+
+    def directory(self, path, mode):
+        path = Path(path)
+        if path.exists():
+            if not path.is_dir():
+                raise SDKError('fixture runtime directory conflict')
+            return
+        path.mkdir()
+        path.chmod(mode)
+        self._record(path, 'dir', mode)
+
+    def file(self, source, destination, mode):
+        destination = Path(destination)
+        shutil.copyfile(source, destination)
+        destination.chmod(mode)
+        self._record(destination, 'file', mode)
+
+    def link(self, target, destination, mode):
+        destination = Path(destination)
+        destination.symlink_to(target)
+        if hasattr(os, 'lchmod'):
+            os.lchmod(destination, mode)
+        self._record(destination, 'link', mode, '\tlink=' + target)
+
+
 class HistoricalKitTests(TemporaryCase):
     def setUp(self):
         super().setUp()
@@ -262,9 +304,14 @@ def release_fixture(root, target, version='1.0'):
     options = fixture(root, target)
     source = Path(options['os'])
     write(source / 'share/mk/bsd.own.mk', f'EMBER_VERSION?= {version}\n')
+    write(source / 'distrib/sets/lists/base/mi', '# base list fixture\n')
+    write(source / 'distrib/sets/lists/comp/mi', '# comp list fixture\n')
+    if target == 'amd64':
+        write(source / 'ember/tests/installer-image.py',
+              'import sys\nassert len(sys.argv) == 5\n')
     base, comp = set_files()
     # This producer emits archives and kernel identity bytes. It never compiles.
-    producer = '''import json, os, sys, gzip, hashlib, io, tarfile
+    producer = '''import json, os, sys, gzip, hashlib, io, tarfile, shlex
 from pathlib import Path
 args = sys.argv[1:]
 def value(k): return args[args.index(k)+1]
@@ -274,25 +321,104 @@ release = Path(value('-R')); output = release.parent
 version = Path(__file__).with_name('share').joinpath('mk/bsd.own.mk').read_text().split('=',1)[1].strip()
 with (output / 'observed-argv.jsonl').open('a') as handle: handle.write(json.dumps(args)+'\\n')
 if control.get('fail') == args[-1]: raise SystemExit(77)
+sets_source = next((a.split('=',1)[1] for a in args if a.startswith('EMBER_SETS_SOURCE=')), None)
 sha = next(a.split('=',1)[1] for a in args if a.startswith('EMBER_BUILD_ID='))
 kernel = ELF + ('EmberBSD:'+sha+'\\n\\0').encode()
 if args[-1] == 'kernel=EMBER64':
     path = Path(value('-O'))/'kernels/EMBER64/netbsd'; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(kernel)
+elif args[-1] == 'distribution':
+    (output/'fixture-distribution-complete').write_text('fixture only; no target build')
+    dest = Path(value('-D'))
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest/'METALOG').write_text('./\\ttype=dir\\tmode=0755\\tuid=0\\tgid=0\\n')
+    tools = Path(value('-T'))/'bin'
+    tools.mkdir(parents=True, exist_ok=True)
+    install = tools/(('aarch64--netbsd' if '-a' in args and value('-a') == 'aarch64' else 'x86_64--netbsd') + '-install')
+    install.write_text('#!/bin/sh\\nexit 0\\n'); install.chmod(0o755)
+    wrapper = tools/('nbmake-evbarm' if value('-a') == 'aarch64' else 'nbmake-amd64')
+    checkscript = output/'fixture-checkflist.py'
+    checkscript.write_text(f"""import gzip, json, sys
+from pathlib import Path
+args=sys.argv[1:]
+def value(key): return args[args.index(key)+1]
+dest=Path({str(dest)!r})
+output=Path({str(output)!r})
+release=Path({str(release)!r})
+version={version!r}
+target=args[-1]
+if target == 'checkflist':
+    overlay=next((a.split('=',1)[1] for a in args if a.startswith('EMBER_SETS_SOURCE=')), None)
+    if overlay is None or not (dest/'usr/include/c++').is_dir() or not Path(overlay).is_dir():
+        raise SystemExit('checkflist ran before common runtime import')
+    (output/'fixture-checkflist-complete').write_text('fixture only')
+elif target == 'release':
+    if not (dest/'usr/include/c++').is_dir() or not (output/'fixture-checkflist-complete').is_file():
+        raise SystemExit('etc release ran before common runtime import and checkflist')
+    (output/'fixture-etc-release-complete').write_text('fixture only')
+elif target == 'install_image':
+    overlay=next((a.split('=',1)[1] for a in args if a.startswith('EMBER_SETS_SOURCE=')), None)
+    if overlay is not None and not (output/'fixture-etc-release-complete').is_file():
+        raise SystemExit('install_image ran before etc release')
+    images=release/'images'
+    images.mkdir(parents=True, exist_ok=True)
+    (images/f'EmberBSD-{version}-amd64-install.img.gz').write_bytes(gzip.compress(b'USB fixture'))
+elif target == 'iso-image':
+    overlay=next((a.split('=',1)[1] for a in args if a.startswith('EMBER_SETS_SOURCE=')), None)
+    if overlay is not None and not (output/'fixture-etc-release-complete').is_file():
+        raise SystemExit('iso-image ran before etc release')
+    images=release/'images'
+    images.mkdir(parents=True, exist_ok=True)
+    (images/f'EmberBSD-{version}-amd64.iso').write_bytes(b'ISO fixture')
+else:
+    raise SystemExit('unexpected fixture make target: '+target)
+with (output/'observed-argv.jsonl').open('a') as handle:
+    handle.write(json.dumps([target])+'\\\\n')
+""")
+    wrapper.write_text('#!/bin/sh\\nexec ' + shlex.quote(sys.executable) + ' ' + shlex.quote(str(checkscript)) + ' "$@"\\n')
+    wrapper.chmod(0o755)
 elif args[-1] == 'sets':
+    if sets_source is not None:
+        dest = Path(value('-D'))
+        if not (dest/'usr/pkg/llvm').is_dir() or not (output/'fixture-checkflist-complete').is_file(): raise SystemExit('sets ran before runtime import and checkflist')
     path = release/'evbarm-aarch64/binary/sets'; path.mkdir(parents=True)
     (path/'base.tar.xz').write_bytes(BASE)
     if not control.get('omit_comp'): (path/'comp.tar.xz').write_bytes(COMP)
 elif args[-1] == 'release':
-    path = release/'images'; path.mkdir(parents=True)
+    if sets_source is not None and not (output/'fixture-etc-release-complete').is_file(): raise SystemExit('release media ran before etc release')
+    path = release/'images'; path.mkdir(parents=True, exist_ok=True)
     (path/f'EmberBSD-{version}-amd64-install.img.gz').write_bytes(gzip.compress(b'USB fixture'))
     wrapper = Path(value('-T'))/'bin/nbmake-amd64'; wrapper.parent.mkdir(parents=True, exist_ok=True)
-    wrapper.write_text('#!/bin/sh\\nexit 0\\n'); wrapper.chmod(0o755)
+    wrapper.write_text('#!/bin/sh\\nexit 0\\n')
+    wrapper.chmod(0o755)
+elif args[-1] == 'install_image':
+    if not (output/'fixture-etc-release-complete').is_file(): raise SystemExit('install_image ran before etc release')
+    path = release/'images'; path.mkdir(parents=True, exist_ok=True)
+    (path/f'EmberBSD-{version}-amd64-install.img.gz').write_bytes(gzip.compress(b'USB fixture'))
 elif args[-1] == 'iso-image':
-    path=release/f'images/EmberBSD-{version}-amd64.iso'; path.write_bytes(b'ISO orchestration fixture')
+    if sets_source is not None and not (output/'fixture-etc-release-complete').is_file(): raise SystemExit('iso-image ran before etc release')
+    set_payloads = {}
+    for name in SETS:
+        members = {'./netbsd': kernel} if name == 'kern-GENERIC' else {'./fixture': b'fixture'}
+        blob = io.BytesIO()
+        with tarfile.open(fileobj=blob, mode='w:xz') as archive:
+            for member, data in members.items():
+                info = tarfile.TarInfo(member); info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+        set_payloads[name + '.tar.xz'] = blob.getvalue()
+    sums = ''.join('SHA512 (' + name + ') = ' + hashlib.sha512(data).hexdigest() + '\\n'
+                   for name, data in set_payloads.items()).encode()
+    image_files = {'amd64/binary/sets/' + name: data for name, data in set_payloads.items()}
+    image_files['amd64/binary/sets/SHA512'] = sums
+    image_files['netbsd'] = gzip.compress(kernel)
+    path = release/f'images/EmberBSD-{version}-amd64.iso'
+    with tarfile.open(path, mode='w') as archive:
+        for name, data in image_files.items():
+            info = tarfile.TarInfo(name); info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
 else: raise SystemExit('unexpected operation')
 '''
     producer = ('CONTROL=' + repr(str(root / 'control.json')) + '\nELF=' + repr(header(183 if target == 'aarch64' else 62)) +
-                '\nBASE=' + repr(tar_bytes(base)) + '\nCOMP=' + repr(tar_bytes(comp)) + '\n') + producer
+                '\nSETS=' + repr(kit.SETS) + '\nBASE=' + repr(tar_bytes(base)) + '\nCOMP=' + repr(tar_bytes(comp)) + '\n') + producer
     producer += "dest = Path(value('-D'))\n" + installation_source(183 if target == 'aarch64' else 62, arguments='args', control='control')
     write(source / 'fixture-producer.py', producer)
     commit(source)
@@ -315,16 +441,131 @@ class BuilderReleaseTests(TemporaryCase):
         options = release_fixture(self.root, 'aarch64')
         builder, _ = llvm_fixtures.LLVMBuilderTests.builder(self, options, ClangRelease)
         builder.options['base-cxx'] = True
-        receipt = builder.run()
+        with patch('emberbsd_sdk.native_runtime_install.NativeRuntimeInstaller',
+                   FixtureNativeRuntimeInstaller):
+            receipt = builder.run()
         output = Path(builder.paths['destination'])
         profile = jsonio.read_json(output / 'build-profile.json')
+        self.assertEqual((profile['schema'], receipt['version']), (5, 5))
         self.assertIn('MKLIBCXX=yes', receipt['signature']['flags'])
         validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
+        manifest = kit.prepare(output, self.root / 'common-runtime-kit', 'aarch64-sysroot')
+        self.assertEqual(manifest['schema'], 'emberbsd.aarch64.sysroot.v3')
+        self.assertEqual(manifest['build_profile']['schema'], 5)
+        self.assertTrue((output / 'dest/usr/include/c++').is_dir())
+        observed = [json.loads(line) for line in (output / 'observed-argv.jsonl').read_text().splitlines()]
+        self.assertEqual([row[-1] for row in observed],
+                         ['kernel=EMBER64', 'distribution', 'checkflist', 'sets'])
         forged = copy.deepcopy(profile)
         flags = forged['sdk_receipt']['signature']['flags']
         flags[flags.index('MKCXX=yes')] = 'MKCXX=no'
         with self.assertRaisesRegex(SDKError, 'MKLIBCXX=yes requires MKCXX=yes'):
             validate_profile(forged, receipt['sources']['os']['commit'], 'aarch64')
+
+        forged = copy.deepcopy(profile)
+        flags = forged['sdk_receipt']['signature']['flags']
+        flags[flags.index('MKLIBCXX=yes')] = 'MKLIBCXX=no'
+        with self.assertRaisesRegex(SDKError, 'Common-runtime release must select base C\\+\\+'):
+            validate_profile(forged, receipt['sources']['os']['commit'], 'aarch64')
+
+        wrong_manifest = self.root / 'wrong-outer-schema'
+        shutil.copytree(self.root / 'common-runtime-kit', wrong_manifest)
+        reseal(wrong_manifest, lambda m: m.update(schema='emberbsd.aarch64.sysroot.v2'))
+        with self.assertRaisesRegex(SDKError, 'Manifest and build profile schema differ'):
+            kit.verify(wrong_manifest, 'aarch64-sysroot')
+
+    def test_runtime_import_failure_prevents_checkflist_sets_and_success(self):
+        class FailingImportRelease(OSReleaseBuilder):
+            compiler = llvm_fixtures.ClangBuilder.compiler
+
+            def import_base_runtime(self):
+                raise SDKError('fixture runtime importer failed')
+        options = release_fixture(self.root, 'aarch64')
+        builder, _ = llvm_fixtures.LLVMBuilderTests.builder(self, options, FailingImportRelease)
+        builder.options['base-cxx'] = True
+        with self.assertRaisesRegex(SDKError, 'fixture runtime importer failed'):
+            builder.run()
+        output = Path(builder.paths['destination'])
+        observed = [json.loads(line) for line in (output / 'observed-argv.jsonl').read_text().splitlines()]
+        self.assertEqual([row[-1] for row in observed], ['kernel=EMBER64', 'distribution'])
+        self.assertFalse((output / 'build-success').exists())
+        self.assertFalse((output / 'fixture-checkflist-complete').exists())
+
+    def test_clang_amd64_base_runtime_precedes_release_media(self):
+        class AMD64ClangIdentity:
+            def compiler(self):
+                record = llvm_fixtures.ClangBuilder.compiler(self)
+                record['triplet'] = 'x86_64--netbsd'
+                record['reported_triplet'] = 'x86_64-unknown-netbsd'
+                for role, command in record['commands'].items():
+                    record['commands'][role] = [arg.replace('aarch64--netbsd', 'x86_64--netbsd')
+                                                for arg in command]
+                return record
+
+        class ClangRelease(AMD64ClangIdentity, OSReleaseBuilder):
+            pass
+        options = release_fixture(self.root, 'amd64')
+        builder, runtime = llvm_fixtures.LLVMBuilderTests.builder(self, options, ClangRelease)
+        old_builtins = runtime.record['artifacts']['builtins']
+        new_builtins = old_builtins.replace('-aarch64.', '-x86_64.')
+        (runtime.stage / old_builtins).rename(runtime.stage / new_builtins)
+        runtime.builtins = new_builtins
+        runtime.record['artifacts']['builtins'] = new_builtins
+        runtime.record.update(target='amd64', triplet='x86_64--netbsd',
+                              machine_arch='x86_64', elf_machine=62)
+        for path in runtime.stage.rglob('*'):
+            if not path.is_file() or path.name == 'runtime.json':
+                continue
+            data = bytearray(path.read_bytes())
+            if data.startswith(b'\x7fELF'):
+                data[18:20] = (62).to_bytes(2, 'little')
+            elif data.startswith(b'!<arch>\n') and data[68:72] == b'\x7fELF':
+                data[86:88] = (62).to_bytes(2, 'little')
+            path.write_bytes(data)
+        runtime.save()
+        builder.options['base-cxx'] = True
+        with patch('emberbsd_sdk.native_runtime_install.NativeRuntimeInstaller',
+                   FixtureNativeRuntimeInstaller):
+            receipt = builder.run()
+        output = Path(builder.paths['destination'])
+        profile = jsonio.read_json(output / 'build-profile.json')
+        self.assertEqual((profile['schema'], receipt['version']), (5, 5))
+        validate_profile(profile, receipt['sources']['os']['commit'], 'amd64')
+        observed = [json.loads(line) for line in (output / 'observed-argv.jsonl').read_text().splitlines()]
+        self.assertEqual([row[-1] for row in observed],
+                         ['distribution', 'checkflist', 'release', 'install_image', 'iso-image'])
+        manifest = kit.prepare(output, self.root / 'common-runtime-amd64-kit', 'amd64',
+                               os_source=Path(builder.paths['os']))
+        self.assertEqual(manifest['schema'], 'emberbsd.amd64.release.v3')
+        self.assertEqual(manifest['build_profile']['schema'], 5)
+        self.assertTrue((output / 'dest/usr/include/c++').is_dir())
+
+    def test_historical_schema4_base_cxx_selection_keeps_old_commands(self):
+        class ClangRelease(OSReleaseBuilder):
+            compiler = llvm_fixtures.ClangBuilder.compiler
+        builder, _ = llvm_fixtures.LLVMBuilderTests.builder(
+            self, release_fixture(self.root, 'aarch64'), ClangRelease)
+        receipt = builder.run()
+        profile = jsonio.read_json(Path(builder.paths['destination']) / 'build-profile.json')
+        signature = profile['sdk_receipt']['signature']
+        flags, commands = producer_commands(
+            'aarch64', profile['sdk_receipt']['paths'], signature['host_tools'],
+            profile['source_commit'], profile['source_timestamp'], profile['jobs'],
+            profile['shell'], signature['native_toolset'], 'clang', base_cxx=True,
+            install_base_cxx=False)
+        profile['commands'] = commands
+        signature['flags'] = flags
+        profile['sdk_receipt']['plan'] = [builder.runtime_command, *commands,
+                                           builder.runtime_command]
+        profile['sdk_receipt']['commands'] = [
+            dict(scope='producer', argv=argv, status='passed', exit_status=0)
+            for argv in commands]
+        self.assertEqual((profile['schema'], receipt['version']), (4, 4))
+        self.assertIn('MKLIBCXX=yes', flags)
+        self.assertEqual([command[-1] for command in commands],
+                         ['kernel=EMBER64', 'sets'])
+        self.assertEqual(commands[1][-2:], ['distribution', 'sets'])
+        validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
 
     def test_clang_release_uses_versioned_runtime_and_qualification(self):
         class ClangRelease(OSReleaseBuilder):

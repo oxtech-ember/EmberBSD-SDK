@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
 # Origin: EmberBSD ember/release/build-{amd64,aarch64}.sh and SDK SysrootBuilder.
-# AI-assisted migration to the common checked GCC16 producer controls.
+# AI-assisted migration to the common SDK producer controls.
 """Complete OS release orchestration on the shared SDK compiler/runtime contract."""
 
 import gzip
@@ -36,11 +36,15 @@ def flags_for(target, compiler_family=None):
 
 
 def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_selection=None,
-                      compiler_family=None, base_cxx=False):
+                      compiler_family=None, base_cxx=False, install_base_cxx=None):
     if type(base_cxx) is not bool:
         raise SDKError('base C++ selection must be boolean')
     if base_cxx and compiler_family != 'clang':
         raise SDKError('base C++ aliases require the selected Clang runtime')
+    if install_base_cxx is None:
+        install_base_cxx = base_cxx
+    if type(install_base_cxx) is not bool or (install_base_cxx and not base_cxx):
+        raise SDKError('runtime installation requires the base C++ selection')
     definition = target_definition(target)
     # Only portable historical validation uses the original command contract.
     cc = host['cc']['path'] if native_selection is None else native_selection['tools']['cc']
@@ -86,12 +90,25 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
                     [paths['tools'] + '/bin/nbmake-amd64', '-C', paths['os'] + '/distrib/amd64/installimage',
                      'INSTIMG_RELEASEDIR=' + paths['destination'] + '/release/images', 'install_image'],
                     base + ['iso-image']]
+    if install_base_cxx:
+        # Check the ordinary distribution before adding the common runtime.
+        # The second check and all set producers share one derived list root.
+        overlay = 'EMBER_SETS_SOURCE=' + paths['destination'] + '/llvm-sets'
+        make = paths['tools'] + '/bin/nbmake-' + definition['machine']
+        check_sets = [make, '-C', paths['os'] + '/distrib/sets', overlay, 'checkflist']
+        if target == 'aarch64':
+            commands = [commands[0], base + ['distribution'], check_sets,
+                        base + ['-V', overlay, 'sets']]
+        else:
+            commands = [base + ['tools', 'distribution'], check_sets,
+                        [make, '-C', paths['os'] + '/etc', overlay, 'release'],
+                        *commands[1:]]
     return flags, commands
 
 
 def validate_profile(profile, sha, target):
     """Validate current and historical profiles without reading mutable tool paths."""
-    check(type(profile['schema']) is int and profile['schema'] in (2, 3, 4) and profile['status'] == 'built', 'Incomplete release build profile')
+    check(type(profile['schema']) is int and profile['schema'] in (2, 3, 4, 5) and profile['status'] == 'built', 'Incomplete release build profile')
     explicit_native = profile['schema'] >= 3
     check(profile['source_commit'] == sha and full_hash(sha, 40), 'Build receipt belongs to another source')
     check(profile['source_repository'] == 'https://github.com/oxtech-ember/EmberBSD', 'Wrong source repository')
@@ -116,8 +133,9 @@ def validate_profile(profile, sha, target):
           re.fullmatch(r'(?:lib|usr/lib)/libedit\.so\.3(?:\.[0-9]+)?', installed['library']) is not None,
           'Incomplete native libedit installation receipt')
     compiler = signature['compiler']
-    clang = profile['schema'] == 4
+    clang = profile['schema'] in (4, 5)
     base_cxx = llvm_runtime_install.base_cxx_enabled(signature.get('flags', []))
+    check(profile['schema'] != 5 or base_cxx, 'Common-runtime release must select base C++')
     if clang:
         check(signature['compiler_family'] == 'clang', 'Mixed release compiler family')
         validate_clang_identity(compiler, target_definition(target)['triplet'])
@@ -151,7 +169,8 @@ def validate_profile(profile, sha, target):
         validate_native_binding(signature, paths, profile['shell'])
         native = signature['native_toolset']
     flags, commands = producer_commands(target, paths, signature['host_tools'], sha, profile['source_timestamp'], profile['jobs'], profile['shell'], native,
-                                       signature.get('compiler_family'), base_cxx=base_cxx)
+                                       signature.get('compiler_family'), base_cxx=base_cxx,
+                                       install_base_cxx=profile['schema'] == 5)
     check(signature['flags'] == flags and profile['commands'] == commands, 'Build command does not select the exact required profile')
     executed = [r for r in receipt['commands'] if r.get('scope') != 'runtime-check']
     check([r['argv'] for r in executed] == commands and all(r['status'] == 'passed' and r['exit_status'] == 0 for r in executed),
@@ -189,7 +208,8 @@ class OSReleaseBuilder(SysrootBuilder):
     def preflight(self):
         check('destination' in self.options, 'OS release requires an explicit destination stage')
         super().preflight()
-        self.receipt.update(format='emberbsd-os-release-build', version=4 if self.compiler_family() == 'clang' else 3, scope='os-release-build',
+        version = (5 if llvm_runtime_install.base_cxx_enabled(self.flags) else 4) if self.compiler_family() == 'clang' else 3
+        self.receipt.update(format='emberbsd-os-release-build', version=version, scope='os-release-build',
                             previous_contexts=self.contexts, plan=[self.runtime_command, *self.release_commands, self.runtime_command],
                             not_checked=['target execution', 'VM installation', 'physical hardware', 'binary publication'])
         self.receipt.pop('copy', None)
@@ -200,10 +220,18 @@ class OSReleaseBuilder(SysrootBuilder):
         self.capture(self.git_command, '-C', self.paths['os'], 'archive', '--format=tar.gz',
                      '-o', str(output / 'source.tar.gz'), self.sources['os']['commit'])
         self.source_sha256 = inventory.sha256_file(output / 'source.tar.gz')
+        base_cxx = llvm_runtime_install.base_cxx_enabled(self.flags)
+        imported = False
         for command in self.release_commands:
+            if base_cxx and command[-1] == 'checkflist':
+                self.import_base_runtime()
+                imported = True
             self.dispatch(command)
-        # The external runtime is a build-only input. A Ports target package
-        # owns its deployed DSOs; OS sets must not acquire the SDK payload.
+        if base_cxx and not imported:
+            raise SDKError('base C++ release has no runtime installation step')
+        # Historical profiles keep their original build-only runtime input.
+        # An enabled base C++ profile imports the same common payload and
+        # records its ownership through the native unprivileged installer.
         if self.verify_runtime() != self.runtime_record:
             raise SDKError('runtime inputs changed during release build')
         if self.options['target'] == 'aarch64':
@@ -212,8 +240,23 @@ class OSReleaseBuilder(SysrootBuilder):
                 with gzip.GzipFile(filename='', mode='wb', fileobj=destination, mtime=0) as packed:
                     shutil.copyfileobj(source, packed)
 
+    def import_base_runtime(self):
+        from .native_runtime_install import NativeRuntimeInstaller
+        from .llvm_runtime_sets import prepare_sets_overlay
+        destination = os.path.join(self.paths['destination'], 'dest')
+        installer = NativeRuntimeInstaller(destination,
+            {'install': self.paths['tools'] + '/bin/' + self.target['triplet'] + '-install'},
+            self.paths['os'], lambda argv: self.capture(*argv))
+        self.copy_runtime(destination=destination, installer=installer)
+        prepare_sets_overlay(os.path.join(self.paths['os'], 'distrib/sets'),
+                             os.path.join(self.paths['destination'], 'llvm-sets'),
+                             self.runtime_record)
+
     def inspect_payload(self):
         output = Path(self.paths['destination'])
+        if llvm_runtime_install.base_cxx_enabled(self.flags):
+            llvm_runtime_install.validate_base_aliases(output / 'dest',
+                                                       self.runtime_record['manifest'])
         self.receipt['libedit_installation'] = libedit.validate_installation(
             output / 'dest', self.libedit_record, self.target['elf'])
         names = ([KERNEL] + ['release/evbarm-aarch64/binary/sets/' + n for n in SYSROOT_SETS]

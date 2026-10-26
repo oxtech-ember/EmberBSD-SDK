@@ -71,15 +71,26 @@ native prefix roles. The context binds the complete normalized native selection.
 Only native `HOST_*` flags receive its ABI arguments. Saved profile verification
 checks command and selection consistency; it does not requalify local tools.
 
-The recorded AArch64 sequence uses `tools kernel=EMBER64`, then `distribution sets`.
-The amd64 profile runs `tools release`, the OS UEFI `install_image` target,
-then `iso-image`. It retains GENERIC kernel and modules, with the INSTALL boot
-kernel profile selected through command variables. Both profiles omit native
-bootstrap compiler commands, X11 and rump. The external runtime is a build-only
-input. OS distribution rules maintain METALOG and strict set-list checks;
-OS sets do not own the external SDK or compiler-runtime package payload. Select one matching
-Ports runtime provider separately and check image dependency closure before
-VM qualification. The adapter alone does not compose that runtime package.
+The historical Clang schema 4 AArch64 sequence uses `tools kernel=EMBER64`,
+then `distribution sets`; amd64 runs `tools release`, the OS UEFI
+`install_image` target, then `iso-image`. Schema 5 is selected only when the
+Clang release enables the common base C++ runtime. It separates distribution,
+imports that runtime and its derived base aliases into `dest`, runs the normal
+sets check, then builds sets from the SDK-derived overlay. On amd64 the
+equivalent sequence keeps release media generation after the imported runtime
+and sets check. The OS's native unprivileged installer records the imported
+files in METALOG. The fixtures verify orchestration only; OS-owner tests cover
+the real installer and sets overlay. Neither schema establishes target
+execution or runtime acceptance.
+
+Both Clang profiles omit native bootstrap compiler commands, X11 and rump.
+The outer AArch64 sysroot and amd64 release manifests remain version 3 for
+either Clang build-profile schema. The explicit GCC alternative retains build
+profile schema 3 and the version 2 kit wrapper. For GCC and historical Clang
+schema 4, select one matching Ports runtime provider separately and check image
+dependency closure before VM qualification; those release kits do not compose
+that runtime package. Clang schema 5 includes the selected common C++ runtime
+in the base set.
 
 The producer records exact commands, source commits, compiler/runtime
 hashes, source archive and output hashes. It sanitizes inherited make controls.
@@ -87,9 +98,11 @@ The common SDK log and incomplete receipt remain on failure. `build-success`
 appears only after all producer operations and receipt checks succeed.
 A build result is not a VM, hardware or publication qualification.
 
-Clang release profiles and SDK release receipts use schema 4, with version 3 kit
-wrappers. The explicit GCC alternative retains schema 3 and version 2 wrappers.
-Portable verification binds the native selection,
+Clang release profiles use schema 4 for the historical build-only runtime
+command sequence, or schema 5 when the common runtime is installed into the
+base set through the SDK-derived overlay. Both retain version 3 outer kit
+manifests. The explicit GCC alternative retains schema 3 and version 2
+manifests. Portable verification binds the native selection,
 input pins, tool paths, ABI flags, and environment. It does not read the original compiler files.
 Historical schema 2 profiles retain their original command contract and acquire no native-toolset qualification.
 For GCC, add `--compiler-family gcc`, select the GCC16 cross prefix and runtime

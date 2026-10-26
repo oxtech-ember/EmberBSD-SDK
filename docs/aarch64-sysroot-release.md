@@ -14,11 +14,15 @@ base. Run the fork CAS and bounded libc/loader regressions against those inputs.
 The target needs no compiler. Record actual library paths and SHA256 values.
 
 A qualification JSON binds `source_commit`, `base_sha256`, `comp_sha256` and
-`kernel_gzip_sha256`. For a Clang schema 4 build profile, record
+`kernel_gzip_sha256`. For Clang schema 4 or 5 build profiles, record
 `consumer_compiler_family: "clang"` and the measured Clang banner in
 `consumer_compiler`, with the same version as the SDK build receipt.
-The explicit GCC route and historical schemas retain the GCC16.2.0 consumer
-identity. Record the execution platform as
+Schema 5 selects the common Clang C++ runtime in the OS base set. Schema 4
+retains the historical build-only runtime selection and command sequence.
+Both produce the existing `emberbsd.aarch64.sysroot.v3` outer kit manifest;
+this version describes the kit format, not target acceptance. The explicit
+GCC route and historical schemas retain the GCC16.2.0 consumer identity.
+Record the execution platform as
 `EmberBSD aarch64 full-system QEMU TCG`.
 Its `checks` object must contain true results for `libc_aliases`, `cross_c11`,
 `cross_cxx20`, `target_c11`, `target_cxx20`, `base_loader_smoke` and `fork_cas`.
