@@ -5,14 +5,15 @@
 import hashlib
 import os
 import re
+import shlex
 import shutil
 import tempfile
 
 from .errors import SDKError
 from .native_toolset import NativeToolset
 from .host_prefix import HostPrefix
-from .paths import (canonical_existing, open_regular, path_string,
-                    reject_overlap, verify_stable)
+from .paths import (canonical_existing, entry, open_regular, path_string,
+                    real_directory, reject_overlap, verify_stable)
 from .publication import publish_directory_noreplace
 
 NATIVE_OS_ROUTING_API = 1
@@ -20,6 +21,48 @@ _SAFE_PATH = re.compile(r'/[A-Za-z0-9_./+@%=\-]+\Z')
 _NAME = re.compile(r'[A-Za-z0-9_+][A-Za-z0-9_+.\-]*\Z')
 _BINDINGS = frozenset(('-', 'HOST_AR', 'HOST_CC', 'HOST_CXX', 'HOST_CPP',
                        'HOST_LD', 'HOST_LN', 'HOST_RANLIB', 'HOST_SH', 'HOST_YACC', 'HOST_MV_CP', 'HOST_MV_RM', 'MAKE', 'SED'))
+
+
+def native_host_flags(selection):
+    """Map the selected host ABI arguments only to OS native variables."""
+    flags = selection['abi_flags']
+    result = ['HOST_' + name.upper() + '=' + shlex.join(flags[name])
+              for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')]
+    if selection['format'] != 'emberbsd-host-prefix':
+        result.append('HOST_SH=' + selection['tools']['sh'])
+    elif selection['version'] >= 2:
+        result.append('EMBER_HOST_COMPILER_FAMILY=' + selection['compiler']['family'])
+    return result
+
+
+def native_path(selection):
+    directories = [os.path.dirname(path) for _, path in sorted(selection['tools'].items())]
+    if selection['format'] == 'emberbsd-host-prefix':
+        directories = [os.path.dirname(selection['tools']['cc'])] + [
+            os.path.join(selection['bundle_root'], name) for name in ('bin', 'gnu/bin')] + directories
+    directories = tuple(dict.fromkeys(directories))
+    if any(os.pathsep in directory for directory in directories):
+        raise SDKError('native tool directory contains the PATH separator')
+    return os.pathsep.join(directories)
+
+
+def ensure_native_os_routing(toolset, *, contract_path, contract_sha256, destination):
+    """Reuse exactly the existing mapping, or publish it without replacement."""
+    destination = path_string(destination)
+    if entry(destination) is None:
+        return publish_native_os_routing(toolset, contract_path=contract_path,
+            contract_sha256=contract_sha256, destination=destination)
+    real_directory(destination)
+    _, rows, _ = read_native_os_contract(contract_path, sha256=contract_sha256)
+    read_native_os_contract(os.path.join(destination, 'contract'), sha256=contract_sha256)
+    if set(os.listdir(destination)) != {'contract', *(command for command, _, _ in rows)}:
+        raise SDKError('saved native routing contains unexpected members')
+    for command, role, _ in rows:
+        selected = os.path.join(destination, command)
+        if not os.path.islink(selected) or os.readlink(selected) != toolset.tool(role):
+            raise SDKError('saved native routing differs from host prefix')
+    return dict(directory=destination, contract_sha256=contract_sha256,
+                members={command:toolset.tool(role) for command,role,_ in rows})
 
 
 def read_native_os_contract(path, *, sha256):

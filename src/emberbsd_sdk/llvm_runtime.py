@@ -148,6 +148,34 @@ def _payload(rows):
             {name: row['target'] for name, row in rows.items() if row['kind'] == 'link'})
 
 
+def runtime_paths(root, record):
+    """Derive the target resource directory from the measured builtins archive."""
+    prefix = record['prefix']
+    builtins = record['artifacts']['builtins']
+    match = re.fullmatch(re.escape(prefix) + r'/(lib/clang/[^/]+)/lib/netbsd/libclang_rt\.builtins-[^/]+\.a', builtins)
+    _require(match is not None, 'LLVM builtins do not identify a supported NetBSD resource directory')
+    return {'runtime-prefix': os.path.join(root, prefix),
+            'llvm-resource': os.path.join(root, prefix, match[1]),
+            'llvm-unwind': os.path.join(root, record['artifacts']['libunwind']['static'])}
+
+
+def validate_install(root, record, *, target=None, required_components=FULL_COMPONENTS):
+    """Check a runtime subtree in a sysroot without requiring a second manifest."""
+    root = paths.canonical_existing(root)
+    paths.real_directory(root)
+    record = validate_identity(record, target=target, required_components=required_components)
+    prefix = record['prefix']
+    current = root
+    for component in prefix.split('/'):
+        current = os.path.join(current, component)
+        paths.real_directory(current)
+    rows = inventory.snapshot_tree(os.path.join(root, prefix), machine=record['elf_machine'])
+    rows = {prefix + '/' + name:row for name, row in rows.items()}
+    _require(_payload(rows) == (record['files'], record['symlinks']), 'LLVM runtime installed inventory changed')
+    _validate_artifacts(root, record)
+    return record
+
+
 def validate_stage(stage, *, target=None, required_components=(), ports=None,
                    ports_revision=None, base=None):
     """Verify stage bytes and target object types, not runtime execution or PIC.
@@ -165,6 +193,32 @@ def validate_stage(stage, *, target=None, required_components=(), ports=None,
     prefix = record['prefix']
     _require(all(name == prefix or name.startswith(prefix + '/') or prefix.startswith(name + '/')
                  for name in rows), 'LLVM runtime stage contains an unrelated directory')
+    _validate_artifacts(root, record)
+    if ports_revision is not None:
+        _digest(ports_revision, 40)
+        _require(ports_revision == record['recipe']['ports_revision'], 'LLVM runtime Ports revision changed')
+    if ports is not None:
+        _require(ports_revision is not None, 'explicit Ports revision is required for recipe input checks')
+        ports = paths.canonical_existing(ports)
+        for name, digest in record['recipe']['files'].items():
+            path = paths.canonical_existing(os.path.join(ports, name))
+            _require(paths.inside(path, ports) and inventory.sha256_file(path) == digest,
+                     'LLVM runtime recipe input changed: ' + name)
+    if base is not None:
+        base = paths.canonical_existing(base)
+        for name, digest in record['base']['files'].items():
+            path = paths.canonical_existing(os.path.join(base, name))
+            _require(paths.inside(path, base) and inventory.sha256_file(path) == digest,
+                     'LLVM runtime base inputs changed: ' + name)
+        for name, target in record['base']['symlinks'].items():
+            path = os.path.join(base, name)
+            _require(os.path.islink(path) and os.readlink(path) == target and
+                     paths.inside(paths.canonical_existing(path), base),
+                     'LLVM runtime base inputs changed: ' + name)
+    return record
+
+
+def _validate_artifacts(root, record):
     artifacts = record['artifacts']
     archives = [artifacts['builtins']]
     for component in ('libunwind', 'libcxxabi', 'libcxx'):
@@ -189,25 +243,3 @@ def validate_stage(stage, *, target=None, required_components=(), ports=None,
                  'empty LLVM runtime archive: ' + name)
     if 'cxx_headers' in artifacts:
         inventory.required_file(root, artifacts['cxx_headers'] + '/vector')
-    if ports_revision is not None:
-        _digest(ports_revision, 40)
-        _require(ports_revision == record['recipe']['ports_revision'], 'LLVM runtime Ports revision changed')
-    if ports is not None:
-        _require(ports_revision is not None, 'explicit Ports revision is required for recipe input checks')
-        ports = paths.canonical_existing(ports)
-        for name, digest in record['recipe']['files'].items():
-            path = paths.canonical_existing(os.path.join(ports, name))
-            _require(paths.inside(path, ports) and inventory.sha256_file(path) == digest,
-                     'LLVM runtime recipe input changed: ' + name)
-    if base is not None:
-        base = paths.canonical_existing(base)
-        for name, digest in record['base']['files'].items():
-            path = paths.canonical_existing(os.path.join(base, name))
-            _require(paths.inside(path, base) and inventory.sha256_file(path) == digest,
-                     'LLVM runtime base inputs changed: ' + name)
-        for name, target in record['base']['symlinks'].items():
-            path = os.path.join(base, name)
-            _require(os.path.islink(path) and os.readlink(path) == target and
-                     paths.inside(paths.canonical_existing(path), base),
-                     'LLVM runtime base inputs changed: ' + name)
-    return record

@@ -96,7 +96,8 @@ retain the original bundle and pin.
 
 The library capability is `SYSROOT_TRANSFER_API = 1` in
 `emberbsd_sdk.sysroot_transfer`. The manifest format is
-`emberbsd-sysroot-transfer`, version `1`, scope `sysroot-transfer`.
+`emberbsd-sysroot-transfer`, version `1` for historical GCC or `2` for Clang,
+scope `sysroot-transfer`.
 
 The archive is gzip-compressed POSIX ustar. It contains only regular files
 named `files/00000000`, `files/00000001`, and so on. Their order is the sorted
@@ -121,6 +122,11 @@ Provenance records full OS, Ports and SDK source commits, build-host identity,
 selected compiler binary hashes, and hashes of the runtime, build context and
 receipt. Version 2 explicitly records the Clang family and version; version 1
 retains the historical GCC16 contract. Import supports both formats.
+Version 2 also preserves the existing portable runtime manifest and its
+inventory in `runtime`, bound to `provenance.runtime_sha256`. Its complete
+prefix subtree must equal the payload subtree, including directories and
+links; unrecorded additions within the runtime are refused. The imported
+record retains measured runtime paths for [application tool selection](application-toolchain.md).
 It omits the original host paths, environment and command logs. Files themselves
 can still contain build paths or private content. The producer must control
 which files it installs. Export is not a secret scanner or a relocation fix.

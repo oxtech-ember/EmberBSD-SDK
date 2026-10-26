@@ -16,6 +16,7 @@ import sysconfig
 import time
 from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, process, provenance, workspace
 from .errors import SDKError, ProcessOwnershipError
+from .native_os_routing import native_host_flags, native_path
 from .targets import TARGETS, target_definition
 
 NATIVE_INPUTS = ('native-toolset', 'native-toolset-sha256',
@@ -25,29 +26,6 @@ NATIVE_ALIASES = (('host-cc', 'cc'), ('host-cxx', 'cxx'), ('python', 'python'))
 
 class BuildInterrupted(KeyboardInterrupt):
     pass
-
-
-def native_host_flags(selection):
-    """Map the selected host ABI arguments only to OS native variables."""
-    flags = selection['abi_flags']
-    result = ['HOST_' + name.upper() + '=' + shlex.join(flags[name])
-              for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')]
-    if selection['format'] != 'emberbsd-host-prefix':
-        result.append('HOST_SH=' + selection['tools']['sh'])
-    elif selection['version'] >= 2:
-        result.append('EMBER_HOST_COMPILER_FAMILY=' + selection['compiler']['family'])
-    return result
-
-
-def native_path(selection):
-    directories = [os.path.dirname(path) for _, path in sorted(selection['tools'].items())]
-    if selection['format'] == 'emberbsd-host-prefix':
-        directories = [os.path.dirname(selection['tools']['cc'])] + [
-            os.path.join(selection['bundle_root'], name) for name in ('bin', 'gnu/bin')] + directories
-    directories = tuple(dict.fromkeys(directories))
-    if any(os.pathsep in directory for directory in directories):
-        raise SDKError('native tool directory contains the PATH separator')
-    return os.pathsep.join(directories)
 
 
 def check_native_command_identity(signature, shell):
@@ -220,14 +198,7 @@ class SysrootBuilder:
     def prepare_native_routing(self):
         """Install the OS-owned command mapping inside the locked tools tree."""
         destination = self.paths['native-routing']
-        if paths.entry(destination) is not None:
-            data, rows, _ = native_os_routing.read_native_os_contract(
-                os.path.join(destination, 'contract'), sha256=self.native_contract_sha256)
-            for command, role, _ in rows:
-                if os.readlink(os.path.join(destination, command)) != self.native.tool(role):
-                    raise SDKError('saved native routing differs from host prefix')
-            return
-        native_os_routing.publish_native_os_routing(self.native,
+        native_os_routing.ensure_native_os_routing(self.native,
             contract_path=self.native_contract, contract_sha256=self.native_contract_sha256,
             destination=destination)
 

@@ -90,6 +90,12 @@ They create the [OS command mapping](native-os-routing.md) under their locked to
 An alias cannot replace the corresponding prefix tool.
 The selected cross compiler and target runtime remain separate inputs.
 
+Use the [shared native-check runner](native-checks.md) for source checks and CI.
+It binds exact native ABI arguments even for existing scripts that accept only
+an executable in `CC` or `CXX`.
+OS producers use [run-native-os.py](native-os.md), which keeps native `HOST_*`
+arguments separate from the target compiler and persists them in build.sh wrappers.
+
 ## Historical records
 
 `NativeToolset`, `load_native_toolset`, and the old seed readers remain for compatibility with historical data.

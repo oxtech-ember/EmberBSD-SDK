@@ -131,6 +131,13 @@ requires a final SDK manifest. Both functions return the record or raise
 `SDKError`. These checks cannot discover omitted recipe dependencies or prove
 compiler options, runtime behavior, ABI compatibility or deployment closure.
 
+`validate_install(sysroot, record, target=..., required_components=...)` checks
+the recorded runtime subtree after installation or transfer while allowing
+unrelated packages elsewhere in the sysroot. Every prefix ancestor must be a
+real directory. `runtime_paths(root, record)` derives the target resource and
+static unwind paths from measured artifact locations. Completed application
+consumers use the [shared compiler commands](application-toolchain.md).
+
 ## Shared source extraction
 
 Runtime preparation uses `emberbsd_sdk.sourceprep` with

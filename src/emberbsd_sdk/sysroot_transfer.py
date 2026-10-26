@@ -324,6 +324,10 @@ def export_sysroot(source, output, *, target):
                     inventory=rows, unpacked_bytes=total,
                     payload=dict(name='payload.tar.gz', format='gzip-ustar-flat-v1',
                                  size=written.size, sha256=written.digest.hexdigest()))
+    if manifest['version'] == 2:
+        # Keep the existing portable record so an imported SDK can recover its
+        # measured runtime paths without guessing a resource-directory layout.
+        manifest['runtime'] = receipt['signature']['runtime']
     data = jsonio.json_bytes(manifest)
     if len(data) > MAX_MANIFEST:
         raise SDKError('transfer manifest exceeds size limit')
@@ -346,8 +350,16 @@ def _manifest(bundle, target, digest, max_bytes):
             or hashlib.sha256(data).hexdigest() != digest):
         raise SDKError('manifest pin or READY mismatch')
     m = jsonio.loads_json(data, max_bytes=MAX_MANIFEST)
+    return validate_manifest(m, target=target, max_bytes=max_bytes)
+
+
+def validate_manifest(m, *, target, max_bytes=MAX_BYTES):
+    """Check portable transfer metadata without requiring the original bundle."""
+    definition = target_definition(target)
     keys = {'format', 'version', 'scope', 'target', 'triplet', 'provenance', 'qualification',
             'relocation', 'execution_acceptance', 'root_mode', 'inventory', 'unpacked_bytes', 'payload'}
+    if isinstance(m, dict) and m.get('version') == 2:
+        keys.add('runtime')
     if (not isinstance(m, dict) or set(m) != keys or m['format'] != FORMAT
             or type(m['version']) is not int or m['version'] not in (1, 2)
             or m['scope'] != 'sysroot-transfer' or m['target'] != target
@@ -394,6 +406,28 @@ def _manifest(bundle, target, digest, max_bytes):
             raise SDKError('invalid transfer compiler')
         for value in compiler['binaries'].values():
             _digest(value)
+        if m['version'] == 2:
+            runtime = m['runtime']
+            if not isinstance(runtime, dict) or set(runtime) != {'manifest','inventory','root_mode'}:
+                raise SDKError('invalid transfer runtime record')
+            record = llvm_runtime.validate_identity(runtime['manifest'], target=target,
+                required_components=llvm_runtime.FULL_COMPONENTS)
+            if (_hash_json(runtime) != provenance['runtime_sha256'] or
+                    record['llvm_version'] != compiler['version'] or
+                    record['base']['os_revision'] != provenance['sources']['os']):
+                raise SDKError('transfer runtime differs from compiler or source provenance')
+            _mode(runtime['root_mode'])
+            _validate_rows(runtime['inventory'], max_bytes)
+            prefix = record['prefix']
+            subtree = {name[len(prefix)+1:]:row for name,row in m['inventory'].items()
+                       if name.startswith(prefix + '/')}
+            if (m['inventory'].get(prefix) != {'kind':'directory', 'mode':runtime['root_mode']} or
+                    subtree != runtime['inventory']):
+                raise SDKError('transfer runtime differs from the sysroot payload')
+            files = {prefix+'/'+name:row['sha256'] for name,row in runtime['inventory'].items() if row['kind']=='file'}
+            links = {prefix+'/'+name:row['target'] for name,row in runtime['inventory'].items() if row['kind']=='link'}
+            if files != record['files'] or links != record['symlinks']:
+                raise SDKError('transfer runtime artifact inventory differs')
     except (KeyError, TypeError, AttributeError) as exc:
         raise SDKError('invalid transfer provenance') from exc
     return m

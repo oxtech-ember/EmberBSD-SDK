@@ -3,25 +3,13 @@
 """First-base LLVM ordering, using the common OS and Ports producers."""
 
 import os
-import re
 
 from . import inventory, jsonio, llvm_runtime, paths, process, workspace
 from .errors import SDKError
 from .sysroot_builder import SysrootBuilder
+from .llvm_runtime import runtime_paths
 
 PRODUCER = 'pkgsrc/lang/compiler-rt/files/runtime.py'
-
-
-def runtime_paths(stage, record):
-    """Derive driver resources from the installed archive, never a guessed version."""
-    prefix = record['prefix']
-    builtins = record['artifacts']['builtins']
-    match = re.fullmatch(re.escape(prefix) + r'/(lib/clang/[^/]+)/lib/netbsd/libclang_rt\.builtins-[^/]+\.a', builtins)
-    if match is None:
-        raise SDKError('LLVM builtins do not identify a supported NetBSD resource directory')
-    return {'runtime-prefix': os.path.join(stage, prefix),
-            'llvm-resource': os.path.join(stage, prefix, match[1]),
-            'llvm-unwind': os.path.join(stage, record['artifacts']['libunwind']['static'])}
 
 
 def llvm_flags(selected, *, phase):
