@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 EmberBSD contributors.
+"""Source component extraction without links or case collisions escaping a stage."""
+
+import io
+import tarfile
+
+from test_core import TemporaryCase
+from emberbsd_sdk.errors import SDKError
+from emberbsd_sdk.sourceprep import extract_archive
+
+
+class SourceArchiveTests(TemporaryCase):
+    def setUp(self):
+        super().setUp()
+        self.archive = self.root / 'source.tar'
+        self.output = self.root / 'output'; self.output.mkdir()
+
+    def pack(self, rows):
+        with tarfile.open(self.archive, 'w') as packed:
+            for name, data, link in rows:
+                member = tarfile.TarInfo('source/' + name)
+                if link is not None:
+                    member.type = tarfile.SYMTYPE; member.linkname = link
+                    packed.addfile(member)
+                else:
+                    member.size = len(data)
+                    packed.addfile(member, io.BytesIO(data))
+
+    def extract(self, **options):
+        extract_archive(self.archive, self.output, 'source', 'fixture', **options)
+
+    def test_explicit_components_and_bounds(self):
+        self.pack([('llvm/cmake/config.cmake', b'yes', None),
+                   ('llvm/lib/unselected.cpp', b'unselected', None),
+                   ('libcxx/CMakeLists.txt', b'yes', None)])
+        self.extract(components=('llvm/cmake', 'libcxx'), max_members=3, max_bytes=6)
+        self.assertTrue((self.output / 'source/llvm/cmake/config.cmake').is_file())
+        self.assertTrue((self.output / 'source/libcxx/CMakeLists.txt').is_file())
+        self.assertFalse((self.output / 'source/llvm/lib').exists())
+
+    def test_member_bound_counts_unselected_archive_entries(self):
+        self.pack([('llvm/unselected', b'x', None), ('libcxx/selected', b'x', None)])
+        with self.assertRaisesRegex(SDKError, 'too many members'):
+            self.extract(components=('libcxx',), max_members=1)
+
+    def test_selected_byte_bound_is_enforced(self):
+        self.pack([('libcxx/selected', b'xx', None)])
+        with self.assertRaisesRegex(SDKError, 'size limit'):
+            self.extract(components=('libcxx',), max_bytes=1)
+
+    def test_default_retains_link_refusal(self):
+        self.pack([('file', b'x', None), ('alias', b'', 'file')])
+        with self.assertRaisesRegex(SDKError, 'link or special'):
+            self.extract()
+
+    def test_component_selection_retains_link_refusal(self):
+        self.pack([('libcxx/alias', b'', 'real'), ('libcxx/real', b'x', None)])
+        with self.assertRaisesRegex(SDKError, 'link or special'):
+            self.extract(components=('libcxx',))
+
+    def test_links_cannot_escape_or_select_unextracted_components(self):
+        for target in ('../../outside', '/etc/passwd', '../llvm/real'):
+            self.pack([('libcxx/alias', b'', target)])
+            with self.subTest(target=target), self.assertRaises(SDKError):
+                self.extract(components=('libcxx',))
+
+    def test_case_collisions_in_selected_components_are_refused(self):
+        self.pack([('libcxx/Config', b'x', None), ('libcxx/config', b'y', None)])
+        with self.assertRaisesRegex(SDKError, 'duplicate'):
+            self.extract(components=('libcxx',))
+
+    def test_preexisting_symlink_parent_is_not_followed(self):
+        outside = self.root / 'outside'; outside.mkdir()
+        (self.output / 'source').symlink_to(outside)
+        self.pack([('libcxx/file', b'x', None)])
+        with self.assertRaises(SDKError):
+            self.extract(components=('libcxx',))
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_case_collisions_in_implicit_parent_directories_are_refused(self):
+        self.pack([('libcxx/Config/a', b'x', None), ('libcxx/config/b', b'y', None)])
+        with self.assertRaisesRegex(SDKError, 'duplicate'):
+            self.extract(components=('libcxx',))
+
+    def test_missing_component_and_invalid_limits_are_refused(self):
+        self.pack([('libcxx/file', b'x', None)])
+        for options in ({'components': ('libunwind',)}, {'max_members': True},
+                        {'max_bytes': 0}, {'components': ('../outside',)}):
+            with self.subTest(options=options), self.assertRaises(SDKError):
+                self.extract(**options)

@@ -79,3 +79,5 @@ The current target runtime import and release schemas still describe GCC16 artif
 They do not establish LLVM target runtime support. Update these producers and
 their matching Ports/OS runtime interfaces before a Clang SDK release.
 Changing the compiler does not by itself change the C++ library or target ABI.
+The [common LLVM runtime stage contract](llvm-runtime.md) defines the initial
+builtins/static-unwind inputs and the subsequent full C++ runtime.
