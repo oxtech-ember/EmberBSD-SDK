@@ -14,6 +14,7 @@ from .bootstrap_identity import IDENTITY_OUTPUTS, identity_output
 from .bootstrap_program_data import decode_data, data_size, MAX_FILE_BYTES
 from . import bootstrap_program_fs as filesystem
 from . import bootstrap_compat_component as component
+from . import bootstrap_program_components as component_inputs
 from .bootstrap_shell import literal_stdin
 from .bootstrap_gnu_program import GNU_PROGRAM_STAGES
 from .bootstrap_compat import (EFUN_PROGRAMS, EFUN_PROGRAM_STAGES,
@@ -61,6 +62,7 @@ MKDIR_MANIFEST_SHA256 = '6d52c3dd9fe813f652e7d98110f56af8078b9617d6d1f3ca0b3b08e
 MKDIR_LEGACY_MANIFEST_SHA256 = '111fe0d327e4ccdc7de008ac3844e49893edfbd43d62400ef2dbc4ceb76c5453'
 MKDIR_MANIFEST_CASE_COUNTS = {MKDIR_MANIFEST_SHA256: 11, MKDIR_LEGACY_MANIFEST_SHA256: 10}
 _FILESYSTEM_MANIFESTS = {
+    'touch': '096e55a50b02a993e465022733118c73cb3d9494c92a83b31b045b4a4b998542',
     'chmod': '0139b41d150bb82e79a99547c4d3a6f5cac975152c32e850922af7bdb269e1ae',
     'mkdir': MKDIR_MANIFEST_SHA256,
     'ln': '3b3fc97c04775eb92f447b3b466b2f2867002fba2736da33971a441d630260e5',
@@ -69,11 +71,11 @@ _FILESYSTEM_MANIFESTS = {
 _NBTOOL_CONFIG = 'tools/compat/bootstrap/nbtool_config.h'
 _NATIVE_LOCAL_HEADERS = {'sleep': ('sleep_darwin.h',), 'cmp': ('extern.h',), 'tr': ('extern.h',), 'tail': ('extern.h',), 'hexdump': ('hexdump.h',),
                          'date': ('extern.h',), 'cut': ('x_cut.c',), 'sort': ('sort.h', 'fsort.h', 'pathnames.h')}
-_NATIVE_DIRECTORIES = {'sleep': 'bin/sleep', **{name: 'bin/' + name for name in filesystem.PROGRAMS}, 'hexdump': 'usr.bin/hexdump', 'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
+_NATIVE_DIRECTORIES = {'sleep': 'bin/sleep', **{name: 'bin/' + name for name in filesystem.PROGRAMS}, 'touch': 'usr.bin/touch', 'hexdump': 'usr.bin/hexdump', 'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
                        'basename': 'usr.bin/basename', 'dirname': 'usr.bin/dirname',
                        'cat': 'bin/cat', 'head': 'usr.bin/head', 'uniq': 'usr.bin/uniq',
                        'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut', 'env': 'usr.bin/env', 'uname': 'usr.bin/uname', 'tail': 'usr.bin/tail', 'sort': 'usr.bin/sort', 'date': 'bin/date', 'id': 'usr.bin/id', 'expr': 'bin/expr'}
-_NATIVE_SOURCES = {'sleep': ('bin/sleep/sleep.c',), **{name: ('bin/' + name + '/' + name + '.c',) for name in filesystem.PROGRAMS}, 'hexdump': (*('usr.bin/hexdump/' + name + '.c' for name in
+_NATIVE_SOURCES = {'sleep': ('bin/sleep/sleep.c',), **{name: ('bin/' + name + '/' + name + '.c',) for name in filesystem.PROGRAMS}, 'touch': ('usr.bin/touch/touch.c',), 'hexdump': (*('usr.bin/hexdump/' + name + '.c' for name in
                               ('conv', 'display', 'hexdump', 'hexsyntax', 'odsyntax', 'parse')), *_EFUN_SOURCES),
                    'expr': ('bin/expr/expr.y',), 'date': ('bin/date/date.c',), 'sort': (*('usr.bin/sort/' + name + '.c' for name in
                            ('append', 'fields', 'files', 'fsort', 'init', 'msort', 'sort', 'tmp', 'radix_sort')),
@@ -84,7 +86,7 @@ _NATIVE_SOURCES = {'sleep': ('bin/sleep/sleep.c',), **{name: ('bin/' + name + '/
                    'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'), 'pwd': ('bin/pwd/pwd.c',), 'cut': ('usr.bin/cut/cut.c', *_EFUN_SOURCES),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
                       for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf', 'env', 'uname', 'id')}}
-_LITERAL_CASE_COUNTS = dict(sleep=21, chmod=12, mkdir=11, ln=12, rmdir=9, rm=25, basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
+_LITERAL_CASE_COUNTS = dict(touch=36, sleep=21, chmod=12, mkdir=11, ln=12, rmdir=9, rm=25, basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
 _ALIASES = {'grep': ('egrep', 'fgrep'), 'tail': ('tac',), 'id': ('groups', 'whoami'), 'hexdump': ('od',)}
@@ -183,30 +185,34 @@ def _profile(plan):
             digest, _NATIVE_SOURCES[name],
             ('tools/' + name + '/Makefile', 'tools/Makefile.host', directory + '/Makefile',
              'tools/' + name + '/README.md', *(_EFUN_PROVENANCE if name in EFUN_PROGRAMS else ()),
-             *(('tools/rm/test-source.py',) if name == 'rm' else ())))
+             *(('tools/' + name + '/test-source.py',) if name in ('rm', 'touch') else ())))
 
 
 def _native_program_contract(manifest, name, *, manifest_digest=None):
     cmp = name == 'cmp'
     efun = name in EFUN_PROGRAMS
+    components = name + '-bootstrap' in component_inputs.CONSUMERS
     nbtool = name == 'date'
     directory = _NATIVE_DIRECTORIES[name]
     _require(set(manifest) == {'format', 'version', 'name', 'origin', 'canonical_host_recipe', 'source_makefile',
         'compiler', 'sources', 'headers', 'include_dirs', 'cppflags', 'cflags', 'link_flags', 'libraries',
-        'invocations', 'files', 'runtime_cases'} | ({'compat'} if efun else set()) | ({'generation'} if name == 'expr' else set()) and
+        'invocations', 'files', 'runtime_cases'} | ({'compat'} if efun else set()) | ({'generation'} if name == 'expr' else set()) | ({'components'} if components else set()) and
         manifest['format'] == 'emberbsd-native-bootstrap-program' and
         type(manifest['version']) is int and manifest['version'] == 1 and manifest['name'] == name and
         manifest['canonical_host_recipe'] == 'tools/' + name + '/Makefile' and
         manifest['source_makefile'] == directory + '/Makefile' and
         manifest['compiler'] == dict(family='gcc', major=16, abi='native') and
         manifest['sources'] == list(_NATIVE_SOURCES[name]) and
-        manifest['headers'] == ([_ID_GROUP_HEADER, _BOOTSTRAP_CDEFS] if name == 'id' else [*(directory + '/' + header for header in _NATIVE_LOCAL_HEADERS.get(name, ())),
+        manifest['headers'] == ([] if components else [_ID_GROUP_HEADER, _BOOTSTRAP_CDEFS] if name == 'id' else [*(directory + '/' + header for header in _NATIVE_LOCAL_HEADERS.get(name, ())),
                                 _BOOTSTRAP_CDEFS, *(_EFUN_HEADERS if efun else (_NBTOOL_CONFIG,) if nbtool else ())]) and
         manifest['include_dirs'] == (['common/include'] if name == 'id' else [directory, 'tools/compat', 'common/lib/libc/stdlib'] if efun else [directory, 'tools/compat/bootstrap'] if nbtool else [directory] if name in _NATIVE_LOCAL_HEADERS else []) and
-        manifest['cppflags'] == (['-DHAVE_NBTOOL_CONFIG_H=1', '-include', 'nbtool_config.h'] if efun else (['-DHAVE_NBTOOL_CONFIG_H=1'] if nbtool else []) + ['-include', _BOOTSTRAP_CDEFS]) and
+        manifest['cppflags'] == ([] if components else ['-DHAVE_NBTOOL_CONFIG_H=1', '-include', 'nbtool_config.h'] if efun else (['-DHAVE_NBTOOL_CONFIG_H=1'] if nbtool else []) + ['-include', _BOOTSTRAP_CDEFS]) and
         manifest['cflags'] == (['-fwrapv'] if name == 'expr' else []) and
-        manifest['link_flags'] == [] and manifest['libraries'] == (['m'] if name == 'sleep' else []) and
+        manifest['link_flags'] == [] and manifest['libraries'] == (['m'] if name in ('sleep', 'touch') else []) and
         manifest['invocations'] == [name, *_ALIASES.get(name, ())], 'unsupported direct-source ' + name + ' contract')
+    if components:
+        _require(manifest['components'] == list(component_inputs.CONSUMERS[name + '-bootstrap']),
+                 'program component contract differs')
     if name == 'expr':
         _require(manifest['generation'] == dict(tool='yacc', source='bin/expr/expr.y',
                  output='expr.c', arguments=['-o', 'expr.c']), 'unsupported expr generator contract')
@@ -359,6 +365,9 @@ def program_steps(plan, descriptor, commands, flags):
         cppflags = ['-DHAVE_NBTOOL_CONFIG_H=1', '-include', os.path.join(work, 'nbtool_config.h'), '-I', work]
     elif manifest['name'] == 'date':
         cppflags = ['-DHAVE_NBTOOL_CONFIG_H=1', *cppflags]
+    component_libraries = []
+    if plan['stage'] in component_inputs.CONSUMERS:
+        cppflags, component_libraries = component_inputs.flags(plan, descriptor)
     includes = [word for directory in manifest['include_dirs'] for word in ('-I', os.path.join(source, directory))]
     if manifest['name'] == 'expr':
         from .bootstrap_generated import selected_yacc
@@ -375,7 +384,7 @@ def program_steps(plan, descriptor, commands, flags):
     result.append(dict(id='link-' + manifest['name'], phase='link', cwd=work, env=dict(env), expected_exit=0,
         argv=[*driver, *flags['cflags'], *manifest['cflags'], '-v', *objects, *flags['ldflags'], '-Wl,--threads=1',
               *(['-Wl,-v'] if descriptor['host']['os'] == 'Darwin' else []),
-              *('-l' + library for library in manifest['libraries']),
+              *component_libraries, *('-l' + library for library in manifest['libraries']),
               '-o', os.path.join(work, manifest['name'])]))
     for case in manifest['runtime_cases']:
         command = shlex.join([os.path.join(work, case['invocation']), *case['args']])
@@ -414,6 +423,7 @@ def program_elapsed_case(step, plan):
 
 
 def prepare_program_step(step, plan, completed=()):
+    component_inputs.revalidate(plan)
     if plan.get('stage') in component.STAGES:
         return component.prepare(step, plan, completed)
     from .bootstrap_generated import before_step
@@ -425,6 +435,7 @@ def prepare_program_step(step, plan, completed=()):
 
 
 def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
+    component_inputs.revalidate(plan)
     if plan.get('stage') in component.STAGES:
         return component.verify(step, work, plan, actual_exit, completed)
     if plan.get('stage') == 'byacc-bootstrap':
@@ -498,7 +509,9 @@ def verify_program_step(step, work, plan, *, actual_exit=None, completed=()):
 def validate_program_source(plan, source_pin):
     """Re-read the complete pinned source and provenance chain without children."""
     value = plan['program']
-    _require(set(value) == {'source', 'manifest'}, 'unsupported program input fields')
+    optional = {'components'} if plan.get('stage') in component_inputs.CONSUMERS else set()
+    _require({'source', 'manifest'} <= set(value) <= {'source', 'manifest'} | optional,
+             'unsupported program input fields')
     source = value['source']
     _require(set(source) == {'root', 'source', 'inventory', 'source_proof'} and
              source['source'] == source_pin, 'bootstrap program OS source pin mismatch')

@@ -86,7 +86,10 @@ Retained artifacts and original evidence remain required; this interface does no
 This is an OS file-time subset. It is not the complete OS library or the
 separate Ports `pkgtools/libnbcompat` contract.
 The [BSD installer](bootstrap-bsdinstall.md) retains its existing Ports input checks.
-No cp, mv, ls or touch profile is added by this first component.
+No cp, mv or ls profile is added by this first component.
+The separate [initial touch consumer](bootstrap-program.md#initial-touch-and-named-component-inputs)
+requires both filetime and parsedate receipts through the shared named component selector.
+It keeps their separate configurations, archives, retained evidence, and qualification limits.
 
 ## Initial parsedate component
 

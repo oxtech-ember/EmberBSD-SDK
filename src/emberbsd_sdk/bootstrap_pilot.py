@@ -259,6 +259,9 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         roots += [plan['ports_export']['root'], plan['netbsd']['makeconf']['path']]
     if program:
         roots += [plan['program']['source']['root']]
+        from .bootstrap_program_components import read_inputs
+        component_roots, component_documents = read_inputs(plan)
+        roots += component_roots
         if gnu_program or bsdinstall or pkg_install or byacc:
             roots += [plan['program']['owner']['root']]
         if bsdinstall or pkg_install:
@@ -284,6 +287,8 @@ def _run(descriptor_path, *, descriptor_sha256, accepted_seed_receipt,
         shared.update(_references(_json(plan['netbsd']['source_transfer_acceptance'])))
     if program:
         shared.update(_references(_json(plan['program']['source']['source_proof'])))
+        for document in component_documents:
+            shared.update(_references(document))
         if gnu_program or bsdinstall or pkg_install or byacc:
             shared.update(_references(_json(plan['program']['owner']['source_proof'])))
         if pkg_install:
