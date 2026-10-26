@@ -98,8 +98,10 @@ def _commands(plan, result, manifest):
     for name, raw in program_sources(plan).items():
         _require(outputs.get(name) == hashlib.sha256(raw).hexdigest(),
                  'historical created source or fixture differs from its owner bytes')
+    from .bootstrap_program_timing import verify as verify_elapsed
     cases = {'case-' + case['name']: case for case in manifest['runtime_cases']}
     for wanted, row in zip(expected, actual):
+        verify_elapsed(cases.get(wanted['id']), row)
         _require(json_bytes({key: row.get(key) for key in wanted}) == json_bytes(wanted),
                  'historical command differs from its finite plan')
         status = row.get('actual_exit')

@@ -30,7 +30,7 @@ _SOURCES = tuple('usr.bin/grep/' + name + '.c' for name in ('fastgrep', 'file', 
 _PROVENANCE = ('tools/grep/Makefile', 'tools/Makefile.host', 'usr.bin/grep/Makefile', 'tools/grep/README.md')
 PROGRAM_STAGES = (*component.STAGES, 'grep-bootstrap', 'cmp-bootstrap', 'hostname-bootstrap',
                   'basename-bootstrap', 'dirname-bootstrap',
-                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'cut-bootstrap', 'env-bootstrap', 'uname-bootstrap', 'tail-bootstrap', 'sort-bootstrap', 'date-bootstrap', 'id-bootstrap', 'expr-bootstrap', 'hexdump-bootstrap',
+                  'cat-bootstrap', 'head-bootstrap', 'uniq-bootstrap', 'wc-bootstrap', 'tr-bootstrap', 'printf-bootstrap', 'pwd-bootstrap', 'sleep-bootstrap', 'cut-bootstrap', 'env-bootstrap', 'uname-bootstrap', 'tail-bootstrap', 'sort-bootstrap', 'date-bootstrap', 'id-bootstrap', 'expr-bootstrap', 'hexdump-bootstrap',
                   *(name + '-bootstrap' for name in filesystem.PROGRAMS))
 CMP_MANIFEST_SHA256 = 'a3267d3387b08780fb1e372f5a742dccd9faa84568292506d3389f35e869ad56'
 HOSTNAME_MANIFEST_SHA256 = '32450fa3c2d68e63c13f1d32795f4d3e14cab8b5beac909ee27242cef279750d'
@@ -56,6 +56,7 @@ ID_MANIFEST_SHA256 = '7184d420bdd70778b1c290f028bc43df9441db16087657d06915c2b9d3
 _ID_GROUP_HEADER = 'common/include/libutil/compat_grouplist.h'
 EXPR_MANIFEST_SHA256 = '505c27cdc0db4b2d22b6f348559e91735bf723b1f47251d6e98fa3d979e71854'
 HEXDUMP_MANIFEST_SHA256 = '9fe663af4124f714bcac65dce3bb7666bef0af2f74a9f97fb638699c8c42d974'
+SLEEP_MANIFEST_SHA256 = '3df89c370882bfc0137b3bdf84c9aa4c0a853c6c981934e00843db322bae7433'
 MKDIR_MANIFEST_SHA256 = '6d52c3dd9fe813f652e7d98110f56af8078b9617d6d1f3ca0b3b08edf73936a9'
 MKDIR_LEGACY_MANIFEST_SHA256 = '111fe0d327e4ccdc7de008ac3844e49893edfbd43d62400ef2dbc4ceb76c5453'
 MKDIR_MANIFEST_CASE_COUNTS = {MKDIR_MANIFEST_SHA256: 11, MKDIR_LEGACY_MANIFEST_SHA256: 10}
@@ -66,13 +67,13 @@ _FILESYSTEM_MANIFESTS = {
     'rmdir': '22e24af317a8e1c18559c407f0497a18f24bfb9c88ff8a89b48a9aa09b3ae995',
     'rm': '8ae57707433b60bb726b4b070d3389abc775514fc663064dca75180b816342fc'}
 _NBTOOL_CONFIG = 'tools/compat/bootstrap/nbtool_config.h'
-_NATIVE_LOCAL_HEADERS = {'cmp': ('extern.h',), 'tr': ('extern.h',), 'tail': ('extern.h',), 'hexdump': ('hexdump.h',),
+_NATIVE_LOCAL_HEADERS = {'sleep': ('sleep_darwin.h',), 'cmp': ('extern.h',), 'tr': ('extern.h',), 'tail': ('extern.h',), 'hexdump': ('hexdump.h',),
                          'date': ('extern.h',), 'cut': ('x_cut.c',), 'sort': ('sort.h', 'fsort.h', 'pathnames.h')}
-_NATIVE_DIRECTORIES = {**{name: 'bin/' + name for name in filesystem.PROGRAMS}, 'hexdump': 'usr.bin/hexdump', 'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
+_NATIVE_DIRECTORIES = {'sleep': 'bin/sleep', **{name: 'bin/' + name for name in filesystem.PROGRAMS}, 'hexdump': 'usr.bin/hexdump', 'cmp': 'usr.bin/cmp', 'hostname': 'bin/hostname',
                        'basename': 'usr.bin/basename', 'dirname': 'usr.bin/dirname',
                        'cat': 'bin/cat', 'head': 'usr.bin/head', 'uniq': 'usr.bin/uniq',
                        'wc': 'usr.bin/wc', 'tr': 'usr.bin/tr', 'printf': 'usr.bin/printf', 'pwd': 'bin/pwd', 'cut': 'usr.bin/cut', 'env': 'usr.bin/env', 'uname': 'usr.bin/uname', 'tail': 'usr.bin/tail', 'sort': 'usr.bin/sort', 'date': 'bin/date', 'id': 'usr.bin/id', 'expr': 'bin/expr'}
-_NATIVE_SOURCES = {**{name: ('bin/' + name + '/' + name + '.c',) for name in filesystem.PROGRAMS}, 'hexdump': (*('usr.bin/hexdump/' + name + '.c' for name in
+_NATIVE_SOURCES = {'sleep': ('bin/sleep/sleep.c',), **{name: ('bin/' + name + '/' + name + '.c',) for name in filesystem.PROGRAMS}, 'hexdump': (*('usr.bin/hexdump/' + name + '.c' for name in
                               ('conv', 'display', 'hexdump', 'hexsyntax', 'odsyntax', 'parse')), *_EFUN_SOURCES),
                    'expr': ('bin/expr/expr.y',), 'date': ('bin/date/date.c',), 'sort': (*('usr.bin/sort/' + name + '.c' for name in
                            ('append', 'fields', 'files', 'fsort', 'init', 'msort', 'sort', 'tmp', 'radix_sort')),
@@ -83,7 +84,7 @@ _NATIVE_SOURCES = {**{name: ('bin/' + name + '/' + name + '.c',) for name in fil
                    'tr': ('usr.bin/tr/str.c', 'usr.bin/tr/tr.c'), 'pwd': ('bin/pwd/pwd.c',), 'cut': ('usr.bin/cut/cut.c', *_EFUN_SOURCES),
                    **{name: ('usr.bin/' + name + '/' + name + '.c',)
                       for name in ('basename', 'dirname', 'head', 'uniq', 'wc', 'printf', 'env', 'uname', 'id')}}
-_LITERAL_CASE_COUNTS = dict(chmod=12, mkdir=11, ln=12, rmdir=9, rm=25, basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
+_LITERAL_CASE_COUNTS = dict(sleep=21, chmod=12, mkdir=11, ln=12, rmdir=9, rm=25, basename=14, dirname=11, cat=18, head=16, uniq=16, wc=18, tr=18, printf=24, pwd=10, cut=22, env=19, uname=15, tail=31, sort=36, date=41, id=31, expr=52, hexdump=37)
 _RUNTIME_ARGS = {'grep': ('-q', 'needle', 'input.txt'), 'cmp': ('-s', 'same.txt', 'same.txt'),
                  'hostname': ()}
 _ALIASES = {'grep': ('egrep', 'fgrep'), 'tail': ('tac',), 'id': ('groups', 'whoami'), 'hexdump': ('od',)}
@@ -124,6 +125,10 @@ def _literal_cases(manifest, count, *, work_root_output=False, uname_output=Fals
                       isinstance(case, dict) and 'stdout_uname' in case else 'stdout_identity' if identity_oracle and
                       isinstance(case, dict) and 'stdout_identity' in case else 'stdout')
         base = {'name', 'invocation', 'args', 'stdin', 'exit', output_key}
+        if isinstance(case, dict) and 'elapsed' in case:
+            from .bootstrap_program_timing import limits
+            limits(case)
+            base.add('elapsed')
         if filesystem_cases:
             base.add('filesystem')
         _require(isinstance(case, dict) and
@@ -164,7 +169,7 @@ def _profile(plan):
               'basename': BASENAME_MANIFEST_SHA256, 'dirname': DIRNAME_MANIFEST_SHA256,
               'cat': CAT_MANIFEST_SHA256, 'head': HEAD_MANIFEST_SHA256, 'uniq': UNIQ_MANIFEST_SHA256,
               'wc': WC_MANIFEST_SHA256, 'tr': TR_MANIFEST_SHA256,
-              'printf': PRINTF_MANIFEST_SHA256, 'pwd': PWD_MANIFEST_SHA256, 'cut': CUT_MANIFEST_SHA256,
+              'printf': PRINTF_MANIFEST_SHA256, 'pwd': PWD_MANIFEST_SHA256, 'sleep': SLEEP_MANIFEST_SHA256, 'cut': CUT_MANIFEST_SHA256,
               'env': ENV_MANIFEST_SHA256, 'uname': UNAME_MANIFEST_SHA256, 'tail': TAIL_MANIFEST_SHA256, 'sort': SORT_MANIFEST_SHA256, 'date': DATE_MANIFEST_SHA256, 'id': ID_MANIFEST_SHA256, 'expr': EXPR_MANIFEST_SHA256}[name]
     if name == 'mkdir' and 'program' in plan:
         _require(isinstance(plan['program'], dict), 'unsupported mkdir program input')
@@ -200,7 +205,7 @@ def _native_program_contract(manifest, name, *, manifest_digest=None):
         manifest['include_dirs'] == (['common/include'] if name == 'id' else [directory, 'tools/compat', 'common/lib/libc/stdlib'] if efun else [directory, 'tools/compat/bootstrap'] if nbtool else [directory] if name in _NATIVE_LOCAL_HEADERS else []) and
         manifest['cppflags'] == (['-DHAVE_NBTOOL_CONFIG_H=1', '-include', 'nbtool_config.h'] if efun else (['-DHAVE_NBTOOL_CONFIG_H=1'] if nbtool else []) + ['-include', _BOOTSTRAP_CDEFS]) and
         manifest['cflags'] == (['-fwrapv'] if name == 'expr' else []) and
-        all(manifest[key] == [] for key in ('link_flags', 'libraries')) and
+        manifest['link_flags'] == [] and manifest['libraries'] == (['m'] if name == 'sleep' else []) and
         manifest['invocations'] == [name, *_ALIASES.get(name, ())], 'unsupported direct-source ' + name + ' contract')
     if name == 'expr':
         _require(manifest['generation'] == dict(tool='yacc', source='bin/expr/expr.y',
@@ -212,7 +217,7 @@ def _native_program_contract(manifest, name, *, manifest_digest=None):
                  all(case['invocation'] == 'cmp' and 'stdout_nonempty' not in case
                      for case in manifest['runtime_cases']), 'unsupported fixed cmp semantic cases')
     elif name in _LITERAL_CASE_COUNTS:
-        if name in ('basename', 'dirname', 'tr', 'printf', 'pwd', 'env', 'uname', 'date', 'id', 'expr', *filesystem.PROGRAMS):
+        if name in ('basename', 'dirname', 'tr', 'printf', 'pwd', 'env', 'uname', 'date', 'id', 'expr', 'sleep', *filesystem.PROGRAMS):
             _require(manifest['files'] == {}, 'this program needs no fixture files')
         else:
             files = manifest['files']
@@ -381,6 +386,7 @@ def program_steps(plan, descriptor, commands, flags):
     result.append(dict(id='link-' + manifest['name'], phase='link', cwd=work, env=dict(env), expected_exit=0,
         argv=[*driver, *flags['cflags'], *manifest['cflags'], '-v', *objects, *flags['ldflags'], '-Wl,--threads=1',
               *(['-Wl,-v'] if descriptor['host']['os'] == 'Darwin' else []),
+              *('-l' + library for library in manifest['libraries']),
               '-o', os.path.join(work, manifest['name'])]))
     for case in manifest['runtime_cases']:
         command = shlex.join([os.path.join(work, case['invocation']), *case['args']])
@@ -408,6 +414,14 @@ def program_steps(plan, descriptor, commands, flags):
     result.append(dict(id='runtime-observation', phase='run', cwd=runtime_cwd, env=observed, expected_exit=0,
                        argv=runtime_argv))
     return result
+
+
+def program_elapsed_case(step, plan):
+    """Return a source-owned timed literal case, never a caller hook."""
+    if step['phase'] != 'program-case':
+        return None
+    return next((case for case in program_manifest(plan).get('runtime_cases', ())
+                 if step['id'] == 'case-' + case['name']), None)
 
 
 def prepare_program_step(step, plan, completed=()):
