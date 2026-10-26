@@ -22,8 +22,7 @@ def llvm_flags(selected, *, phase, base_cxx=False):
              'MKCXX=' + ('yes' if phase == 'final' else 'no'),
              'MKLIBCXX=' + ('yes' if phase == 'final' and base_cxx else 'no')]
     if phase != 'headers':
-        flags += ['EMBER_LIBUNWIND_ARCHIVE=' + selected['llvm-unwind'],
-                  'EMBER_LLVM_RUNTIME_PHASE=' + ('full' if phase == 'final' else 'bootstrap'),
+        flags += ['EMBER_LLVM_RUNTIME_PHASE=' + ('full' if phase == 'final' else 'bootstrap'),
                   'EMBER_EXTERNAL_LLVM_RUNTIME=' + selected['runtime-prefix'],
                   'EMBER_LLVM_RESOURCE_DIR=' + selected['llvm-resource']]
     return flags
