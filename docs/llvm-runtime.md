@@ -26,15 +26,17 @@ recipe files still match; changing a recorded recipe file does invalidate it.
 Ports owns LLVM runtime recipes, source preparation, compiler options and build
 orchestration. SDK provides the shared stage validator in
 `emberbsd_sdk.llvm_runtime`, with `LLVM_RUNTIME_API == 1`. The
-[builtins producer](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/pkgsrc/lang/llvm/README.runtime.md)
-implements the first component stage. OS integration and the full runtime
-producer remain incomplete. A runtime stage is not a completed SDK, an
-execution result, or an ABI compatibility claim.
+[common runtime producer](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/pkgsrc/lang/llvm/README.runtime.md)
+implements builtins, preliminary static unwind and full C++ runtime stages.
+The OS consumes the prepared common sources and measured stage artifacts.
+These interfaces still require actual end-to-end build and target checks;
+a runtime stage is not a completed SDK, an execution result, or an ABI
+compatibility claim.
 
 ## Bootstrap order
 
-The first LLVM SDK cannot require an existing final LLVM SDK. Complete the
-producer and OS integration in this order:
+The first LLVM SDK cannot require an existing final LLVM SDK. Its producers
+run in this order:
 
 1. Prepare the limited EmberBSD base headers with the native OS
    [`bootstrap-headers` operation](https://github.com/oxtech-ember/EmberBSD/blob/main/tools/docs/cross-build.md#headers-and-crt-for-runtime-bootstrap)
@@ -57,14 +59,15 @@ actual compilation with the selected native prefix. Compiler-rt builtins must
 be selected through the matching Clang NetBSD driver in its normal library
 ordering; placing an archive before driver-added C++ libraries is insufficient.
 
-The proposed OS inputs are `EMBER_LLVM_SOURCE` for prepared common sources and
-`EMBER_LIBUNWIND_ARCHIVE` for the preliminary stage archive. These selectors
-are not implemented in the OS build yet. Its current libc build still refers
-to the bundled compiler-rt and libunwind sources. Replace those consumers
-before accepting a base built with the common LLVM runtime. Final integration
-must also select the target resource directory and keep the selected
-compiler's matching resource headers separate. The application sysroot and
-release builders continue to reject Clang until this integration is complete.
+The OS inputs are `EMBER_LLVM_SOURCE` for prepared common sources and
+`EMBER_LIBUNWIND_ARCHIVE` for the preliminary stage archive. The SDK selects
+them for the base build, replacing the bundled compiler-rt and libunwind inputs.
+Both the C base and final build use `EMBER_EXTERNAL_LLVM_RUNTIME` and the
+manifest-derived `EMBER_LLVM_RESOURCE_DIR`, with runtime phases `bootstrap`
+and `full` respectively. Compiler resource headers remain separate and match
+the selected native Clang. The application sysroot and release builders invoke
+these stages; accepting their outputs still requires actual links and target
+execution.
 
 ## Manifest
 
