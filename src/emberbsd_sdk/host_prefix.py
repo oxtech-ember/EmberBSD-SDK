@@ -46,6 +46,13 @@ _NAMES = {'cc': ('gcc16/bin/gcc', 'bin/gcc-16', 'bin/gcc16', 'bin/gcc'),
 _COMPONENTS = ('cc1', 'cc1plus', 'collect2', 'lto1', 'lto-wrapper', 'as', 'ld')
 
 
+def _search_path(root, tools):
+    return os.pathsep.join(dict.fromkeys(
+        ([os.path.dirname(tools['cc'])] if 'cc' in tools else []) +
+        [os.path.join(root, name) for name in ('bin', 'gnu/bin')] +
+        [os.path.dirname(path) for _, path in sorted(tools.items())]))
+
+
 @dataclass(frozen=True)
 class HostPrefix:
     """A checked selection. It has no qualification or receipt prerequisite."""
@@ -68,10 +75,7 @@ class HostPrefix:
 
     @property
     def path(self):
-        return os.pathsep.join(dict.fromkeys(
-            ([os.path.dirname(self.tool('cc'))] if 'cc' in self.tools else []) +
-            [os.path.join(self.bundle_root, name) for name in ('bin', 'gnu/bin')] +
-            [os.path.dirname(path) for _, path in sorted(self.tools.items())]))
+        return _search_path(self.bundle_root, self.tools)
 
     def as_dict(self):
         return dict(format='emberbsd-host-prefix', version=HOST_PREFIX_API,
@@ -81,7 +85,7 @@ class HostPrefix:
                     driver_components=dict(self.driver_components))
 
 
-def _member(path, root, host, *, binary=False, seen=()):
+def _member(path, root, host, *, search_path, binary=False, seen=()):
     """Check both path spellings and every script interpreter before execution."""
     real = canonical_existing(path)
     path = os.path.abspath(path)
@@ -98,15 +102,22 @@ def _member(path, root, host, *, binary=False, seen=()):
         except (ValueError, UnicodeError) as exc:
             raise SDKError(f'invalid native script interpreter: {path}') from exc
         _require(bool(words) and os.path.isabs(words[0]), f'absolute native interpreter required: {path}')
-        _member(words[0], root, host, seen=(*seen, real))
+        _member(words[0], root, host, search_path=search_path, seen=(*seen, real))
         if os.path.basename(words[0]) == 'env':
             args = words[1:]
             if args and args[0] == '-S':
                 args = args[1:]
             _require(bool(args) and not args[0].startswith('-') and '=' not in args[0],
                      f'explicit native env interpreter required: {path}')
-            interpreter = args[0] if os.path.isabs(args[0]) else os.path.join(root, 'bin', args[0])
-            _member(interpreter, root, host, seen=(*seen, real))
+            interpreter = args[0]
+            if not os.path.isabs(interpreter):
+                _require('/' not in interpreter, f'bare native env interpreter required: {path}')
+                candidates = (os.path.join(directory, interpreter)
+                              for directory in search_path.split(os.pathsep))
+                interpreter = next((candidate for candidate in candidates
+                                    if os.path.isfile(candidate) and os.access(candidate, os.X_OK)), None)
+                _require(interpreter is not None, f'missing native env interpreter: {path}')
+            _member(interpreter, root, host, search_path=search_path, seen=(*seen, real))
     else:
         _native_image(real, host)
     return path
@@ -147,15 +158,16 @@ def load_host_prefix(prefix, *, required_roles, host=None):
                 # ld64.lld on Darwin. Check that actual route below.
                 continue
             _require(selected is not None, f'missing native tool in host prefix: {role}')
-            tools[role] = _member(selected, root, selected_host)
+            tools[role] = selected
+        search_path = _search_path(root, tools)
+        for selected in tools.values():
+            _member(selected, root, selected_host, search_path=search_path)
         flags = {name: () for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}
         if not needs_compiler:
             return HostPrefix(root, MappingProxyType(selected_host), MappingProxyType({}),
                               MappingProxyType(tools), MappingProxyType(flags), MappingProxyType({}))
         env = process.sanitized_environment()
-        env['PATH'] = os.pathsep.join(dict.fromkeys(
-            [os.path.dirname(tools['cc']), os.path.join(root, 'bin'), os.path.join(root, 'gnu/bin')] +
-            [os.path.dirname(path) for _, path in sorted(tools.items())]))
+        env['PATH'] = search_path
 
         def query(driver, option):
             return process.capture([driver, option], env=env).stdout.decode('utf-8', 'strict').strip()
@@ -176,11 +188,16 @@ def load_host_prefix(prefix, *, required_roles, host=None):
                 path = next((os.path.join(directory, path) for directory in env['PATH'].split(os.pathsep)
                              if os.path.lexists(os.path.join(directory, path))), '')
             _require(bool(path), f'missing native driver component: {component}')
-            components[component] = _member(path, root, selected_host)
+            components[component] = _member(path, root, selected_host, search_path=search_path)
         for role in ('as', 'ld'):
             tools.setdefault(role, components[role])
             _require(canonical_existing(components[role]) == canonical_existing(tools[role]),
                      f'compiler selects a different native {role}')
+        final_path = _search_path(root, tools)
+        if final_path != search_path:
+            # Driver-discovered tool directories can change env lookup order.
+            for selected in dict.fromkeys((*tools.values(), *components.values())):
+                _member(selected, root, selected_host, search_path=final_path)
         return HostPrefix(root, MappingProxyType(selected_host), MappingProxyType(compiler),
                           MappingProxyType(tools), MappingProxyType(flags), MappingProxyType(components))
     except (OSError, ValueError, TypeError, UnicodeError) as exc:

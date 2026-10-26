@@ -45,6 +45,17 @@ class PrefixFixture:
         with patch('emberbsd_sdk.host_prefix.process.capture', side_effect=self.capture):
             return load_host_prefix(self.root, required_roles=roles, host=self.host, **kwargs)
 
+    def env_script(self, interpreter='python3.15'):
+        env = self.write('env', header(62, 2))
+        return self.write('meson', f'#!{env} {interpreter}\n'.encode())
+
+    def compiler_directory(self):
+        directory = self.root / 'gcc16/bin'
+        directory.mkdir(parents=True)
+        for name in ('gcc', 'g++', 'cpp'):
+            (self.root / 'bin' / name).rename(directory / name)
+        return directory
+
 
 class HostPrefixTests(TemporaryCase):
     def setUp(self):
@@ -272,6 +283,64 @@ class HostPrefixTests(TemporaryCase):
             self.fixture.load(roles=('meson',))
         self.fixture.write('meson', ('#!' + str(self.fixture.root / 'bin/python3.15') + '\npass\n').encode())
         self.fixture.load(roles=('meson',))
+
+    def test_env_interpreter_rejects_earlier_wrong_cpu(self):
+        self.fixture.env_script()
+        directory = self.fixture.compiler_directory()
+        shadow = directory / 'python3.15'
+        shadow.write_bytes(header(183, 2)); shadow.chmod(0o755)
+        with self.assertRaisesRegex(SDKError, 'expected a native executable'):
+            self.fixture.load(roles=('cc', 'meson'))
+        self.assertEqual(self.fixture.queries, [])
+
+    def test_env_interpreter_rejects_earlier_external_link(self):
+        self.fixture.env_script()
+        directory = self.fixture.compiler_directory()
+        external = self.write('outside-python', header(62, 2), 0o755)
+        (directory / 'python3.15').symlink_to(external)
+        with self.assertRaisesRegex(SDKError, 'escapes host prefix'):
+            self.fixture.load(roles=('cc', 'meson'))
+        self.assertEqual(self.fixture.queries, [])
+
+    def test_env_interpreter_uses_first_executable_in_selected_path(self):
+        self.fixture.env_script()
+        directory = self.fixture.compiler_directory()
+        (self.fixture.root / 'bin/python3.15').rename(directory / 'python3.15')
+        self.fixture.write('python3.15', header(183, 2))
+        selected = self.fixture.load(roles=('cc', 'meson'))
+        self.assertEqual(selected.path.split(os.pathsep)[0], str(directory))
+        self.assertTrue(all(env['PATH'] == selected.path for _, env in self.fixture.queries))
+
+    def test_env_interpreter_searches_gnu_bin_without_compiler(self):
+        self.fixture.env_script('-S python3.15 -I')
+        directory = self.fixture.root / 'gnu/bin'
+        directory.mkdir(parents=True)
+        (self.fixture.root / 'bin/python3.15').rename(directory / 'python3.15')
+        selected = self.fixture.load(roles=('meson',))
+        self.assertEqual(selected.tool('meson'), str(self.fixture.root / 'bin/meson'))
+        self.assertEqual(self.fixture.queries, [])
+
+    def test_env_interpreter_skips_non_executable_path_entry(self):
+        self.fixture.env_script()
+        directory = self.fixture.compiler_directory()
+        (directory / 'python3.15').write_bytes(header(183, 2))
+        self.fixture.load(roles=('cc', 'meson'))
+
+    def test_env_interpreter_checks_final_driver_tool_path(self):
+        self.fixture.env_script('helper-python')
+        self.write('host-pkg-g16/sbin/helper-python', header(62, 2), 0o755)
+        self.write('host-pkg-g16/sbin/pkg_info', header(62, 2), 0o755)
+        (self.fixture.root / 'bin/as').unlink()
+        assembler = self.write('host-pkg-g16/libexec/as', header(62, 2), 0o755)
+        self.write('host-pkg-g16/libexec/helper-python', header(183, 2), 0o755)
+        original = self.fixture.capture
+        def capture(argv, *, env):
+            if argv[-1] == '-print-prog-name=as':
+                return SimpleNamespace(stdout=str(assembler).encode())
+            return original(argv, env=env)
+        self.fixture.capture = capture
+        with self.assertRaisesRegex(SDKError, 'expected a native executable'):
+            self.fixture.load(roles=('cc', 'meson', 'pkg_info'))
 
     def test_driver_component_cannot_escape_prefix(self):
         external = self.write('outside', header(62, 2), 0o755)

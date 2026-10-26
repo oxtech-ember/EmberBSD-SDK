@@ -43,6 +43,8 @@ Other role names select `bin/<role>` or `gnu/bin/<role>`; `pkg-config` also supp
 The build search path includes `bin` and `gnu/bin` inside the prefix.
 When `bin/as` or `bin/ld` is absent, the loader uses GCC's explicit component path.
 No lookup uses ambient `PATH`.
+An `env` shebang resolves its interpreter through the selected build PATH, in order.
+The loader checks that resolved interpreter, including any earlier same-name entry.
 
 The checks are limited to practical tool selection:
 
