@@ -136,8 +136,12 @@ def apply_patch(patch_tool, patch_path, patch_bytes, cwd, label, *,
         for header in headers:
             if allow_dev_null and header == b'/dev/null':
                 continue
-            parent = backup_directory.joinpath(*header.decode('ascii').split('/')[:-1])
-            parent.mkdir(parents=True, exist_ok=True)
+            parts = header.decode('ascii').split('/')[:-1]
+            # The caller owns patch's strip option. BSD patch uses the stripped
+            # destination for backups, so allow every safe suffix of the header.
+            for index in range(len(parts)):
+                parent = backup_directory.joinpath(*parts[index:])
+                parent.mkdir(parents=True, exist_ok=True)
         args.extend(('-B', str(backup_directory) + os.sep))
     args.extend(('-i', str(patch_path)))
     process.capture(args, cwd=str(cwd),

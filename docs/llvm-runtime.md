@@ -174,6 +174,15 @@ consumers use the [shared compiler commands](application-toolchain.md).
 
 ## Shared source extraction
 
+`sourceprep.apply_patch` can keep BSD patch backups outside prepared sources
+through `backup_directory`. It creates backup parents for stripped header
+paths as well as unstripped paths; the caller retains its chosen patch
+arguments. Set `EMBERBSD_TEST_PATCH` to an absolute selected patch executable
+and run `python3 -B -m unittest discover -s tests -p test_sourceprep_patch.py`
+to check actual changed/new file bytes, source cleanliness, and strip levels
+0, 1 and 2. BSD patch can report success after a failed backup while leaving
+old bytes in place, so these checks inspect the output files.
+
 Runtime preparation uses `emberbsd_sdk.sourceprep` with
 `SOURCE_PREPARATION_API == 2`:
 
