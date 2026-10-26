@@ -106,6 +106,43 @@ class HostPrefixTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, 'PATH directory escapes'):
             self.fixture.load()
 
+    def test_package_query_and_otool_aliases_are_native_prefix_tools(self):
+        for role, preferred, alternate in (
+                ('pkg_info', 'sbin/pkg_info', 'bin/pkg_info'),
+                ('otool', 'bin/otool', 'bin/llvm-otool')):
+            with self.subTest(role=role):
+                first = self.write('host-pkg-g16/' + preferred, header(62, 2), 0o755)
+                second = self.write('host-pkg-g16/' + alternate, header(62, 2), 0o755)
+                selected = self.fixture.load(roles=(role,))
+                self.assertEqual(selected.tool(role), str(first))
+                self.assertIn(str(first.parent), selected.path.split(os.pathsep))
+                first.unlink()
+                self.assertEqual(self.fixture.load(roles=(role,)).tool(role), str(second))
+        self.assertEqual(self.fixture.queries, [])
+
+    def test_package_query_and_otool_aliases_cannot_escape_prefix(self):
+        external = self.write('outside-tool', header(62, 2), 0o755)
+        for role, name in (('pkg_info', 'sbin/pkg_info'), ('pkg_info', 'bin/pkg_info'),
+                           ('otool', 'bin/otool'), ('otool', 'bin/llvm-otool')):
+            with self.subTest(path=name):
+                path = self.fixture.root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.symlink_to(external)
+                with self.assertRaisesRegex(SDKError, 'escapes host prefix'):
+                    self.fixture.load(roles=(role,))
+                path.unlink()
+        self.assertEqual(self.fixture.queries, [])
+
+    def test_package_query_and_otool_aliases_reject_wrong_native_cpu(self):
+        for role, name in (('pkg_info', 'sbin/pkg_info'), ('pkg_info', 'bin/pkg_info'),
+                           ('otool', 'bin/otool'), ('otool', 'bin/llvm-otool')):
+            with self.subTest(path=name):
+                path = self.write('host-pkg-g16/' + name, header(183, 2), 0o755)
+                with self.assertRaisesRegex(SDKError, 'expected a native executable'):
+                    self.fixture.load(roles=(role,))
+                path.unlink()
+        self.assertEqual(self.fixture.queries, [])
+
     def test_offline_validation_does_not_inspect_live_symlinks(self):
         selected = self.fixture.load().as_dict()
         path = self.fixture.root / 'bin/gcc'

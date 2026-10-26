@@ -36,6 +36,8 @@ Make lookup prefers `bin/bmake`, then `bin/make`.
 Shell lookup supports `sh`, `mksh`, `dash`, and `bash` inside `bin`.
 Python lookup prefers `python3.15`, then `python3` and `python`.
 The archiver, ranlib, nm, and strip roles also support their `llvm-` names.
+Package queries prefer `sbin/pkg_info`, then `bin/pkg_info`.
+The `otool` role also supports `bin/llvm-otool`.
 The install role prefers `bsdinstall`; yacc also supports `byacc`.
 Other role names select `bin/<role>` or `gnu/bin/<role>`; `pkg-config` also supports `pkgconf`.
 The build search path includes `bin` and `gnu/bin` inside the prefix.
