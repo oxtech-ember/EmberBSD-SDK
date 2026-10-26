@@ -37,6 +37,7 @@ DARWIN_STATIC_FORMAT_CXX_PROBE = (b'#include <chrono>\n#include <format>\n'
 _DARWIN_FORMAT_PURPOSES = {
     'native-darwin-static-format-pilot': 'baseline',
     'native-darwin-static-format-iconv-pilot': 'sdk-iconv',
+    'native-darwin-static-format-iconv-linker-pilot': 'sdk-iconv-linker',
 }
 
 
@@ -79,7 +80,7 @@ def pilot_steps(descriptor, commands, flags, work_root, *, static_runtime=False,
     _require(not linker_trace or (not static_runtime and descriptor['host']['os'] == 'Darwin'),
              'linker-trace pilot needs Darwin and a separate non-static purpose')
     _require(darwin_format is None or type(darwin_format) is str and
-             darwin_format in ('baseline', 'sdk-iconv'), 'unsupported Darwin format pilot selector')
+             darwin_format in ('baseline', 'sdk-iconv', 'sdk-iconv-linker'), 'unsupported Darwin format pilot selector')
     _require(darwin_format is None or (not static_runtime and not linker_trace and
              descriptor['host']['os'] == 'Darwin'),
              'format pilot needs Darwin and its separate fixed purpose')
@@ -90,6 +91,10 @@ def pilot_steps(descriptor, commands, flags, work_root, *, static_runtime=False,
                  'format pilot needs the fixed Darwin v2 SDK driver binding')
         if darwin_format == 'sdk-iconv':
             iconv = _darwin_iconv_stub(descriptor, value)
+        elif darwin_format == 'sdk-iconv-linker':
+            stub = _darwin_iconv_stub(descriptor, value)
+            _require(',' not in stub, 'format pilot SDK iconv path cannot be encoded in -Wl')
+            iconv = '-Wl,' + stub
     work = _absolute(work_root)
     binding = descriptor.get('driver_binding')
     external_tools = (seed_external_tools(descriptor, inspect_inputs=False)

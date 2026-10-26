@@ -19,7 +19,7 @@ scope `gcc16-bootstrap`. It has exactly these fields:
 
 | Field | Value |
 | --- | --- |
-| `purpose` | `native-c-and-cxx-pilot`, `native-c-and-cxx-static-runtime-pilot`, `native-c-and-cxx-linker-trace-pilot`, `native-darwin-static-format-pilot`, or `native-darwin-static-format-iconv-pilot` |
+| `purpose` | `native-c-and-cxx-pilot`, `native-c-and-cxx-static-runtime-pilot`, `native-c-and-cxx-linker-trace-pilot`, `native-darwin-static-format-pilot`, `native-darwin-static-format-iconv-pilot`, or `native-darwin-static-format-iconv-linker-pilot` |
 | `seed_descriptor` | Exact `{path, sha256}` reference |
 | `host`, `sources` | Exact descriptor values |
 | `work_root` | Fresh absolute output directory with real ancestors |
@@ -97,6 +97,15 @@ The current full ABI inventory checks reject changed bytes, links and missing
 files before dispatch and after drainage. Metadata-only historical plan checks
 read the pinned inventory without opening a retired SDK. A caller cannot supply another path,
 GNU iconv, an environment override, or extra linker flags.
+
+Use `darwin_format='sdk-iconv-linker'` with
+`purpose: native-darwin-static-format-iconv-linker-pilot` to pass the same SDK
+stub as `-Wl,<absolute-path>`. This encoding keeps the linker input through
+Libtool's flag handling. Paths with a comma are refused. All other commands,
+source bytes and input checks match the direct iconv route. The earlier
+purposes retain their exact arguments for historical plan validation.
+The pilot invokes GCC directly; the recipe build must separately verify
+Libtool's final command and the resulting shared-library dependencies.
 
 Each purpose needs a fresh plan, work directory, and independent input-route
 acceptance. The baseline can fail on an affected external GCC seed. Keep that

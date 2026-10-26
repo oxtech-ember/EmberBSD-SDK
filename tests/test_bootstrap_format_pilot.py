@@ -22,6 +22,7 @@ from emberbsd_sdk.native_toolset import NATIVE_C_PROBE, _flags
 
 BASELINE = 'native-darwin-static-format-pilot'
 ICONV = 'native-darwin-static-format-iconv-pilot'
+LINKER = 'native-darwin-static-format-iconv-linker-pilot'
 
 
 class DarwinFormatPilotTests(unittest.TestCase):
@@ -48,7 +49,7 @@ class DarwinFormatPilotTests(unittest.TestCase):
         self.plan['purpose'] = purpose
         self.plan['commands'] = P.pilot_steps(self.seed.descriptor, self.seed.commands,
             self.seed.descriptor['abi_flags'], str(self.work),
-            darwin_format='sdk-iconv' if purpose == ICONV else 'baseline')
+            darwin_format={BASELINE:'baseline', ICONV:'sdk-iconv', LINKER:'sdk-iconv-linker'}[purpose])
         self.seal()
 
     def fake_command(self, argv, log, **kwargs):
@@ -59,7 +60,7 @@ class DarwinFormatPilotTests(unittest.TestCase):
             output += b'emberbsd-native-cxx-v1\n'
         Path(log).write_bytes(output)
         if '-o' in argv:
-            if '-c' not in argv and str(self.work / 'cxx.o') in argv and str(self.alias) not in argv:
+            if '-c' not in argv and str(self.work / 'cxx.o') in argv and not any(v in argv for v in (str(self.alias), '-Wl,' + str(self.alias))):
                 Path(log).write_bytes(b'undefined symbol: _iconv_open\n')
                 raise CommandError(1, argv, log=log)
             image = bytearray(64)
@@ -227,8 +228,88 @@ class DarwinFormatPilotTests(unittest.TestCase):
                         self.seed.commands, self.seed.descriptor['abi_flags'], inspect_inputs=False)
         self.assertEqual(checked, self.plan)
 
+    def test_linker_encoding_changes_only_the_exact_cxx_sdk_operand(self):
+        descriptor = copy.deepcopy(self.seed.descriptor)
+        flags = descriptor['abi_flags']
+        old = P.pilot_steps(descriptor, self.seed.commands, flags, str(self.work),
+                            darwin_format='sdk-iconv')
+        encoded = P.pilot_steps(descriptor, self.seed.commands, flags, str(self.work),
+                                darwin_format='sdk-iconv-linker')
+        expected = copy.deepcopy(old)
+        argv = expected[4]['argv']
+        argv[argv.index(str(self.alias))] = '-Wl,' + str(self.alias)
+        self.assertEqual(encoded, expected)
+        self.assertEqual(descriptor, self.seed.descriptor)
+        self.assertEqual(encoded[4]['argv'].count('-Wl,' + str(self.alias)), 1)
+        self.assertNotIn(str(self.alias), encoded[4]['argv'])
+        self.select(LINKER)
+        selected = self.seed.load(required_roles=('cc', 'cxx'))
+        self.assertEqual(selected.as_dict()['plan']['purpose'], LINKER)
+        self.assertNotIn('execution_audit', self.seed.acceptance)
+
+    def test_linker_encoding_uses_six_fixed_commands_and_retains_scope(self):
+        self.select(LINKER)
+        with patch.object(P, 'run_logged', side_effect=self.fake_command) as run, \
+                patch('subprocess.Popen', side_effect=AssertionError('no child')):
+            result = self.invoke()
+        self.assertEqual(run.call_count, 6)
+        self.assertEqual([row['argv'] for row in result['commands']],
+                         [step['argv'] for step in self.plan['commands']])
+        self.assertEqual(result['status'], 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW')
+        self.assertTrue(result['all_commands_drained'] and result['inputs_revalidated_after_drain'])
+        self.assertTrue(result['all_leases_closed'])
+        self.assertFalse(result['ordinary_provider_qualified'])
+
+    def test_linker_encoding_rejects_tampering_before_child(self):
+        self.select(LINKER)
+        valid = copy.deepcopy(self.plan)
+        operand = '-Wl,' + str(self.alias)
+        for case in ('direct', 'other-path', 'missing', 'duplicate', 'c-link', 'compile',
+                     'old-purpose', 'unknown-purpose'):
+            with self.subTest(case=case):
+                self.plan.clear(); self.plan.update(copy.deepcopy(valid))
+                argv = self.plan['commands'][4]['argv']
+                if case == 'direct': argv[argv.index(operand)] = str(self.alias)
+                elif case == 'other-path': argv[argv.index(operand)] = '-Wl,/caller/libiconv.tbd'
+                elif case == 'missing': argv.remove(operand)
+                elif case == 'duplicate': argv.insert(-2, operand)
+                elif case == 'c-link': self.plan['commands'][1]['argv'].insert(-2, operand)
+                elif case == 'compile': self.plan['commands'][3]['argv'].append(operand)
+                elif case == 'old-purpose': self.plan['purpose'] = ICONV
+                else: self.plan['purpose'] = LINKER + '-arbitrary'
+                self.seal()
+                with patch.object(P, 'run_logged') as run, self.assertRaises(SDKError):
+                    self.invoke()
+                run.assert_not_called(); self.assertFalse(self.work.exists())
+
+    def test_linker_encoding_preserves_host_binding_and_live_stub_refusals(self):
+        d, c, f = self.seed.descriptor, self.seed.commands, self.seed.descriptor['abi_flags']
+        for option in ('static_runtime', 'linker_trace'):
+            with self.subTest(option=option), self.assertRaises(SDKError):
+                P.pilot_steps(d, c, f, str(self.work), darwin_format='sdk-iconv-linker', **{option:True})
+        for system in ('Linux', 'NetBSD', 'Windows'):
+            changed = copy.deepcopy(d); changed['host']['os'] = system
+            with self.subTest(system=system), self.assertRaises(SDKError):
+                P.pilot_steps(changed, c, f, str(self.work), darwin_format='sdk-iconv-linker')
+        with patch.object(P, '_darwin_iconv_stub', return_value='/SDK,other/usr/lib/libiconv.tbd'), \
+                self.assertRaises(SDKError):
+            P.pilot_steps(d, c, f, str(self.work), darwin_format='sdk-iconv-linker')
+        self.select(LINKER)
+        self.target.write_bytes(b'changed SDK stub')
+        with patch.object(P, 'run_logged') as run, self.assertRaises(SDKError):
+            self.invoke()
+        run.assert_not_called(); self.assertFalse(self.work.exists())
+
+    def test_linker_historical_plan_uses_inventory_without_opening_retired_sdk(self):
+        self.select(LINKER)
+        shutil.rmtree(self.fixture.sdk)
+        checked = _plan(self.seed.plan_ref, self.seed.descriptor,
+                        self.seed.commands, self.seed.descriptor['abi_flags'], inspect_inputs=False)
+        self.assertEqual(checked, self.plan)
+
     def test_diagnostic_flags_do_not_enter_the_ordinary_abi_grammar(self):
-        for value in ('-static-libstdc++', '-static-libgcc', '-nodefaultrpaths', str(self.alias)):
+        for value in ('-static-libstdc++', '-static-libgcc', '-nodefaultrpaths', str(self.alias),
+                      '-Wl,' + str(self.alias)):
             flags = {key:[] for key in ('cppflags','cflags','cxxflags','ldflags')}
             flags['ldflags'] = [value]
             with self.subTest(flag=value), self.assertRaises(SDKError): _flags(flags)
