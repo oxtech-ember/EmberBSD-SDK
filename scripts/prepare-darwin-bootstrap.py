@@ -33,6 +33,8 @@ def main(argv=None):
     parser.add_argument('--source-tool', action='append', default=[])
     parser.add_argument('--jobs', type=int, action=UniqueOption, help='serial initial build; default 1')
     parser.add_argument('--tool-phase', choices=('initial', 'full'), action=UniqueOption)
+    parser.add_argument('--compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
+                        help='Clang by default; select GCC explicitly for a platform exception')
     args = parser.parse_args(argv)
     try:
         source = Path(args.sdk_source).resolve(strict=True)
@@ -54,7 +56,8 @@ def main(argv=None):
         result = write_makeconf(**options, tools=tools, tool_roots=args.tool_root,
             compiler_args={role: getattr(args, role + '_arg') for role in ('cc', 'cxx', 'cpp')},
             ldflags=args.ldflag, source_tools=args.source_tool,
-            jobs=1 if args.jobs is None else args.jobs, tool_phase=args.tool_phase or 'full')
+            jobs=1 if args.jobs is None else args.jobs, tool_phase=args.tool_phase or 'full',
+            compiler_family=args.compiler_family or 'clang')
         print(json.dumps(result, indent=2))
         return 0
     except Exception as error:

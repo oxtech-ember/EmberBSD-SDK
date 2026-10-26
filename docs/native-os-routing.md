@@ -12,7 +12,7 @@ Sysroot and release builders use this sequence:
 4. Invoke `build.sh` with the selected shell and `EMBER_NATIVE_TOOLS`.
 
 The mapping contains the contract and symbolic links to selected absolute paths.
-An internal compiler alias keeps its spelling because GCC can use its invocation path.
+An internal compiler alias keeps its spelling because drivers can use their invocation path.
 The OS uses the mapped NetBSD make, shell, utilities, and host compiler variables.
 SDK does not pass conflicting `HOST_CC`, `HOST_CXX`, or `HOST_SH` command overrides.
 Native ABI flags remain separate from target flags.

@@ -80,7 +80,8 @@ def _mapping(destination, tools):
 
 def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pkgdb,
                    utility_bin, makefiles, macos_sdk, deployment, tools, compiler_args,
-                   tool_roots, jobs=1, ldflags=(), source_tools=(), tool_phase='full'):
+                   tool_roots, jobs=1, ldflags=(), source_tools=(), tool_phase='full',
+                   compiler_family='clang'):
     """Render explicit inputs. Do not run tools, compiler queries, or a build.
 
     Initial tools can use several declared roots before the final Ports prefix
@@ -88,6 +89,7 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
     """
     _require(type(jobs) is int and jobs == 1,
              'this initial configuration is serial; use jobs=1')
+    _require(compiler_family in ('clang', 'gcc'), 'unsupported compiler family')
     _require(tool_phase in ('initial', 'full'), 'invalid Darwin tool phase')
     _require(isinstance(deployment, str) and re.fullmatch(r'[0-9]+(?:\.[0-9]+){0,2}', deployment),
              'invalid macOS deployment version')
@@ -154,16 +156,19 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
                      PACKAGES=_path(packages), LOCALBASE=_path(prefix), PKG_DBDIR=_path(pkgdb),
                      EMBERBSD_DARWIN_MAKE=shlex.join(make), EMBERBSD_DARWIN_GMAKE=shlex.join(gmake),
                      EMBERBSD_DARWIN_SH=tools['sh'], EMBERBSD_DARWIN_TOOL_PHASE=tool_phase,
-                     OSX_SDK_PATH=sdk, EMBERBSD_GCC16_DARWIN_SDK_VERSION=sdk_version,
+                     OSX_SDK_PATH=sdk, EMBERBSD_DARWIN_SDK_VERSION=sdk_version,
+                     EMBERBSD_COMPILER_FAMILY=compiler_family,
                      MACOSX_DEPLOYMENT_TARGET=deployment, EMBERBSD_DARWIN_JOBS='1',
                      EMBERBSD_DARWIN_CPU_BUDGET='1', EMBERBSD_DARWIN_UTILITY_BIN=utility_bin,
                      EMBERBSD_DARWIN_NATIVE_TOOLS=' '.join(sorted(utilities)),
                      EMBERBSD_DARWIN_SOURCE_TOOLS=' '.join(sorted(sources)),
                      LDFLAGS=shlex.join([_word(word) for word in ldflags]))
     for role, command in commands.items():
-        variables['EMBERBSD_GCC16_SEED_' + role.upper()] = shlex.join(command)
+        variables['EMBERBSD_DARWIN_SEED_' + role.upper()] = shlex.join(command)
+    variables['EMBERBSD_DARWIN_SEED_AS'] = shlex.join(
+        [*commands['cc'], '-c', '-x', 'assembler'] if compiler_family == 'clang' else [tools['as']])
     for name, role in LLVM.items():
-        variables['EMBERBSD_GCC16_' + name] = tools[role]
+        variables['EMBERBSD_DARWIN_' + name] = tools[role]
     for name, role in CMAKE.items():
         if role in tools:
             variables['EMBERBSD_DARWIN_' + name] = tools[role]
@@ -195,7 +200,8 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
     environment = process.sanitized_environment()
     environment.update(PATH=utility_bin, MAKECONF=output, SHELL=tools['sh'], CONFIG_SHELL=tools['sh'],
                        TMPDIR=work, TZ='UTC', PATH_SEPARATOR=os.pathsep)
-    return dict(makeconf=output, selected_roles=sorted(tools), required_roles=sorted(required),
+    return dict(makeconf=output, compiler_family=compiler_family,
+                selected_roles=sorted(tools), required_roles=sorted(required),
                 source_tools=sorted(sources), utility_bin=utility_bin,
                 initial_command=[*make, 'EMBERBSD_DARWIN_BOOTSTRAP=yes', '-C',
                                  os.path.join(pkgsrc, 'devel/bmake'), 'build', 'install'],

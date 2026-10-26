@@ -11,10 +11,10 @@ from types import MappingProxyType
 
 from . import process
 from .errors import SDKError
-from .native_toolset import _gcc, _native_image, _require
+from .native_toolset import _gcc, _native_image, _native_triplet, _require
 from .paths import canonical_existing
 
-HOST_PREFIX_API = 1
+HOST_PREFIX_API = 2
 _NAMES = {'cc': ('gcc16/bin/gcc', 'bin/gcc-16', 'bin/gcc16', 'bin/gcc'),
           'cxx': ('gcc16/bin/g++', 'bin/g++-16', 'bin/g++16', 'bin/g++'),
           'cpp': ('gcc16/bin/cpp', 'bin/cpp-16', 'bin/cpp16', 'bin/cpp'),
@@ -44,6 +44,67 @@ _NAMES = {'cc': ('gcc16/bin/gcc', 'bin/gcc-16', 'bin/gcc16', 'bin/gcc'),
           'pkg_create': ('bin/pkg_create', 'sbin/pkg_create', 'gnu/bin/pkg_create'),
           'pkg_delete': ('bin/pkg_delete', 'sbin/pkg_delete', 'gnu/bin/pkg_delete')}
 _COMPONENTS = ('cc1', 'cc1plus', 'collect2', 'lto1', 'lto-wrapper', 'as', 'ld')
+_CLANG_NAMES = {'cc': ('bin/clang',), 'cxx': ('bin/clang++',),
+                'cpp': ('bin/clang-cpp',), 'as': ('bin/clang-as',),
+                **{role: ('bin/llvm-' + role,) for role in
+                   ('ar', 'ranlib', 'nm', 'strip', 'objcopy', 'objdump', 'readelf')}}
+
+
+def _compiler(value, host):
+    _require(isinstance(value, dict) and set(value) == {'family', 'version', 'triplet'},
+             'invalid native compiler identity')
+    _require(value['family'] in ('clang', 'gcc'), 'unsupported compiler family')
+    if value['family'] == 'gcc':
+        _gcc(value, host)
+    else:
+        _require(isinstance(value['version'], str) and
+                 re.fullmatch(r'[1-9][0-9]*\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9_.-]+)?', value['version']),
+                 'invalid Clang compiler version')
+        _native_triplet(value['triplet'], host)
+
+
+def _clang(tools, root, host, env, query):
+    """Inspect the real Clang routes without producing compilation outputs."""
+    def identity(driver):
+        version = re.search(r'\bclang version ([0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9_.-]+)?)',
+                            query(driver, '--version'))
+        _require(version is not None, 'selected compiler does not identify Clang')
+        return dict(family='clang', version=version[1], triplet=query(driver, '-dumpmachine'))
+    compiler = identity(tools['cc'])
+    _compiler(compiler, host)
+    _require(all(identity(tools[role]) == compiler for role in ('cxx', 'cpp')),
+             'native C, C++ and preprocessor compilers differ')
+    resource = canonical_existing(query(tools['cc'], '-print-resource-dir'))
+    _require(os.path.isdir(resource) and resource != root and
+             os.path.commonpath((resource, root)) == root, 'Clang resource directory escapes host prefix')
+    components = {'resource-dir': resource}
+    for role, language in (('cc', 'c'), ('cxx', 'c++')):
+        result = process.capture([tools[role], '-###', '-x', language, os.devnull, '-o', os.devnull], env=env)
+        commands = [shlex.split(line) for line in result.stderr.decode('utf-8', 'strict').splitlines()
+                    if line.lstrip().startswith('"')]
+        _require(len(commands) >= 2, 'Clang did not report compiler and linker routes')
+        linker = None
+        for command in commands:
+            _require(bool(command) and os.path.isabs(command[0]), 'implicit Clang driver component')
+            path = _member(command[0], root, host, search_path=env['PATH'])
+            if '-cc1' in command or '-cc1as' in command:
+                _require(canonical_existing(path) == canonical_existing(tools[role]),
+                         'Clang selects a different frontend')
+            else:
+                _require(os.path.basename(path) in ('ld.lld', 'ld64.lld', 'lld'),
+                         'Clang must select the prefix LLVM linker')
+                _require(linker is None, 'multiple Clang linker routes')
+                linker = path
+        _require(linker is not None, 'Clang did not report an LLVM linker')
+        if 'ld' in components:
+            _require(canonical_existing(linker) == canonical_existing(components['ld']),
+                     'native C and C++ linkers differ')
+        components['ld'] = linker
+    # The Ports clang-as command provides assembler-only driver arguments.
+    # Its backend is Clang's integrated assembler, not another assembler.
+    components.update(cc1=tools['cc'], cc1as=tools['cc'])
+    tools['ld'] = components['ld']
+    return compiler, components
 
 
 def _search_path(root, tools):
@@ -72,6 +133,11 @@ class HostPrefix:
 
     def command(self, role):
         return (self.tool(role),)
+
+    @property
+    def compiler_family(self):
+        """The inspected family, or None when no compiler was requested."""
+        return self.compiler.get('family')
 
     @property
     def path(self):
@@ -124,14 +190,15 @@ def _member(path, root, host, *, search_path, binary=False, seen=()):
     return path
 
 
-def load_host_prefix(prefix, *, required_roles, host=None):
-    """Select GCC16 and required tools. Query drivers; do not compile probes.
+def load_host_prefix(prefix, *, required_roles, host=None, compiler_family='clang'):
+    """Select LLVM or explicit GCC tools. Query drivers; do not compile probes.
 
     The caller builds the prefix from the common Ports recipes. This function
-    checks containment, native CPU, script interpreters, and GCC component paths.
+    checks containment, native CPU, script interpreters, and compiler routes.
     Host ABI headers, libraries, and process services remain OS inputs.
     """
     try:
+        _require(compiler_family in ('clang', 'gcc'), 'unsupported compiler family')
         root = canonical_existing(os.fspath(prefix))
         _require(os.path.isdir(root), 'host prefix must be a directory')
         _require(root != os.path.sep, 'host prefix must be a dedicated directory')
@@ -151,10 +218,15 @@ def load_host_prefix(prefix, *, required_roles, host=None):
         for role in sorted(roles):
             _require(isinstance(role, str) and re.fullmatch(r'[a-z][a-z0-9_-]*', role),
                      'invalid native tool role')
-            names = _NAMES.get(role, ('bin/' + role, 'gnu/bin/' + role))
+            if needs_compiler and compiler_family == 'clang' and role == 'ld':
+                continue
+            names = (_CLANG_NAMES.get(role) if compiler_family == 'clang' else None)
+            if compiler_family == 'clang' and role == 'ld':
+                names = ('bin/ld64.lld',) if selected_host['os'] == 'Darwin' else ('bin/ld.lld',)
+            names = names or _NAMES.get(role, ('bin/' + role, 'gnu/bin/' + role))
             candidates = [os.path.join(root, name) for name in names]
             selected = next((path for path in candidates if os.path.lexists(path)), None)
-            if selected is None and needs_compiler and role in ('as', 'ld'):
+            if selected is None and needs_compiler and compiler_family == 'gcc' and role in ('as', 'ld'):
                 # GCC can use another installed name, such as llvm-mc or
                 # ld64.lld on Darwin. Check that actual route below.
                 continue
@@ -172,6 +244,11 @@ def load_host_prefix(prefix, *, required_roles, host=None):
 
         def query(driver, option):
             return process.capture([driver, option], env=env).stdout.decode('utf-8', 'strict').strip()
+
+        if compiler_family == 'clang':
+            compiler, components = _clang(tools, root, selected_host, env, query)
+            return HostPrefix(root, MappingProxyType(selected_host), MappingProxyType(compiler),
+                              MappingProxyType(tools), MappingProxyType(flags), MappingProxyType(components))
 
         compiler = dict(family='gcc', version=query(tools['cc'], '-dumpfullversion'),
                         triplet=query(tools['cc'], '-dumpmachine'))
@@ -207,14 +284,16 @@ def load_host_prefix(prefix, *, required_roles, host=None):
 
 def validate_host_prefix(value, *, required_roles):
     """Check saved command consistency. Do not read the old prefix."""
-    _require(value.get('format') == 'emberbsd-host-prefix' and value.get('version') == HOST_PREFIX_API,
+    _require(value.get('format') == 'emberbsd-host-prefix' and value.get('version') in (1, HOST_PREFIX_API),
              'invalid saved host prefix')
     root = value['bundle_root']
     _require(os.path.isabs(root) and root != os.path.sep, 'invalid host prefix')
     roles = set(required_roles)
     if roles & {'cc', 'cxx', 'cpp'} or value['compiler']:
         roles |= {'cc', 'cxx', 'cpp', 'as', 'ld'}
-        _gcc(value['compiler'], value['host'])
+        _compiler(value['compiler'], value['host'])
+        if value['version'] == 1:
+            _require(value['compiler']['family'] == 'gcc', 'historical host prefix requires GCC')
     _require(roles <= set(value['tools']),
              'missing recorded native roles')
     for path in (*value['tools'].values(), *value['driver_components'].values()):

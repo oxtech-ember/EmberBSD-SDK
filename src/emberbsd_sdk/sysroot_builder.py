@@ -34,6 +34,8 @@ def native_host_flags(selection):
               for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')]
     if selection['format'] != 'emberbsd-host-prefix':
         result.append('HOST_SH=' + selection['tools']['sh'])
+    elif selection['version'] >= 2:
+        result.append('EMBER_HOST_COMPILER_FAMILY=' + selection['compiler']['family'])
     return result
 
 
@@ -54,14 +56,16 @@ def check_native_command_identity(signature, shell):
         native = signature['native_toolset']
         native_toolset.validate_selection(native, required_roles=('cc', 'cxx', 'sh', 'python'))
         if set(signature['host_tools']) != {'cc', 'c++'}:
-            raise SDKError('Missing native GCC16 compiler identity')
+            raise SDKError('Missing native compiler identity')
         for name, role in (('cc', 'cc'), ('c++', 'cxx')):
             record = signature['host_tools'][name]
             prefix = native['format'] == 'emberbsd-host-prefix'
             if (record['origin'] != ('host-prefix' if prefix else 'accepted-native-toolset')
                     or (not prefix and (record['descriptor_sha256'] != native['descriptor_sha256'] or
                         not re.fullmatch('[0-9a-f]{64}', record['sha256'])))
-                    or record['version'] != native['compiler']['version'] or record['gcc_version'] != native['compiler']['version']
+                    or record['version'] != native['compiler']['version']
+                    or record.get('gcc_version', record['version']) != native['compiler']['version']
+                    or record.get('compiler_family', 'gcc') != native['compiler']['family']
                     or record['machine'] != native['compiler']['triplet']
                     or record['programs'] != {tool: native['tools'][tool] for tool in ('as', 'ld')}):
                 raise SDKError('Mixed native compiler identity')
@@ -169,7 +173,8 @@ class SysrootBuilder:
         self.native_contract_sha256 = inventory.sha256_file(contract)
         _, _, roles = native_os_routing.read_native_os_contract(contract, sha256=self.native_contract_sha256)
         self.native_contract = contract
-        return native_toolset.load_host_prefix(self.options['host-prefix'], required_roles=roles | {'python'})
+        return native_toolset.load_host_prefix(self.options['host-prefix'], required_roles=roles | {'python'},
+            compiler_family=self.options.get('host-compiler-family', 'clang'))
 
     def native_identity(self, native):
         # Optional selectors are checked aliases, never alternate providers.
@@ -185,7 +190,7 @@ class SysrootBuilder:
             canonical = self.executable(selected)
             host_tools[name] = dict(path=canonical, selected=selected,
                 alias=self.options[option], origin='host-prefix',
-                version=native.compiler['version'], gcc_version=native.compiler['version'],
+                version=native.compiler['version'], compiler_family=native.compiler['family'],
                 machine=native.compiler['triplet'],
                 programs={tool: native.tool(tool) for tool in ('as', 'ld')})
         return host_tools

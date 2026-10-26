@@ -10,7 +10,7 @@ import sys
 from unittest.mock import patch
 
 from test_core import TemporaryCase, SDK_SOURCE
-from test_host_prefix import PrefixFixture
+from test_host_clang import ClangFixture
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.os_release_builder import OSReleaseBuilder, producer_commands
 from emberbsd_sdk.sysroot_builder import (SysrootBuilder, native_host_flags,
@@ -23,7 +23,7 @@ CONTRACT = ('EmberBSD-native-tools 1\ncc cc HOST_CC\nc++ cxx HOST_CXX\n'
 class NativeConsumerTests(TemporaryCase):
     def setUp(self):
         super().setUp()
-        self.fixture = PrefixFixture(self.root)
+        self.fixture = ClangFixture(self.root)
         self.os = self.root / 'os'
         contract = self.os / 'tools/native-tools/contract'
         contract.parent.mkdir(parents=True)
@@ -45,6 +45,7 @@ class NativeConsumerTests(TemporaryCase):
     def test_only_prefix_is_required_for_native_selection(self):
         builder = self.select()
         self.assertEqual(builder.host_tools['cc']['origin'], 'host-prefix')
+        self.assertEqual(builder.host_tools['cc']['compiler_family'], 'clang')
         self.assertEqual(set(builder.native_inputs), {'host-prefix', 'host-cc', 'host-cxx', 'python'})
         self.assertEqual(builder.options['python'], builder.native.tool('python'))
         self.assertIn('make', builder.native.tools)
@@ -93,7 +94,9 @@ class NativeConsumerTests(TemporaryCase):
                                             1, '1', builder.shell, builder.native_selection)
         self.assertEqual(commands[0][0], builder.native.tool('sh'))
         self.assertFalse(any(word.startswith(('HOST_CC=', 'HOST_CXX=', 'HOST_SH=')) for word in flags))
-        self.assertTrue(all(word.startswith('HOST_') for word in native_host_flags(builder.native_selection)))
+        self.assertIn('EMBER_HOST_COMPILER_FAMILY=clang', flags)
+        self.assertTrue(all(word.startswith(('HOST_', 'EMBER_HOST_COMPILER_FAMILY='))
+                            for word in native_host_flags(builder.native_selection)))
 
     def test_saved_native_binding_uses_prefix_and_os_route(self):
         builder = self.select()

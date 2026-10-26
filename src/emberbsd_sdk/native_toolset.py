@@ -20,10 +20,10 @@ from .paths import canonical_existing, inside, open_regular, verify_stable
 NATIVE_TOOLSET_API = 1
 
 
-def load_host_prefix(prefix, *, required_roles, host=None):
+def load_host_prefix(prefix, *, required_roles, host=None, compiler_family='clang'):
     """Load installed native Ports tools without a descriptor or receipt."""
     from .host_prefix import load_host_prefix as load
-    return load(prefix, required_roles=required_roles, host=host)
+    return load(prefix, required_roles=required_roles, host=host, compiler_family=compiler_family)
 NATIVE_C_PROBE = (b'#include <stdio.h>\n'
                   b'int main(void) { return puts("emberbsd-native-c-v1") < 0; }\n')
 NATIVE_CXX_PROBE = (b'#include <iostream>\n'
@@ -142,7 +142,12 @@ def _gcc(value, host):
     _require(value['family'] == 'gcc' and isinstance(value['version'], str) and
              re.fullmatch(r'16\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9_.-]+)?', value['version']),
              'native build tools require GCC16')
-    triplet = _text(value['triplet'], 'native compiler triplet')
+    _native_triplet(value['triplet'], host)
+
+
+def _native_triplet(value, host):
+    """Check the host ABI independently of the selected compiler family."""
+    triplet = _text(value, 'native compiler triplet')
     cpu = {'arm64': 'aarch64', 'amd64': 'x86_64'}.get(host['cpu'], host['cpu'])
     parts = triplet.split('-')
     triplet_cpu = {'arm64': 'aarch64', 'amd64': 'x86_64'}.get(parts[0], parts[0])

@@ -18,9 +18,11 @@ class UniqueOption(argparse.Action):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Build a GCC16 EmberBSD OS sysroot with a native Ports prefix.')
+    parser = argparse.ArgumentParser(description='Build an EmberBSD OS sysroot with a native Ports prefix.')
     for name in ('sdk', 'os', 'ports', 'compiler', 'runtime-work', 'gcc-archive', 'pkgsrc', 'target', 'jobs', 'sdk-source', 'libedit-source', 'host-prefix'):
-        parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix built with host GCC16'}.get(name))
+        parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix'}.get(name))
+    parser.add_argument('--host-compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
+                        help='Clang by default; select GCC explicitly for a platform exception')
     for name in ('destination', 'objects', 'tools'):
         parser.add_argument('--' + name, action=UniqueOption)
     for name in ('host-cc', 'host-cxx', 'python'):

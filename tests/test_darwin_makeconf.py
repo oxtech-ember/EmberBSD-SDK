@@ -56,7 +56,7 @@ class DarwinMakeconfTests(TemporaryCase):
     def test_writes_direct_configuration_and_full_initial_make_command(self):
         result = self.render()
         data = Path(self.options['output']).read_text()
-        self.assertIn('EMBERBSD_GCC16_SEED_CC= ' + self.tools['cc'] +
+        self.assertIn('EMBERBSD_DARWIN_SEED_CC= ' + self.tools['cc'] +
                       ' -B/explicit/driver/ -specs=/explicit/seed.specs -isysroot ' + self.options['macos_sdk'], data)
         self.assertIn('.include "' + self.options['pkgsrc'] + '/EMBERBSD-DARWIN-BOOTSTRAP-MK.CONF"', data)
         self.assertIn('LOCALBASE= ' + self.options['prefix'], data)
@@ -68,6 +68,26 @@ class DarwinMakeconfTests(TemporaryCase):
         self.assertFalse((Path(self.options['utility_bin']) / 'cc').exists())
         self.assertFalse(any('receipt' in key or 'sha256' in key for key in result))
         self.assertEqual(self.render(), result)
+
+    def test_default_family_selects_clang_without_gcc_policy_inputs(self):
+        result = self.render()
+        data = Path(self.options['output']).read_text()
+        self.assertIn('EMBERBSD_COMPILER_FAMILY= clang\n', data)
+        self.assertIn('EMBERBSD_DARWIN_LD64_LLD= ' + self.tools['ld'], data)
+        self.assertIn('EMBERBSD_DARWIN_SEED_AS= ' + self.tools['cc'], data)
+        self.assertIn(' -c -x assembler\n', data)
+        self.assertNotIn('EMBERBSD_GCC16_', data)
+        self.assertEqual(result['compiler_family'], 'clang')
+
+    def test_gcc_family_is_an_explicit_option(self):
+        result = self.render(compiler_family='gcc')
+        self.assertIn('EMBERBSD_COMPILER_FAMILY= gcc\n', Path(self.options['output']).read_text())
+        self.assertEqual(result['compiler_family'], 'gcc')
+
+    def test_unknown_family_fails_without_outputs(self):
+        with self.assertRaisesRegex(SDKError, 'compiler family'):
+            self.render(compiler_family='automatic')
+        self.assertFalse(Path(self.options['output']).exists())
 
     def test_missing_role_fails_without_path_fallback_or_outputs(self):
         tools = dict(self.tools); del tools['awk']

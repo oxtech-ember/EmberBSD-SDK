@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -66,7 +67,9 @@ class LibelfSourceTests(TemporaryCase):
     def selected_patch(self):
         directory = self.root / 'selected tools'; directory.mkdir()
         selected = directory / 'nbpatch'
-        selected.write_bytes(Path(shutil.which('patch')).read_bytes())
+        # Keep the selected pathname (including spaces) without copying a
+        # platform-signed executable, which Darwin may refuse to execute.
+        selected.write_text('#!/bin/sh\nexec ' + shlex.quote(shutil.which('patch')) + ' "$@"\n')
         selected.chmod(0o755)
         return selected
 

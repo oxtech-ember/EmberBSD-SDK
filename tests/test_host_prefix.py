@@ -42,6 +42,7 @@ class PrefixFixture:
         return SimpleNamespace(stdout=(output + '\n').encode())
 
     def load(self, roles=('cc', 'sh', 'python', 'make'), **kwargs):
+        kwargs.setdefault('compiler_family', 'gcc')
         with patch('emberbsd_sdk.host_prefix.process.capture', side_effect=self.capture):
             return load_host_prefix(self.root, required_roles=roles, host=self.host, **kwargs)
 

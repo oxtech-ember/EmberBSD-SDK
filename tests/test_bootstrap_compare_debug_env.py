@@ -21,7 +21,7 @@ class ComparisonEnvironmentTests(unittest.TestCase):
         result = metadata_environment(self.plan('emberbsd-native-gcc16-producer-plan'), self.commands())
         self.assertEqual(result, dict(PATH='/source-test/utility', LC_ALL='C', TZ='UTC',
             TMPDIR='/source-test/work', MAKECONF='/source-test/mk.conf',
-            SHELL='/source-test/sh', CONFIG_SHELL='/source-test/sh'))
+            SHELL='/source-test/sh', CONFIG_SHELL='/source-test/sh', PATH_SEPARATOR=':'))
 
     def test_full_plan_binds_selected_strip(self):
         result = metadata_environment(self.plan('emberbsd-native-gcc16-bootstrap-plan'), self.commands())

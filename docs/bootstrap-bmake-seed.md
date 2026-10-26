@@ -1,7 +1,8 @@
 # First bmake bootstrap seed
 
 > Retired bootstrap admission interface. This document describes historical data.
-> Normal native tools are Ports packages in `host-pkg-g16`, built with host GCC16.
+> Normal native tools are Ports packages in `host-pkg-llvm`, built with Clang.
+> GCC16 is an explicitly selected alternative.
 > Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
 
 This narrow producer builds the first native `bmake` when no accepted bmake

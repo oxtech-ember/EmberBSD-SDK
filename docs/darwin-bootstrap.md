@@ -7,7 +7,8 @@ The current exported Ports profile owns package options, dependencies, and tool 
 
 First export Ports with its normal `scripts/prepare-pkgsrc.py` command.
 Read the Ports [Darwin profile](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/darwin-bootstrap.md).
-Use the common GCC16 recipe and its complete Darwin patches.
+Use the common Clang, LLVM, and LLD recipes and their complete Darwin patches.
+The default family is `clang`. `--compiler-family gcc` selects the GCC alternative explicitly.
 
 ## Explicit inputs
 
@@ -30,8 +31,9 @@ Use repeatable `--cc-arg`, `--cxx-arg`, and `--cpp-arg` options for complete com
 Use `--cc-arg=-OPTION` when an argument starts with a dash.
 Keep the actual `-B`, specs, native ABI, and deployment arguments in their original order.
 `--ldflag` adds a selected link-only argument. It does not change compiler arguments.
-The renderer checks executable paths and CPU. It does not query GCC or compile probes.
-The caller must select the real native GCC16 commands, including their driver routes.
+The renderer checks executable paths and CPU. It does not query compilers or compile probes.
+The caller must select complete native compiler commands, including their driver routes.
+It emits `EMBERBSD_COMPILER_FAMILY` and generic `EMBERBSD_DARWIN_*` tool variables.
 
 `--makefiles` selects the complete initial system-makefile tree.
 Its `sys.mk` must select the same shell with `.SHELL: name=sh path=/absolute/shell`.
@@ -49,9 +51,9 @@ The renderer reads host OS facts and that SDK version directly.
 Start with the explicit tool selections in shell arguments. For example:
 
 ```sh
-set -- --tool cc=/absolute/initial/gcc16/bin/gcc \
-       --tool cxx=/absolute/initial/gcc16/bin/g++ \
-       --tool cpp=/absolute/initial/gcc16/bin/cpp
+set -- --tool cc=/absolute/initial/llvm/bin/clang \
+       --tool cxx=/absolute/initial/llvm/bin/clang++ \
+       --tool cpp=/absolute/initial/llvm/bin/clang-cpp
 # Append --tool ROLE=/absolute/path for each remaining required and selected role.
 # Append the actual compiler argument words; do not replace a bound command with its first word.
 
@@ -60,7 +62,7 @@ set -- --tool cc=/absolute/initial/gcc16/bin/gcc \
   --tool-root /absolute/initial --tool-root /absolute/initial-utilities \
   --pkgsrc /absolute/pkgsrc --makefiles /absolute/initial-mk \
   --macos-sdk /absolute/MacOSX.sdk --deployment 15.0 \
-  --prefix /absolute/host-pkg-g16 --pkgdb /absolute/host-pkg-g16/pkgdb \
+  --prefix /absolute/host-pkg-llvm --pkgdb /absolute/host-pkg-llvm/pkgdb \
   --work-root /absolute/bootstrap-work \
   --distfiles /absolute/distfiles --packages /absolute/packages \
   --output /absolute/bootstrap-work/mk.conf \
@@ -87,11 +89,11 @@ It excludes raw compiler and make names whose plain links would lose command arg
 After that closure installs bmake, its makefiles, and mksh, use the resulting tools:
 
 ```sh
-/absolute/host-pkg-g16/bin/bmake \
-  -m /absolute/host-pkg-g16/share/mk \
-  SHELL=/absolute/host-pkg-g16/bin/mksh \
+/absolute/host-pkg-llvm/bin/bmake \
+  -m /absolute/host-pkg-llvm/share/mk \
+  SHELL=/absolute/host-pkg-llvm/bin/mksh \
   MAKECONF=/absolute/bootstrap-work/mk.conf \
-  EMBERBSD_DARWIN_BOOTSTRAP=yes -C /absolute/pkgsrc/lang/gcc16 build install
+  EMBERBSD_DARWIN_BOOTSTRAP=yes -C /absolute/pkgsrc/lang/clang build install
 ```
 
 Retain the returned utility PATH and selected environment for this command.

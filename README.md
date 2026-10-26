@@ -82,13 +82,15 @@ maintain another compiler recipe or another libc.
 ## Build and validation boundaries
 
 Follow the [SDK tool selection policy](docs/tool-selection.md).
-The native toolset is the `host-pkg-g16` prefix built by Ports with host GCC16.
+The default native toolset is the `host-pkg-llvm` prefix built by Ports with Clang and LLVM.
 Select it with `--host-prefix` for sysroot and OS release builds.
+Use `--host-compiler-family gcc` only for an explicit platform exception.
 No separate toolchain qualification, descriptor, acceptance receipt, or hash is required.
 The [native prefix API](docs/native-toolset.md) checks contained executable paths,
-host CPU, GCC16 driver components, and script interpreters.
+host CPU, compiler driver routes, Clang resource files, and script interpreters.
 The [OS command mapping](docs/native-os-routing.md) selects those tools for nested builds.
-Use the native GCC16 for host generators and cross GCC16 for EmberBSD target code.
+Select native and target compilers separately. Clang is the default family.
+The [migration boundary](docs/tool-selection.md#migration-boundary) identifies target runtime work that remains.
 Reject implicit system build-tool selection.
 The selected target architecture, ABI and runtime must agree. Build-host tools
 remain host executables. Boards and VMs execute prepared acceptance programs.
