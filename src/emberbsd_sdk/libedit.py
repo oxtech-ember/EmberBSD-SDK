@@ -149,7 +149,7 @@ def _tree_hash(root):
 
 
 def validate_source(root, *, ports=None):
-    """Verify source contents, receipt and, when supplied, the current clean Ports pin."""
+    """Verify source contents, receipt and, when supplied, the current clean recipe."""
     root = Path(paths.canonical_existing(root))
     record = validate_identity(jsonio.read_json(root / RECEIPT))
     for name in ('src', 'doc'):
@@ -158,7 +158,11 @@ def validate_source(root, *, ports=None):
     _require(_tree_hash(root) == record['tree_sha256'], 'libedit source tree changed')
     if ports is not None:
         _, metadata, entries, _ = _recipe(ports)
-        _require(metadata == record['recipe'], 'libedit source does not match selected clean Ports recipe')
+        # Retain the preparation commit as provenance. Unrelated Ports commits
+        # do not change the recipe, archive or patched source inputs.
+        _require(all(record['recipe'][key] == value for key, value in metadata.items()
+                     if key != 'ports_commit'),
+                 'libedit source does not match selected clean Ports recipe')
         name = metadata['distname'] + '.tar.gz'
         _require(record['archive']['sha512'] == entries['SHA512', name] and
                  record['archive']['blake2s'] == entries['BLAKE2s', name] and

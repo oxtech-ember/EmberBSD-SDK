@@ -60,6 +60,39 @@ class LibeditTests(TemporaryCase):
         self.assertEqual({str(p.relative_to(self.output)) for p in self.output.rglob('*')
                           if p.is_file()}, expected)
 
+    def test_unrelated_ports_commit_preserves_prepared_source_and_origin(self):
+        record = self.prepare()
+        receipt = (self.output / RECEIPT).read_bytes()
+        (self.ports / 'unrelated').write_text('another package changed\n')
+        self.commit()
+        current = subprocess.check_output(['git', '-C', str(self.ports), 'rev-parse', 'HEAD'], text=True).strip()
+        self.assertNotEqual(current, record['recipe']['ports_commit'])
+        self.assertEqual(validate_source(self.output, ports=self.ports), record)
+        self.assertEqual((self.output / RECEIPT).read_bytes(), receipt)
+
+    def test_changed_recipe_still_refuses_prepared_source(self):
+        self.prepare()
+        path = self.ports / RECIPE / 'Makefile'
+        path.write_text(path.read_text() + '# Changed recipe\n')
+        self.commit()
+        with self.assertRaisesRegex(SDKError, 'does not match selected clean Ports recipe'):
+            validate_source(self.output, ports=self.ports)
+
+    def test_changed_patch_with_updated_distinfo_still_refuses_prepared_source(self):
+        self.prepare()
+        path = self.ports / RECIPE / 'patches/patch-input0'
+        before = path.read_bytes()
+        after = before.replace(b'+patched', b'+different')
+        path.write_bytes(after)
+        def checksum(data):
+            return hashlib.sha1(b''.join(line for line in data.splitlines(keepends=True)
+                                        if b'$NetBSD' not in line)).hexdigest()
+        distinfo = self.ports / RECIPE / 'distinfo'
+        distinfo.write_text(distinfo.read_text().replace(checksum(before), checksum(after)))
+        self.commit()
+        with self.assertRaisesRegex(SDKError, 'does not match selected clean Ports recipe'):
+            validate_source(self.output, ports=self.ports)
+
     def test_shared_patch_helper_preserves_libedit_invocation(self):
         from emberbsd_sdk import libedit
         original = libedit.process.capture

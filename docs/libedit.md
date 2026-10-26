@@ -40,6 +40,10 @@ recipe metadata, archive hashes, patch hashes and prepared tree inventory.
 Read-only permissions prevent accidental receipt edits; they are not a digital
 signature. Validation detects changes against the recorded inventory and the
 selected clean Ports recipe. Keep the prepared source unchanged during builds.
+The recorded `ports_commit` remains the original preparation commit. Validation
+against a later clean Ports checkout compares the recipe metadata, archive and
+all patch hashes; unrelated commits do not invalidate the prepared source or
+rewrite its receipt. Recipe or patch changes still require preparation again.
 
 Both `build-sysroot.py` and `build-os-release.py` require `--libedit-source`.
 They validate it before and after producers, pass `-V EMBER_LIBEDIT_SOURCE`,
