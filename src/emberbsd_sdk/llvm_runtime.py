@@ -12,7 +12,6 @@ from .errors import SDKError
 from .targets import target_definition
 
 LLVM_RUNTIME_API = 1
-LLVM_RUNTIME_REUSE_API = 1
 MANIFEST = 'runtime.json'
 FULL_COMPONENTS = ('builtins', 'libunwind', 'libcxxabi', 'libcxx')
 _PROFILES = (('builtins',), ('builtins', 'libunwind-static'), FULL_COMPONENTS)
@@ -73,9 +72,8 @@ def validate_identity(record, *, target=None, required_components=()):
     """Check portable input and artifact declarations without reading local paths."""
     fields = ('format version compiler_family llvm_version components target triplet machine_arch '
               'elf_machine prefix source recipe base artifacts files symlinks')
-    extra = ''.join(' ' + name for name in ('bootstrap', 'reuse')
-                    if isinstance(record, dict) and name in record)
-    _keys(record, fields + extra, 'manifest fields')
+    _keys(record, fields + (' bootstrap' if isinstance(record, dict) and 'bootstrap' in record else ''),
+          'manifest fields')
     _require(record['format'] == 'emberbsd-llvm-runtime' and type(record['version']) is int and
              record['version'] == 1 and record['compiler_family'] == 'clang',
              'unsupported LLVM runtime format or compiler family')
@@ -100,19 +98,6 @@ def validate_identity(record, *, target=None, required_components=()):
         _files(record['bootstrap']['files'], nonempty=True)
         _require(all(name.startswith(record['prefix'] + '/') for name in record['bootstrap']['files']),
                  'LLVM bootstrap artifacts are outside the install prefix')
-    if 'reuse' in record:
-        reuse = record['reuse']
-        _keys(reuse, 'operation compiled_manifest_sha256 compiled_recipe '
-              'compiled_source_tree_sha256 previous_manifest_sha256 selected_source_tree_sha256',
-              'bootstrap reuse identity')
-        _require(reuse['operation'] == 'unchanged-bootstrap-artifacts' and
-                 tuple(record['components']) in _PROFILES[:2], 'unsupported runtime reuse operation')
-        for name in ('compiled_manifest_sha256', 'compiled_source_tree_sha256',
-                     'previous_manifest_sha256', 'selected_source_tree_sha256'):
-            _digest(reuse[name], 64)
-        _keys(reuse['compiled_recipe'], 'ports_revision files', 'compiled recipe identity')
-        _digest(reuse['compiled_recipe']['ports_revision'], 40)
-        _files(reuse['compiled_recipe']['files'], nonempty=True)
     _keys(record['source'], 'archive sha512', 'source identity')
     archive = _relative(record['source']['archive'])
     _require('/' not in archive, 'LLVM source archive must be a basename')
