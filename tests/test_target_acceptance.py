@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: BSD-2-Clause
 import unittest
 import hashlib
+import subprocess
 from pathlib import Path
 import tempfile
 
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.target_acceptance import (CHECKS, GUEST_CHECKS, HOST_CHECKS,
-    _copy_runtime, parse_guest_log)
+    _clean_source_revision, _copy_runtime, _select_os_sources, parse_guest_log)
 
 PORTS_GUEST_MARKERS = ('target_c11', 'target_cxx20', 'libc_aliases',
                        'base_loader_smoke', 'fork_cas')
@@ -105,6 +106,73 @@ class RuntimePlacementTests(unittest.TestCase):
         data = valid_log().replace(b'/dev/ld0a', b'/dev/ld1a')
         with self.assertRaisesRegex(SDKError, 'selected read-only FFS'):
             parse_guest_log(data, 'fixture-123', 'ld0a')
+
+
+class SourceRoleTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+
+    def make_source(self, name, include_tests=True):
+        source = self.root / name
+        source.mkdir()
+        subprocess.run(['git', '-C', str(source), 'init', '-q'], check=True)
+        subprocess.run(['git', '-C', str(source), 'config', 'user.name', 'Fixture'], check=True)
+        subprocess.run(['git', '-C', str(source), 'config', 'user.email', 'fixture@example.invalid'], check=True)
+        (source / 'README').write_text(name + '\n')
+        if include_tests:
+            for relative in (
+                    'ember/tests/target-acceptance/libc-aliases.c',
+                    'ember/tests/target-acceptance/base-loader-smoke.c',
+                    'ember/tests/target-acceptance/fork-cas.c',
+                    'ember/image/target-acceptance-rc',
+                    'ember/image/target-acceptance-root.sh'):
+                path = source / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('fixture\n')
+        subprocess.run(['git', '-C', str(source), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(source), 'commit', '-qm', 'fixture'], check=True)
+        revision = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
+        return source, revision
+
+    def test_new_test_snapshot_does_not_change_core_build_identity(self):
+        core, core_revision = self.make_source('core')
+        tests, tests_revision = self.make_source('tests')
+        build_revision, test_revision = _select_os_sources(core_revision, core, tests)
+        self.assertEqual(build_revision, core_revision)
+        self.assertEqual(test_revision, tests_revision)
+        self.assertNotEqual(build_revision, test_revision)
+
+    def test_rejects_core_source_that_does_not_match_build(self):
+        core, _ = self.make_source('core')
+        tests, tests_revision = self.make_source('tests')
+        with self.assertRaisesRegex(SDKError, 'differs from the selected OS build'):
+            _select_os_sources('0' * 40, core, tests)
+        self.assertEqual(len(tests_revision), 40)
+
+    def test_rejects_missing_helper_before_acceptance_side_effects(self):
+        core, core_revision = self.make_source('core')
+        tests, _ = self.make_source('tests', include_tests=False)
+        output = self.root / 'acceptance-output'
+        with self.assertRaisesRegex(SDKError, 'missing required input'):
+            _select_os_sources(core_revision, core, tests)
+        self.assertFalse(output.exists())
+
+    def test_rejects_modified_source_snapshot(self):
+        core, core_revision = self.make_source('core')
+        tests, _ = self.make_source('tests')
+        (tests / 'README').write_text('modified\n')
+        with self.assertRaisesRegex(SDKError, 'not a complete clean Git root'):
+            _select_os_sources(core_revision, core, tests)
+
+    def test_rejects_dirty_sdk_or_ports_producer(self):
+        for role in ('SDK controller', 'Ports producer'):
+            with self.subTest(role=role):
+                source, _ = self.make_source(role.replace(' ', '-'))
+                (source / 'README').write_text('uncommitted producer change\n')
+                with self.assertRaisesRegex(SDKError, 'not a complete clean Git root'):
+                    _clean_source_revision(source, role)
 
 
 if __name__ == '__main__':

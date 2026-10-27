@@ -10,7 +10,7 @@ import re
 import shutil
 import sys
 
-from . import jsonio, native_toolset, os_release_builder, process
+from . import jsonio, native_toolset, os_release_builder, process, provenance
 from . import paths
 from .errors import SDKError
 from .inventory import sha256_file
@@ -83,6 +83,32 @@ def _git_revision(path):
     return revision
 
 
+def _clean_source_revision(path, role):
+    """Return a complete, clean committed source snapshot for one input role."""
+    try:
+        identity = provenance.git_source(str(path))
+    except SDKError as exc:
+        raise SDKError(role + ' source snapshot is not a complete clean Git root: ' + str(path)) from exc
+    return identity['commit']
+
+
+def _select_os_sources(os_build_commit, os_source, os_test_source):
+    """Bind build producers to the OS build and tests/helpers to a source snapshot."""
+    build_revision = _clean_source_revision(os_source, 'OS build')
+    _require(build_revision == os_build_commit,
+             'OS source revision differs from the selected OS build')
+    test_revision = _clean_source_revision(os_test_source, 'OS test')
+    required = (os_test_source / 'ember/tests/target-acceptance/libc-aliases.c',
+                os_test_source / 'ember/tests/target-acceptance/base-loader-smoke.c',
+                os_test_source / 'ember/tests/target-acceptance/fork-cas.c',
+                os_test_source / 'ember/image/target-acceptance-rc',
+                os_test_source / 'ember/image/target-acceptance-root.sh')
+    for source in required:
+        _require(source.is_file() and not source.is_symlink(),
+                 'OS test source snapshot is missing required input: ' + str(source))
+    return build_revision, test_revision
+
+
 def _copy_runtime(sysroot, test_bundle, root, compiler_family):
     rows = (test_bundle / 'runtime-files.tsv').read_text().splitlines()
     expected_roles = {'clang': {'libcxx', 'libcxxabi', 'libunwind'},
@@ -150,6 +176,7 @@ def run(options):
     _require(sdk_source == running_sdk_source,
              'selected SDK source differs from the running target acceptance controller')
     os_source = Path(options.os_source).resolve(strict=True)
+    os_test_source = Path(options.os_test_source or options.os_source).resolve(strict=True)
     ports_source = Path(options.ports_source).resolve(strict=True)
     os_build = Path(options.os_build).resolve(strict=True)
     sysroot = Path(options.sysroot).resolve(strict=True)
@@ -157,15 +184,15 @@ def run(options):
     host_prefix = Path(options.host_prefix).resolve(strict=True)
     output = Path(paths.canonical_new(options.output))
     _require(output.is_absolute() and not output.exists(), 'output must be a new absolute directory')
-    for selected_input in (sdk_source, os_source, ports_source, os_build, sysroot,
+    for selected_input in (sdk_source, os_source, os_test_source, ports_source, os_build, sysroot,
                            target_prefix, host_prefix):
         paths.reject_overlap(output, selected_input)
 
     profile_path = os_build / 'build-profile.json'
     profile = jsonio.read_json(profile_path)
     os_release_builder.validate_profile(profile, profile.get('source_commit'), 'aarch64')
-    _require(profile['source_commit'] == _git_revision(os_source),
-             'OS source revision differs from the selected OS build')
+    os_build_revision, os_test_revision = _select_os_sources(
+        profile['source_commit'], os_source, os_test_source)
     set_base = os_build / 'release/evbarm-aarch64/binary/sets/base.tar.xz'
     set_comp = os_build / 'release/evbarm-aarch64/binary/sets/comp.tar.xz'
     kernel_gz = os_build / 'netbsd-EMBER64.gz'
@@ -194,12 +221,11 @@ def run(options):
     tests = output / 'tests'
     compile_script = ports_source / 'profiles/development-toolchain/cross/compile-tests.py'
     _require(compile_script.is_file(), 'shared Ports compile-tests.py is missing')
-    ports_revision = _git_revision(ports_source)
-    os_test_revision = _git_revision(os_source)
-    sdk_revision = _git_revision(sdk_source)
+    ports_revision = _clean_source_revision(ports_source, 'Ports producer')
+    sdk_revision = _clean_source_revision(sdk_source, 'SDK controller')
     compile_argv = [native.tool('python'), '-B', str(compile_script),
         '--compiler-family', options.compiler_family,
-        '--os-source', str(os_source),
+        '--os-source', str(os_test_source),
         '--target', 'aarch64', str(target_prefix), str(sysroot), str(tests),
         '--sdk-source', str(sdk_source)]
     if options.compiler_family == 'clang':
@@ -236,7 +262,7 @@ def run(options):
                        output / 'extract-base.log', env=process.sanitized_environment({'PATH': native.path}))
     _copy_test_bundle(tests, root)
     _copy_runtime(sysroot, tests, root, options.compiler_family)
-    shutil.copy2(os_source / 'ember/image/target-acceptance-rc', root / 'etc/target-acceptance-rc')
+    shutil.copy2(os_test_source / 'ember/image/target-acceptance-rc', root / 'etc/target-acceptance-rc')
     os.chmod(root / 'etc/target-acceptance-rc', 0o755)
     nonce = __import__('secrets').token_hex(16)
     (root / 'etc/emberbsd-target-acceptance.nonce').write_text(nonce + '\n')
@@ -248,7 +274,7 @@ def run(options):
     os.chmod(local, 0o755)
 
     image = work / 'root.ffs'
-    image_helper = os_source / 'ember/image/target-acceptance-root.sh'
+    image_helper = os_test_source / 'ember/image/target-acceptance-root.sh'
     process.run_logged([native.tool('sh'), str(image_helper), str(root),
         str(destination / 'dest'), str(tools), str(os_source), options.root_device,
         str(image), native.tool('sh')], output / 'makefs.log',
@@ -274,7 +300,7 @@ def run(options):
     result_data = dict(format='emberbsd-target-acceptance', version=1,
         execution='EmberBSD aarch64 full-system QEMU TCG', status='passed',
         checks={**compile_checks, **checks}, compiler_family=options.compiler_family,
-        sources=dict(os_build=profile['source_commit'], os_tests=os_test_revision,
+        sources=dict(os_build=os_build_revision, os_tests=os_test_revision,
                      ports=ports_revision, sdk=sdk_revision),
         os_build_profile_sha256=sha256_file(profile_path),
         base_set_sha256=sha256_file(set_base), kernel_sha256=sha256_file(kernel_gz),
@@ -292,7 +318,7 @@ def run(options):
             ('atomic-tls', 'atomic-tls-lto', 'boundary', 'libboundary.so',
              'libc-aliases', 'base-loader-smoke', 'fork-cas', 'fork-cas-static')},
         root_helper_sha256=sha256_file(image_helper),
-        guest_runner_sha256=sha256_file(os_source / 'ember/image/target-acceptance-rc'),
+        guest_runner_sha256=sha256_file(os_test_source / 'ember/image/target-acceptance-rc'),
         sdk_runner_sha256=sha256_file(Path(__file__).resolve().parents[2] /
                                       'scripts/target-acceptance.py'))
     jsonio.write_json(output / 'target-acceptance.json', result_data)
@@ -317,6 +343,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--os-build', required=True)
     parser.add_argument('--os-source', required=True)
+    parser.add_argument('--os-test-source',
+        help='optional clean OS test/helper source snapshot; defaults to --os-source')
     parser.add_argument('--ports-source', required=True)
     parser.add_argument('--sysroot', required=True)
     parser.add_argument('--target-prefix', required=True)
