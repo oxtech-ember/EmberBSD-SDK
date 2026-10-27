@@ -257,7 +257,7 @@ def _recipe(ports):
     tracked = [RECIPE + '/Makefile', RECIPE + '/distinfo', MANIFEST]
     tracked.extend(RECIPE + '/patches/' + name for name in patch_names)
     process.capture(['git', '-C', source['path'], 'ls-files', '--error-unmatch', *tracked],
-                    env=process.sanitized_environment())
+                    env=process.git_environment())
     archive_name = manifest['upstream']['distname'] + '.tar.bz2'
     entries = _distinfo(distinfo, archive_name, patch_names)
     archive_identity = manifest['upstream']['archive']

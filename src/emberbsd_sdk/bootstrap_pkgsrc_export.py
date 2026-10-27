@@ -59,8 +59,9 @@ def _file_ref(path):
 
 
 def _git_env(git_path):
-    return dict(PATH=os.path.dirname(git_path), LC_ALL='C', GIT_OPTIONAL_LOCKS='0',
-                GIT_NO_LAZY_FETCH='1', GIT_TERMINAL_PROMPT='0')
+    env = process.git_environment(dict(PATH=os.path.dirname(git_path), LC_ALL='C'))
+    env['GIT_TERMINAL_PROMPT'] = '0'
+    return env
 
 
 def _git(git_path, root, *args):

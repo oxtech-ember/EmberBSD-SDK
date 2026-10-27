@@ -20,6 +20,27 @@ def sanitized_environment(environment=None):
     return result
 
 
+def git_environment(environment=None, config=()):
+    """Return an environment where Git reads only repository config.
+
+    System, global and XDG config, ignore and attribute files must not change
+    which files Git reports, adds, archives or checks out.  Inherited GIT_*
+    variables (repository, index or config overrides) are dropped.  Each
+    ``(key, value)`` in ``config`` is passed as command config.
+    """
+    source = sanitized_environment() if environment is None else environment
+    result = {key: value for key, value in source.items()
+              if not key.startswith('GIT_') and key != 'XDG_CONFIG_HOME'}
+    result.update(GIT_OPTIONAL_LOCKS='0', GIT_NO_LAZY_FETCH='1',
+                  GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_SYSTEM=os.devnull, GIT_CONFIG_GLOBAL=os.devnull)
+    pairs = (('core.excludesFile', os.devnull), ('core.attributesFile', os.devnull), *config)
+    result['GIT_CONFIG_COUNT'] = str(len(pairs))
+    for index, (key, value) in enumerate(pairs):
+        result[f'GIT_CONFIG_KEY_{index}'] = key
+        result[f'GIT_CONFIG_VALUE_{index}'] = value
+    return result
+
+
 def _argv(argv):
     if isinstance(argv, (str, bytes)):
         raise SDKError('command must be an argv sequence')

@@ -7,12 +7,12 @@ import re
 import stat
 from .errors import SDKError
 from .paths import canonical_existing, entry
-from .process import capture, sanitized_environment
+from .process import capture, git_environment
 
 
 def git_source(root, *, kind=None, git='git', env=None):
     root = canonical_existing(root)
-    env = sanitized_environment() if env is None else env
+    env = git_environment(env)
 
     def invoke(*args):
         return capture([git, '-C', root, *args], env=env).stdout

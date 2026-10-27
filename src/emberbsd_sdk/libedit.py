@@ -95,7 +95,7 @@ def _recipe(ports, *, git='git'):
     process.capture(['git', '-C', source['path'], 'ls-files', '--error-unmatch',
                      RECIPE + '/Makefile', RECIPE + '/distinfo',
                      *[RECIPE + '/patches/' + p.name for p in patches]],
-                    env=process.sanitized_environment())
+                    env=process.git_environment())
     expected = {('BLAKE2s', archive_name), ('SHA512', archive_name), ('Size', archive_name)}
     expected.update(('SHA1', p.name) for p in patches)
     _require(set(entries) == expected, 'libedit distinfo must cover the archive and every patch')

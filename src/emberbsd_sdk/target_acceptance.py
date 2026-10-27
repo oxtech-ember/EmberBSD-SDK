@@ -76,7 +76,7 @@ def parse_guest_log(data, nonce, root_device):
 
 
 def _git_revision(path):
-    result = process.capture(['git', '-C', str(path), 'rev-parse', 'HEAD'])
+    result = process.capture(['git', '-C', str(path), 'rev-parse', 'HEAD'], env=process.git_environment())
     revision = result.stdout.decode('ascii', 'strict').strip()
     _require(re.fullmatch(r'[0-9a-f]{40}', revision) is not None,
              'invalid Git source revision: ' + str(path))

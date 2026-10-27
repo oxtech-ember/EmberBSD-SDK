@@ -17,7 +17,7 @@ from .errors import SDKError
 from .inventory import sha256_file
 from .jsonio import read_json, write_json
 from .paths import regular_file, real_directory
-from .process import capture, sanitized_environment
+from .process import capture, git_environment, sanitized_environment
 
 REPOSITORY = 'oxtech-ember/EmberBSD'
 SETS = 'base comp etc games gpufw kern-GENERIC man manhtml misc modules rescue tests text'.split()
@@ -50,6 +50,10 @@ def full_hash(value, length=64):
 
 def command(*argv):
     return capture([str(arg) for arg in argv], env=sanitized_environment()).stdout
+
+
+def git(*argv):
+    return capture(['git', *(str(arg) for arg in argv)], env=git_environment()).stdout
 
 
 def tag(sha, profile):
@@ -380,9 +384,9 @@ def prepare_amd64(build, directory, qualification, os_source):
     version = build_version(build, p) if p else archive_version(build / 'source.tar')
     source = Path(os_source) if os_source else Path(p['sdk_receipt']['paths']['os']) if p else build / 'source'
     checker_path = 'ember/tests/installer-image.py'
-    checker_commit = command('git', '-C', source, 'rev-parse', 'HEAD').decode().strip()
+    checker_commit = git('-C', source, 'rev-parse', 'HEAD').decode().strip()
     check(full_hash(checker_commit, 40), 'Installer checker requires an explicit OS source checkout')
-    checker_bytes = command('git', '-C', source, 'cat-file', 'blob', 'HEAD:' + checker_path)
+    checker_bytes = git('-C', source, 'cat-file', 'blob', 'HEAD:' + checker_path)
     regular_file(source / checker_path)
     check((source / checker_path).read_bytes() == checker_bytes, 'Installer checker differs from its recorded source')
     checker = dict(repository=REPOSITORY, source_commit=checker_commit, path=checker_path,

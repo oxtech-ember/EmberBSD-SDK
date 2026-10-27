@@ -62,20 +62,13 @@ GIT_FIXTURE_IDENTITY = dict(GIT_AUTHOR_NAME='SDK fixture', GIT_AUTHOR_EMAIL='fix
 
 
 def git_environment(environment=None):
-    """Return an environment for test Git commands that ignores machine Git config.
+    """Return the SDK's hermetic Git environment for test Git commands.
 
-    Global, system and XDG config, ignore and attribute files must not change
-    which fixture files Git adds, archives or checks out.  Inherited GIT_*
-    variables (repository, index or config overrides) are dropped as well.
+    It keeps the caller's other variables and adds a fixed branch and identity.
     """
     source = os.environ if environment is None else environment
-    result = {key: value for key, value in source.items() if not key.startswith('GIT_')}
-    result.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull, GIT_CONFIG_NOSYSTEM='1',
-                  GIT_CONFIG_COUNT='3',
-                  GIT_CONFIG_KEY_0='core.excludesFile', GIT_CONFIG_VALUE_0=os.devnull,
-                  GIT_CONFIG_KEY_1='core.attributesFile', GIT_CONFIG_VALUE_1=os.devnull,
-                  GIT_CONFIG_KEY_2='init.defaultBranch', GIT_CONFIG_VALUE_2='main',
-                  **GIT_FIXTURE_IDENTITY)
+    result = process.git_environment(source, config=(('init.defaultBranch', 'main'),))
+    result.update(GIT_FIXTURE_IDENTITY)
     return result
 
 
@@ -387,6 +380,61 @@ class GitEnvironmentTests(TemporaryCase):
         self.assertEqual(environment['PATH'], '/bin')
         self.assertEqual(environment['GIT_CONFIG_GLOBAL'], os.devnull)
 
+
+
+class GitSourceMachineConfigTests(TemporaryCase):
+    """git_source must not let machine Git config hide source changes."""
+
+    def repository(self):
+        repository = self.root / 'repository'
+        self.write('repository/README', 'fixture\n')
+        for args in (['init', '-q'], ['add', '.'], ['commit', '-qm', 'Fixture']):
+            subprocess.run(['git', '-C', str(repository), *args], check=True, env=git_environment())
+        self.write('repository/untracked.c', 'int x;\n')
+        return repository
+
+    def home(self):
+        home = self.root / 'home'
+        self.write('home/ignore', 'untracked.c\n')
+        self.write('home/.gitconfig', f'[core]\n\texcludesFile = {home / "ignore"}\n')
+        self.write('home/.config/git/ignore', 'untracked.c\n')
+        return home
+
+    def check_dirty(self, environment):
+        repository = self.repository()
+        with patch.dict(os.environ, environment):
+            # The machine config really hides the untracked file from plain Git.
+            hidden = subprocess.run(['git', '-C', str(repository), 'status', '--porcelain'],
+                                    check=True, capture_output=True).stdout
+            self.assertEqual(hidden, b'')
+            with self.assertRaisesRegex(SDKError, 'clean Git root'):
+                provenance.git_source(str(repository))
+            with self.assertRaisesRegex(SDKError, 'clean Git root'):
+                provenance.git_source(str(repository), env=dict(PATH=os.environ['PATH'], **environment))
+
+    def test_home_gitconfig_excludes_file_does_not_hide_untracked_file(self):
+        self.check_dirty(dict(HOME=str(self.home())))
+
+    def test_default_home_ignore_file_does_not_hide_untracked_file(self):
+        home = self.home()
+        (home / '.gitconfig').unlink()
+        self.check_dirty(dict(HOME=str(home)))
+
+    def test_xdg_ignore_file_does_not_hide_untracked_file(self):
+        xdg = self.root / 'xdg'
+        self.write('xdg/git/ignore', 'untracked.c\n')
+        self.check_dirty(dict(HOME=str(self.root / 'empty-home'), XDG_CONFIG_HOME=str(xdg)))
+
+    def test_production_environment_reads_only_repository_config(self):
+        environment = process.git_environment({'PATH': '/bin', 'HOME': '/home/user', 'XDG_CONFIG_HOME': '/x',
+                                               'GIT_DIR': '/elsewhere'})
+        self.assertNotIn('GIT_DIR', environment)
+        self.assertNotIn('XDG_CONFIG_HOME', environment)
+        self.assertEqual((environment['GIT_CONFIG_GLOBAL'], environment['GIT_CONFIG_SYSTEM'],
+                          environment['GIT_CONFIG_NOSYSTEM']), (os.devnull, os.devnull, '1'))
+        configured = {environment[f'GIT_CONFIG_KEY_{index}']: environment[f'GIT_CONFIG_VALUE_{index}']
+                      for index in range(int(environment['GIT_CONFIG_COUNT']))}
+        self.assertEqual(configured, {'core.excludesFile': os.devnull, 'core.attributesFile': os.devnull})
 
 if __name__ == '__main__':
     unittest.main()

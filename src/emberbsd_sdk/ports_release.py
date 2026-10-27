@@ -15,7 +15,7 @@ from .inventory import sha256_file
 from .jsonio import json_bytes, read_json, write_json
 from .paths import open_regular, verify_stable
 from .ports_plan import PORTS_JSON_LIMIT, plan_status, validate_plan
-from .process import capture, run_logged, sanitized_environment
+from .process import capture, git_environment, run_logged, sanitized_environment
 from .provenance import git_source
 
 PORTS_RELEASE_API = 1
@@ -33,7 +33,7 @@ class ReleaseError(SDKError):
 
 def _git(root, *args, input=None):
     return capture(['git', '-C', str(root), *args], input=input,
-                   env=sanitized_environment()).stdout.decode('utf-8').strip()
+                   env=git_environment()).stdout.decode('utf-8').strip()
 
 
 def _tag_name(version):
@@ -72,7 +72,7 @@ def _version_file(root):
     verify_stable(path, before)
     try:
         tracked = capture(['git', '-C', str(root), 'cat-file', 'blob', 'HEAD:' + VERSION_FILE],
-                          env=sanitized_environment()).stdout
+                          env=git_environment()).stdout
     except SDKError as exc:
         raise SDKError('OS version source must be tracked in HEAD') from exc
     if tracked != raw:

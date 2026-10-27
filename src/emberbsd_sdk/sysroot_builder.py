@@ -208,7 +208,9 @@ class SysrootBuilder:
             destination=destination)
 
     def git(self, root, *arguments):
-        return self.capture(self.git_command, '-C', root, *arguments)[0].strip()
+        result = process.capture([self.git_command, '-C', root, *arguments],
+                                 env=process.git_environment(self.environment))
+        return result.stdout.decode('utf-8', 'strict').strip()
 
     def source(self, root, kind=None):
         return provenance.git_source(root, kind=kind, git=self.git_command, env=self.environment)

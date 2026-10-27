@@ -245,8 +245,8 @@ class OSReleaseBuilder(SysrootBuilder):
 
     def build_payload(self):
         output = Path(self.paths['destination'])
-        self.capture(self.git_command, '-C', self.paths['os'], 'archive', '--format=tar.gz',
-                     '-o', str(output / 'source.tar.gz'), self.sources['os']['commit'])
+        self.git(self.paths['os'], 'archive', '--format=tar.gz',
+                 '-o', str(output / 'source.tar.gz'), self.sources['os']['commit'])
         self.source_sha256 = inventory.sha256_file(output / 'source.tar.gz')
         base_cxx = llvm_runtime_install.base_cxx_enabled(self.flags)
         imported = False
