@@ -4,17 +4,17 @@ The shared target suite is compiled by Ports and executed by the SDK in a
 disposable EmberBSD FFS root under full-system QEMU TCG. The guest has no
 compiler, package manager or Python. The selected SDK native prefix supplies
 the controller Python, archive utility, shell and `qemu-system-aarch64`; the
-target compiler family defaults to Clang and GCC remains an explicit option.
+image helper's utility roles are also selected from that prefix. The target
+compiler family defaults to Clang and GCC remains an explicit option.
 
 The runner consumes one completed AArch64 OS build, its matching core OS source
 revision, an OS test/helper source snapshot, the shared Ports source, the
 selected sysroot and target compiler, and one native prefix. It extracts the
-build's base set, adds only the test programs and runtime libraries required
-by the selected family, builds the root with that build's `nbmakefs`, `nbmtree`
-and `DESTDIR/etc/MAKEDEV`, then
-boots the build's `netbsd-EMBER64.gz`. The root device is mandatory; the runner
-does not assume a QEMU unit number. It verifies the mounted root is read-only
-and uses tmpfs for test scratch files.
+build's base set, adds the test programs, selected runtime libraries, and the
+diagnostic `/etc/rc`, builds the root with that build's `nbmakefs`, `nbmtree`
+and `DESTDIR/etc/MAKEDEV`, then boots the build's `netbsd-EMBER64.gz`. The root
+device is mandatory; the runner does not assume a QEMU unit number. It verifies
+the mounted root is read-only and uses tmpfs for test scratch files.
 
 ```sh
 /absolute/native-ports-prefix/bin/python3.15 -B scripts/target-acceptance.py \
@@ -39,8 +39,10 @@ supplies same-build `DESTDIR/etc/MAKEDEV` and OS metadata to the root-image
 helper. `--os-test-source` supplies the C regressions and guest/root-helper
 scripts; it defaults to `--os-source`. Its revision and file inventory are
 recorded separately from the OS build revision, so adding acceptance tests or
-root-helper logic does not claim a new OS build. Both source snapshots should be
-published inputs.
+root-helper logic does not claim a new OS build. The image helper runs in the
+selected native environment, with SDK-generated utility aliases and a PATH
+limited to the native prefix; target compilation uses a separate environment.
+Both source snapshots should be published inputs.
 
 The guest serial log uses a per-run nonce. Acceptance requires one read-only
 root event, all seven named check events, one completion event, and a clean

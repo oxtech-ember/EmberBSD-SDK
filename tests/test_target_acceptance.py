@@ -9,7 +9,8 @@ from types import SimpleNamespace
 from test_core import SDK_SOURCE  # noqa: F401  # puts the SDK sources on sys.path
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.target_acceptance import (CHECKS, GUEST_CHECKS, HOST_CHECKS,
-    _clean_source_revision, _copy_runtime, _select_os_sources, parse_guest_log, run)
+    _clean_source_revision, _copy_runtime, _install_diagnostic_runcom,
+    _select_os_sources, parse_guest_log, run)
 
 PORTS_GUEST_MARKERS = ('target_c11', 'target_cxx20', 'libc_aliases',
                        'base_loader_smoke', 'fork_cas')
@@ -128,6 +129,7 @@ class SourceRoleTests(unittest.TestCase):
                 run(options)
             self.assertFalse(Path(options.output).exists())
 
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -192,6 +194,35 @@ class SourceRoleTests(unittest.TestCase):
                 (source / 'README').write_text('uncommitted producer change\n')
                 with self.assertRaisesRegex(SDKError, 'not a complete clean Git root'):
                     _clean_source_revision(source, role)
+
+
+class DiagnosticRuncomTests(unittest.TestCase):
+    def test_installs_selected_diagnostic_rc_as_boot_entrypoint(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / 'source'
+            (source / 'ember/image').mkdir(parents=True)
+            runcom = source / 'ember/image/target-acceptance-rc'
+            runcom.write_text('#!/bin/sh\n/sbin/halt -p -q\n')
+            guest = root / 'guest'
+            (guest / 'etc').mkdir(parents=True)
+            _install_diagnostic_runcom(source, guest)
+            installed = guest / 'etc/rc'
+            self.assertEqual(installed.read_bytes(), runcom.read_bytes())
+            self.assertTrue(installed.stat().st_mode & 0o111)
+            self.assertFalse((guest / 'etc/rc.local').exists())
+
+    def test_refuses_base_runcom_collision(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / 'source'
+            (source / 'ember/image').mkdir(parents=True)
+            (source / 'ember/image/target-acceptance-rc').write_text('#!/bin/sh\n')
+            guest = root / 'guest'
+            (guest / 'etc').mkdir(parents=True)
+            (guest / 'etc/rc').symlink_to('/tmp/external-rc')
+            with self.assertRaisesRegex(SDKError, 'base set unexpectedly contains /etc/rc'):
+                _install_diagnostic_runcom(source, guest)
 
 
 if __name__ == '__main__':
