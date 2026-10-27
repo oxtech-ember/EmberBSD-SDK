@@ -73,10 +73,12 @@ def clang_application_commands(compiler, sysroot, runtime_record, *, runtime_roo
               '-isystem', compiler['resource_dir']+'/include']
     for role in ('cc','cxx'):
         # --ld-path is a link operation flag. Clang diagnoses it under -c -Werror.
-        commands[role] = [word for word in commands[role] if not word.startswith('--ld-path=')] + common
-    commands['cpp'] += common
+        commands[role] = [word for word in commands[role] if not word.startswith('--ld-path=')]
     commands['cxx'] += ['-nostdinc++','-isystem',
                         os.path.join(runtime_root,record['artifacts']['cxx_headers'])]
+    for role in ('cc','cxx'):
+        commands[role] += common
+    commands['cpp'] += common
     if link:
         for role, language in (('cc','c'), ('cxx','c++')):
             commands[role] += clang_application_link_flags(compiler, root, record,
