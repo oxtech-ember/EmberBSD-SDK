@@ -45,3 +45,15 @@ release input `qualification.json` only when the selected consumer family and
 version match the OS build's compiler. A different-family run remains useful
 as a separately recorded target result, but cannot qualify that build. The
 result does not publish a release.
+
+## Ports protocol regression
+
+The SDK consumer regression runs the selected published Ports guest runner and
+passes its stdout through the SDK parser, including a negative case where a
+host-only compile marker is inserted into the guest stream:
+
+```sh
+PYTHONPATH=src:tests /absolute/native-ports-prefix/bin/python3.15 -B \
+    tests/target_acceptance_ports_protocol.py \
+    --ports-source /absolute/EmberBSD-Ports
+```
