@@ -162,6 +162,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
                     **runtime_paths('/stage', self.manifest())}
         base = llvm_flags(selected, phase='base')
         self.assertIn('MKCXX=no', base)
+        self.assertIn('EMBER_LIBUNWIND_ARCHIVE=/stage/usr/pkg/llvm/lib/libunwind.a', base)
         self.assertIn('EMBER_EXTERNAL_LLVM_RUNTIME=/stage/usr/pkg/llvm', base)
         self.assertIn('EMBER_LLVM_RUNTIME_PHASE=bootstrap', base)
         self.assertIn('EMBER_LLVM_RESOURCE_DIR=/stage/usr/pkg/llvm/lib/clang/23', base)
@@ -174,8 +175,6 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         opted_in = llvm_flags(selected, phase='final', base_cxx=True)
         self.assertIn('MKLIBCXX=yes', opted_in)
         self.assertIn('MKLIBCXX=no', llvm_flags(selected, phase='final', base_cxx=False))
-        for flags in (base, final, opted_in):
-            self.assertFalse(any(v.startswith('EMBER_LIBUNWIND_ARCHIVE=') for v in flags))
 
     def test_bootstrap_phases_do_not_require_a_final_runtime(self):
         options = {'sdk': str(self.root / 'sdk'), 'runtime-work': str(self.root / 'sdk/obj/runtime'),

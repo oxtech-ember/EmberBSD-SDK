@@ -78,9 +78,8 @@ run in this order:
    and prepare the common LLVM sources. The OS requires the canonical prepared
    libedit source and excludes the old compiler runtime headers. A builtins-only
    stage consumes these actual inputs without an application sysroot receipt.
-2. Build PIC static libunwind with the common recipe, then the preliminary
-   C base. The base's direct unwind consumers may use that archive, but libc
-   does not embed it or duplicate the compiler-rt C personality.
+2. Build PIC static libunwind with the common recipe. The base OS can consume
+   that archive while building its libc.
 3. Use the resulting base headers, libc and CRT to build shared libunwind,
    libc++abi and libc++. Keep the base input tree stable during this operation.
 4. Build the complete application sysroot against the full runtime stage.
@@ -95,16 +94,12 @@ actual compilation with the selected native prefix. Compiler-rt builtins must
 be selected through the matching Clang NetBSD driver in its normal library
 ordering; placing an archive before driver-added C++ libraries is insufficient.
 
-The OS input `EMBER_LLVM_SOURCE` selects prepared common sources. Both the
-C base and final build use `EMBER_EXTERNAL_LLVM_RUNTIME` and the
+The OS inputs are `EMBER_LLVM_SOURCE` for prepared common sources and
+`EMBER_LIBUNWIND_ARCHIVE` for the preliminary stage archive. The SDK selects
+them for the base build, replacing the bundled compiler-rt and libunwind inputs.
+Both the C base and final build use `EMBER_EXTERNAL_LLVM_RUNTIME` and the
 manifest-derived `EMBER_LLVM_RESOURCE_DIR`, with runtime phases `bootstrap`
-and `full` respectively. They do not set `EMBER_LIBUNWIND_ARCHIVE`: the
-external provider owns the unwinder, and the final sysroot must not contain
-a second implementation embedded in libc. Libc has no reverse dependency on
-libunwind, allowing the C base to precede the full shared runtime. Its final
-consumers are rebuilt against that full runtime. See the
-[OS unwind integration](https://github.com/oxtech-ember/EmberBSD/blob/main/tools/docs/llvm-runtime.md).
-Compiler resource headers remain separate and match
+and `full` respectively. Compiler resource headers remain separate and match
 the selected native Clang. The application sysroot and release builders invoke
 these stages; accepting their outputs still requires actual links and target
 execution.
