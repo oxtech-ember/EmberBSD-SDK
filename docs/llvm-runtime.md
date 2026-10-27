@@ -14,6 +14,13 @@ payload before reuse. Failed or incompatible stages are left intact for
 diagnosis. `--plan` describes the dependency order without creating outputs;
 later commands depend on the artifacts measured by their producers.
 
+The OS bootstrap-headers operation does not enter libc or consume the common
+LLVM runtime source. Its object and completed-stage compatibility therefore
+ignores that source manifest and its `EMBER_LLVM_SOURCE` path, while source
+preflight still verifies the selected input. Compiler/ABI options, other build
+flags, OS headers and output bytes retain their checks. C base and final
+objects continue to depend on the selected LLVM runtime source.
+
 `--llvm-runtime-stage` explicitly reuses a completed full runtime and skips
 the prerequisite coordinator. Its LLVM version, target, source archive,
 recipe files and OS revision must match the selected inputs. The final SDK

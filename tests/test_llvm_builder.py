@@ -294,6 +294,47 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
              patch.object(type(builder), 'build_payload', side_effect=AssertionError('must reuse')):
             self.assertEqual(type(builder)(builder.options).run(), original)
 
+    def test_completed_headers_do_not_consume_common_runtime_source(self):
+        builder, original = self.completed_headers()
+        source = self.root / 'llvm-profile-source-update'
+        source.mkdir()
+        record = jsonio.read_json(Path(builder.options['llvm-source']) / 'llvm-source.json')
+        record['tree_sha256'] = 'a' * 64
+        record['recipe'] = {'files': {'profile-patch': 'b' * 64}}
+        write(source / 'llvm-source.json', json.dumps(record))
+        options = builder.options | {'llvm-source': str(source)}
+        with patch.object(type(builder), 'build_payload', side_effect=AssertionError('must reuse')):
+            self.assertEqual(type(builder)(options).run(), original)
+        # Selection still verifies the new prepared source against the compiler.
+        record['llvm_version'] = '99.0.0'
+        write(source / 'llvm-source.json', json.dumps(record))
+        with self.assertRaisesRegex(SDKError, 'common LLVM source and selected compiler differ'):
+            type(builder)(options).run()
+
+    def test_headers_source_exception_keeps_other_flags_strict(self):
+        builder, _ = self.completed_headers()
+        record = {'signature': copy.deepcopy(builder.signature), 'sources': builder.sources}
+        builder.signature['llvm_source']['tree_sha256'] = 'a' * 64
+        builder.signature['flags'].append('MKFORTIFY=no')
+        self.assertFalse(builder.compatible_context(record, builder.paths['objects']))
+
+    def test_common_runtime_source_changes_still_invalidate_base_and_final(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        for phase in ('base', 'final'):
+            with self.subTest(phase=phase):
+                builder.llvm_phase = phase
+                original = copy.deepcopy(builder.signature)
+                record = {'signature': copy.deepcopy(original), 'sources': builder.sources}
+                builder.signature['llvm_source']['tree_sha256'] = 'a' * 64
+                self.assertFalse(builder.compatible_context(record, builder.paths['objects']))
+                builder.signature = copy.deepcopy(original)
+                builder.signature['flags'] = [
+                    'EMBER_LLVM_SOURCE=/updated/source' if flag.startswith('EMBER_LLVM_SOURCE=') else flag
+                    for flag in original['flags']]
+                self.assertFalse(builder.compatible_context(record, builder.paths['objects']))
+                builder.signature = original
+
     def test_target_linker_bytes_only_affect_contexts_that_link_target_code(self):
         builder, _ = self.builder()
         builder.preflight()
