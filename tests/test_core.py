@@ -403,6 +403,10 @@ class GitSourceMachineConfigTests(TemporaryCase):
     def check_dirty(self, environment):
         repository = self.repository()
         with patch.dict(os.environ, environment):
+            # Only the fixture selects machine config; CI runners set XDG_CONFIG_HOME.
+            for key in [k for k in os.environ if k == 'XDG_CONFIG_HOME' or k.startswith('GIT_')]:
+                if key not in environment:
+                    del os.environ[key]
             # The machine config really hides the untracked file from plain Git.
             hidden = subprocess.run(['git', '-C', str(repository), 'status', '--porcelain'],
                                     check=True, capture_output=True).stdout
