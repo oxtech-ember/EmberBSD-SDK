@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 import tempfile
 
+from test_core import SDK_SOURCE  # noqa: F401  # puts the SDK sources on sys.path
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.target_acceptance import (CHECKS, GUEST_CHECKS, HOST_CHECKS,
     _clean_source_revision, _copy_runtime, _select_os_sources, parse_guest_log)
