@@ -403,6 +403,16 @@ class SysrootBuilder:
                 # discard these outputs solely because ld.lld bytes changed.
                 for signature in (old, new):
                     signature['compiler']['binaries']['ld'].pop('sha256', None)
+            if (self.compiler_family() == 'clang' and
+                    getattr(self, 'llvm_phase', None) == 'headers' and
+                    path != self.paths['tools']):
+                # bootstrap-headers only installs OS/libedit headers. It does
+                # not enter libc or consume the common LLVM runtime source.
+                # Source selection is still verified during preflight.
+                for signature in (old, new):
+                    signature.pop('llvm_source', None)
+                    signature['flags'] = [flag for flag in signature['flags']
+                                          if not flag.startswith('EMBER_LLVM_SOURCE=')]
             previous, selected = old['native_toolset'], new['native_toolset']
             if any(selected['tools'].get(role) != value
                    for role, value in previous['tools'].items()):
