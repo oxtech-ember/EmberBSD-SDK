@@ -19,7 +19,7 @@ class UniqueOption(argparse.Action):
 
 def main():
     parser = argparse.ArgumentParser(description='Build an EmberBSD OS release with a native Ports prefix.')
-    for name in ('sdk', 'os-source', 'ports', 'compiler', 'runtime-work', 'jobs', 'sdk-source', 'libedit-source', 'host-prefix', 'host-binutils'):
+    for name in ('sdk', 'os-source', 'ports', 'compiler', 'runtime-work', 'jobs', 'sdk-source', 'libedit-source', 'libarchive-source', 'libevent-source', 'host-prefix', 'host-binutils'):
         parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix'}.get(name))
     parser.add_argument('--host-compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
                         help='Clang by default; select GCC explicitly for a platform exception')
@@ -30,6 +30,8 @@ def main():
     parser.add_argument('--llvm-source', action=UniqueOption, help='common Ports prepared LLVM source')
     parser.add_argument('--llvm-runtime-stage', action=UniqueOption,
                         help='reuse a completed common LLVM runtime; otherwise build its prerequisites')
+    parser.add_argument('--llvm-bootstrap-stage', action=UniqueOption,
+                        help='verified bootstrap runtime consumed by the full runtime')
     parser.add_argument('--base-cxx', action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS,
                         help='install the selected LLVM libc++ headers and linker aliases into the OS base paths (default for Clang)')
     parser.add_argument('--profile', required=True, choices=('amd64', 'aarch64-sysroot'))

@@ -25,7 +25,7 @@ def flags_for(target, compiler_family=None):
     common = list(SysrootBuilder.FLAGS)
     replacements = dict(MKFIRMWARE='yes', MKLINKLIB='yes', MKSTATICLIB='yes',
                         MKPIC='yes', MKPICLIB='yes', MKDYNAMICROOT='yes',
-                        MKLIBSTDCXX='yes', MKREPRO='yes', USE_XZ_SETS='yes')
+                        MKLIBSTDCXX='yes', USE_XZ_SETS='yes')
     if target == 'amd64':
         replacements.update(MKKMOD='yes', MKMAN='yes', MKHTML='yes', MKDOC='yes',
                             MKINFO='yes', MKATF='yes', MKKYUA='yes', MKLINT='yes')
@@ -61,6 +61,9 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
         f'EMBER_LIBEDIT_SOURCE={paths["libedit-source"]}',
         f'MKREPRO_TIMESTAMP={timestamp}', f'EMBER_BUILD_ID={sha}', f'BUILDINFO=EmberBSD:{sha}',
         f'KERNOBJDIR={paths["objects"]}/kernels'] + (native_host_flags(native_selection) if native_selection is not None else [])
+    for name in ('libarchive', 'libevent'):
+        if name + '-source' in paths:
+            flags.append(f'EMBER_{name.upper()}_SOURCE={paths[name + "-source"]}')
     # Current preflight requires BFD; historical command records predate it.
     if 'host-binutils' in paths:
         flags.append(f'EMBER_HOST_BFD_CONFIG={paths["host-binutils"]}/host-bfd.mk')
@@ -106,6 +109,11 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
             commands = [base + ['tools', 'distribution'], check_sets,
                         [make, '-C', paths['os'] + '/etc', overlay, 'release'],
                         *commands[1:]]
+    source_flags = [f'EMBER_{name.upper()}_SOURCE={paths[name + "-source"]}'
+                    for name in ('libarchive', 'libevent') if name + '-source' in paths]
+    for command in commands:
+        if command[0].startswith(paths['tools'] + '/bin/nbmake-'):
+            command[-1:-1] = source_flags
     return flags, commands
 
 
@@ -163,6 +171,20 @@ def validate_profile(profile, sha, target):
         for key in ('GCC_RUNTIME_INPUTS_SHA256', 'GCC_RUNTIME_STAGE_SHA256', 'GCC_RUNTIME_LINKS_SHA256'):
             check(full_hash(metadata[key]), 'Missing runtime receipt hash')
     paths = receipt['paths']
+    if 'common_sources' in signature:
+        common_sources = signature['common_sources']
+        check(isinstance(common_sources, dict) and set(common_sources) == {'libarchive', 'libevent'},
+              'Invalid common source selection')
+        for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent')):
+            record = common_sources[name]
+            check(isinstance(record, dict) and record.get('format') == 'emberbsd-prepared-source' and
+                  type(record.get('version')) is int and record['version'] == 1 and
+                  record.get('package') == package and full_hash(record.get('tree_sha256', '')) and
+                  isinstance(record.get('identity'), dict) and bool(record['identity']),
+                  'Invalid common source receipt')
+            check(isinstance(paths.get(name + '-source'), str) and
+                  paths[name + '-source'].startswith('/') and not re.search(r'\s', paths[name + '-source']),
+                  'Invalid common source path')
     for key in ('os', 'ports', 'sdk-source', 'compiler', 'runtime-prefix', 'objects', 'tools', 'destination', 'libedit-source'):
         check(isinstance(paths[key], str) and paths[key].startswith('/') and not re.search(r'\s', paths[key]), 'Invalid producer path')
     if 'host-binutils' in paths:
@@ -202,7 +224,7 @@ class OSReleaseBuilder(SysrootBuilder):
             raise SDKError('base C++ selection must be boolean')
         if self.options.get('base-cxx', False) and self.compiler_family() != 'clang':
             raise SDKError('base C++ aliases require the selected Clang runtime')
-        self.timestamp = int(self.git(self.paths['os'], 'show', '-s', '--format=%ct', self.sources['os']['commit']))
+        self.timestamp = self.source_timestamp()
         self.product_version = source_version(Path(self.paths['os'], 'share/mk/bsd.own.mk').read_text())
         self.signature['product_version'] = self.product_version
         self.flags, self.release_commands = producer_commands(self.options['target'], self.paths, self.host_tools,

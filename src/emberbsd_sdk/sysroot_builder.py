@@ -105,7 +105,7 @@ class SysrootBuilder:
     FLAGS = ('TOOLCHAIN_MISSING=yes MKGCCCMDS=no MKCOMPAT=no MKCXX=yes '
              'MKDEBUG=no MKDEBUGLIB=no MKX11=no MKLLVM=no MKLLVMRT=no MKLIBCXX=no MKKMOD=no MKGDB=no MKBINUTILS=no '
              'MKATF=no MKKYUA=no MKMAN=no MKDOC=no MKINFO=no MKHTML=no MKLINT=no '
-             'MKPROFILE=no MKCVS=no MKGROFF=no MKRUMP=no MAKECONF=/dev/null').split()
+             'MKPROFILE=no MKCVS=no MKGROFF=no MKRUMP=no MKREPRO=yes MAKECONF=/dev/null').split()
     VERIFIER = 'profiles/development-toolchain/runtime/recipe/files/runtime.py'
     CONTEXT = '.prebuild-sdk-context.json'
     QUARANTINE = '.prebuild-sdk-quarantine.json'
@@ -318,6 +318,9 @@ class SysrootBuilder:
                          record['base']['os_revision'], self.sources['os']['commit'])
             rows = inventory.snapshot_tree(self.paths['runtime-prefix'], machine=self.target['elf'])
             self.commands.append(dict(argv=self.runtime_command, scope='runtime-check', status='passed'))
+            if self.llvm_phase == 'final':
+                llvm_runtime.validate_bootstrap_pair(
+                    self.paths['llvm-bootstrap-stage'], record, target=self.options['target'])
             return dict(manifest=record, inventory=rows,
                         root_mode=stat.S_IMODE(os.stat(self.paths['runtime-prefix']).st_mode))
         result = process.capture(self.runtime_command, env=self.environment)
@@ -411,8 +414,11 @@ class SysrootBuilder:
                 # Source selection is still verified during preflight.
                 for signature in (old, new):
                     signature.pop('llvm_source', None)
+                    signature.pop('common_sources', None)
                     signature['flags'] = [flag for flag in signature['flags']
-                                          if not flag.startswith('EMBER_LLVM_SOURCE=')]
+                                          if not flag.startswith(('EMBER_LLVM_SOURCE=',
+                                                                  'EMBER_LIBARCHIVE_SOURCE=',
+                                                                  'EMBER_LIBEVENT_SOURCE='))]
             previous, selected = old['native_toolset'], new['native_toolset']
             if any(selected['tools'].get(role) != value
                    for role, value in previous['tools'].items()):
@@ -476,6 +482,25 @@ class SysrootBuilder:
             raise SDKError('common LLVM source and selected compiler differ')
         return record
 
+    def verify_common_sources(self):
+        result = {}
+        for name, package, argv in (
+            ('libarchive', 'archivers/libarchive', ['scripts/libarchive-source.py', 'verify']),
+            ('libevent', 'devel/libevent', ['scripts/source-inputs/libevent/source.py']),
+        ):
+            command = [self.paths['python'], '-B', os.path.join(self.paths['ports'], argv[0])]
+            if name == 'libarchive':
+                command += ['verify', self.paths[name + '-source'], '--sdk-source', self.paths['sdk-source'], '--git', self.git_command]
+            else:
+                command += ['--sdk-source', self.paths['sdk-source'], '--git', self.git_command, 'verify-source', '--source', self.paths[name + '-source']]
+            record = jsonio.loads_json(process.capture(command, env=self.environment).stdout)
+            if (not isinstance(record, dict) or record.get('format') != 'emberbsd-prepared-source' or
+                    type(record.get('version')) is not int or record['version'] != 1 or
+                    record.get('package') != package):
+                raise SDKError(f'invalid {name} prepared source receipt')
+            result[name] = record
+        return result
+
     def python_identity(self):
         python = self.paths['python']
         source = self.paths['sdk-source']
@@ -517,9 +542,16 @@ class SysrootBuilder:
         self.llvm_phase = getattr(self, 'llvm_phase', 'final')
         if not self.options.get('llvm-source'):
             raise SDKError('--llvm-source is required: prepare the common Ports LLVM source')
+        for name in ('libarchive-source', 'libevent-source'):
+            if self.llvm_phase != 'headers' and not self.options.get(name):
+                raise SDKError(f'--{name} is required: prepare the common Ports source')
+        if bool(self.options.get('libarchive-source')) != bool(self.options.get('libevent-source')):
+            raise SDKError('select both common sources together')
         if clang:
             if self.llvm_phase != 'headers' and not self.options.get('llvm-runtime-stage'):
                 raise SDKError('--llvm-runtime-stage is required for direct final preflight; run() builds its prerequisites')
+            if self.llvm_phase == 'final' and not self.options.get('llvm-bootstrap-stage'):
+                raise SDKError('--llvm-bootstrap-stage is required with a full LLVM runtime')
         elif not self.options.get('gcc-archive') or not self.options.get('pkgsrc'):
             raise SDKError('--gcc-archive and --pkgsrc are required for the explicit GCC runtime')
         if not self.options.get('host-binutils'):
@@ -536,8 +568,11 @@ class SysrootBuilder:
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
+        input_names += [name for name in ('libarchive-source', 'libevent-source') if self.options.get(name)]
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
                         if clang else ['runtime-work', 'gcc-archive', 'pkgsrc'])
+        if clang and self.llvm_phase == 'final':
+            input_names.append('llvm-bootstrap-stage')
         if clang and self.llvm_phase == 'base' and self.options.get('llvm-runtime-base'):
             input_names.append('llvm-runtime-base')
         for name in input_names:
@@ -587,7 +622,10 @@ class SysrootBuilder:
         paths.regular_file(os.path.join(self.paths['ports'], PRODUCER))
         self.sources = {name: self.source(self.paths[name], name) for name in ('os', 'ports')}
         self.sources['sdk'] = self.source(self.paths['sdk-source'], 'sdk')
-        self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'])
+        self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command)
+        self.common_source_records = (self.verify_common_sources()
+                                      if all(name + '-source' in self.paths for name in ('libarchive', 'libevent'))
+                                      else {})
         self.python = self.python_identity()
         self.git(self.paths['os'], 'ls-files', '--error-unmatch', 'build.sh', 'Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk')
         self.git(self.paths['ports'], 'ls-files', '--error-unmatch', verifier)
@@ -607,6 +645,9 @@ class SysrootBuilder:
                 record = llvm_runtime.validate_stage(stage, target=self.options['target'],
                     required_components=('builtins', 'libunwind-static'))
                 self.paths.update(runtime_paths(stage, record))
+                if self.llvm_phase == 'final':
+                    boot = llvm_runtime.validate_bootstrap_pair(self.paths['llvm-bootstrap-stage'], record, target=self.options['target'])
+                    self.paths['llvm-libc-unwind'] = runtime_paths(self.paths['llvm-bootstrap-stage'], boot)['llvm-unwind']
                 prefix = self.paths['runtime-prefix']
                 self.runtime_command = producer + ['verify', '--stage', stage, '--target', self.options['target'],
                     '--phase', 'full' if self.llvm_phase == 'final' else 'bootstrap', '--git', self.git_command]
@@ -625,22 +666,32 @@ class SysrootBuilder:
         self.runtime_record = self.verify_runtime()
         self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}',
                        f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
+        self.flags += [f'EMBER_{name.upper()}_SOURCE={self.paths[name + "-source"]}'
+                       for name in ('libarchive', 'libevent') if name + '-source' in self.paths]
         self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, native_toolset=self.native_selection, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
         self.signature['native_inputs'] = self.native_inputs
         self.signature['compiler_family'] = self.compiler_family()
         self.signature['llvm_source'] = self.llvm_source_record
+        self.signature['common_sources'] = self.common_source_records
         if clang:
             self.signature['llvm_phase'] = self.llvm_phase
         self.configure_signature()
         self.contexts = {name: self.inspect_context(self.paths[name]) for name in ('objects', 'tools')}
         self.build_command = [self.shell, os.path.join(self.paths['os'], 'build.sh'), '-U', '-u', '-j' + jobs, '-m', self.target['machine'], '-a', self.target['arch'], '-O', self.paths['objects'], '-T', self.paths['tools'], '-D', self.paths['destination']]
-        for flag in self.flags + ['BUILDINFO=EmberBSD:' + self.sources['os']['commit']]:
+        # Commit metadata stays out of the signature: the same OS tree at a new
+        # commit reuses compatible objects. build.sh derives a missing
+        # MKREPRO_TIMESTAMP from VCS tools that the sanitized PATH omits.
+        for flag in self.flags + ['MKREPRO_TIMESTAMP=' + str(self.source_timestamp()),
+                                  'BUILDINFO=EmberBSD:' + self.sources['os']['commit']]:
             self.build_command.extend(('-V', flag))
         self.build_command.extend(('tools', 'libs'))
         self.loader_command = [os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine']), '-C', os.path.join(self.paths['os'], 'libexec/ld.elf_so'), '-j' + jobs, 'dependall']
         self.install_command = self.loader_command[:-1] + ['install']
         self.receipt = dict(format='emberbsd-sysroot-build', version=3 if clang else 2, scope='sysroot-build', qualification='not-built', execution_acceptance='not-run', workspace=layout, paths=self.paths, sources=self.sources, previous_contexts=self.contexts, signature=self.signature, commands=self.commands, plan=[self.runtime_command, self.build_command, self.loader_command, self.install_command, self.runtime_command, self.runtime_command], working_directory=self.paths['os'], copy=dict(source=prefix, destination=os.path.join(self.paths['destination'], 'usr/pkg/llvm' if clang else 'usr/pkg/gcc16'), verification='exact pre/copy/post inventory'), not_checked=['target execution', 'ABI compatibility', 'SDK release'])
         return self.receipt
+
+    def source_timestamp(self):
+        return int(self.git(self.paths['os'], 'show', '-s', '--format=%ct', self.sources['os']['commit']))
 
     def mkdirs(self, path, boundary):
         current = boundary
@@ -870,11 +921,15 @@ class SysrootBuilder:
             self.prepare_contexts()
             self.contexts_prepared = True
             self.prepare_native_routing()
-            if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports']) != self.libedit_record:
+            if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command) != self.libedit_record:
                 raise SDKError('libedit source changed before build')
+            if self.common_source_records and self.verify_common_sources() != self.common_source_records:
+                raise SDKError('common sources changed before build')
             self.build_payload()
-            if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports']) != self.libedit_record:
+            if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command) != self.libedit_record:
                 raise SDKError('libedit source changed during build')
+            if self.common_source_records and self.verify_common_sources() != self.common_source_records:
+                raise SDKError('common sources changed during build')
             for name, expected in self.sources.items():
                 if self.source(expected['path'], name) != expected:
                     raise SDKError(f'{name} source changed during build')

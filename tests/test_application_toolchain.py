@@ -71,6 +71,8 @@ class ApplicationToolchainTests(TemporaryCase):
             self.assertIn('--unwindlib=libunwind', link[role])
             self.assertIn('--ld-path='+self.compiler['binaries']['ld']['selected_path'], link[role])
         self.assertIn(str(self.sysroot/self.runtime['artifacts']['cxx_headers']), compile['cxx'])
+        self.assertLess(compile['cxx'].index(str(self.sysroot/self.runtime['artifacts']['cxx_headers'])),
+                        compile['cxx'].index(self.compiler['resource_dir']+'/include'))
         self.assertIn(self.compiler['resource_dir']+'/include', compile['cc'])
         cxx_headers = str(self.sysroot/self.runtime['artifacts']['cxx_headers'])
         resource_include = self.compiler['resource_dir']+'/include'

@@ -9,6 +9,27 @@ from emberbsd_sdk.os_release_builder import producer_commands
 
 
 class ReleaseRuntimeSequenceTests(unittest.TestCase):
+    def test_common_sources_reach_release_and_direct_make_commands(self):
+        paths = {name: '/sdk/' + name for name in (
+            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
+            'libedit-source', 'libarchive-source', 'libevent-source', 'objects', 'tools', 'destination', 'os')}
+        host = {'cc': {'path': '/sdk/host/bin/clang'}, 'c++': {'path': '/sdk/host/bin/clang++'}}
+        _, commands = producer_commands('aarch64', paths, host, 'a' * 40, 1, '2',
+                                        '/sdk/host/bin/sh', compiler_family='clang', base_cxx=True)
+        for command in commands:
+            self.assertIn('EMBER_LIBARCHIVE_SOURCE=/sdk/libarchive-source', command)
+            self.assertIn('EMBER_LIBEVENT_SOURCE=/sdk/libevent-source', command)
+
+    def test_release_uses_bootstrap_libc_unwind_and_full_runtime(self):
+        paths = {name: '/sdk/' + name for name in (
+            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-libc-unwind',
+            'llvm-resource', 'libedit-source', 'objects', 'tools', 'destination', 'os')}
+        host = {'cc': {'path': '/sdk/host/bin/clang'}, 'c++': {'path': '/sdk/host/bin/clang++'}}
+        _, commands = producer_commands('aarch64', paths, host, 'a' * 40, 1, '2',
+                                        '/sdk/host/bin/sh', compiler_family='clang', base_cxx=True)
+        self.assertIn('EMBER_LIBUNWIND_ARCHIVE=/sdk/llvm-libc-unwind', commands[0])
+        self.assertIn('EMBER_EXTERNAL_LLVM_RUNTIME=/sdk/runtime-prefix', commands[0])
+
     def commands(self, target, base_cxx, **selection):
         paths = {name: '/sdk/' + name for name in (
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind',

@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from unittest.mock import patch
 
-from test_core import TemporaryCase, SDK_SOURCE
+from test_core import TemporaryCase, SDK_SOURCE, git_environment
 from libedit_fixture import recipe_fixture
 from emberbsd_sdk import jsonio
 from emberbsd_sdk.errors import SDKError
@@ -21,12 +21,12 @@ class LibeditTests(TemporaryCase):
         self.archive = self.root / 'libedit.tar.gz'
         self.output = self.root / 'prepared'
         recipe_fixture(self.ports, self.archive)
-        subprocess.run(['git', '-C', str(self.ports), 'init', '-q'], check=True)
+        subprocess.run(['git', '-C', str(self.ports), 'init', '-q'], check=True, env=git_environment())
         self.commit()
 
     def commit(self):
-        subprocess.run(['git', '-C', str(self.ports), 'add', '-f', '.'], check=True)
-        subprocess.run(['git', '-C', str(self.ports), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Fixture'], check=True)
+        subprocess.run(['git', '-C', str(self.ports), 'add', '-f', '.'], check=True, env=git_environment())
+        subprocess.run(['git', '-C', str(self.ports), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Fixture'], check=True, env=git_environment())
 
     def prepare(self):
         return prepare_source(self.ports, self.archive, self.output)
@@ -41,6 +41,15 @@ class LibeditTests(TemporaryCase):
         self.assertEqual((self.output / RECEIPT).stat().st_mode & 0o777, 0o444)
         with self.assertRaisesRegex(SDKError, 'already exists'):
             self.prepare()
+
+    def test_validate_source_uses_selected_git(self):
+        record = self.prepare()
+        selected = shutil.which('git')
+        self.assertIsNotNone(selected)
+        from emberbsd_sdk import libedit
+        with patch.object(libedit.provenance, 'git_source', wraps=libedit.provenance.git_source) as source:
+            self.assertEqual(record, validate_source(self.output, ports=self.ports, git=selected))
+        self.assertEqual(source.call_args.kwargs['git'], selected)
 
     def test_patch_offset_does_not_leave_backup(self):
         patchfile = self.ports / RECIPE / 'patches/patch-input0'
@@ -65,7 +74,7 @@ class LibeditTests(TemporaryCase):
         receipt = (self.output / RECEIPT).read_bytes()
         (self.ports / 'unrelated').write_text('another package changed\n')
         self.commit()
-        current = subprocess.check_output(['git', '-C', str(self.ports), 'rev-parse', 'HEAD'], text=True).strip()
+        current = subprocess.check_output(['git', '-C', str(self.ports), 'rev-parse', 'HEAD'], text=True, env=git_environment()).strip()
         self.assertNotEqual(current, record['recipe']['ports_commit'])
         self.assertEqual(validate_source(self.output, ports=self.ports), record)
         self.assertEqual((self.output / RECEIPT).read_bytes(), receipt)
@@ -227,10 +236,10 @@ class LibeditTests(TemporaryCase):
                 self.assertFalse(self.output.exists())
 
     def test_metadata_must_be_tracked(self):
-        subprocess.run(['git', '-C', str(self.ports), 'rm', '--cached', RECIPE + '/Makefile'], check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(['git', '-C', str(self.ports), 'rm', '--cached', RECIPE + '/Makefile'], check=True, stdout=subprocess.DEVNULL, env=git_environment())
         (self.ports / '.gitignore').write_text('/' + RECIPE + '/Makefile\n')
-        subprocess.run(['git', '-C', str(self.ports), 'add', '.gitignore'], check=True)
-        subprocess.run(['git', '-C', str(self.ports), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Ignore metadata'], check=True)
+        subprocess.run(['git', '-C', str(self.ports), 'add', '.gitignore'], check=True, env=git_environment())
+        subprocess.run(['git', '-C', str(self.ports), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Ignore metadata'], check=True, env=git_environment())
         with self.assertRaises(SDKError):
             self.prepare()
         self.assertFalse(self.output.exists())

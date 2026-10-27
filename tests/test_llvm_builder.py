@@ -60,6 +60,7 @@ class LLVMBuilderTests(TemporaryCase):
         base = dict(sdk='/unused/sdk', ports='/unused/ports', compiler='/unused/compiler',
                     runtime_work='/unused/runtime', jobs='2',
                     sdk_source=str(SDK_SOURCE), libedit_source='/unused/libedit',
+                    libarchive_source='/unused/libarchive', libevent_source='/unused/libevent',
                     host_prefix='/unused/host', host_binutils='/unused/host-binutils',
                     llvm_source='/unused/llvm')
 
@@ -114,7 +115,7 @@ class LLVMBuilderTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, 'must be boolean'):
             SysrootBuilder({'compiler-family': 'gcc', 'base-cxx': 'false'}).preflight()
 
-    def builder(self, options=None, builder_type=ClangBuilder):
+    def builder(self, options=None, builder_type=ClangBuilder, retarget=None):
         options = fixture(self.root) if options is None else options
         source = self.root / 'llvm-selected-source'; source.mkdir()
         runtime = runtime_tests.LLVMRuntimeTests()
@@ -136,8 +137,19 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         runtime.record['recipe'] = dict(ports_revision=git(options['ports'], 'rev-parse', 'HEAD'),
             files={script: inventory.sha256_file(Path(options['ports']) / script)})
         runtime.record['base']['os_revision'] = git(options['os'], 'rev-parse', 'HEAD')
+        bootstrap = runtime_tests.LLVMRuntimeTests()
+        bootstrap.setUp(); self.addCleanup(bootstrap.doCleanups)
+        bootstrap.static_unwind()
+        bootstrap.record['recipe'] = copy.deepcopy(runtime.record['recipe'])
+        bootstrap.record['base']['os_revision'] = runtime.record['base']['os_revision']
+        bootstrap.save()
+        if retarget:  # before pinning, so the full runtime records the retargeted bootstrap
+            retarget(runtime); retarget(bootstrap)
+        names = (bootstrap.record['artifacts']['builtins'], bootstrap.record['artifacts']['libunwind']['static'])
+        runtime.record['bootstrap'] = dict(manifest_sha256=inventory.sha256_file(bootstrap.stage / 'runtime.json'),
+            files={name: bootstrap.record['files'][name] for name in names})
         runtime.save()
-        options.update({'compiler-family': 'clang', 'llvm-source': str(source),
+        options.update({'llvm-bootstrap-stage': str(bootstrap.stage), 'compiler-family': 'clang', 'llvm-source': str(source),
                         'llvm-runtime-stage': str(runtime.stage),
                         'destination': str(Path(options['sdk']) / 'stages/clang')})
         return builder_type(options), runtime
@@ -146,6 +158,14 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         return {'prefix': 'usr/pkg/llvm', 'llvm_version': '23.1.4', 'artifacts': {
             'builtins': 'usr/pkg/llvm/lib/clang/23/lib/netbsd/libclang_rt.builtins-aarch64.a',
             'libunwind': {'static': 'usr/pkg/llvm/lib/libunwind.a'}}}
+
+    def test_direct_full_runtime_requires_bootstrap_for_both_builders(self):
+        original, _ = self.builder()
+        options = dict(original.options)
+        del options['llvm-bootstrap-stage']
+        for builder_type in (ClangBuilder, OSReleaseBuilder):
+            with self.assertRaisesRegex(SDKError, '--llvm-bootstrap-stage is required'):
+                builder_type(options).preflight()
 
     def test_resource_location_comes_from_measured_builtins(self):
         stage = str(self.root / 'stage')
@@ -160,6 +180,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
     def test_base_and_final_have_distinct_runtime_policies(self):
         selected = {'compiler': '/compiler', 'llvm-source': '/source',
                     **runtime_paths('/stage', self.manifest())}
+        selected['llvm-libc-unwind'] = '/bootstrap/usr/pkg/llvm/lib/libunwind.a'
         base = llvm_flags(selected, phase='base')
         self.assertIn('MKCXX=no', base)
         self.assertIn('EMBER_LIBUNWIND_ARCHIVE=/stage/usr/pkg/llvm/lib/libunwind.a', base)
@@ -170,6 +191,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertIn('MKCXX=yes', final)
         self.assertIn('MKLIBCXX=no', final)
         self.assertIn('EMBER_EXTERNAL_LLVM_RUNTIME=/stage/usr/pkg/llvm', final)
+        self.assertIn('EMBER_LIBUNWIND_ARCHIVE=/bootstrap/usr/pkg/llvm/lib/libunwind.a', final)
         self.assertIn('EMBER_LLVM_RUNTIME_PHASE=full', final)
         self.assertFalse(any('GCC' in v or 'STDCXX' in v for v in final))
         opted_in = llvm_flags(selected, phase='final', base_cxx=True)
@@ -195,7 +217,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
             def run(self):
                 events.append('final')
                 self_stage = self.options['llvm-runtime-stage']
-                return {'runtime': self_stage}
+                return {'runtime': self_stage, 'bootstrap': self.options['llvm-bootstrap-stage']}
         coordinator.builder_type = Final
         with patch.object(coordinator, 'prepare', return_value=None), \
              patch.object(coordinator, 'lock'), \
@@ -204,15 +226,22 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
             result = coordinator.run()
         self.assertEqual(events, ['headers', 'bootstrap', 'base', 'full', 'final'])
         self.assertEqual(result['runtime'], options['runtime-work'] + '/full-stage')
+        self.assertEqual(result['bootstrap'], options['runtime-work'] + '/bootstrap-stage')
 
     def test_headers_use_the_limited_os_operation_without_runtime_headers(self):
         class Headers(LLVMPhaseBuilder, ClangBuilder):
             pass
         builder, _ = self.builder(builder_type=lambda options:Headers(options, 'headers'))
+        builder.options.pop('libarchive-source')
+        builder.options.pop('libevent-source')
         receipt = builder.preflight()
         self.assertEqual(len(receipt['plan']), 1)
         self.assertEqual(receipt['plan'][0][-2:], ['tools', 'bootstrap-headers'])
+        self.assertFalse(any('EMBER_LIBARCHIVE_SOURCE=' in arg or 'EMBER_LIBEVENT_SOURCE=' in arg
+                             for arg in receipt['plan'][0]))
         self.assertIn('EMBER_HOST_BFD_CONFIG=' + builder.options['host-binutils'] + '/host-bfd.mk', receipt['plan'][0])
+        self.assertIn('MKREPRO=yes', receipt['plan'][0])
+        self.assertIn('MKREPRO_TIMESTAMP=' + str(builder.source_timestamp()), receipt['plan'][0])
         for name in ('stdio.h','sys/types.h','sys/param.h','stdint.h','limits.h','math.h','pthread.h'):
             write(Path(builder.paths['destination'])/'usr/include'/name, '/* base header */\n')
         builder.inspect_payload()
@@ -565,7 +594,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
     def test_runtime_of_another_llvm_version_fails_before_outputs(self):
         builder, runtime = self.builder()
         runtime.record['llvm_version'] = '22.1.0'; runtime.save()
-        with self.assertRaisesRegex(SDKError, 'runtime compiler'):
+        with self.assertRaisesRegex(SDKError, 'runtime compiler|bootstrap and full runtime inputs differ'):
             builder.run()
         self.assertFalse(Path(builder.options['destination']).exists())
 

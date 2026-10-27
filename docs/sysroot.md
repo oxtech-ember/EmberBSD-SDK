@@ -37,7 +37,7 @@ Provide:
   from this work tree through `EMBER_HOST_BFD_CONFIG`. Keep it unchanged
   while the tools are built or reused.
 - A new runtime work path below the SDK object directory, or an explicitly
-  selected completed full `--llvm-runtime-stage`.
+  selected completed full `--llvm-runtime-stage`. When selecting a full stage directly, also pass `--llvm-bootstrap-stage` for the exact bootstrap stage recorded by that full runtime. The OS embeds its checked static libunwind archive into libc; the full runtime remains the application runtime.
 
 The prepared common LLVM source is also required with GCC: libc and kernel
 builtins use that source independently of the application runtime choice.
@@ -51,23 +51,31 @@ Sparse checkout, skip-worktree and assume-unchanged entries are rejected.
 Tracked files and links must be present with their recorded types.
 The Ports `upstream/pkgsrc` gitlink is recorded as an external pin without
 claiming its payload is qualified. The selected runtime verifier uses the
-explicit `--pkgsrc` export on the GCC route instead. No recursive pkgsrc checkout is required
-for that unused gitlink. Other gitlinks are rejected by this backend.
+explicit `--pkgsrc` export on the GCC route instead. The common libarchive and
+libevent producers require the pinned pkgsrc checkout to prepare and verify
+their export inputs. Other gitlinks are rejected by this backend.
 
 See [libedit preparation](libedit.md) for the mandatory `--libedit-source` input.
+Prepare libarchive with the Ports `scripts/libarchive-source.py prepare` command
+and libevent with `scripts/source-inputs/libevent/source.py prepare`; both use
+the selected SDK source and canonical Ports export. Pass the resulting trees
+as `--libarchive-source` and `--libevent-source` for the base build. The
+bootstrap headers phase does not consume these two sources.
 
 ## Preflight and plan
 
 Use the implemented script's help for the exact options:
 
 ```sh
-python3 scripts/build-sysroot.py --help
-python3 scripts/build-sysroot.py \
+/absolute/host-pkg-llvm/bin/python3.15 -B scripts/build-sysroot.py --help
+/absolute/host-pkg-llvm/bin/python3.15 -B scripts/build-sysroot.py \
   --sdk-source /absolute/EmberBSD-SDK \
   --sdk /absolute/prebuild-sdk-aarch64 \
   --os /absolute/EmberBSD \
   --ports /absolute/EmberBSD-Ports \
   --libedit-source /absolute/prepared-libedit \
+  --libarchive-source /absolute/prepared-libarchive \
+  --libevent-source /absolute/prepared-libevent \
   --host-prefix /absolute/host-pkg-llvm \
   --host-binutils /absolute/binutils-aarch64 \
   --compiler /absolute/host-pkg-llvm \

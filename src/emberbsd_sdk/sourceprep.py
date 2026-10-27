@@ -146,3 +146,50 @@ def apply_patch(patch_tool, patch_path, patch_bytes, cwd, label, *,
     args.extend(('-i', str(patch_path)))
     process.capture(args, cwd=str(cwd),
                     env=process.sanitized_environment())
+
+# Package owners compute the identity of their selected recipe and inputs.
+# These helpers bind that identity to a measured prepared tree; they do not
+# decide which inputs constitute a package's complete source contract.
+PREPARED_TREE_API = 1
+PREPARED_TREE_RECEIPT = 'emberbsd-prepared-source.json'
+
+
+def _prepared_tree_digest(root):
+    from . import inventory, jsonio, paths
+    root = paths.canonical_existing(root)
+    paths.real_directory(root)
+    rows = inventory.snapshot_tree(root, exclude=(PREPARED_TREE_RECEIPT,))
+    return hashlib.sha256(jsonio.json_bytes(rows)).hexdigest()
+
+
+def write_prepared_tree_receipt(root, *, package, identity):
+    """Record an owner-selected identity and the exact prepared payload."""
+    from . import jsonio, paths
+    root = paths.canonical_existing(root)
+    if not isinstance(package, str) or re.fullmatch(r'[a-z0-9][a-z0-9+_.-]*/[a-z0-9][a-z0-9+_.-]*', package) is None:
+        raise SDKError('invalid prepared source package')
+    if not isinstance(identity, dict) or not identity:
+        raise SDKError('invalid prepared source identity')
+    record = dict(format='emberbsd-prepared-source', version=1,
+                  package=package, identity=identity,
+                  tree_sha256=_prepared_tree_digest(root))
+    jsonio.write_json(os.path.join(root, PREPARED_TREE_RECEIPT), record, exclusive=True)
+    return record
+
+
+def validate_prepared_tree(root, *, package, identity):
+    """Refuse changed package inputs, receipt or prepared payload."""
+    from . import jsonio, paths
+    root = paths.canonical_existing(root)
+    record = jsonio.read_json(os.path.join(root, PREPARED_TREE_RECEIPT))
+    if (not isinstance(record, dict) or
+            set(record) != {'format', 'version', 'package', 'identity', 'tree_sha256'} or
+            record['format'] != 'emberbsd-prepared-source' or
+            type(record['version']) is not int or record['version'] != 1 or
+            record['package'] != package or record['identity'] != identity or
+            not isinstance(identity, dict) or not identity or
+            not isinstance(record['tree_sha256'], str) or
+            re.fullmatch('[0-9a-f]{64}', record['tree_sha256']) is None or
+            record['tree_sha256'] != _prepared_tree_digest(root)):
+        raise SDKError('prepared source identity or payload changed')
+    return record

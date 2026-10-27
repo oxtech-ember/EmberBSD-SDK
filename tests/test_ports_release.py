@@ -21,6 +21,7 @@ from emberbsd_sdk.jsonio import json_bytes, read_json
 from emberbsd_sdk.ports_plan import lock_graph, make_plan, record_result
 from emberbsd_sdk import ports_release as release
 from test_ports_plan import graph
+from test_core import git_environment
 
 
 class ReleaseTests(unittest.TestCase):
@@ -64,7 +65,7 @@ class ReleaseTests(unittest.TestCase):
             self.artifacts.append(artifact)
 
     def git(self, component, *args):
-        return subprocess.check_output(['git', '-C', str(self.repos[component]), *args], stderr=subprocess.PIPE).decode().strip()
+        return subprocess.check_output(['git', '-C', str(self.repos[component]), *args], stderr=subprocess.PIPE, env=git_environment()).decode().strip()
 
     def commit(self, component):
         self.git(component, 'add', '.')

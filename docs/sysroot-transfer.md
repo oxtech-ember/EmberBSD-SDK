@@ -134,6 +134,9 @@ existing interpretation.
 It omits the original host paths, environment and command logs. Files themselves
 can still contain build paths or private content. The producer must control
 which files it installs. Export is not a secret scanner or a relocation fix.
+Sysroot builds select `MKREPRO=yes`. The OS build then maps the source,
+object and external source roots to canonical paths such as
+`/usr/src/external/libedit`.
 
 ## Shared store for a team
 

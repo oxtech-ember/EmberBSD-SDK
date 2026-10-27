@@ -148,6 +148,20 @@ def _payload(rows):
             {name: row['target'] for name, row in rows.items() if row['kind'] == 'link'})
 
 
+def validate_bootstrap_pair(root, full, *, target):
+    """Verify the exact bootstrap stage consumed by a full runtime build."""
+    bootstrap = validate_stage(root, target=target, required_components=('builtins', 'libunwind-static'))
+    pin = full.get('bootstrap')
+    _require(isinstance(pin, dict), 'full LLVM runtime lacks bootstrap provenance')
+    names = (bootstrap['artifacts']['builtins'], bootstrap['artifacts']['libunwind']['static'])
+    _require(pin.get('manifest_sha256') == inventory.sha256_file(os.path.join(root, 'runtime.json')) and
+             pin.get('files') == {name: bootstrap['files'][name] for name in names},
+             'LLVM bootstrap stage differs from full runtime provenance')
+    _require(all(bootstrap[key] == full[key] for key in ('target', 'triplet', 'machine_arch',
+             'elf_machine', 'llvm_version', 'source')), 'LLVM bootstrap and full runtime inputs differ')
+    return bootstrap
+
+
 def runtime_paths(root, record):
     """Derive the target resource directory from the measured builtins archive."""
     prefix = record['prefix']

@@ -86,7 +86,10 @@ class TargetClangTests(TemporaryCase):
         sdk = self.root / 'sdk'; create(sdk, target='aarch64')
         with self.assertRaisesRegex(SDKError, '--gcc-archive'):
             SysrootBuilder({'compiler-family': 'gcc', 'sdk': str(sdk),
-                            'llvm-source': '/selected-common-source', 'target': 'aarch64', 'jobs': '1'}).preflight()
+                            'llvm-source': '/selected-common-source',
+                            'libarchive-source': '/selected-libarchive-source',
+                            'libevent-source': '/selected-libevent-source',
+                            'target': 'aarch64', 'jobs': '1'}).preflight()
 
     def test_wrong_target_is_not_a_native_fallback(self):
         capture = self.capture

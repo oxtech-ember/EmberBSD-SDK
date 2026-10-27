@@ -137,3 +137,29 @@ retains jobs, budget and launcher in the recursive leaf. No package or compiler 
 
 Once the native Ports tools are installed, use [host prefix selection](native-toolset.md).
 Configuration success does not claim a compiler build, runtime check, or complete package graph.
+
+## Explicit SDK metadata
+
+`emberbsd_sdk.darwin_sdk` provides `DARWIN_SDK_API = 1` and
+`read_metadata(macos_sdk, xcode_version_plist=...)` for native build consumers.
+Both inputs must be absolute paths. The reader accepts an SDK directory alias,
+then checks the canonical root. SDK metadata links cannot leave that root.
+
+```sh
+python3 scripts/darwin-sdk.py \
+  --macos-sdk /absolute/MacOSX.sdk \
+  --xcode-version-plist /absolute/SelectedXcode.app/Contents/version.plist
+```
+
+The JSON result contains `sdk_path`, `sdk_version`, `sdk_name`, `sdk_build`,
+`xcode_version`, `xcode_build`, and SHA256 values for the three input plists.
+The reader uses `SDKSettings.plist`, the SDK's
+`System/Library/CoreServices/SystemVersion.plist`, and the explicit Xcode
+version plist. It requires matching macOS SDK version fields and rejects
+missing or malformed values. Version strings retain their declared form.
+Consumers own build-system-specific formatting, such as Chromium's DTXcode.
+
+This operation does not execute `xcrun`, `xcodebuild`, or another tool. It does
+not discover a compiler. Select native Clang and LLVM tools through the common
+native prefix API. The metadata describes the selected Darwin ABI inputs;
+it does not qualify a package or target sysroot.
