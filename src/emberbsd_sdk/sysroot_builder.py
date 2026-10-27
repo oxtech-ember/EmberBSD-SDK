@@ -287,7 +287,7 @@ class SysrootBuilder:
             raise SDKError('unsupported target compiler family')
         return family
 
-    def verify_runtime(self):
+    def verify_runtime(self, *, base=None):
         if self.compiler_family() == 'clang':
             from . import llvm_runtime
             if self.llvm_phase == 'headers':
@@ -295,18 +295,27 @@ class SysrootBuilder:
             required = (llvm_runtime.FULL_COMPONENTS if self.llvm_phase == 'final'
                         else ('builtins', 'libunwind-static'))
             stage = self.paths['llvm-runtime-stage']
+            if base is None and self.llvm_phase == 'base':
+                base = self.paths.get('llvm-runtime-base')
             reported = jsonio.loads_json(process.capture(self.runtime_command, env=self.environment).stdout)
             llvm_runtime.validate_identity(reported, target=self.options['target'], required_components=required)
             record = llvm_runtime.validate_stage(stage, target=self.options['target'],
                 required_components=required, ports=self.paths['ports'],
-                ports_revision=reported['recipe']['ports_revision'])
+                ports_revision=reported['recipe']['ports_revision'], base=base)
             if reported != record:
                 raise SDKError('LLVM runtime producer and shared validator disagree')
             if (record['llvm_version'] != self.compiler_record['version'] or
                     record['source'] != {key: self.llvm_source_record['source'][key]
-                                         for key in ('archive', 'sha512')} or
-                    record['base']['os_revision'] != self.sources['os']['commit']):
-                raise SDKError('LLVM runtime compiler, common source or base OS differs from selection')
+                                         for key in ('archive', 'sha512')}):
+                raise SDKError('LLVM runtime compiler or common source differs from selection')
+            if record['base']['os_revision'] != self.sources['os']['commit']:
+                if self.llvm_phase != 'base' or base is None:
+                    raise SDKError('LLVM runtime base OS differs from selection')
+                # Bootstrap archives depend on measured headers, not the entire
+                # later OS tree. The base phase checks its new headers again
+                # before accepting any libc/CRT output.
+                self.git(self.sources['os']['path'], 'merge-base', '--is-ancestor',
+                         record['base']['os_revision'], self.sources['os']['commit'])
             rows = inventory.snapshot_tree(self.paths['runtime-prefix'], machine=self.target['elf'])
             self.commands.append(dict(argv=self.runtime_command, scope='runtime-check', status='passed'))
             return dict(manifest=record, inventory=rows,
@@ -512,6 +521,8 @@ class SysrootBuilder:
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
                         if clang else ['runtime-work', 'gcc-archive', 'pkgsrc'])
+        if clang and self.llvm_phase == 'base' and self.options.get('llvm-runtime-base'):
+            input_names.append('llvm-runtime-base')
         for name in input_names:
             self.paths[name] = paths.build_path(paths.canonical_existing(self.options[name]))
         self.paths['python'] = self.native.tool('python')

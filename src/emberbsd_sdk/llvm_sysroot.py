@@ -69,6 +69,8 @@ class LLVMPhaseBuilder(SysrootBuilder):
 
     def inspect_payload(self):
         if self.llvm_phase == 'base':
+            if self.verify_runtime(base=self.paths['destination']) != self.runtime_record:
+                raise SDKError('bootstrap LLVM runtime changed during OS base build')
             return super().inspect_payload()
         for name in ('stdio.h', 'sys/types.h', 'sys/param.h', 'stdint.h', 'limits.h', 'math.h', 'pthread.h'):
             inventory.required_file(self.paths['destination'], 'usr/include/' + name)
@@ -119,6 +121,7 @@ class LLVMCoordinator:
             options['base-cxx'] = False
         if phase == 'base':
             options['llvm-runtime-stage'] = os.path.join(self.work, 'bootstrap-stage')
+            options['llvm-runtime-base'] = os.path.join(self.stage_root, 'headers')
         return options
 
     def prepare(self):

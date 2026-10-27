@@ -142,6 +142,13 @@ the remaining C libraries, the loader and fork-owned CRT. That stage selects
 the initial LLVM runtime for C links; it never asks for `libgcc`. Ports can then
 link libc++, libc++abi and shared libunwind against the actual base.
 
+The C-base phase may consume bootstrap archives from an ancestor OS revision
+when the preserved header files and symlinks still match their measured runtime
+inputs. It compares those inputs again with the newly installed base headers
+before qualifying the result. A changed header leaves that stage incomplete;
+it requires rebuilding the affected runtime. This does not relax the final
+C++ runtime's exact OS revision or measured base-library checks.
+
 With the full selected runtime, the OS source provides these operations:
 
 1. `build.sh -U -u` selects the external compiler family and its matching runtime.
