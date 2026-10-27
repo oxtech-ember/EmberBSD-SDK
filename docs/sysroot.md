@@ -105,6 +105,8 @@ clear an incompatible context to make a build pass.
 The context includes the selected native prefix, tool paths, host and target, and flags.
 Native ABI flags map only to `HOST_CPPFLAGS`, `HOST_CFLAGS`, `HOST_CXXFLAGS`, and `HOST_LDFLAGS`.
 The build environment uses prefix directories in `PATH`; Git source inspection remains separate.
+Git is selected before narrowing that path. Repeated phase preflight checks use
+the same executable and keep the build environment restricted to the native prefix.
 The builder loads the OS contract roles and publishes `EMBER_NATIVE_TOOLS` under the locked tools tree.
 It checks the selection again before dispatch and completion.
 A changed selection after output preparation leaves the object contexts quarantined.

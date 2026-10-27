@@ -218,6 +218,30 @@ class BuilderTests(TemporaryCase):
         super().setUp()
         self.options = fixture(self.root)
 
+    def test_repeated_preflight_retains_source_git_outside_build_path(self):
+        builder = B(self.options)
+        first = builder.preflight()
+        selected_git = builder.git_command
+        build_path = builder.environment['PATH']
+        self.assertIsNone(shutil.which('git', path=build_path))
+        second = builder.preflight()
+        self.assertEqual(builder.git_command, selected_git)
+        self.assertEqual(builder.environment['PATH'], build_path)
+        self.assertEqual(first['sources'], second['sources'])
+        self.assertEqual(first['signature'], second['signature'])
+
+    def test_repeated_preflight_rejects_removed_source_git(self):
+        selected = self.root / 'source-service/git'
+        write(selected, '#!/bin/sh\nexec ' + shlex.quote(shutil.which('git')) + ' "$@"\n', 0o755)
+        builder = B(self.options)
+        builder.environment['PATH'] = str(selected.parent) + os.pathsep + builder.environment['PATH']
+        builder.preflight()
+        self.assertEqual(builder.git_command, str(selected))
+        selected.unlink()
+        with self.assertRaises(SDKError):
+            builder.preflight()
+        self.assertFalse(Path(builder.paths['destination'], builder.MARKER).exists())
+
     def test_gcc_selects_common_llvm_sources_independently_of_its_runtime(self):
         builder = B(self.options | {'plan': True})
         result = builder.run()

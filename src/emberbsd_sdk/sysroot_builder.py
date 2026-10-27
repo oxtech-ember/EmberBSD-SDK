@@ -114,6 +114,7 @@ class SysrootBuilder:
     def __init__(self, options):
         self.options = options.copy()
         self.commands = []
+        self.git_command = None
         self.handles = []
         self.environment = process.sanitized_environment()
         self.environment['PYTHONDONTWRITEBYTECODE'] = '1'
@@ -436,7 +437,10 @@ class SysrootBuilder:
             raise SDKError('--host-binutils is required for the OS host BFD tools')
         self.select_native_toolset()
         # Git is a source-inspection service. It is not a build-tool provider.
-        self.git_command = self.find_command('git')
+        if self.git_command is None:
+            self.git_command = self.find_command('git')
+        else:
+            self.executable(self.git_command)
         self.environment['PATH'] = native_path(self.native_selection)
         # Darwin PID churn can delay a complete empty snapshot after a producer exits.
         self.process_inspector = process.SessionInspector(env=self.environment, empty_snapshot_timeout=120)
