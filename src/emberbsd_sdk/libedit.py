@@ -35,8 +35,8 @@ def _digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def _recipe(ports):
-    source = provenance.git_source(ports, kind='ports')
+def _recipe(ports, *, git='git'):
+    source = provenance.git_source(ports, kind='ports', git=git)
     root = Path(source['path'], RECIPE)
     makefile = _read(root / 'Makefile')
     # Version 1 supports the normal distfile + patches pipeline only. Custom
@@ -148,7 +148,7 @@ def _tree_hash(root):
     return _digest(jsonio.json_bytes(inventory.snapshot_tree(str(root), exclude=(RECEIPT,))))
 
 
-def validate_source(root, *, ports=None):
+def validate_source(root, *, ports=None, git='git'):
     """Verify source contents, receipt and, when supplied, the current clean recipe."""
     root = Path(paths.canonical_existing(root))
     record = validate_identity(jsonio.read_json(root / RECEIPT))
@@ -157,7 +157,7 @@ def validate_source(root, *, ports=None):
     _require(inventory.sha256_file(root / 'ports.distinfo') == record['recipe']['distinfo_sha256'], 'libedit distinfo changed')
     _require(_tree_hash(root) == record['tree_sha256'], 'libedit source tree changed')
     if ports is not None:
-        _, metadata, entries, _ = _recipe(ports)
+        _, metadata, entries, _ = _recipe(ports, git=git)
         # Retain the preparation commit as provenance. Unrelated Ports commits
         # do not change the recipe, archive or patched source inputs.
         _require(all(record['recipe'][key] == value for key, value in metadata.items()

@@ -42,6 +42,15 @@ class LibeditTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, 'already exists'):
             self.prepare()
 
+    def test_validate_source_uses_selected_git(self):
+        record = self.prepare()
+        selected = shutil.which('git')
+        self.assertIsNotNone(selected)
+        from emberbsd_sdk import libedit
+        with patch.object(libedit.provenance, 'git_source', wraps=libedit.provenance.git_source) as source:
+            self.assertEqual(record, validate_source(self.output, ports=self.ports, git=selected))
+        self.assertEqual(source.call_args.kwargs['git'], selected)
+
     def test_patch_offset_does_not_leave_backup(self):
         patchfile = self.ports / RECIPE / 'patches/patch-input0'
         before = patchfile.read_bytes()
