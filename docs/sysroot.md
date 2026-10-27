@@ -82,11 +82,13 @@ Use the implemented script's help for the exact options:
   --llvm-source /absolute/prepared-llvm \
   --runtime-work /absolute/prebuild-sdk-aarch64/obj/llvm-runtime \
   --destination /absolute/prebuild-sdk-aarch64/stages/sysroot-next \
-  --target aarch64 --jobs 2 --plan
+  --target aarch64 --jobs "$(getconf _NPROCESSORS_ONLN)" --plan
 ```
 
 The plan checks inputs and lists the build commands without creating outputs.
 Remove `--plan` to run those commands.
+`--jobs` is required. Use the host CPU count for a parallel build;
+`--jobs 1` selects a serial build.
 
 The final Clang build enables the common libc++ base layout by default. Use
 `--no-base-cxx` to retain the historical build-only layout and `MKLIBCXX=no`;
@@ -192,6 +194,15 @@ file/link inventory and SHA256 values. It checks required headers, CRT,
 libraries and loader, target ELF architecture, and contained relative links.
 An error retains an explicit incomplete state and its evidence; a previous
 artifact does not become the result of that failed build.
+
+Sysroot builds select `MKREPRO=yes` and pass `MKREPRO_TIMESTAMP` from the
+selected OS commit time. The OS build maps the source and object roots to
+`/usr/src` and `/usr/obj`. It maps the prepared libedit, libevent, libarchive
+and LLVM sources to `/usr/src/external/NAME`, and the staged runtime to
+`/usr/pkg/llvm` or `/usr/pkg/gcc16`. Ports maps the LLVM runtime phases to the
+same roots. Shipped files then contain no build-host paths, and the output
+does not depend on the directory layout of the build host. See the OS
+[reproducible path rules](https://github.com/oxtech-ember/EmberBSD/blob/main/tools/docs/cross-build.md#reproducible-debug-paths).
 
 The sysroot builder waits up to 120 seconds for a complete empty producer
 session snapshot on Darwin. Unrelated host process churn can make a shorter
