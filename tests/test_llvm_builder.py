@@ -283,6 +283,43 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         with self.assertRaisesRegex(SDKError, 'incomplete or unrelated LLVM OS stage'):
             type(builder)(builder.options).run()
 
+    def test_completed_headers_do_not_use_target_linker_bytes(self):
+        builder, original = self.completed_headers()
+        previous = type(builder).compiler
+        def updated_linker(current):
+            result = previous(current)
+            result['binaries']['ld']['sha256'] = 'a' * 64
+            return result
+        with patch.object(type(builder), 'compiler', updated_linker), \
+             patch.object(type(builder), 'build_payload', side_effect=AssertionError('must reuse')):
+            self.assertEqual(type(builder)(builder.options).run(), original)
+
+    def test_target_linker_bytes_only_affect_contexts_that_link_target_code(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        original = copy.deepcopy(builder.signature)
+        records = {name: {'signature': copy.deepcopy(builder.context_signature(builder.paths[name])),
+                          'sources': builder.sources} for name in ('tools', 'objects')}
+        builder.signature['compiler']['binaries']['ld']['sha256'] = 'a' * 64
+        self.assertTrue(builder.compatible_context(records['tools'], builder.paths['tools']))
+        for phase in ('base', 'final'):
+            builder.llvm_phase = phase
+            self.assertFalse(builder.compatible_context(records['objects'], builder.paths['objects']))
+        for phase in ('headers', 'final'):
+            builder.llvm_phase = phase
+            for change in (
+                    lambda s: s['compiler']['binaries']['ld'].update(path='/other/ld.lld'),
+                    lambda s: s['compiler']['binaries']['ld'].update(selected_path='/other/ld.lld'),
+                    lambda s: s['compiler']['commands']['cc'].append('-DCHANGED_ABI'),
+                    lambda s: s['compiler']['binaries']['cc'].update(sha256='b' * 64),
+                    lambda s: s['native_toolset']['abi_flags'].update(cflags=['-m32'])):
+                with self.subTest(phase=phase, change=change):
+                    builder.signature = copy.deepcopy(original)
+                    builder.signature['compiler']['binaries']['ld']['sha256'] = 'a' * 64
+                    change(builder.signature)
+                    self.assertFalse(builder.compatible_context(records['tools'], builder.paths['tools']))
+                    self.assertFalse(builder.compatible_context(records['objects'], builder.paths['objects']))
+
     def bootstrap_base(self):
         header = '/* measured bootstrap header */\n'
         class Base(LLVMPhaseBuilder, ClangBuilder):
