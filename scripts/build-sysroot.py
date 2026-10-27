@@ -32,6 +32,8 @@ def main():
     parser.add_argument('--llvm-source', action=UniqueOption, help='common Ports prepared LLVM source')
     parser.add_argument('--llvm-runtime-stage', action=UniqueOption,
                         help='reuse a completed common LLVM runtime; otherwise build its prerequisites')
+    parser.add_argument('--llvm-bootstrap-stage', action=UniqueOption,
+                        help='verified bootstrap runtime consumed by the full runtime')
     parser.add_argument('--base-cxx', action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS,
                         help='install the selected LLVM libc++ headers and linker aliases into the OS base paths (default for Clang)')
     for name in ('destination', 'objects', 'tools'):

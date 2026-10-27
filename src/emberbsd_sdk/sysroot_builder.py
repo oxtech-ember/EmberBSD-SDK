@@ -318,6 +318,9 @@ class SysrootBuilder:
                          record['base']['os_revision'], self.sources['os']['commit'])
             rows = inventory.snapshot_tree(self.paths['runtime-prefix'], machine=self.target['elf'])
             self.commands.append(dict(argv=self.runtime_command, scope='runtime-check', status='passed'))
+            if self.llvm_phase == 'final':
+                llvm_runtime.validate_bootstrap_pair(
+                    self.paths['llvm-bootstrap-stage'], record, target=self.options['target'])
             return dict(manifest=record, inventory=rows,
                         root_mode=stat.S_IMODE(os.stat(self.paths['runtime-prefix']).st_mode))
         result = process.capture(self.runtime_command, env=self.environment)
@@ -547,6 +550,8 @@ class SysrootBuilder:
         if clang:
             if self.llvm_phase != 'headers' and not self.options.get('llvm-runtime-stage'):
                 raise SDKError('--llvm-runtime-stage is required for direct final preflight; run() builds its prerequisites')
+            if self.llvm_phase == 'final' and not self.options.get('llvm-bootstrap-stage'):
+                raise SDKError('--llvm-bootstrap-stage is required with a full LLVM runtime')
         elif not self.options.get('gcc-archive') or not self.options.get('pkgsrc'):
             raise SDKError('--gcc-archive and --pkgsrc are required for the explicit GCC runtime')
         if not self.options.get('host-binutils'):
@@ -566,6 +571,8 @@ class SysrootBuilder:
         input_names += [name for name in ('libarchive-source', 'libevent-source') if self.options.get(name)]
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
                         if clang else ['runtime-work', 'gcc-archive', 'pkgsrc'])
+        if clang and self.llvm_phase == 'final':
+            input_names.append('llvm-bootstrap-stage')
         if clang and self.llvm_phase == 'base' and self.options.get('llvm-runtime-base'):
             input_names.append('llvm-runtime-base')
         for name in input_names:
@@ -638,6 +645,9 @@ class SysrootBuilder:
                 record = llvm_runtime.validate_stage(stage, target=self.options['target'],
                     required_components=('builtins', 'libunwind-static'))
                 self.paths.update(runtime_paths(stage, record))
+                if self.llvm_phase == 'final':
+                    boot = llvm_runtime.validate_bootstrap_pair(self.paths['llvm-bootstrap-stage'], record, target=self.options['target'])
+                    self.paths['llvm-libc-unwind'] = runtime_paths(self.paths['llvm-bootstrap-stage'], boot)['llvm-unwind']
                 prefix = self.paths['runtime-prefix']
                 self.runtime_command = producer + ['verify', '--stage', stage, '--target', self.options['target'],
                     '--phase', 'full' if self.llvm_phase == 'final' else 'bootstrap', '--git', self.git_command]

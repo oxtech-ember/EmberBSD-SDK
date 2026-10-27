@@ -22,7 +22,8 @@ def llvm_flags(selected, *, phase, base_cxx=False):
              'MKCXX=' + ('yes' if phase == 'final' else 'no'),
              'MKLIBCXX=' + ('yes' if phase == 'final' and base_cxx else 'no')]
     if phase != 'headers':
-        flags += ['EMBER_LIBUNWIND_ARCHIVE=' + selected['llvm-unwind'],
+        flags += ['EMBER_LIBUNWIND_ARCHIVE=' + (selected.get('llvm-libc-unwind', selected['llvm-unwind'])
+                                               if phase == 'final' else selected['llvm-unwind']),
                   'EMBER_LLVM_RUNTIME_PHASE=' + ('full' if phase == 'final' else 'bootstrap'),
                   'EMBER_EXTERNAL_LLVM_RUNTIME=' + selected['runtime-prefix'],
                   'EMBER_LLVM_RESOURCE_DIR=' + selected['llvm-resource']]
@@ -197,5 +198,6 @@ class LLVMCoordinator:
             LLVMPhaseBuilder(self.stage_options('base'), 'base').run()
             self.runtime('full', os.path.join(self.stage_root, 'base'))
             final_options = self.options | {'llvm-runtime-stage': os.path.join(self.work, 'full-stage'),
+                                            'llvm-bootstrap-stage': os.path.join(self.work, 'bootstrap-stage'),
                                             'tools': self.tools}
             return self.builder_type(final_options).run()

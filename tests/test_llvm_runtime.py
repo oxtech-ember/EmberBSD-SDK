@@ -76,6 +76,30 @@ class LLVMRuntimeFixture(TemporaryCase):
 
 
 class LLVMRuntimeTests(LLVMRuntimeFixture):
+    def test_full_runtime_pins_bootstrap_stage_and_rejects_tampering(self):
+        self.static_unwind()
+        bootstrap = copy.deepcopy(self.record)
+        full = copy.deepcopy(bootstrap)
+        names = [bootstrap['artifacts']['builtins'], bootstrap['artifacts']['libunwind']['static']]
+        full['bootstrap'] = dict(manifest_sha256=inventory.sha256_file(self.stage / 'runtime.json'),
+                                 files={name: bootstrap['files'][name] for name in names})
+        self.assertEqual(llvm_runtime.validate_bootstrap_pair(self.stage, full, target='aarch64'), bootstrap)
+        bad = copy.deepcopy(full)
+        bad.pop('bootstrap')
+        with self.assertRaises(SDKError):
+            llvm_runtime.validate_bootstrap_pair(self.stage, bad, target='aarch64')
+        bad = copy.deepcopy(full)
+        bad['source']['sha512'] = '0' * 128
+        with self.assertRaises(SDKError):
+            llvm_runtime.validate_bootstrap_pair(self.stage, bad, target='aarch64')
+        bad = copy.deepcopy(full)
+        bad['bootstrap']['manifest_sha256'] = '0' * 64
+        with self.assertRaises(SDKError):
+            llvm_runtime.validate_bootstrap_pair(self.stage, bad, target='aarch64')
+        (self.stage / names[1]).write_bytes(b'tampered')
+        with self.assertRaises(SDKError):
+            llvm_runtime.validate_bootstrap_pair(self.stage, full, target='aarch64')
+
     def test_shared_object_needs_its_recorded_soname_path(self):
         self.full()
         library = self.prefix / 'lib/libc++.so.1'
