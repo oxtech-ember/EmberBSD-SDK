@@ -30,8 +30,8 @@ def main():
     parser.add_argument('--llvm-source', action=UniqueOption, help='common Ports prepared LLVM source')
     parser.add_argument('--llvm-runtime-stage', action=UniqueOption,
                         help='reuse a completed common LLVM runtime; otherwise build its prerequisites')
-    parser.add_argument('--base-cxx', action='store_true',
-                        help='install the selected LLVM libc++ headers and linker aliases into the OS base paths')
+    parser.add_argument('--base-cxx', action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS,
+                        help='install the selected LLVM libc++ headers and linker aliases into the OS base paths (default for Clang)')
     parser.add_argument('--profile', required=True, choices=('amd64', 'aarch64-sysroot'))
     for name in ('destination', 'objects', 'tools'):
         parser.add_argument('--' + name, action=UniqueOption, required=name == 'destination')

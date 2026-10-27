@@ -440,7 +440,6 @@ class BuilderReleaseTests(TemporaryCase):
             compiler = llvm_fixtures.ClangBuilder.compiler
         options = release_fixture(self.root, 'aarch64')
         builder, _ = llvm_fixtures.LLVMBuilderTests.builder(self, options, ClangRelease)
-        builder.options['base-cxx'] = True
         with patch('emberbsd_sdk.native_runtime_install.NativeRuntimeInstaller',
                    FixtureNativeRuntimeInstaller):
             receipt = builder.run()
@@ -523,7 +522,6 @@ class BuilderReleaseTests(TemporaryCase):
                 data[86:88] = (62).to_bytes(2, 'little')
             path.write_bytes(data)
         runtime.save()
-        builder.options['base-cxx'] = True
         with patch('emberbsd_sdk.native_runtime_install.NativeRuntimeInstaller',
                    FixtureNativeRuntimeInstaller):
             receipt = builder.run()
@@ -545,6 +543,7 @@ class BuilderReleaseTests(TemporaryCase):
             compiler = llvm_fixtures.ClangBuilder.compiler
         builder, _ = llvm_fixtures.LLVMBuilderTests.builder(
             self, release_fixture(self.root, 'aarch64'), ClangRelease)
+        builder.options['base-cxx'] = False
         receipt = builder.run()
         profile = jsonio.read_json(Path(builder.paths['destination']) / 'build-profile.json')
         signature = profile['sdk_receipt']['signature']
@@ -572,6 +571,7 @@ class BuilderReleaseTests(TemporaryCase):
             compiler = llvm_fixtures.ClangBuilder.compiler
         builder, runtime = llvm_fixtures.LLVMBuilderTests.builder(self,
             release_fixture(self.root, 'aarch64'), ClangRelease)
+        builder.options['base-cxx'] = False
         receipt = builder.run()
         output = Path(builder.paths['destination'])
         profile = jsonio.read_json(output / 'build-profile.json')

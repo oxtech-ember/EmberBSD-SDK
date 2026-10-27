@@ -4,6 +4,7 @@
 
 import unittest
 
+from test_core import SDK_SOURCE
 from emberbsd_sdk.os_release_builder import producer_commands
 
 

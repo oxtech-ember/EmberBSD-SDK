@@ -80,10 +80,11 @@ python3 scripts/build-sysroot.py \
 The plan checks inputs and lists the build commands without creating outputs.
 Remove `--plan` to run those commands.
 
-For an explicit Clang base libc++ layout, add `--base-cxx`. This is opt-in;
-without it the final sysroot retains `MKLIBCXX=no` and the legacy recorded
-layout. `build-os-release.py` accepts the same option for its final Clang
-producer profile.
+The final Clang build enables the common libc++ base layout by default. Use
+`--no-base-cxx` to retain the historical build-only layout and `MKLIBCXX=no`;
+`--base-cxx` explicitly enables it. GCC remains disabled by default, and
+`--base-cxx` with `--compiler-family gcc` is refused. `build-os-release.py`
+uses the same default and opt-out for its final Clang producer profile.
 
 The builder first compares `--target` with the canonical layout declaration.
 An unknown or different target fails before compiler, runtime or producer

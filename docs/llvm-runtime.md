@@ -19,11 +19,12 @@ the prerequisite coordinator. Its LLVM version, target, source archive,
 recipe files and OS revision must match the selected inputs. The final SDK
 copies `usr/pkg/llvm`; it does not substitute a GCC runtime. GCC retains its
 explicit `--compiler-family gcc --gcc-archive ... --pkgsrc ...` path.
-The final Clang build can opt into the base libc++ install paths with
-`--base-cxx` on `build-sysroot.py` or `build-os-release.py`. This selects
-`MKCXX=yes` and `MKLIBCXX=yes`, and installs relative aliases from the measured
-runtime into `usr/include/c++` and `usr/lib`. The default remains
-`MKLIBCXX=no`; bootstrap phases and GCC builds never install these aliases.
+The final Clang build enables the base libc++ install paths by default on
+`build-sysroot.py` and `build-os-release.py`. `--base-cxx` explicitly enables
+this layout, while `--no-base-cxx` retains the historical build-only layout.
+The enabled selection sets `MKCXX=yes` and `MKLIBCXX=yes`, and installs
+relative aliases from the measured runtime into `usr/include/c++` and
+`usr/lib`. Bootstrap phases and GCC builds never install these aliases.
 The runtime manifest keeps the Ports revision that produced it. A later
 unrelated Ports commit does not invalidate that origin when the relevant
 recipe files still match; changing a recorded recipe file does invalidate it.

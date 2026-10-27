@@ -113,6 +113,8 @@ class SysrootBuilder:
 
     def __init__(self, options):
         self.options = options.copy()
+        if 'base-cxx' not in self.options:
+            self.options['base-cxx'] = self.options.get('compiler-family', 'clang') == 'clang'
         self.commands = []
         self.git_command = None
         self.handles = []
