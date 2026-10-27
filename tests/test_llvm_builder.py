@@ -205,6 +205,49 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertEqual(events, ['headers', 'bootstrap', 'base', 'full', 'final'])
         self.assertEqual(result['runtime'], options['runtime-work'] + '/full-stage')
 
+    def test_coordinator_restages_through_owner_and_retains_original_stage(self):
+        from types import SimpleNamespace
+        runtime = runtime_tests.LLVMRuntimeTests()
+        runtime.setUp(); self.addCleanup(runtime.doCleanups); runtime.static_unwind()
+        original = copy.deepcopy(runtime.record)
+        old_hash = inventory.sha256_file(runtime.stage / 'runtime.json')
+        options = dict(sdk=str(runtime.root), target='aarch64',
+                       **{'runtime-work': str(runtime.root / 'work')})
+        coordinator = LLVMCoordinator(options, SysrootBuilder)
+        Path(coordinator.work).mkdir()
+        commands = []
+        def execute(command, output, log):
+            commands.append(command)
+            destination = Path(command[command.index('--destination') + 1])
+            shutil.copytree(runtime.stage, destination, symlinks=True)
+            record = copy.deepcopy(original)
+            record['reuse'] = dict(operation='unchanged-bootstrap-artifacts',
+                compiled_manifest_sha256=old_hash, compiled_recipe=original['recipe'],
+                compiled_source_tree_sha256='2' * 64, previous_manifest_sha256=old_hash,
+                selected_source_tree_sha256='3' * 64)
+            jsonio.write_json(destination / 'runtime.json', record, exclusive=False)
+        base = runtime.root / 'base'
+        write(base / 'usr/include/stdint.h', 'header')
+        runtime.record['base']['files']['usr/include/stdint.h'] = inventory.sha256_file(base / 'usr/include/stdint.h')
+        runtime.save(); original = copy.deepcopy(runtime.record)
+        old_hash = inventory.sha256_file(runtime.stage / 'runtime.json')
+        coordinator.headers = SimpleNamespace(paths={name: '/' + name for name in
+            ('python', 'ports', 'sdk-source', 'llvm-source', 'host-prefix', 'compiler')},
+            git_command='/git', execute_external=execute)
+        with patch.object(coordinator.headers, 'execute_external', side_effect=SDKError('owner refused')):
+            with self.assertRaisesRegex(SDKError, 'owner refused'):
+                coordinator.reuse_bootstrap('bootstrap', str(base), str(runtime.stage))
+        self.assertEqual(inventory.sha256_file(runtime.stage / 'runtime.json'), old_hash)
+        coordinator.reuse_bootstrap('bootstrap', str(base), str(runtime.stage))
+        retained = Path(str(runtime.stage) + '-before-reuse-' + old_hash)
+        self.assertEqual(jsonio.read_json(retained / 'runtime.json'), original)
+        self.assertEqual(inventory.sha256_file(retained / 'runtime.json'), old_hash)
+        self.assertEqual((retained / runtime.builtins).read_bytes(),
+                         (runtime.stage / runtime.builtins).read_bytes())
+        self.assertIn('reuse', commands[0])
+        llvm_runtime = runtime_tests.llvm_runtime
+        llvm_runtime.validate_stage(runtime.stage, base=base)
+
     def test_headers_use_the_limited_os_operation_without_runtime_headers(self):
         class Headers(LLVMPhaseBuilder, ClangBuilder):
             pass

@@ -34,7 +34,15 @@ relative aliases from the measured runtime into `usr/include/c++` and
 `usr/lib`. Bootstrap phases and GCC builds never install these aliases.
 The runtime manifest keeps the Ports revision that produced it. A later
 unrelated Ports commit does not invalidate that origin when the relevant
-recipe files still match; changing a recorded recipe file does invalidate it.
+recipe files still match. For owned builtins/static-unwind work, the coordinator
+can ask the same Ports producer to restage unchanged archives after a change
+limited to unused profiling C sources. The owner checks the recorded source
+origin, complete output inventory, actual Ninja source/header/CMake dependency
+closure and all selected CMake inputs; build code, used sources, ABI flags and
+full-runtime inputs remain strict. The new manifest's `reuse` entry identifies
+the original compilation recipe and manifest separately from the later source
+compatibility check. The coordinator retains the previous stage unchanged at
+`bootstrap-stage-before-reuse-MANIFEST_SHA256`; this operation is not a rebuild.
 
 Ports owns LLVM runtime recipes, source preparation, compiler options and build
 orchestration. SDK provides the shared stage validator in

@@ -3,6 +3,7 @@
 """First-base LLVM ordering, using the common OS and Ports producers."""
 
 import os
+import tempfile
 
 from . import inventory, jsonio, llvm_runtime, paths, process, workspace
 from .errors import SDKError
@@ -166,6 +167,37 @@ class LLVMCoordinator:
             command += ['--bootstrap-stage', os.path.join(self.work, 'bootstrap-stage')]
         return command
 
+    def reuse_bootstrap(self, phase, base, stage):
+        """Let the common producer restage compatible bytes; retain their origin."""
+        selected = self.headers
+        original_hash = inventory.sha256_file(os.path.join(stage, 'runtime.json'))
+        retained = stage + '-before-reuse-' + original_hash
+        if paths.entry(retained) is not None:
+            raise SDKError('previous runtime reuse destination already exists: ' + retained)
+        with tempfile.TemporaryDirectory(prefix='.bootstrap-reuse-', dir=self.work) as temporary:
+            candidate = os.path.join(temporary, 'stage')
+            command = [selected.paths['python'], '-B', os.path.join(selected.paths['ports'], PRODUCER),
+                '--sdk-source', selected.paths['sdk-source'], 'reuse',
+                '--source', selected.paths['llvm-source'], '--stage', stage,
+                '--work', os.path.join(self.work, phase + '-work'), '--destination', candidate,
+                '--sysroot', base, '--target', self.options['target'], '--phase', phase,
+                '--host-prefix', selected.paths['host-prefix'],
+                '--host-compiler-family', self.options.get('host-compiler-family', 'clang'),
+                '--target-prefix', selected.paths['compiler'], '--git', selected.git_command]
+            selected.execute_external(command, os.path.join(self.work, phase + '-reuse.json'),
+                                      os.path.join(self.work, phase + '-reuse.log'))
+            record = llvm_runtime.validate_stage(candidate, target=self.options['target'],
+                required_components=('builtins', 'libunwind-static'), base=base)
+            if (record.get('reuse', {}).get('previous_manifest_sha256') != original_hash or
+                    inventory.sha256_file(os.path.join(stage, 'runtime.json')) != original_hash):
+                raise SDKError('runtime reuse does not retain its previous manifest')
+            os.rename(stage, retained)
+            try:
+                os.rename(candidate, stage)
+            except BaseException:
+                os.rename(retained, stage)
+                raise
+
     def runtime(self, phase, base):
         selected = self.headers
         stage = os.path.join(self.work, phase + '-stage')
@@ -173,7 +205,15 @@ class LLVMCoordinator:
             selected.mkdirs(self.work, os.path.join(selected.paths['sdk'], 'obj'))
             selected.execute_external(self.runtime_command(phase, base),
                 os.path.join(self.work, phase + '.json'), os.path.join(self.work, phase + '.log'))
-        result = process.capture(self.runtime_command(phase, base, verify=True), env=selected.environment)
+        try:
+            result = process.capture(self.runtime_command(phase, base, verify=True), env=selected.environment)
+        except SDKError:
+            if phase != 'bootstrap':
+                raise
+            # The owner independently checks bytes, source/recipe history,
+            # actual dependency closure and configure inputs before restaging.
+            self.reuse_bootstrap(phase, base, stage)
+            result = process.capture(self.runtime_command(phase, base, verify=True), env=selected.environment)
         record = jsonio.loads_json(result.stdout)
         llvm_runtime.validate_identity(record, target=self.options['target'])
         expected = llvm_runtime.validate_stage(stage, target=self.options['target'],
