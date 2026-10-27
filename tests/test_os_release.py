@@ -262,6 +262,20 @@ class HistoricalKitTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, 'bound target evidence'):
             kit.require_qualification(m, 'aarch64-sysroot')
 
+    def test_qualification_uses_evidence_sidecar_without_mutating_os_build(self):
+        qualification = qualify(self.build, self.manifest, 'aarch64-sysroot')
+        evidence_bytes = (self.build / kit.EVIDENCE).read_bytes()
+        sidecar = self.root / 'acceptance'
+        sidecar.mkdir()
+        moved_qualification = sidecar / 'qualification.json'
+        shutil.move(qualification, moved_qualification)
+        shutil.move(self.build / kit.EVIDENCE, sidecar / kit.EVIDENCE)
+        result = kit.prepare(self.build, self.root / 'sidecar-qualified',
+                             'aarch64-sysroot', moved_qualification)
+        self.assertEqual((self.root / 'sidecar-qualified' / kit.EVIDENCE).read_bytes(), evidence_bytes)
+        self.assertFalse((self.build / kit.EVIDENCE).exists())
+        kit.require_qualification(result, 'aarch64-sysroot')
+
     def test_canonical_version_and_historical_archive_cleanup(self):
         before = snapshot(self.directory)
         kit.verify(self.directory, 'aarch64-sysroot')

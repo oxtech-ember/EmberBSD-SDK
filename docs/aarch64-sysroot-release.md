@@ -28,17 +28,18 @@ Its `checks` object must contain true results for `libc_aliases`, `cross_c11`,
 `cross_cxx20`, `target_c11`, `target_cxx20`, `base_loader_smoke` and `fork_cas`.
 Record true only from actual successful execution.
 
-Keep the raw target serial evidence in the build directory as
-`target-acceptance.log`. Bind its SHA256 in the receipt's `evidence_sha256`
-object under that filename. The kit includes and verifies the bound log.
+Run the shared SDK [target acceptance runner](target-acceptance.md). It writes
+`qualification.json` and the raw `target-acceptance.log` together in its new
+output directory. Preparation reads that evidence sidecar and leaves the OS
+build output untouched. The kit includes and verifies the bound log.
 `runtime_libraries` can record observed providers. Preparation removes unrelated
 receipt fields; do not include credentials or personal data.
 
 ```sh
-python3 scripts/os-release.py --profile aarch64-sysroot \
+/absolute/native-prefix/bin/python3.15 scripts/os-release.py --profile aarch64-sysroot \
   prepare /absolute/build /absolute/new-qualified-kit \
-  --qualification /absolute/target-qualification.json
-python3 scripts/os-release.py --profile aarch64-sysroot verify /absolute/new-qualified-kit
+  --qualification /absolute/acceptance-output/qualification.json
+/absolute/native-prefix/bin/python3.15 scripts/os-release.py --profile aarch64-sysroot verify /absolute/new-qualified-kit
 ```
 
 External CI pins the full OS source and accepted manifest SHA256.
