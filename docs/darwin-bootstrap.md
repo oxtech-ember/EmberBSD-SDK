@@ -105,9 +105,10 @@ After that closure installs bmake, its makefiles, and mksh, use the resulting to
 
 Retain the returned utility PATH and selected environment for this command.
 The Ports profile owns the later make, shell, and gzip transitions.
-`--jobs` sets positive package build parallelism; its default is 1.
+`--jobs` sets positive package build parallelism.
+Its default is the host CPU count from `os.cpu_count()`. `--jobs 1` selects a serial build.
 `--cpu-budget` defaults to that job count and must be at least `--jobs`.
-For parallel builds, also select `--link-python`, `--lock-root` and
+For parallel builds, including the default, also select `--link-python`, `--lock-root` and
 `--heavy-link-context`. The Python executable must belong to a declared tool
 root. The lock directory must already exist; use the same lock root and
 resource context for builds sharing a heavy-link slot. For example:

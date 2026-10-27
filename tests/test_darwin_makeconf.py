@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import shutil
 import struct
 from unittest.mock import patch
 
@@ -98,6 +99,37 @@ class DarwinMakeconfTests(TemporaryCase):
                      '--lock-root', str(self.root / 'work'), '--context', str(self.root / 'work/heavy-link'), '--']
             self.assertIn('EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER= ' + ';'.join(words) + '\n', data)
             self.assertEqual('EMBERBSD_GCC16_LINKER_LAUNCHER=' in data, family == 'gcc')
+
+    def test_default_jobs_follow_host_cpu_count(self):
+        del self.options['jobs']
+        links = dict(link_python=self.tools['cc'], lock_root=self.root / 'work',
+                     heavy_link_context=self.root / 'work/heavy-link')
+        with patch('emberbsd_sdk.darwin_makeconf.os.cpu_count', return_value=12):
+            self.render(**links)
+            data = Path(self.options['output']).read_text()
+            self.assertIn('EMBERBSD_DARWIN_JOBS= 12\n', data)
+            self.assertIn('EMBERBSD_DARWIN_CPU_BUDGET= 12\n', data)
+            self.render(jobs=4, **links)
+            self.assertIn('EMBERBSD_DARWIN_JOBS= 4\n', Path(self.options['output']).read_text())
+            self.render(jobs=1)
+            self.assertIn('EMBERBSD_DARWIN_JOBS= 1\n', Path(self.options['output']).read_text())
+        Path(self.options['output']).unlink()
+        shutil.rmtree(self.options['utility_bin'])
+        for count, message in ((12, 'jobs=1 for a serial build'), (None, 'CPU count is unavailable')):
+            with self.subTest(count=count), \
+                 patch('emberbsd_sdk.darwin_makeconf.os.cpu_count', return_value=count), \
+                 self.assertRaisesRegex(SDKError, message):
+                self.render()
+            self.assertFalse(Path(self.options['output']).exists())
+
+    def test_cli_default_jobs_follow_host_cpu_count(self):
+        del self.options['jobs']
+        self.options.update(link_python=self.tools['cc'], lock_root=self.root / 'work',
+                            heavy_link_context=self.root / 'work/heavy-link')
+        with patch('emberbsd_sdk.darwin_makeconf.os.cpu_count', return_value=12):
+            code, stdout, stderr = self.cli()
+        self.assertEqual((code, stderr), (0, ''))
+        self.assertIn('EMBERBSD_DARWIN_JOBS= 12\n', Path(json.loads(stdout)['makeconf']).read_text())
 
     def test_invalid_parallel_inputs_preserve_no_outputs(self):
         for changes in ({'jobs': 0}, {'jobs': True}, {'jobs': -2}, {'jobs': 18, 'cpu_budget': 8},

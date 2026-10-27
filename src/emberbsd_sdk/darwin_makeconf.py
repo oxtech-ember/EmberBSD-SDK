@@ -80,7 +80,7 @@ def _mapping(destination, tools):
 
 def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pkgdb,
                    utility_bin, makefiles, macos_sdk, deployment, tools, compiler_args,
-                   tool_roots, jobs=1, ldflags=(), source_tools=(), tool_phase='full',
+                   tool_roots, jobs=None, ldflags=(), source_tools=(), tool_phase='full',
                    compiler_family='clang', cpu_budget=None, link_python=None,
                    lock_root=None, heavy_link_context=None):
     """Render explicit inputs. Do not run tools, compiler queries, or a build.
@@ -88,13 +88,17 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
     Initial tools can use several declared roots before the final Ports prefix
     exists. Compiler argument order is retained; this is not a compiler probe.
     """
+    if jobs is None:
+        jobs = os.cpu_count()
+        _require(jobs is not None, 'host CPU count is unavailable; select jobs explicitly')
     _require(type(jobs) is int and jobs > 0, 'jobs must be a positive integer')
     cpu_budget = jobs if cpu_budget is None else cpu_budget
     _require(type(cpu_budget) is int and cpu_budget > 0 and jobs <= cpu_budget,
              'CPU budget must be positive and at least jobs')
     link_inputs = (link_python, lock_root, heavy_link_context)
     _require(all(link_inputs) if jobs > 1 or any(value is not None for value in link_inputs) else True,
-             'parallel builds require link-python, lock-root and heavy-link-context')
+             'parallel builds require link-python, lock-root and heavy-link-context; '
+             'select jobs=1 for a serial build')
     _require(compiler_family in ('clang', 'gcc'), 'unsupported compiler family')
     _require(tool_phase in ('initial', 'full'), 'invalid Darwin tool phase')
     _require(isinstance(deployment, str) and re.fullmatch(r'[0-9]+(?:\.[0-9]+){0,2}', deployment),

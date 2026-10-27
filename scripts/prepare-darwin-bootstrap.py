@@ -31,7 +31,7 @@ def main(argv=None):
                             help='append one compiler argument; use --' + role + '-arg=-OPTION')
     parser.add_argument('--ldflag', action='append', default=[])
     parser.add_argument('--source-tool', action='append', default=[])
-    parser.add_argument('--jobs', type=int, action=UniqueOption, help='positive package build parallelism; default 1')
+    parser.add_argument('--jobs', type=int, action=UniqueOption, help='positive package build parallelism; default: host CPU count')
     parser.add_argument('--cpu-budget', type=int, action=UniqueOption, help='available CPU budget; defaults to jobs')
     parser.add_argument('--link-python', action=UniqueOption, help='explicit native Python for the shared SDK linker launcher')
     parser.add_argument('--lock-root', action=UniqueOption, help='existing shared linker lock directory')
@@ -60,7 +60,7 @@ def main(argv=None):
         result = write_makeconf(**options, tools=tools, tool_roots=args.tool_root,
             compiler_args={role: getattr(args, role + '_arg') for role in ('cc', 'cxx', 'cpp')},
             ldflags=args.ldflag, source_tools=args.source_tool,
-            jobs=1 if args.jobs is None else args.jobs, tool_phase=args.tool_phase or 'full',
+            jobs=args.jobs, tool_phase=args.tool_phase or 'full',
             compiler_family=args.compiler_family or 'clang', cpu_budget=args.cpu_budget,
             link_python=args.link_python, lock_root=args.lock_root, heavy_link_context=args.heavy_link_context)
         print(json.dumps(result, indent=2))
