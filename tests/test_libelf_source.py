@@ -13,7 +13,7 @@ import sys
 import tarfile
 from unittest.mock import patch
 
-from test_core import TemporaryCase
+from test_core import TemporaryCase, git_environment, hostile_git_environment
 from libelf_fixture import RECIPE, recipe_fixture
 from emberbsd_sdk import jsonio
 from emberbsd_sdk.errors import SDKError
@@ -28,14 +28,14 @@ class LibelfSourceTests(TemporaryCase):
         self.archive = self.root / 'elftoolchain.tar.bz2'
         self.output = self.root / 'prepared'
         recipe_fixture(self.ports, self.archive)
-        subprocess.run(['git', '-C', str(self.ports), 'init', '-q'], check=True)
+        subprocess.run(['git', '-C', str(self.ports), 'init', '-q'], check=True, env=git_environment())
         self.commit()
 
     def commit(self):
-        subprocess.run(['git', '-C', str(self.ports), 'add', '-f', '.'], check=True)
+        subprocess.run(['git', '-C', str(self.ports), 'add', '-f', '.'], check=True, env=git_environment())
         subprocess.run(['git', '-C', str(self.ports), '-c', 'user.name=Fixture',
                         '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Fixture'],
-                       check=True)
+                       check=True, env=git_environment())
 
     def prepare(self):
         return prepare_source(self.ports, self.archive, self.output)
@@ -131,19 +131,19 @@ class LibelfSourceTests(TemporaryCase):
         committed = repository / relative
         committed.parent.mkdir(parents=True)
         shutil.copytree(self.output, committed)
-        subprocess.run(['git', 'init', '-q', str(repository)], check=True)
-        subprocess.run(['git', '-C', str(repository), 'add', str(relative)], check=True)
+        subprocess.run(['git', 'init', '-q', str(repository)], check=True, env=git_environment())
+        subprocess.run(['git', '-C', str(repository), 'add', str(relative)], check=True, env=git_environment())
         subprocess.run(['git', '-C', str(repository), '-c', 'user.name=Fixture',
                         '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Fixture'],
-                       check=True)
+                       check=True, env=git_environment())
         tree_entry = subprocess.run(
             ['git', '-C', str(repository), 'ls-tree', 'HEAD',
-             (relative / RECEIPT).as_posix()], check=True, capture_output=True).stdout
+             (relative / RECEIPT).as_posix()], check=True, capture_output=True, env=git_environment()).stdout
         self.assertTrue(tree_entry.startswith(b'100644 blob '))
 
         archive = self.root / 'bundled-source.tar'
         subprocess.run(['git', '-C', str(repository), 'archive', '--format=tar',
-                        '--output=' + str(archive), 'HEAD', relative.as_posix()], check=True)
+                        '--output=' + str(archive), 'HEAD', relative.as_posix()], check=True, env=git_environment())
         archived = self.root / 'archive-extract'
         archived.mkdir()
         checkout = self.root / 'git-checkout'
@@ -152,7 +152,7 @@ class LibelfSourceTests(TemporaryCase):
             with tarfile.open(archive) as packed:
                 packed.extractall(archived, filter='data')
             subprocess.run(['git', 'clone', '-q', '--no-hardlinks', str(repository),
-                            str(checkout)], check=True)
+                            str(checkout)], check=True, env=git_environment())
         finally:
             os.umask(previous_umask)
 
@@ -160,6 +160,12 @@ class LibelfSourceTests(TemporaryCase):
             self.assertEqual((root / RECEIPT).stat().st_mode & 0o777, 0o644)
             self.assertEqual(validate_source(root), record)
             self.assertEqual(validate_source(root, ports=self.ports), record)
+
+    def test_machine_git_config_cannot_drop_bundled_makefiles(self):
+        # A developer's global ignore of Makefile once made git add drop
+        # common/Makefile and libelf/Makefile from the bundled fixture.
+        with patch.dict(os.environ, hostile_git_environment(self.root / 'machine')):
+            self.test_git_archive_and_checkout_preserve_valid_source_receipt()
 
     def test_receipt_rejects_unexpected_permissions(self):
         self.prepare()

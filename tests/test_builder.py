@@ -17,7 +17,7 @@ from types import MappingProxyType
 from unittest.mock import patch
 from unittest import skipUnless
 
-from test_core import TemporaryCase, SDK_SOURCE, header, archive
+from test_core import TemporaryCase, SDK_SOURCE, header, archive, git_environment
 from emberbsd_sdk import inventory, jsonio, process
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.sysroot_builder import SysrootBuilder as ProductionBuilder
@@ -54,7 +54,7 @@ def write(path, data, mode=0o644):
 
 
 def git(path, *args):
-    return subprocess.check_output(['git', '-C', str(path), *args], stderr=subprocess.STDOUT).decode().strip()
+    return subprocess.check_output(['git', '-C', str(path), *args], stderr=subprocess.STDOUT, env=git_environment()).decode().strip()
 
 
 def commit(path):

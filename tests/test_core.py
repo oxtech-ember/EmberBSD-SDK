@@ -3,12 +3,14 @@
 """Host API contracts. ELF fixtures deliberately separate header and dynamic scope."""
 
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import struct
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -53,6 +55,43 @@ def dynamic_elf():
     data[256:256 + len(dynamic)] = dynamic
     data[400:400 + len(strings)] = strings
     return bytes(data)
+
+
+GIT_FIXTURE_IDENTITY = dict(GIT_AUTHOR_NAME='SDK fixture', GIT_AUTHOR_EMAIL='fixture@example.invalid',
+                            GIT_COMMITTER_NAME='SDK fixture', GIT_COMMITTER_EMAIL='fixture@example.invalid')
+
+
+def git_environment(environment=None):
+    """Return an environment for test Git commands that ignores machine Git config.
+
+    Global, system and XDG config, ignore and attribute files must not change
+    which fixture files Git adds, archives or checks out.  Inherited GIT_*
+    variables (repository, index or config overrides) are dropped as well.
+    """
+    source = os.environ if environment is None else environment
+    result = {key: value for key, value in source.items() if not key.startswith('GIT_')}
+    result.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull, GIT_CONFIG_NOSYSTEM='1',
+                  GIT_CONFIG_COUNT='3',
+                  GIT_CONFIG_KEY_0='core.excludesFile', GIT_CONFIG_VALUE_0=os.devnull,
+                  GIT_CONFIG_KEY_1='core.attributesFile', GIT_CONFIG_VALUE_1=os.devnull,
+                  GIT_CONFIG_KEY_2='init.defaultBranch', GIT_CONFIG_VALUE_2='main',
+                  **GIT_FIXTURE_IDENTITY)
+    return result
+
+
+def hostile_git_environment(root):
+    """Machine Git config that hides and export-ignores every Makefile."""
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / 'ignore').write_text('Makefile\n')
+    (root / 'attributes').write_text('Makefile export-ignore\n')
+    (root / 'gitconfig').write_text(f'[core]\n\texcludesFile = {root / "ignore"}\n'
+                                    f'\tattributesFile = {root / "attributes"}\n')
+    (root / 'xdg/git').mkdir(parents=True, exist_ok=True)
+    (root / 'xdg/git/ignore').write_text('Makefile\n')
+    (root / 'xdg/git/attributes').write_text('Makefile export-ignore\n')
+    return dict(GIT_CONFIG_GLOBAL=str(root / 'gitconfig'), GIT_CONFIG_SYSTEM=str(root / 'gitconfig'),
+                XDG_CONFIG_HOME=str(root / 'xdg'))
 
 
 class TemporaryCase(unittest.TestCase):
@@ -308,6 +347,45 @@ raise SystemExit(1 if failures else 0)
         result = subprocess.run([sys.executable, '-B', '-I', '-S', '-c', code, str(SDK_SOURCE / 'tests')],
                                 cwd=self.root, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class GitEnvironmentTests(TemporaryCase):
+    def check_fixture_keeps_makefile(self, hostile):
+        repository = self.root / 'repository'
+        self.write('repository/sub/Makefile', 'all:\n')
+        self.write('repository/README', 'fixture\n')
+        with patch.dict(os.environ, hostile):
+            # The machine config really hides the Makefile from plain Git.
+            subprocess.run(['git', 'init', '-q', str(repository)], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            ignored = subprocess.run(['git', '-C', str(repository), 'check-ignore', 'sub/Makefile'],
+                                     capture_output=True)
+            self.assertEqual(ignored.returncode, 0, ignored.stderr)
+            for args in (['add', '.'], ['commit', '-qm', 'Fixture']):
+                subprocess.run(['git', '-C', str(repository), *args], check=True, env=git_environment())
+            listed = subprocess.run(['git', '-C', str(repository), 'ls-files'], check=True,
+                                    capture_output=True, text=True, env=git_environment()).stdout
+            packed = subprocess.run(['git', '-C', str(repository), 'archive', '--format=tar', 'HEAD'],
+                                    check=True, capture_output=True, env=git_environment()).stdout
+        self.assertEqual(listed.split(), ['README', 'sub/Makefile'])
+        with tarfile.open(fileobj=io.BytesIO(packed)) as members:
+            self.assertIn('sub/Makefile', members.getnames())
+
+    def test_global_and_system_config_do_not_change_fixture_files(self):
+        hostile = hostile_git_environment(self.root / 'machine')
+        self.check_fixture_keeps_makefile(hostile)
+
+    def test_xdg_ignore_and_attributes_do_not_change_fixture_files(self):
+        hostile = hostile_git_environment(self.root / 'machine')
+        hostile.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+        self.check_fixture_keeps_makefile(hostile)
+
+    def test_inherited_git_variables_are_dropped(self):
+        environment = git_environment({'PATH': '/bin', 'GIT_DIR': '/elsewhere', 'GIT_INDEX_FILE': '/x'})
+        self.assertNotIn('GIT_DIR', environment)
+        self.assertNotIn('GIT_INDEX_FILE', environment)
+        self.assertEqual(environment['PATH'], '/bin')
+        self.assertEqual(environment['GIT_CONFIG_GLOBAL'], os.devnull)
 
 
 if __name__ == '__main__':

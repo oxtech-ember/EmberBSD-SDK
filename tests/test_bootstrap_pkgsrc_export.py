@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import unittest
 
-from test_core import TemporaryCase
+from test_core import TemporaryCase, git_environment
 from emberbsd_sdk.bootstrap_pkgsrc_export import (
     describe_export_source, export_source_manifest, create_export_plan,
     validate_export_source, validate_export_plan, validate_export_transfer_acceptance,
@@ -21,7 +21,7 @@ from unittest.mock import patch
 
 
 def git(root, *args):
-    return subprocess.check_output(['git', '-C', str(root), *args], stderr=subprocess.STDOUT).decode().strip()
+    return subprocess.check_output(['git', '-C', str(root), *args], stderr=subprocess.STDOUT, env=git_environment()).decode().strip()
 
 
 def write(path, data):

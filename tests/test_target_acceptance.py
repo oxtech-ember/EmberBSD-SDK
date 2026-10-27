@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 
-from test_core import SDK_SOURCE  # noqa: F401  # puts the SDK sources on sys.path
+from test_core import SDK_SOURCE, git_environment  # noqa: F401  # puts the SDK sources on sys.path
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.target_acceptance import (CHECKS, GUEST_CHECKS, HOST_CHECKS,
     _clean_source_revision, _copy_runtime, _install_diagnostic_runcom,
@@ -138,9 +138,9 @@ class SourceRoleTests(unittest.TestCase):
     def make_source(self, name, include_tests=True):
         source = self.root / name
         source.mkdir()
-        subprocess.run(['git', '-C', str(source), 'init', '-q'], check=True)
-        subprocess.run(['git', '-C', str(source), 'config', 'user.name', 'Fixture'], check=True)
-        subprocess.run(['git', '-C', str(source), 'config', 'user.email', 'fixture@example.invalid'], check=True)
+        subprocess.run(['git', '-C', str(source), 'init', '-q'], check=True, env=git_environment())
+        subprocess.run(['git', '-C', str(source), 'config', 'user.name', 'Fixture'], check=True, env=git_environment())
+        subprocess.run(['git', '-C', str(source), 'config', 'user.email', 'fixture@example.invalid'], check=True, env=git_environment())
         (source / 'README').write_text(name + '\n')
         if include_tests:
             for relative in (
@@ -152,9 +152,9 @@ class SourceRoleTests(unittest.TestCase):
                 path = source / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('fixture\n')
-        subprocess.run(['git', '-C', str(source), 'add', '.'], check=True)
-        subprocess.run(['git', '-C', str(source), 'commit', '-qm', 'fixture'], check=True)
-        revision = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
+        subprocess.run(['git', '-C', str(source), 'add', '.'], check=True, env=git_environment())
+        subprocess.run(['git', '-C', str(source), 'commit', '-qm', 'fixture'], check=True, env=git_environment())
+        revision = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True, env=git_environment()).strip()
         return source, revision
 
     def test_new_test_snapshot_does_not_change_core_build_identity(self):

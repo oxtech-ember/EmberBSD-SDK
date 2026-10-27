@@ -15,7 +15,7 @@ import sys
 import tarfile
 from unittest.mock import patch
 
-from test_core import TemporaryCase, header, SDK_SOURCE
+from test_core import TemporaryCase, header, SDK_SOURCE, git_environment
 from test_builder import fixture, write, commit, snapshot, fixture_native_selection
 from libedit_fixture import installation_source
 from emberbsd_sdk import os_release as kit, jsonio
@@ -946,7 +946,7 @@ class Amd64KitTests(TemporaryCase):
         source = self.root / 'checker'
         write(source / 'ember/tests/installer-image.py',
               'import sys\nassert sys.argv[2:] == [' + repr(sha) + ", '2.7+fixture', 'github.com']\n")
-        subprocess.run(['git', 'init', '-q', str(source)], check=True)
+        subprocess.run(['git', 'init', '-q', str(source)], check=True, env=git_environment())
         commit(source)
         kernel = header(62) + f'EmberBSD:{sha}\n\0'.encode()
         sets = {name + '.tar.xz': tar_bytes({'./netbsd': kernel} if name == 'kern-GENERIC' else {'./fixture': b'fixture'}) for name in kit.SETS}
