@@ -3,6 +3,8 @@
 # Origin: EmberBSD; AI-assisted OS and Ports build orchestration.
 """Checked separate-stage OS sysroot builder. No build occurs on import."""
 
+import copy
+import hashlib
 import itertools
 import os
 from pathlib import Path
@@ -358,7 +360,7 @@ class SysrootBuilder:
             return None
         record = jsonio.read_json(os.path.join(path, self.CONTEXT))
         if (not isinstance(record, dict) or set(record) != {'format', 'signature', 'sources', 'version'} or
-                record['format'] != 'emberbsd-sysroot-object-context' or type(record['version']) is not int or record['version'] != 1 or record['signature'] != self.context_signature(path)):
+                record['format'] != 'emberbsd-sysroot-object-context' or type(record['version']) is not int or record['version'] != 1 or not self.compatible_context(record, path)):
             raise SDKError(f'unknown or incompatible object context; leave it unchanged: {path}')
         try:
             for name in ('os', 'ports', 'sdk'):
@@ -369,6 +371,61 @@ class SysrootBuilder:
         except (KeyError, TypeError) as exc:
             raise SDKError(f'invalid object context: {path}: {exc}') from exc
         return record
+
+    def compatible_context(self, record, path):
+        """Compare compiled inputs, allowing controller updates and new utilities."""
+        old = copy.deepcopy(record['signature'])
+        new = copy.deepcopy(self.context_signature(path))
+        if old == new:
+            return True
+        try:
+            # Loaded modules still match selected sources before/during a run.
+            # Their hashes alone do not describe the compiler's object inputs.
+            old['python'].pop('modules', None)
+            new['python'].pop('modules', None)
+            previous, selected = old['native_toolset'], new['native_toolset']
+            if any(selected['tools'].get(role) != value
+                   for role, value in previous['tools'].items()):
+                return False
+            added = selected['tools'].keys() - previous['tools'].keys()
+            old_env, new_env = old['environment'], new['environment']
+            routing_changed = old_env['EMBER_NATIVE_TOOLS'] != new_env['EMBER_NATIVE_TOOLS']
+            if added or routing_changed:
+                # Compare the actual OS-owned rows from both source revisions.
+                # Existing commands/bindings cannot change during object reuse.
+                source = record['sources']['os']
+                data = self.git(self.sources['os']['path'], 'show', source['commit'] +
+                                ':tools/native-tools/contract') + '\n'
+                old_rows = data.splitlines()
+                new_rows = Path(self.native_contract).read_text(encoding='ascii').splitlines()
+                if (old_rows[:1] != new_rows[:1] or
+                        not set(old_rows[1:]) <= set(new_rows[1:])):
+                    return False
+                extra = [row.split(' ') for row in new_rows[1:] if row not in old_rows[1:]]
+                if (any(len(row) != 3 or row[2] != '-' for row in extra) or
+                        not added <= {row[1] for row in extra}):
+                    return False
+                old_digest = hashlib.sha256(data.encode('ascii')).hexdigest()
+                allowed = (os.path.join(old['tools'], 'native-routing'),
+                           os.path.join(old['tools'], 'native-routing-' + old_digest))
+                if (old_env['EMBER_NATIVE_TOOLS'] not in allowed or
+                        new_env['EMBER_NATIVE_TOOLS'] != self.paths['native-routing']):
+                    return False
+                new_env['EMBER_NATIVE_TOOLS'] = old_env['EMBER_NATIVE_TOOLS']
+            # Only the derived PATH may gain new utility directories. Preserve
+            # the relative order of every old search directory.
+            if (old_env['PATH'] != native_path(previous) or
+                    new_env['PATH'] != native_path(selected)):
+                return False
+            remaining = iter(new_env['PATH'].split(os.pathsep))
+            if not all(directory in remaining for directory in old_env['PATH'].split(os.pathsep)):
+                return False
+            new_env['PATH'] = old_env['PATH']
+            for role in added:
+                del selected['tools'][role]
+            return old == new
+        except (KeyError, TypeError, AttributeError, ValueError):
+            return False
 
     def context_signature(self, path):
         if self.compiler_family() != 'clang' or path != self.paths['tools']:
@@ -471,7 +528,8 @@ class SysrootBuilder:
             raise SDKError('destination must not be below the active sysroot; use SDK/stages/NAME')
         for name, directory in (('objects', 'os'), ('tools', 'tools')):
             self.paths[name] = self.output_path(self.options.get(name, os.path.join(sdk, 'obj', directory, profile)), os.path.join(sdk, 'obj'))
-        self.paths['native-routing'] = os.path.join(self.paths['tools'], 'native-routing')
+        self.paths['native-routing'] = os.path.join(
+            self.paths['tools'], 'native-routing-' + self.native_contract_sha256)
         self.environment['EMBER_NATIVE_TOOLS'] = self.paths['native-routing']
         self.empty_destination()
         for name in ('obj', 'packages', 'receipts'):
