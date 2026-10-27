@@ -202,9 +202,9 @@ def run(options):
              'kernel differs from the selected OS build')
     _require(sha256_file(set_comp) == profile['output_sha256']['release/evbarm-aarch64/binary/sets/comp.tar.xz'],
              'comp set differs from the selected OS build')
-    paths = profile['sdk_receipt']['paths']
-    tools = Path(paths['tools']).resolve(strict=True)
-    destination = Path(paths['destination']).resolve(strict=True)
+    receipt_paths = profile['sdk_receipt']['paths']
+    tools = Path(receipt_paths['tools']).resolve(strict=True)
+    destination = Path(receipt_paths['destination']).resolve(strict=True)
     _require((destination / 'dest/etc/MAKEDEV').is_file(), 'same-build DESTDIR/MAKEDEV is missing')
 
     native = native_toolset.load_host_prefix(str(host_prefix),
