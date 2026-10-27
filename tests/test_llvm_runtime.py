@@ -190,6 +190,38 @@ class LLVMRuntimeTests(LLVMRuntimeFixture):
         with self.assertRaisesRegex(SDKError, 'Ports revision changed'):
             llvm_runtime.validate_stage(self.stage, ports_revision='f' * 40)
 
+    def test_reused_bootstrap_retains_compilation_origin_and_checks_bytes(self):
+        self.static_unwind()
+        original_hash = inventory.sha256_file(self.stage / 'runtime.json')
+        compiled_recipe = copy.deepcopy(self.record['recipe'])
+        self.record['recipe']['ports_revision'] = '1' * 40
+        self.record['reuse'] = dict(operation='unchanged-bootstrap-artifacts',
+            compiled_manifest_sha256=original_hash, compiled_recipe=compiled_recipe,
+            compiled_source_tree_sha256='2' * 64, previous_manifest_sha256=original_hash,
+            selected_source_tree_sha256='3' * 64)
+        self.save()
+        verified = llvm_runtime.validate_stage(self.stage)
+        self.assertEqual(verified['reuse']['compiled_recipe'], compiled_recipe)
+        self.assertNotEqual(verified['recipe'], compiled_recipe)
+        (self.stage / self.builtins).write_bytes(archive(header(183, 1) + b'changed'))
+        with self.assertRaisesRegex(SDKError, 'inventory changed'):
+            llvm_runtime.validate_stage(self.stage)
+
+    def test_reuse_identity_does_not_extend_to_full_runtime_or_unknown_origins(self):
+        self.record['reuse'] = dict(operation='unchanged-bootstrap-artifacts',
+            compiled_manifest_sha256='1' * 64, compiled_recipe=copy.deepcopy(self.record['recipe']),
+            compiled_source_tree_sha256='2' * 64, previous_manifest_sha256='3' * 64,
+            selected_source_tree_sha256='4' * 64)
+        llvm_runtime.validate_identity(self.record)
+        original = copy.deepcopy(self.record)
+        for key in ('compiled_manifest_sha256', 'previous_manifest_sha256', 'compiled_source_tree_sha256'):
+            record = copy.deepcopy(original); record['reuse'][key] = 'invalid'
+            with self.subTest(key=key), self.assertRaises(SDKError):
+                llvm_runtime.validate_identity(record)
+        self.full()
+        with self.assertRaisesRegex(SDKError, 'unsupported runtime reuse'):
+            llvm_runtime.validate_identity(self.record)
+
     def test_consumed_bootstrap_identity_has_no_local_path(self):
         self.full()
         self.record['bootstrap'] = dict(manifest_sha256='f' * 64,
