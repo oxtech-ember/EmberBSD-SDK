@@ -105,7 +105,7 @@ class SysrootBuilder:
     FLAGS = ('TOOLCHAIN_MISSING=yes MKGCCCMDS=no MKCOMPAT=no MKCXX=yes '
              'MKDEBUG=no MKDEBUGLIB=no MKX11=no MKLLVM=no MKLLVMRT=no MKLIBCXX=no MKKMOD=no MKGDB=no MKBINUTILS=no '
              'MKATF=no MKKYUA=no MKMAN=no MKDOC=no MKINFO=no MKHTML=no MKLINT=no '
-             'MKPROFILE=no MKCVS=no MKGROFF=no MKRUMP=no MAKECONF=/dev/null').split()
+             'MKPROFILE=no MKCVS=no MKGROFF=no MKRUMP=no MKREPRO=yes MAKECONF=/dev/null').split()
     VERIFIER = 'profiles/development-toolchain/runtime/recipe/files/runtime.py'
     CONTEXT = '.prebuild-sdk-context.json'
     QUARANTINE = '.prebuild-sdk-quarantine.json'

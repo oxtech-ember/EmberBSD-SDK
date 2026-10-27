@@ -25,7 +25,7 @@ def flags_for(target, compiler_family=None):
     common = list(SysrootBuilder.FLAGS)
     replacements = dict(MKFIRMWARE='yes', MKLINKLIB='yes', MKSTATICLIB='yes',
                         MKPIC='yes', MKPICLIB='yes', MKDYNAMICROOT='yes',
-                        MKLIBSTDCXX='yes', MKREPRO='yes', USE_XZ_SETS='yes')
+                        MKLIBSTDCXX='yes', USE_XZ_SETS='yes')
     if target == 'amd64':
         replacements.update(MKKMOD='yes', MKMAN='yes', MKHTML='yes', MKDOC='yes',
                             MKINFO='yes', MKATF='yes', MKKYUA='yes', MKLINT='yes')
