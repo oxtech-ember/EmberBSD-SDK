@@ -69,14 +69,19 @@ def clang_application_commands(compiler, sysroot, runtime_record, *, runtime_roo
     paths.real_directory(runtime_root)
     selected = llvm_runtime.runtime_paths(runtime_root, record)
     commands = {role:list(command) for role,command in compiler['commands'].items()}
-    common = ['--sysroot='+root, '-resource-dir='+selected['llvm-resource'],
-              '-isystem', compiler['resource_dir']+'/include']
+    # Host clang resource headers supply freestanding C builtins when the target
+    # resource-dir has only compiler-rt. For C++ they must follow libc++ so
+    # <cstddef> finds libc++'s <stddef.h> before the C resource header.
+    common = ['--sysroot='+root, '-resource-dir='+selected['llvm-resource']]
+    resource_includes = ['-isystem', compiler['resource_dir']+'/include']
     for role in ('cc','cxx'):
         # --ld-path is a link operation flag. Clang diagnoses it under -c -Werror.
         commands[role] = [word for word in commands[role] if not word.startswith('--ld-path=')] + common
-    commands['cpp'] += common
+    commands['cpp'] += common + resource_includes
+    commands['cc'] += resource_includes
     commands['cxx'] += ['-nostdinc++','-isystem',
                         os.path.join(runtime_root,record['artifacts']['cxx_headers'])]
+    commands['cxx'] += resource_includes
     if link:
         for role, language in (('cc','c'), ('cxx','c++')):
             commands[role] += clang_application_link_flags(compiler, root, record,

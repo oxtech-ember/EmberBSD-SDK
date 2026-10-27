@@ -72,6 +72,10 @@ class ApplicationToolchainTests(TemporaryCase):
             self.assertIn('--ld-path='+self.compiler['binaries']['ld']['selected_path'], link[role])
         self.assertIn(str(self.sysroot/self.runtime['artifacts']['cxx_headers']), compile['cxx'])
         self.assertIn(self.compiler['resource_dir']+'/include', compile['cc'])
+        cxx_headers = str(self.sysroot/self.runtime['artifacts']['cxx_headers'])
+        resource_include = self.compiler['resource_dir']+'/include'
+        self.assertIn(resource_include, compile['cxx'])
+        self.assertLess(compile['cxx'].index(cxx_headers), compile['cxx'].index(resource_include))
         self.assertEqual(compile['cpp'],link['cpp'])
         self.assertEqual(compile['as'], self.compiler['commands']['as'])
         self.assertIn('-stdlib=libc++',link['cxx'])
