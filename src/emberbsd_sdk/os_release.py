@@ -324,6 +324,20 @@ def prepare_sysroot(build, directory, qualification):
     p = read_json(build / 'build-profile.json')
     version = build_version(build, p)
     profile_check(p, sha, version)
+    q = None
+    evidence = None
+    if qualification:
+        raw = read_json(qualification)
+        fields = ('source_commit base_sha256 comp_sha256 kernel_gzip_sha256 consumer_compiler consumer_compiler_family execution checks runtime_libraries evidence_sha256').split()
+        q = {k: raw[k] for k in fields if k in raw}
+        q['checks'] = {k: raw['checks'][k] for k in SYSROOT_CHECKS if k in raw['checks']}
+        qualification_dir = Path(qualification).resolve().parent
+        sidecar_evidence = qualification_dir / EVIDENCE
+        evidence = sidecar_evidence if sidecar_evidence.is_file() else build / EVIDENCE
+        expected_evidence = q.get('evidence_sha256', {}).get(EVIDENCE)
+        check(evidence.is_file() and not evidence.is_symlink() and
+              sha256_file(evidence) == expected_evidence,
+              'Target evidence is missing or differs from its qualification receipt')
     directory.mkdir(mode=0o700)
     for name in SYSROOT_SETS:
         shutil.copyfile(build / 'release/evbarm-aarch64/binary/sets' / name, directory / name)
@@ -334,14 +348,9 @@ def prepare_sysroot(build, directory, qualification):
     if (build / 'build-run.json').is_file():
         shutil.copyfile(build / 'build-run.json', directory / 'build-run.json')
         names.append('build-run.json')
-    q = None
     if qualification:
-        raw = read_json(qualification)
-        fields = ('source_commit base_sha256 comp_sha256 kernel_gzip_sha256 consumer_compiler consumer_compiler_family execution checks runtime_libraries evidence_sha256').split()
-        q = {k: raw[k] for k in fields if k in raw}
-        q['checks'] = {k: raw['checks'][k] for k in SYSROOT_CHECKS if k in raw['checks']}
         write_json(directory / 'qualification.json', q)
-        shutil.copyfile(build / EVIDENCE, directory / EVIDENCE)
+        shutil.copyfile(evidence, directory / EVIDENCE)
         names += ['qualification.json', EVIDENCE]
     modern = p.get('schema') in (2, 3, 4, 5)
     llvm = p.get('schema') in (4, 5)
