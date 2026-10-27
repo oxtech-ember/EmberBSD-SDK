@@ -440,6 +440,27 @@ else: raise SystemExit('unexpected operation')
     return options
 
 
+def retarget_runtime_amd64(runtime):
+    """Rewrite a synthetic aarch64 LLVM runtime stage as a consistent amd64 stage."""
+    old_builtins = runtime.record['artifacts']['builtins']
+    new_builtins = old_builtins.replace('-aarch64.', '-x86_64.')
+    (runtime.stage / old_builtins).rename(runtime.stage / new_builtins)
+    runtime.builtins = new_builtins
+    runtime.record['artifacts']['builtins'] = new_builtins
+    runtime.record.update(target='amd64', triplet='x86_64--netbsd',
+                          machine_arch='x86_64', elf_machine=62)
+    for path in runtime.stage.rglob('*'):
+        if not path.is_file() or path.name == 'runtime.json':
+            continue
+        data = bytearray(path.read_bytes())
+        if data.startswith(b'\x7fELF'):
+            data[18:20] = (62).to_bytes(2, 'little')
+        elif data.startswith(b'!<arch>\n') and data[68:72] == b'\x7fELF':
+            data[86:88] = (62).to_bytes(2, 'little')
+        path.write_bytes(data)
+    runtime.save()
+
+
 class BuilderReleaseTests(TemporaryCase):
     def test_producer_commands_reject_invalid_or_non_clang_base_cxx(self):
         with self.assertRaisesRegex(SDKError, 'must be boolean'):
@@ -518,24 +539,8 @@ class BuilderReleaseTests(TemporaryCase):
         class ClangRelease(AMD64ClangIdentity, OSReleaseBuilder):
             pass
         options = release_fixture(self.root, 'amd64')
-        builder, runtime = llvm_fixtures.LLVMBuilderTests.builder(self, options, ClangRelease)
-        old_builtins = runtime.record['artifacts']['builtins']
-        new_builtins = old_builtins.replace('-aarch64.', '-x86_64.')
-        (runtime.stage / old_builtins).rename(runtime.stage / new_builtins)
-        runtime.builtins = new_builtins
-        runtime.record['artifacts']['builtins'] = new_builtins
-        runtime.record.update(target='amd64', triplet='x86_64--netbsd',
-                              machine_arch='x86_64', elf_machine=62)
-        for path in runtime.stage.rglob('*'):
-            if not path.is_file() or path.name == 'runtime.json':
-                continue
-            data = bytearray(path.read_bytes())
-            if data.startswith(b'\x7fELF'):
-                data[18:20] = (62).to_bytes(2, 'little')
-            elif data.startswith(b'!<arch>\n') and data[68:72] == b'\x7fELF':
-                data[86:88] = (62).to_bytes(2, 'little')
-            path.write_bytes(data)
-        runtime.save()
+        builder, _ = llvm_fixtures.LLVMBuilderTests.builder(self, options, ClangRelease,
+                                                            retarget=retarget_runtime_amd64)
         with patch('emberbsd_sdk.native_runtime_install.NativeRuntimeInstaller',
                    FixtureNativeRuntimeInstaller):
             receipt = builder.run()

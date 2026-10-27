@@ -115,7 +115,7 @@ class LLVMBuilderTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, 'must be boolean'):
             SysrootBuilder({'compiler-family': 'gcc', 'base-cxx': 'false'}).preflight()
 
-    def builder(self, options=None, builder_type=ClangBuilder):
+    def builder(self, options=None, builder_type=ClangBuilder, retarget=None):
         options = fixture(self.root) if options is None else options
         source = self.root / 'llvm-selected-source'; source.mkdir()
         runtime = runtime_tests.LLVMRuntimeTests()
@@ -143,6 +143,8 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         bootstrap.record['recipe'] = copy.deepcopy(runtime.record['recipe'])
         bootstrap.record['base']['os_revision'] = runtime.record['base']['os_revision']
         bootstrap.save()
+        if retarget:  # before pinning, so the full runtime records the retargeted bootstrap
+            retarget(runtime); retarget(bootstrap)
         names = (bootstrap.record['artifacts']['builtins'], bootstrap.record['artifacts']['libunwind']['static'])
         runtime.record['bootstrap'] = dict(manifest_sha256=inventory.sha256_file(bootstrap.stage / 'runtime.json'),
             files={name: bootstrap.record['files'][name] for name in names})
