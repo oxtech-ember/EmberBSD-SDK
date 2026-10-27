@@ -366,7 +366,7 @@ def prepare_sysroot(build, directory, qualification):
         'Native bootstrap compiler commands are excluded. Build commands and hashes are in build-profile.json.\n'
         'source-export.sha256 identifies the git archive, not the GitHub generated source archive.\n'
         f'Source: https://github.com/{REPOSITORY}/tree/{sha}.\n\n'
-        + ('The bound target receipt records finite C/C++ and libc checks with the selected compiler.\n' if q else 'Target qualification is pending. Do not publish this candidate.\n')
+        + ('The bound target receipt records finite C/C++ and libc checks with the selected compiler.\n' if q else 'No target qualification receipt is bound to this kit.\n')
         + 'This kit does not qualify installation media or physical hardware. Firmware and source licences remain in the sets.\n'
         'Verify SHA256 and provenance before extracting into an empty sysroot. Do not install over a live system.\n')
     m = dict(schema='emberbsd.aarch64.sysroot.v3' if llvm else 'emberbsd.aarch64.sysroot.v2' if modern else 'emberbsd.aarch64.sysroot.v1', repository=REPOSITORY,
@@ -440,7 +440,7 @@ def prepare_amd64(build, directory, qualification, os_source):
         + ('The build uses the common Clang/LLVM compiler and runtime.\n' if p and p.get('schema') in (4, 5) else
            'The build uses the common verified GCC16 compiler and runtime.\n' if p else
            'This historical build uses the in-tree bootstrap compiler; it does not qualify a GCC16 userland.\n')
-        + ('The bound VM receipt records installation, persistence and TLS rejection checks.\n' if q else 'VM qualification is pending. Do not publish this candidate.\n')
+        + ('The bound VM receipt records installation, persistence and TLS rejection checks.\n' if q else 'No VM qualification receipt is bound to this kit.\n')
         + 'Physical machines are not qualified. GitHub-native installation requires a separate post-publication check.\n'
         'Verify SHA256 before use. Select the 13 required sets; skip only an absent optional set after its explicit HTTP 404.\n'
         'Never skip a required set or a certificate error. Back up the destination before installation.\n'

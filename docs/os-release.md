@@ -130,7 +130,7 @@ python3 scripts/os-release.py --profile amd64 \
 ```
 
 Preparation requires a new output directory. A failed preparation leaves a
-partial unqualified kit for inspection. Do not publish it.
+partial kit for inspection. Do not publish it.
 
 For amd64, SDK calls the OS `ember/tests/installer-image.py` contract with the
 actual image, source ID, version and GitHub host. `--os-source` selects that
@@ -151,9 +151,11 @@ Verification rejects extra files, missing files, symlinks, changed bytes,
 unsafe or duplicate names, mixed source IDs and assets of 2 GiB or more.
 It uses the original file order for SHA256 receipt checks.
 
-## Qualification and immutable publication
+## Optional qualification receipt
 
-Run actual target checks before supplying a qualification receipt. The checker
+A person starts publication deliberately and does the release checks.
+`publish` needs no qualification receipt. To record target results in the kit,
+prepare it with `--qualification`. Run actual target checks first. The checker
 validates receipt bindings; it cannot establish that claimed execution occurred.
 For amd64, follow the OS
 [VM installation guide](https://github.com/oxtech-ember/EmberBSD/blob/main/doc/guide/amd64-vm-install.md).
@@ -166,14 +168,14 @@ The receipt binds `source_commit`, `image_sha256`, `usb_image_sha256` and
 
 AArch64 uses the [target receipt](aarch64-sysroot-release.md).
 Prepare another new kit with `--qualification /absolute/receipt.json`.
+Without that option, the release notes state that no receipt is bound.
+
+## Immutable publication
 
 ```sh
-python3 scripts/os-release.py --profile amd64 \
-  prepare /absolute/build /absolute/qualified-kit \
-  --os-source /absolute/EmberBSD --qualification /absolute/vm-receipt.json
-python3 scripts/os-release.py --profile amd64 draft /absolute/qualified-kit
-python3 scripts/os-release.py --profile amd64 publish /absolute/qualified-kit
-python3 scripts/os-release.py --profile amd64 verify-remote /absolute/qualified-kit
+python3 scripts/os-release.py --profile amd64 draft /absolute/new-amd64-kit
+python3 scripts/os-release.py --profile amd64 publish /absolute/new-amd64-kit
+python3 scripts/os-release.py --profile amd64 verify-remote /absolute/new-amd64-kit
 ```
 
 Use the same operations with `--profile aarch64-sysroot` for development sets.
@@ -205,7 +207,7 @@ schema 4 and bind the selected native prefix. Builds use the OS native command m
 be repurposed.
 
 Run `python3 -B -m unittest discover -s tests -p 'test_*.py'`.
-The release tests exercise archive composition, qualification binding, actual
+The release tests exercise archive composition, optional qualification binding, actual
 fixture command dispatch, failure isolation and immutable remote-state refusals.
 They do not build an OS, run a VM, inspect hardware or write GitHub releases.
 The Clang complete-release sequence needs an actual full build and target

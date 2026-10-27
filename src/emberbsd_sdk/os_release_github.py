@@ -156,7 +156,6 @@ class GitHub:
 
     def publish(self):
         self.check_local()
-        kit.require_qualification(self.manifest, self.profile)
         release = self.preflight()
         kit.check(release, 'Create and verify the draft first')
         if release['draft'] is True:

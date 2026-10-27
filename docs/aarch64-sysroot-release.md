@@ -7,6 +7,7 @@ contract. These development sets do not qualify installation media or boards.
 
 ## Target qualification
 
+This receipt is optional. Publication does not require it.
 Use an empty sysroot. Check libc aliases and actual loader/runtime selection.
 Build the current Ports C11 plain/LTO, atomics, TLS and thread consumers, plus
 C++20 and cross-DSO exception checks. Execute them with the matching kernel and

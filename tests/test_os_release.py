@@ -238,11 +238,7 @@ class HistoricalKitTests(TemporaryCase):
                 with self.assertRaises(SDKError):
                     kit.verify(path, 'aarch64-sysroot')
 
-    def test_qualification_binding_and_local_publication_refusal(self):
-        calls = []
-        with self.assertRaisesRegex(SDKError, 'qualification is required'):
-            GitHub(self.directory, 'aarch64-sysroot', lambda *a: calls.append(a)).publish()
-        self.assertEqual(calls, [])
+    def test_optional_qualification_binding(self):
         q = qualify(self.build, self.manifest, 'aarch64-sysroot')
         qualified = self.root / 'qualified'
         m = kit.prepare(self.build, qualified, 'aarch64-sysroot', q)
@@ -796,14 +792,18 @@ class GitHubTests(TemporaryCase):
         self.directory = self.root / 'kit'
         m = kit.prepare(self.build, self.root / 'unqualified', 'aarch64-sysroot')
         self.m = kit.prepare(self.build, self.directory, 'aarch64-sysroot', qualify(self.build, m, 'aarch64-sysroot'))
+        self.select(self.directory)
+        self.enabled = True
+        self.status = 'ahead'
+
+    def select(self, directory):
+        self.directory = directory
         self.calls = []
         self.p = GitHub(self.directory, 'aarch64-sysroot', self.runner)
         self.release = dict(tag_name=self.p.tag, draft=True, immutable=False, prerelease=True, name=self.p.title,
                             body=(self.directory / 'release-notes.md').read_text(), assets=self.assets(), html_url=self.p.url,
                             target_commitish=self.p.sha)
         self.refs = [{'ref': 'refs/tags/' + self.p.tag, 'object': {'type': 'commit', 'sha': self.p.sha}}]
-        self.enabled = True
-        self.status = 'ahead'
 
     def assets(self):
         return [dict(name=n, state='uploaded', size=(self.directory / n).stat().st_size,
@@ -840,6 +840,16 @@ class GitHubTests(TemporaryCase):
         self.assertEqual(self.p.publish(), self.p.url)
         edits = sum(a[:2] == ('release', 'edit') for a in self.calls)
         self.assertEqual(edits, 1)
+        self.assertEqual(self.p.publish(), self.p.url)
+        self.assertEqual(sum(a[:2] == ('release', 'edit') for a in self.calls), 1)
+        self.assertTrue(any(a[:2] == ('release', 'verify-asset') for a in self.calls))
+
+    def test_kit_without_qualification_publishes_on_request(self):
+        self.select(self.root / 'unqualified')
+        self.assertIsNone(kit.verify(self.directory, 'aarch64-sysroot')['qualification'])
+        notes = (self.directory / 'release-notes.md').read_text()
+        self.assertNotIn('Do not publish', notes)
+        self.assertIn('No target qualification receipt is bound to this kit.', notes)
         self.assertEqual(self.p.publish(), self.p.url)
         self.assertEqual(sum(a[:2] == ('release', 'edit') for a in self.calls), 1)
         self.assertTrue(any(a[:2] == ('release', 'verify-asset') for a in self.calls))
