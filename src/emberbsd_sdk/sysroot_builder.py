@@ -396,6 +396,13 @@ class SysrootBuilder:
             # Their hashes alone do not describe the compiler's object inputs.
             old['python'].pop('modules', None)
             new['python'].pop('modules', None)
+            if (self.compiler_family() == 'clang' and
+                    (path == self.paths['tools'] or getattr(self, 'llvm_phase', None) == 'headers')):
+                # Native tools and target headers never invoke the target linker.
+                # Keep its selected route and all compiler/ABI inputs, but do not
+                # discard these outputs solely because ld.lld bytes changed.
+                for signature in (old, new):
+                    signature['compiler']['binaries']['ld'].pop('sha256', None)
             previous, selected = old['native_toolset'], new['native_toolset']
             if any(selected['tools'].get(role) != value
                    for role, value in previous['tools'].items()):

@@ -119,6 +119,12 @@ alone cannot prove that a completed stage contains newer source changes.
 Unrelated Ports commits and SDK controller changes do not require rebuilding
 these stages when the measured common recipes and all compiled inputs match.
 Changed OS trees need a new stage, reusing compatible objects incrementally.
+Native-tool and headers-only contexts do not use the target linker and may
+reuse their outputs after its binary changes at the same selected path.
+Compiler identities, selected command routes and ABI inputs still must match.
+Base/final object contexts retain the strict target linker comparison; linked
+target outputs cannot silently bypass a required relink. Fingerprints remain
+in each original record, including records for reused headers.
 Native ABI flags map only to `HOST_CPPFLAGS`, `HOST_CFLAGS`, `HOST_CXXFLAGS`, and `HOST_LDFLAGS`.
 The build environment uses prefix directories in `PATH`; Git source inspection remains separate.
 Git is selected before narrowing that path. Repeated phase preflight checks use
