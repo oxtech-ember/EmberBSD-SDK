@@ -2,6 +2,8 @@
 import tempfile
 import unittest
 from pathlib import Path
+
+from test_core import SDK_SOURCE  # noqa: F401  # puts the SDK sources on sys.path
 from emberbsd_sdk import sourceprep
 from emberbsd_sdk.errors import SDKError
 
