@@ -240,6 +240,8 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertFalse(any('EMBER_LIBARCHIVE_SOURCE=' in arg or 'EMBER_LIBEVENT_SOURCE=' in arg
                              for arg in receipt['plan'][0]))
         self.assertIn('EMBER_HOST_BFD_CONFIG=' + builder.options['host-binutils'] + '/host-bfd.mk', receipt['plan'][0])
+        self.assertIn('MKREPRO=yes', receipt['plan'][0])
+        self.assertIn('MKREPRO_TIMESTAMP=' + str(builder.source_timestamp()), receipt['plan'][0])
         for name in ('stdio.h','sys/types.h','sys/param.h','stdint.h','limits.h','math.h','pthread.h'):
             write(Path(builder.paths['destination'])/'usr/include'/name, '/* base header */\n')
         builder.inspect_payload()

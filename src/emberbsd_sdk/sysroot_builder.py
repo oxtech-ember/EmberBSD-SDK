@@ -678,13 +678,20 @@ class SysrootBuilder:
         self.configure_signature()
         self.contexts = {name: self.inspect_context(self.paths[name]) for name in ('objects', 'tools')}
         self.build_command = [self.shell, os.path.join(self.paths['os'], 'build.sh'), '-U', '-u', '-j' + jobs, '-m', self.target['machine'], '-a', self.target['arch'], '-O', self.paths['objects'], '-T', self.paths['tools'], '-D', self.paths['destination']]
-        for flag in self.flags + ['BUILDINFO=EmberBSD:' + self.sources['os']['commit']]:
+        # Commit metadata stays out of the signature: the same OS tree at a new
+        # commit reuses compatible objects. build.sh derives a missing
+        # MKREPRO_TIMESTAMP from VCS tools that the sanitized PATH omits.
+        for flag in self.flags + ['MKREPRO_TIMESTAMP=' + str(self.source_timestamp()),
+                                  'BUILDINFO=EmberBSD:' + self.sources['os']['commit']]:
             self.build_command.extend(('-V', flag))
         self.build_command.extend(('tools', 'libs'))
         self.loader_command = [os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine']), '-C', os.path.join(self.paths['os'], 'libexec/ld.elf_so'), '-j' + jobs, 'dependall']
         self.install_command = self.loader_command[:-1] + ['install']
         self.receipt = dict(format='emberbsd-sysroot-build', version=3 if clang else 2, scope='sysroot-build', qualification='not-built', execution_acceptance='not-run', workspace=layout, paths=self.paths, sources=self.sources, previous_contexts=self.contexts, signature=self.signature, commands=self.commands, plan=[self.runtime_command, self.build_command, self.loader_command, self.install_command, self.runtime_command, self.runtime_command], working_directory=self.paths['os'], copy=dict(source=prefix, destination=os.path.join(self.paths['destination'], 'usr/pkg/llvm' if clang else 'usr/pkg/gcc16'), verification='exact pre/copy/post inventory'), not_checked=['target execution', 'ABI compatibility', 'SDK release'])
         return self.receipt
+
+    def source_timestamp(self):
+        return int(self.git(self.paths['os'], 'show', '-s', '--format=%ct', self.sources['os']['commit']))
 
     def mkdirs(self, path, boundary):
         current = boundary

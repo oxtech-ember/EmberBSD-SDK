@@ -224,7 +224,7 @@ class OSReleaseBuilder(SysrootBuilder):
             raise SDKError('base C++ selection must be boolean')
         if self.options.get('base-cxx', False) and self.compiler_family() != 'clang':
             raise SDKError('base C++ aliases require the selected Clang runtime')
-        self.timestamp = int(self.git(self.paths['os'], 'show', '-s', '--format=%ct', self.sources['os']['commit']))
+        self.timestamp = self.source_timestamp()
         self.product_version = source_version(Path(self.paths['os'], 'share/mk/bsd.own.mk').read_text())
         self.signature['product_version'] = self.product_version
         self.flags, self.release_commands = producer_commands(self.options['target'], self.paths, self.host_tools,

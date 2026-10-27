@@ -366,6 +366,9 @@ class BuilderTests(TemporaryCase):
         for flag in ('MKCXX=yes', 'MKGCCCMDS=no', 'MKLLVM=no', 'MKLLVMRT=no', 'MKLIBCXX=no'):
             self.assertIn(flag, record['plan'][1])
         self.assertNotIn('MKOBJDIRS=no', record['plan'][1])
+        timestamp = git(self.options['os'], 'show', '-s', '--format=%ct', record['sources']['os']['commit']).strip()
+        self.assertIn('MKREPRO=yes', record['plan'][1])
+        self.assertIn('MKREPRO_TIMESTAMP=' + timestamp, record['plan'][1])
         self.assertIn('EMBER_LIBEDIT_SOURCE=' + self.options['libedit-source'], record['plan'][1])
         self.assertIn('EMBER_HOST_BFD_CONFIG=' + self.options['host-binutils'] + '/host-bfd.mk', record['plan'][1])
         self.assertEqual(record['signature']['libedit']['recipe']['ports_commit'], record['sources']['ports']['commit'])
