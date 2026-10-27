@@ -284,6 +284,81 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         with self.assertRaisesRegex(SDKError, 'incomplete or unrelated LLVM OS stage'):
             type(builder)(builder.options).run()
 
+    def bootstrap_base(self):
+        header = '/* measured bootstrap header */\n'
+        class Base(LLVMPhaseBuilder, ClangBuilder):
+            installed_header = header
+
+            def __init__(self, options):
+                super().__init__(options, 'base')
+
+            def build_payload(self):
+                super().build_payload()
+                write(Path(self.paths['destination']) / 'usr/include/stdint.h', self.installed_header)
+
+        builder, runtime = self.builder(builder_type=Base)
+        builder.options['base-cxx'] = False
+        base = self.root / 'measured-headers'
+        write(base / 'usr/include/stdint.h', header)
+        runtime.record['base']['files'] = {
+            'usr/include/stdint.h': inventory.sha256_file(base / 'usr/include/stdint.h')}
+        runtime.save()
+        builder.options['llvm-runtime-base'] = str(base)
+        return builder, runtime, base
+
+    def test_bootstrap_runtime_reuses_headers_across_os_fix(self):
+        builder, runtime, _ = self.bootstrap_base()
+        write(Path(builder.options['os']) / 'build-rule-fix', 'changed rule, same headers')
+        commit(builder.options['os'])
+        result = builder.run()
+        self.assertEqual(result['qualification'], 'built-and-inspected')
+        self.assertNotEqual(result['sources']['os']['commit'], runtime.record['base']['os_revision'])
+        self.assertEqual(result['signature']['runtime']['manifest'], runtime.record)
+
+    def test_bootstrap_runtime_rejects_changed_input_headers_before_dispatch(self):
+        builder, _, base = self.bootstrap_base()
+        write(base / 'usr/include/stdint.h', 'changed input')
+        with patch.object(type(builder), 'build_payload', side_effect=AssertionError('must refuse')):
+            with self.assertRaisesRegex(SDKError, 'base inputs changed'):
+                builder.run()
+        self.assertFalse(Path(builder.options['destination']).exists())
+
+    def test_bootstrap_runtime_rejects_new_base_headers_before_qualification(self):
+        builder, _, _ = self.bootstrap_base()
+        builder.installed_header = 'changed installed header'
+        with self.assertRaisesRegex(SDKError, 'base inputs changed'):
+            builder.run()
+        destination = Path(builder.options['destination'])
+        self.assertTrue((destination / builder.MARKER).exists())
+        self.assertEqual(jsonio.read_json(destination / builder.RECEIPT)['qualification'], 'incomplete')
+
+    def test_bootstrap_runtime_needs_header_inputs_to_accept_an_ancestor(self):
+        builder, _, _ = self.bootstrap_base()
+        del builder.options['llvm-runtime-base']
+        write(Path(builder.options['os']) / 'build-rule-fix', 'changed rule')
+        commit(builder.options['os'])
+        with self.assertRaisesRegex(SDKError, 'base OS differs'):
+            builder.preflight()
+
+    def test_bootstrap_runtime_rejects_unrelated_os_even_with_matching_headers(self):
+        builder, runtime, _ = self.bootstrap_base()
+        source = builder.options['os']
+        unrelated = git(source, '-c', 'user.name=SDK fixture',
+            '-c', 'user.email=fixture@example.invalid', 'commit-tree',
+            git(source, 'rev-parse', 'HEAD^{tree}'), '-m', 'Unrelated OS history')
+        runtime.record['base']['os_revision'] = unrelated
+        runtime.save()
+        with self.assertRaises(SDKError):
+            builder.preflight()
+        self.assertFalse(Path(builder.options['destination']).exists())
+
+    def test_final_runtime_keeps_exact_os_revision(self):
+        builder, _ = self.builder()
+        write(Path(builder.options['os']) / 'changed', 'new source')
+        commit(builder.options['os'])
+        with self.assertRaisesRegex(SDKError, 'base OS differs'):
+            builder.preflight()
+
     def test_final_dispatch_installs_default_base_aliases(self):
         builder, runtime = self.builder()
         result = builder.run()
