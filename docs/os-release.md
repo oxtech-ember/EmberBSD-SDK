@@ -26,8 +26,10 @@ Read [sysroot inputs](sysroot.md#required-inputs) and
 [host requirements](host-platforms.md). Use CPython 3.15+, Git, the OS host
 build prerequisites and an ISO-capable libarchive `tar`. Each source checkout
 must be clean and fully materialized. Select exact OS, Ports and SDK commits.
-Clang is the default target family. Native compilation uses the independently
-selected host prefix. Prepare `--llvm-source` with the common Ports source
+Clang is the default target family and installs the common C++ runtime in the
+base sets by default. Use `--no-base-cxx` for the historical build-only Clang
+layout; explicit GCC builds keep base C++ disabled. Native compilation uses
+the independently selected host prefix. Prepare `--llvm-source` with the common Ports source
 producer. Without `--llvm-runtime-stage`, the [LLVM coordinator](llvm-runtime.md)
 builds headers, the initial runtime, C base and full C++ runtime before the
 release. An explicitly supplied full stage is checked against these same inputs.

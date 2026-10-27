@@ -5,14 +5,19 @@
 from pathlib import Path
 import json
 import copy
+import contextlib
+import io
 import os
+import runpy
 import shutil
+import sys
 from unittest.mock import patch
 
-from test_core import TemporaryCase
+from test_core import TemporaryCase, SDK_SOURCE
 from emberbsd_sdk import inventory, jsonio
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.sysroot_builder import SysrootBuilder
+from emberbsd_sdk.os_release_builder import OSReleaseBuilder
 from emberbsd_sdk.llvm_sysroot import runtime_paths, llvm_flags, LLVMCoordinator, LLVMPhaseBuilder
 from emberbsd_sdk.libedit import prepare_source
 from emberbsd_sdk.target_toolchain import CLANG_BINARIES
@@ -41,6 +46,70 @@ class ClangBuilder(B):
 
 
 class LLVMBuilderTests(TemporaryCase):
+    def test_base_cxx_builder_default_tracks_family_and_explicit_value(self):
+        self.assertIs(SysrootBuilder({'compiler-family': 'clang'}).options['base-cxx'], True)
+        self.assertIs(SysrootBuilder({'compiler-family': 'gcc'}).options['base-cxx'], False)
+        self.assertIs(SysrootBuilder({'compiler-family': 'clang', 'base-cxx': False}).options['base-cxx'], False)
+        self.assertIs(SysrootBuilder({'compiler-family': 'gcc', 'base-cxx': True}).options['base-cxx'], True)
+        with self.assertRaisesRegex(SDKError, 'base C\\+\\+ aliases require'):
+            SysrootBuilder({'compiler-family': 'gcc', 'base-cxx': True}).preflight()
+        with self.assertRaisesRegex(SDKError, 'unsupported target compiler family'):
+            SysrootBuilder({'compiler-family': 'rust'}).preflight()
+
+    def test_base_cxx_cli_defaults_and_boolean_opt_out(self):
+        base = dict(sdk='/unused/sdk', ports='/unused/ports', compiler='/unused/compiler',
+                    runtime_work='/unused/runtime', jobs='2',
+                    sdk_source=str(SDK_SOURCE), libedit_source='/unused/libedit',
+                    host_prefix='/unused/host', host_binutils='/unused/host-binutils',
+                    llvm_source='/unused/llvm')
+
+        def invoke(script_name, builder_type, profile_args, extra_args=()):
+            captured = {}
+            def fake_run(builder):
+                captured.update(builder.options)
+                return {'captured': True}
+            script = SDK_SOURCE / 'scripts' / script_name
+            arguments = []
+            for key, value in base.items():
+                arguments.extend(['--' + key.replace('_', '-'), value])
+            arguments.extend(profile_args)
+            arguments.extend(extra_args)
+            with patch.object(builder_type, 'run', fake_run), \
+                 patch.object(sys, 'argv', [str(script), *arguments]), \
+                 contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as exit_info:
+                runpy.run_path(str(script), run_name='__main__')
+            self.assertEqual(exit_info.exception.code, 0)
+            return captured
+
+        sysroot = lambda *args: invoke('build-sysroot.py', SysrootBuilder,
+            ['--os', '/unused/os', '--target', 'aarch64',
+             '--destination', '/unused/destination'], args)
+        release = lambda *args: invoke('build-os-release.py', OSReleaseBuilder,
+            ['--os-source', '/unused/os', '--profile', 'aarch64-sysroot',
+             '--destination', '/unused/destination'], args)
+        for cli in (sysroot, release):
+            with self.subTest(cli=cli.__name__):
+                self.assertIs(cli()['base-cxx'], True)
+                self.assertIs(cli('--no-base-cxx')['base-cxx'], False)
+                self.assertIs(cli('--base-cxx')['base-cxx'], True)
+                self.assertIs(cli('--compiler-family', 'gcc')['base-cxx'], False)
+
+    def test_bootstrap_phases_keep_base_aliases_disabled(self):
+        options = {'sdk': '/sdk', 'runtime-work': '/sdk/obj/runtime',
+                   'target': 'aarch64'}
+        coordinator = LLVMCoordinator(options, SysrootBuilder)
+        self.assertTrue(SysrootBuilder(coordinator.stage_options('final')).options['base-cxx'])
+        for phase in ('headers', 'bootstrap', 'base'):
+            selected = coordinator.stage_options(phase)
+            self.assertIs(selected['base-cxx'], False)
+        selected_paths = {'compiler': '/compiler', 'llvm-source': '/source',
+                          'runtime-prefix': '/stage/usr/pkg/llvm',
+                          'llvm-unwind': '/stage/usr/pkg/llvm/lib/libunwind.a',
+                          'llvm-resource': '/stage/usr/pkg/llvm/lib/clang/23'}
+        for phase in ('headers', 'base'):
+            self.assertIn('MKLIBCXX=no', llvm_flags(
+                selected_paths, phase=phase, base_cxx=True))
+
     def test_base_cxx_option_type_is_checked_before_compiler_selection(self):
         with self.assertRaisesRegex(SDKError, 'must be boolean'):
             SysrootBuilder({'compiler-family': 'gcc', 'base-cxx': 'false'}).preflight()
@@ -149,7 +218,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.inspect_payload()
         self.assertFalse((Path(builder.paths['destination'])/'usr/include/unwind.h').exists())
 
-    def test_final_dispatch_copies_only_the_selected_llvm_runtime(self):
+    def test_final_dispatch_installs_default_base_aliases(self):
         builder, runtime = self.builder()
         result = builder.run()
         self.assertEqual(result['version'], 3)
@@ -157,15 +226,15 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertEqual(result['signature']['runtime']['manifest'], runtime.record)
         output = Path(builder.paths['destination'])
         self.assertTrue((output / 'usr/pkg/llvm/lib/libc++.so').is_symlink())
+        self.assertTrue((output / 'usr/include/c++/vector').is_symlink())
         self.assertFalse((output / 'usr/pkg/gcc16').exists())
         self.assertIn('EMBER_COMPILER_FAMILY=clang', result['signature']['flags'])
         self.assertIn('EMBER_HOST_COMPILER_FAMILY=gcc', result['signature']['flags'])
         self.assertIn('EMBER_HOST_BFD_CONFIG=' + builder.options['host-binutils'] + '/host-bfd.mk', result['signature']['flags'])
 
-    def test_opted_in_base_cxx_aliases_export_import_and_relocate(self):
+    def test_default_base_cxx_aliases_export_import_and_relocate(self):
         from emberbsd_sdk import llvm_runtime_install
         builder, runtime = self.builder()
-        builder.options['base-cxx'] = True
         receipt = builder.run()
         root = Path(builder.paths['destination'])
         plan = llvm_runtime_install.base_alias_plan(runtime.record)
@@ -204,7 +273,6 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
 
     def test_base_alias_conflict_preflights_before_runtime_copy(self):
         builder, runtime = self.builder()
-        builder.options['base-cxx'] = True
         builder.preflight()
         conflict = Path(builder.paths['destination']) / 'usr/include/c++/vector'
         conflict.parent.mkdir(parents=True)
@@ -295,6 +363,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
 
     def test_clang_transfer_is_explicit_and_preserves_historical_format(self):
         builder, runtime = self.builder()
+        builder.options['base-cxx'] = False
         receipt = builder.run()
         bundle = self.root / 'bundle'
         exported = sysroot_transfer.export_sysroot(builder.paths['destination'], bundle, target='aarch64')
