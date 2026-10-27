@@ -219,6 +219,71 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.inspect_payload()
         self.assertFalse((Path(builder.paths['destination'])/'usr/include/unwind.h').exists())
 
+    def completed_headers(self):
+        class Headers(LLVMPhaseBuilder, ClangBuilder):
+            def __init__(self, options):
+                super().__init__(options, 'headers')
+
+            def build_payload(self):
+                for name in ('stdio.h', 'sys/types.h', 'sys/param.h',
+                             'stdint.h', 'limits.h', 'math.h', 'pthread.h'):
+                    write(Path(self.paths['destination']) / 'usr/include' / name,
+                          '/* source header fixture */\n')
+
+        builder, _ = self.builder(builder_type=Headers)
+        return builder, builder.run()
+
+    def test_completed_headers_reuse_after_ports_and_controller_updates(self):
+        builder, original = self.completed_headers()
+        for source in ('ports', 'sdk-source'):
+            write(Path(builder.options[source]) / 'unrelated-update', 'new revision')
+            commit(builder.options[source])
+        previous = type(builder).python_identity
+        def changed_modules(current):
+            result = previous(current)
+            result['modules']['controller_fixture.py'] = '1' * 64
+            return result
+        with patch.object(type(builder), 'python_identity', changed_modules), \
+             patch.object(type(builder), 'build_payload', side_effect=AssertionError('must reuse')):
+            result = type(builder)(builder.options).run()
+        self.assertEqual(result, original)
+        self.assertEqual(jsonio.read_json(Path(builder.paths['destination']) / builder.RECEIPT), original)
+
+    def test_completed_headers_accept_same_os_tree_and_reject_changed_tree(self):
+        builder, original = self.completed_headers()
+        source = builder.options['os']
+        git(source, '-c', 'user.name=SDK fixture', '-c', 'user.email=fixture@example.invalid',
+            'commit', '--allow-empty', '-qm', 'Same OS tree')
+        self.assertEqual(type(builder)(builder.options).run(), original)
+        write(Path(source) / 'include/new-header.h', '/* new OS input */\n')
+        commit(source)
+        with self.assertRaisesRegex(SDKError, 'OS source tree changed'):
+            type(builder)(builder.options).run()
+
+    def test_completed_headers_reject_changed_output_without_dispatch(self):
+        builder, _ = self.completed_headers()
+        write(Path(builder.paths['destination']) / 'usr/include/stdio.h', 'tampered')
+        with patch.object(type(builder), 'build_payload', side_effect=AssertionError('must refuse')):
+            with self.assertRaisesRegex(SDKError, 'inputs or outputs changed'):
+                type(builder)(builder.options).run()
+
+    def test_completed_headers_reject_compiler_and_phase_changes(self):
+        builder, _ = self.completed_headers()
+        previous = type(builder).compiler
+        def changed_compiler(current):
+            result = previous(current)
+            result['commands']['cc'].append('-DCHANGED_ABI')
+            return result
+        with patch.object(type(builder), 'compiler', changed_compiler):
+            with self.assertRaisesRegex(SDKError, 'incompatible object context'):
+                type(builder)(builder.options).run()
+        receipt_path = Path(builder.paths['destination']) / builder.RECEIPT
+        receipt = jsonio.read_json(receipt_path)
+        receipt['phase'] = 'base'
+        write(receipt_path, json.dumps(receipt))
+        with self.assertRaisesRegex(SDKError, 'incomplete or unrelated LLVM OS stage'):
+            type(builder)(builder.options).run()
+
     def test_final_dispatch_installs_default_base_aliases(self):
         builder, runtime = self.builder()
         result = builder.run()

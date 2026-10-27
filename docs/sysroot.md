@@ -112,6 +112,13 @@ may add an explicit utility role while every existing command, binding, tool
 selection, and the relative order of existing search directories stays intact.
 Removing or replacing a tool, changing a compiler binding, or changing ABI
 inputs refuses reuse. Published source ancestry is checked as before.
+Completed LLVM header/base stages use the same significant-input comparison
+and retain their original build records when reused. Their complete output
+inventory and OS source tree must remain identical; an ancestor OS revision
+alone cannot prove that a completed stage contains newer source changes.
+Unrelated Ports commits and SDK controller changes do not require rebuilding
+these stages when the measured common recipes and all compiled inputs match.
+Changed OS trees need a new stage, reusing compatible objects incrementally.
 Native ABI flags map only to `HOST_CPPFLAGS`, `HOST_CFLAGS`, `HOST_CXXFLAGS`, and `HOST_LDFLAGS`.
 The build environment uses prefix directories in `PATH`; Git source inspection remains separate.
 Git is selected before narrowing that path. Repeated phase preflight checks use

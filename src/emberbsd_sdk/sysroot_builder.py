@@ -362,6 +362,11 @@ class SysrootBuilder:
         if (not isinstance(record, dict) or set(record) != {'format', 'signature', 'sources', 'version'} or
                 record['format'] != 'emberbsd-sysroot-object-context' or type(record['version']) is not int or record['version'] != 1 or not self.compatible_context(record, path)):
             raise SDKError(f'unknown or incompatible object context; leave it unchanged: {path}')
+        self.validate_source_ancestry(record, path)
+        return record
+
+    def validate_source_ancestry(self, record, path):
+        """Check prior pins from a context or completed stage in current sources."""
         try:
             for name in ('os', 'ports', 'sdk'):
                 old = record['sources'][name]['commit']
@@ -369,8 +374,7 @@ class SysrootBuilder:
                     raise SDKError('invalid recorded source pin')
                 self.git(self.sources[name]['path'], 'merge-base', '--is-ancestor', old, self.sources[name]['commit'])
         except (KeyError, TypeError) as exc:
-            raise SDKError(f'invalid object context: {path}: {exc}') from exc
-        return record
+            raise SDKError(f'invalid source history: {path}: {exc}') from exc
 
     def compatible_context(self, record, path):
         """Compare compiled inputs, allowing controller updates and new utilities."""
