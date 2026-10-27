@@ -378,9 +378,9 @@ See [Ports update plans](ports-plan.md) for schemas, CLI commands, and limits.
 
 ## Prepare and tag a release
 
-`emberbsd_sdk.ports_release` provides `PORTS_RELEASE_API = 1`. It prepares the
-canonical source version and a source manifest before building. It validates
-the selected build receipts and optional checks before creating release tags.
+`emberbsd_sdk.ports_release` provides `PORTS_RELEASE_API = 2`. It prepares the
+canonical source version and a source manifest before building. It creates
+release tags for those sources without build receipts or check logs.
 See [release preparation](release-tags.md) for the two-phase procedure and limits.
 
 For bounded Libtool configuration text, use the [scalar parser](libtool-config.md).

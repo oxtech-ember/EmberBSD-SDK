@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-# Origin: EmberBSD; AI-assisted release evidence and immutable tag creation.
-"""Verify explicit release evidence and create local annotated tags."""
+# Origin: EmberBSD; AI-assisted release version preparation and immutable tag creation.
+"""Prepare the release version and create local annotated tags for its sources."""
 
 import argparse
 import hashlib
@@ -14,11 +14,11 @@ from .errors import CommandError, SDKError
 from .inventory import sha256_file
 from .jsonio import json_bytes, read_json, write_json
 from .paths import open_regular, verify_stable
-from .ports_plan import PORTS_JSON_LIMIT, plan_status, validate_plan
-from .process import capture, git_environment, run_logged, sanitized_environment
+from .ports_plan import PORTS_JSON_LIMIT
+from .process import capture, git_environment
 from .provenance import git_source
 
-PORTS_RELEASE_API = 1
+PORTS_RELEASE_API = 2
 COMPONENTS = ('os', 'ports', 'sdk')
 VERSION_FILE = 'share/mk/bsd.own.mk'
 
@@ -141,69 +141,6 @@ def _release_sources(path, sources):
     return value, checksum
 
 
-def _evidence(plan_paths, receipt_paths, ports_commit, sources_sha256):
-    if not plan_paths:
-        raise SDKError('release requires at least one nonempty package plan')
-    plans, groups, fingerprints, scopes = {}, {}, {}, set()
-    for path in plan_paths:
-        plan, checksum = _read(path)
-        fingerprints[str(path)] = checksum
-        validate_plan(plan)
-        key = plan['plan_sha256']
-        graph = plan['candidate']['graph']
-        scope = (graph['context']['target'], graph['context']['triplet'])
-        if key in plans or scope in scopes:
-            raise SDKError('duplicate release plan or ambiguous target/triplet scope')
-        if graph['context']['shared_inputs'].get('release-sources') != sources_sha256:
-            raise SDKError('candidate graph does not bind the prepared release sources hash')
-        if not graph['nodes'] or graph['provenance']['revision'] != ports_commit:
-            raise SDKError('candidate graph must be nonempty and match the Ports commit')
-        plans[key], groups[key] = plan, []
-        scopes.add(scope)
-    for path in receipt_paths:
-        receipt, checksum = _read(path)
-        fingerprints[str(path)] = checksum
-        if not isinstance(receipt, dict) or not isinstance(receipt.get('plan_sha256'), str) or receipt['plan_sha256'] not in plans:
-            raise SDKError('orphan or invalid release receipt')
-        groups[receipt['plan_sha256']].append(receipt)
-    evidence = []
-    for key, plan in sorted(plans.items()):
-        status = plan_status(plan, groups[key])
-        expected = set(plan['candidate']['input_keys'])
-        if set(status['accepted']) != expected:
-            raise SDKError('release requires verified success evidence for every candidate node')
-        packages = [dict(id=r['id'], input_key=r['input_key'],
-                         dependency_input_keys=r['dependency_input_keys'],
-                         artifact_sha256=sorted(a['sha256'] for a in r['artifacts']),
-                         log_sha256=r['log']['sha256']) for r in sorted(groups[key], key=lambda r: r['id'])]
-        evidence.append(dict(plan_sha256=key, lock_sha256=plan['candidate']['lock_sha256'],
-                             context=plan['candidate']['graph']['context'], packages=packages))
-    return evidence, fingerprints
-
-
-def _checks(path):
-    if path is None:
-        return None, None
-    value, checksum = _read(path)
-    if not isinstance(value, dict) or set(value) != {'schema', 'checks'} or value['schema'] != 'ports-release-checks-v1':
-        raise SDKError('unsupported release checks schema')
-    if not isinstance(value['checks'], list) or not value['checks']:
-        raise SDKError('release checks must be a nonempty list')
-    names = set()
-    for check in value['checks']:
-        if not isinstance(check, dict) or set(check) != {'name', 'component', 'argv'}:
-            raise SDKError('invalid release check fields')
-        name = check['name']
-        if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', name) or name in names:
-            raise SDKError('invalid or duplicate release check name')
-        names.add(name)
-        if check['component'] not in COMPONENTS:
-            raise SDKError('invalid release check component')
-        if not isinstance(check['argv'], list) or not check['argv'] or any(not isinstance(a, str) or '\0' in a for a in check['argv']) or not check['argv'][0]:
-            raise SDKError('release check requires a nonempty argv')
-    return value, checksum
-
-
 def _absent(repos, ref):
     for root in repos.values():
         try:
@@ -215,8 +152,8 @@ def _absent(repos, ref):
         raise SDKError(f'release tag already exists: {root}: {ref}')
 
 
-def create_release(sources_path, repos, plan_paths, receipt_paths, *, checks_path=None, logs=None):
-    """Create three local refs after validation. Ref writes are not distributed atomic."""
+def create_release(sources_path, repos):
+    """Create three local refs for the prepared sources. Ref writes are not distributed atomic."""
     sources = _sources(repos)
     declared, sources_sha256 = _release_sources(sources_path, sources)
     version = declared['version']
@@ -224,38 +161,10 @@ def create_release(sources_path, repos, plan_paths, receipt_paths, *, checks_pat
     ref = 'refs/tags/' + tag
     repos = {name: source['path'] for name, source in sources.items()}
     _absent(repos, ref)
-    evidence, fingerprints = _evidence(plan_paths, receipt_paths, sources['ports']['commit'], sources_sha256)
-    checks, checks_sha256 = _checks(checks_path)
-    results = []
-    if checks is None and logs is not None:
-        raise SDKError('--logs requires --checks')
-    if checks is not None:
-        if logs is None:
-            raise SDKError('--checks requires a new --logs directory')
-        logs = _outside(logs, repos)
-        logs.mkdir()
-        for index, check in enumerate(checks['checks']):
-            log = logs / f'{index:03d}-{check["name"]}.log'
-            run_logged(check['argv'], log, cwd=repos[check['component']], env=sanitized_environment())
-            results.append(dict(name=check['name'], component=check['component'], log_sha256=sha256_file(log)))
-        if _checks(checks_path) != (checks, checks_sha256):
-            raise SDKError('release checks configuration changed during execution')
-    # Hooks may change sources or evidence. Never tag that changed state.
-    if _sources(repos) != sources or _release_sources(sources_path, sources) != (declared, sources_sha256) or _evidence(plan_paths, receipt_paths, sources['ports']['commit'], sources_sha256) != (evidence, fingerprints):
-        raise SDKError('release sources or evidence changed during validation')
-    if checks is not None:
-        for index, result in enumerate(results):
-            if sha256_file(logs / f'{index:03d}-{result["name"]}.log') != result['log_sha256']:
-                raise SDKError('release check log changed after execution')
-    _absent(repos, ref)
-    manifest = dict(schema='ports-release-v1', version=version, sources_sha256=sources_sha256,
-                    sources={name: sources[name]['commit'] for name in COMPONENTS},
-                    plans=evidence, checks_sha256=checks_sha256, checks=results,
-                    qualification='explicit-checks-passed' if checks else 'artifact-integrity-only')
+    manifest = dict(schema='ports-release-v2', version=version, sources_sha256=sources_sha256,
+                    sources={name: sources[name]['commit'] for name in COMPONENTS})
     manifest['manifest_sha256'] = hashlib.sha256(json_bytes(manifest)).hexdigest()
     message = json_bytes(manifest)
-    if len(message) > PORTS_JSON_LIMIT:
-        raise SDKError('release manifest exceeds the JSON size limit')
     objects, created = {}, []
     try:
         for name, root in repos.items():
@@ -286,12 +195,8 @@ def main(argv=None):
     prepare = commands.add_parser('prepare', help='commit the OS version and pin clean sources')
     prepare.add_argument('--version', required=True)
     prepare.add_argument('--output', required=True)
-    finalize = commands.add_parser('finalize', help='verify pinned build evidence and create local tags')
+    finalize = commands.add_parser('finalize', help='create local tags for the prepared sources')
     finalize.add_argument('--sources', required=True)
-    finalize.add_argument('--plan', action='append', required=True)
-    finalize.add_argument('--receipt', action='append', default=[])
-    finalize.add_argument('--checks')
-    finalize.add_argument('--logs')
     for command in (prepare, finalize):
         command.add_argument('--repo', action='append', required=True, metavar='COMPONENT=PATH')
     args = parser.parse_args(argv)
@@ -305,8 +210,7 @@ def main(argv=None):
         if args.command == 'prepare':
             result = prepare_release(args.version, repos, args.output)
         else:
-            result = create_release(args.sources, repos, args.plan, args.receipt,
-                                    checks_path=args.checks, logs=args.logs)
+            result = create_release(args.sources, repos)
         print(json.dumps(result, indent=2))
         return 0
     except (SDKError, OSError, ValueError) as exc:

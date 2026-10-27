@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-"""Release checks use temporary Git roots and synthetic package artifacts."""
+"""Release preparation and tagging use temporary Git roots."""
 
-from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -18,9 +17,7 @@ sys.path.insert(0, str(SDK_SOURCE / 'src'))
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.inventory import sha256_file
 from emberbsd_sdk.jsonio import json_bytes, read_json
-from emberbsd_sdk.ports_plan import lock_graph, make_plan, record_result
 from emberbsd_sdk import ports_release as release
-from test_ports_plan import graph
 from test_core import git_environment
 
 
@@ -47,22 +44,6 @@ class ReleaseTests(unittest.TestCase):
             self.commit(name)
         self.sources_path = self.write('release-sources.json', dict(schema='ports-release-sources-v1', version='1.2.3',
             sources={name: self.git(name, 'rev-parse', 'HEAD') for name in release.COMPONENTS}))
-        candidate = graph()
-        candidate['context']['shared_inputs']['release-sources'] = sha256_file(self.sources_path)
-        candidate['provenance']['revision'] = self.git('ports', 'rev-parse', 'HEAD')
-        locked = lock_graph(candidate)
-        self.plan = make_plan(locked, locked)
-        self.plan_path = self.write('plan.json', self.plan)
-        self.receipts = []
-        self.artifacts = []
-        for node in candidate['nodes']:
-            artifact = self.root / (node['id'] + '.tgz')
-            artifact.write_text(node['id'], encoding='utf-8')
-            log = self.root / (node['id'] + '.log')
-            log.write_text('producer completed', encoding='utf-8')
-            receipt = record_result(self.plan, node['id'], 'success', str(log), [str(artifact)])
-            self.receipts.append(self.write(node['id'] + '.json', receipt))
-            self.artifacts.append(artifact)
 
     def git(self, component, *args):
         return subprocess.check_output(['git', '-C', str(self.repos[component]), *args], stderr=subprocess.PIPE, env=git_environment()).decode().strip()
@@ -76,16 +57,12 @@ class ReleaseTests(unittest.TestCase):
         path.write_bytes(json_bytes(value))
         return path
 
-    def create(self, **kwargs):
-        return release.create_release(self.sources_path, self.repos, [self.plan_path], self.receipts, **kwargs)
+    def create(self):
+        return release.create_release(self.sources_path, self.repos)
 
     def no_tags(self):
         for name in self.repos:
             self.assertEqual(self.git(name, 'tag', '--list'), '')
-
-    def checks(self, code, *args):
-        return self.write('checks.json', dict(schema='ports-release-checks-v1', checks=[
-            dict(name='regression', component='sdk', argv=[sys.executable, '-c', code, *map(str, args)])]))
 
     def test_prepare_commits_only_version_and_preserves_abi(self):
         before = {name: self.git(name, 'rev-parse', 'HEAD') for name in self.repos}
@@ -179,10 +156,6 @@ class ReleaseTests(unittest.TestCase):
         self.sources_path.write_bytes(json_bytes(declared))
         with self.assertRaisesRegex(SDKError, 'EMBER_VERSION'):
             self.create()
-        declared['version'] = '1.2.3'
-        self.sources_path.write_bytes(json_bytes(declared) + b' ')
-        with self.assertRaisesRegex(SDKError, 'prepared release sources hash'):
-            self.create()
         self.no_tags()
 
     def test_cli_prepare_and_finalize(self):
@@ -190,8 +163,7 @@ class ReleaseTests(unittest.TestCase):
         repos = [arg for name, path in self.repos.items() for arg in ('--repo', name + '=' + str(path))]
         result = subprocess.run(command + ['prepare', '--version', '1.2.3', '--output', str(self.root / 'cli-sources.json'), *repos], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        receipts = [arg for path in self.receipts for arg in ('--receipt', str(path))]
-        result = subprocess.run(command + ['finalize', '--sources', str(self.sources_path), '--plan', str(self.plan_path), *repos, *receipts], capture_output=True, text=True)
+        result = subprocess.run(command + ['finalize', '--sources', str(self.sources_path), *repos], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(json.loads(result.stdout)['created_refs']), 3)
 
@@ -204,29 +176,18 @@ class ReleaseTests(unittest.TestCase):
             message = self.git(name, 'cat-file', '-p', 'emberbsd-1.2.3').split('\n\n', 1)[1]
             self.assertEqual(json.loads(message), result['manifest'])
         self.assertNotIn(str(self.root), json.dumps(result['manifest']))
-        self.assertEqual(result['manifest']['qualification'], 'artifact-integrity-only')
+        self.assertEqual(set(result['manifest']), {'schema', 'version', 'sources_sha256', 'sources', 'manifest_sha256'})
+        self.assertEqual(result['manifest']['sources_sha256'], sha256_file(self.sources_path))
 
-    def test_missing_unchanged_candidate_evidence_refuses(self):
-        self.assertEqual(self.plan['impacted'], [])
-        self.receipts.pop()
-        with self.assertRaisesRegex(SDKError, 'every candidate'):
-            self.create()
-        self.no_tags()
-
-    def test_failure_stale_and_modified_artifact_refuse(self):
-        path = self.receipts[-1]
-        original = read_json(path)
-        failed = dict(original, outcome='failure', artifacts=[])
-        stale = dict(original, plan_sha256='0' * 64)
-        for receipt in (failed, stale):
-            path.write_bytes(json_bytes(receipt))
-            with self.assertRaises(SDKError):
-                self.create()
-            self.no_tags()
-        path.write_bytes(json_bytes(original))
-        self.artifacts[-1].write_text('changed', encoding='utf-8')
-        with self.assertRaisesRegex(SDKError, 'hash mismatch'):
-            self.create()
+    def test_finalize_needs_no_build_evidence(self):
+        command = [sys.executable, '-B', str(SDK_SOURCE / 'scripts/ports-release.py'), 'finalize']
+        repos = [arg for name, path in self.repos.items() for arg in ('--repo', name + '=' + str(path))]
+        for option in ('--plan', '--receipt', '--checks', '--logs'):
+            with self.subTest(option=option):
+                result = subprocess.run(command + ['--sources', str(self.sources_path), *repos, option, str(self.root)],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn('unrecognized arguments', result.stderr)
         self.no_tags()
 
     def test_dirty_and_changed_ports_commit_refuse(self):
@@ -245,7 +206,7 @@ class ReleaseTests(unittest.TestCase):
                 release.prepare_release(version, self.repos, self.root / 'new-sources.json')
         repos = dict(self.repos, sdk=self.repos['os'])
         with self.assertRaisesRegex(SDKError, 'distinct'):
-            release.create_release(self.sources_path, repos, [self.plan_path], self.receipts)
+            release.create_release(self.sources_path, repos)
         self.no_tags()
 
     def test_existing_tag_is_preserved_and_no_other_refs_created(self):
@@ -256,76 +217,6 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(self.git('ports', 'rev-parse', 'emberbsd-1.2.3'), original)
         self.assertEqual(self.git('os', 'tag', '--list'), '')
         self.assertEqual(self.git('sdk', 'tag', '--list'), '')
-
-    def test_duplicate_plan_and_scope_refuse(self):
-        with self.assertRaisesRegex(SDKError, 'duplicate release plan'):
-            release.create_release(self.sources_path, self.repos, [self.plan_path, self.plan_path], self.receipts)
-        candidate = deepcopy(self.plan['candidate']['graph'])
-        candidate['nodes'][0]['version'] = '2'
-        other = self.write('other.json', make_plan(self.plan['baseline'], lock_graph(candidate)))
-        with self.assertRaisesRegex(SDKError, 'ambiguous'):
-            release.create_release(self.sources_path, self.repos, [self.plan_path, other], self.receipts)
-        self.no_tags()
-
-    def test_empty_plans_and_graphs_refuse(self):
-        with self.assertRaisesRegex(SDKError, 'nonempty'):
-            release.create_release(self.sources_path, self.repos, [], [])
-        candidate = deepcopy(self.plan['candidate']['graph'])
-        candidate['nodes'] = []
-        empty = lock_graph(candidate)
-        self.plan_path.write_bytes(json_bytes(make_plan(empty, empty)))
-        with self.assertRaisesRegex(SDKError, 'nonempty'):
-            self.create()
-        self.no_tags()
-
-    def test_passing_check_qualifies_and_failed_check_creates_no_tags(self):
-        checks = self.checks('print("checked")')
-        result = self.create(checks_path=checks, logs=self.root / 'logs')
-        self.assertEqual(result['manifest']['qualification'], 'explicit-checks-passed')
-        self.assertEqual(len(result['manifest']['checks']), 1)
-        self.assertNotIn(str(self.root), json.dumps(result['manifest']))
-
-    def test_failed_check_creates_no_tags(self):
-        checks = self.checks('print("failed"); raise SystemExit(7)')
-        with self.assertRaises(SDKError):
-            self.create(checks_path=checks, logs=self.root / 'logs')
-        self.no_tags()
-        self.assertIn('failed', (self.root / 'logs' / '000-regression.log').read_text())
-
-    def test_check_changes_artifacts_refuses(self):
-        checks = self.checks('from pathlib import Path; import sys; Path(sys.argv[1]).write_text("changed")', self.artifacts[0])
-        with self.assertRaisesRegex(SDKError, 'hash mismatch'):
-            self.create(checks_path=checks, logs=self.root / 'logs')
-        self.no_tags()
-
-    def test_check_changes_sources_or_head_refuses(self):
-        checks = self.checks('from pathlib import Path; Path("source").write_text("changed")')
-        with self.assertRaisesRegex(SDKError, 'clean Git'):
-            self.create(checks_path=checks, logs=self.root / 'logs')
-        self.no_tags()
-        (self.repos['sdk'] / 'source').write_text('sdk', encoding='utf-8')
-        checks = self.checks('import subprocess; subprocess.run(["git","commit","--allow-empty","-qm","Changed HEAD"],check=True)')
-        with self.assertRaisesRegex(SDKError, 'changed during validation'):
-            self.create(checks_path=checks, logs=self.root / 'more-logs')
-        self.no_tags()
-
-    def test_check_changes_receipt_bytes_refuses(self):
-        checks = self.checks('from pathlib import Path; import sys; p=Path(sys.argv[1]); p.write_bytes(p.read_bytes()+b" ")', self.receipts[0])
-        with self.assertRaisesRegex(SDKError, 'changed during validation'):
-            self.create(checks_path=checks, logs=self.root / 'logs')
-        self.no_tags()
-
-    def test_logs_must_be_new_and_outside_repositories(self):
-        checks = self.checks('pass')
-        with self.assertRaisesRegex(SDKError, 'outside'):
-            self.create(checks_path=checks, logs=self.repos['sdk'] / 'logs')
-        with self.assertRaisesRegex(SDKError, 'outside'):
-            self.create(checks_path=checks, logs=self.root)
-        existing = self.root / 'existing-logs'
-        existing.mkdir()
-        with self.assertRaises(FileExistsError):
-            self.create(checks_path=checks, logs=existing)
-        self.no_tags()
 
     def test_partial_ref_failure_preserves_and_reports_created_refs(self):
         original = release._git

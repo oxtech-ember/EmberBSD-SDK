@@ -27,8 +27,8 @@ package databases from unrelated systems or arbitrary build caches as SDK data.
 
 Use the [source version and release-tag procedure](release-tags.md) to prepare
 `EMBER_VERSION` before building. After the selected checks, create matching
-`emberbsd-<version>` tags in OS, Ports, and SDK. Tags bind source identities and
-recorded evidence. They do not themselves publish or qualify a binary SDK.
+`emberbsd-<version>` tags in OS, Ports, and SDK. Tags bind source identities.
+They do not themselves publish or qualify a binary SDK.
 
 Before publication, record:
 
