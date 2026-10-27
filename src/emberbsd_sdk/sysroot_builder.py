@@ -615,7 +615,7 @@ class SysrootBuilder:
         paths.regular_file(os.path.join(self.paths['ports'], PRODUCER))
         self.sources = {name: self.source(self.paths[name], name) for name in ('os', 'ports')}
         self.sources['sdk'] = self.source(self.paths['sdk-source'], 'sdk')
-        self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'])
+        self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command)
         self.common_source_records = (self.verify_common_sources()
                                       if all(name + '-source' in self.paths for name in ('libarchive', 'libevent'))
                                       else {})
@@ -904,12 +904,12 @@ class SysrootBuilder:
             self.prepare_contexts()
             self.contexts_prepared = True
             self.prepare_native_routing()
-            if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports']) != self.libedit_record:
+            if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command) != self.libedit_record:
                 raise SDKError('libedit source changed before build')
             if self.common_source_records and self.verify_common_sources() != self.common_source_records:
                 raise SDKError('common sources changed before build')
             self.build_payload()
-            if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports']) != self.libedit_record:
+            if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command) != self.libedit_record:
                 raise SDKError('libedit source changed during build')
             if self.common_source_records and self.verify_common_sources() != self.common_source_records:
                 raise SDKError('common sources changed during build')
