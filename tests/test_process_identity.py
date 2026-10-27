@@ -22,7 +22,8 @@ class IdentityTests(unittest.TestCase):
             first = process_identity(child.pid)
             second = process_identity(child.pid)
             self.assertEqual(first, second)
-            self.assertEqual(first.argv, (sys.executable, '-c', 'import sys; sys.stdin.buffer.read()', *values))
+            self.assertEqual(first.argv[1:], ('-c', 'import sys; sys.stdin.buffer.read()', *values))
+            self.assertEqual(Path(first.argv[0]).resolve(), Path(sys.executable).resolve())
             self.assertEqual(Path(first.executable).resolve(), Path(sys.executable).resolve())
             self.assertGreater(first.birth, 0)
         finally:
