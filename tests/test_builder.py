@@ -2,6 +2,7 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Dispatch and filesystem contracts. These fixtures do not qualify a sysroot."""
 
+import copy
 import hashlib
 import json
 import os
@@ -29,7 +30,11 @@ from libedit_fixture import recipe_fixture, installation_source
 def fixture_native_selection(builder):
     """Synthetic dispatch input only. This bypass never qualifies native tools."""
     prefix = Path(builder.options['host-cc']).parent
-    tools = {name: str(prefix / name) for name in ('cc', 'cxx', 'cpp', 'as', 'ld', 'python', 'sh')}
+    builder.native_contract = str(Path(builder.options['os']) / 'tools/native-tools/contract')
+    builder.native_contract_sha256 = inventory.sha256_file(builder.native_contract)
+    tools = {name: str(prefix / name) for name in ('cc', 'cxx', 'cpp', 'as', 'ld', 'python', 'sh', 'cmp', 'make', 'readlink')}
+    if 'hostname hostname -' in Path(builder.native_contract).read_text():
+        tools['hostname'] = str(prefix / 'libexec/gettext/hostname')
     return HostPrefix(str(prefix), MappingProxyType({'os': 'Darwin', 'cpu': 'arm64'}),
         MappingProxyType({'family': 'gcc', 'version': '16.2.0', 'triplet': 'aarch64-apple-darwin27'}),
         MappingProxyType(tools), MappingProxyType({name: () for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}), MappingProxyType({}))
@@ -94,6 +99,9 @@ def fixture(root, target='aarch64'):
     create(sdk, target=target); control = root / 'control.json'; write(control, '{}')
     for name in ('include', 'lib', 'libexec/ld.elf_so', 'tools', 'share/mk', 'sys', 'distrib', 'etc'):
         (os_source / name).mkdir(parents=True, exist_ok=True)
+    write(os_source / 'tools/native-tools/contract',
+          'EmberBSD-native-tools 1\ncc cc HOST_CC\ncmp cmp -\nmake make MAKE\n'
+          'readlink readlink -\nsh sh HOST_SH\n')
     for name in ('Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk'):
         write(os_source / name, '# Fixture\n')
     tool = f'''#!{sys.executable}
@@ -206,7 +214,7 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
     prepare_source(ports, root / 'libedit.tar.gz', root / 'libedit-source')
     write(root / 'gcc.tar.xz', 'Fixture archive; no extraction')
     native = root / 'host-gcc16'; native.mkdir()
-    for name in ('cc', 'cxx', 'cpp', 'as', 'ld'):
+    for name in ('cc', 'cxx', 'cpp', 'as', 'ld', 'cmp', 'make', 'readlink'):
         write(native / name, '#!/bin/sh\nexit 0\n', 0o755)
     (native / 'python').symlink_to(os.path.realpath(sys.executable))
     (native / 'sh').symlink_to(os.path.realpath(shutil.which('sh')))
@@ -498,6 +506,79 @@ class BuilderTests(TemporaryCase):
         self.assertNotEqual(plan['sources']['os']['commit'], first['sources']['os']['commit'])
         record = self.run_builder(**changes); self.assertEqual(record['qualification'], 'built-and-inspected')
         self.assertEqual(record['paths']['objects'], first['paths']['objects'])
+
+    def test_reuse_after_controller_only_update_keeps_object_inputs(self):
+        first = self.run_builder()
+        write(Path(self.options['sdk-source']) / 'controller-update', 'new controller revision')
+        commit(self.options['sdk-source'])
+        original = B.python_identity
+        def updated(builder):
+            result = original(builder)
+            result['modules']['controller_fixture.py'] = '1' * 64
+            return result
+        with patch.object(B, 'python_identity', updated):
+            result = self.run_builder(destination=self.options['sdk'] + '/stages/next')
+        self.assertEqual(result['qualification'], 'built-and-inspected')
+        self.assertEqual(result['paths']['objects'], first['paths']['objects'])
+        self.assertIn('controller_fixture.py', result['signature']['python']['modules'])
+
+    def test_new_native_utility_reuses_objects_and_preserves_old_mapping(self):
+        with patch.object(B, 'prepare_native_routing', ProductionBuilder.prepare_native_routing):
+            first = self.run_builder()
+            routing = Path(first['paths']['native-routing'])
+            before = snapshot(routing)
+            contract = Path(self.options['os']) / 'tools/native-tools/contract'
+            write(contract, contract.read_text() + 'hostname hostname -\n')
+            tool = Path(self.options['host-prefix']) / 'libexec/gettext/hostname'
+            write(tool, '#!/bin/sh\nexit 0\n', 0o755)
+            commit(self.options['os'])
+            result = self.run_builder(destination=self.options['sdk'] + '/stages/next')
+        self.assertEqual(result['qualification'], 'built-and-inspected')
+        self.assertEqual(result['paths']['objects'], first['paths']['objects'])
+        self.assertEqual(snapshot(routing), before)
+        current = Path(result['paths']['native-routing'])
+        self.assertNotEqual(current, routing)
+        self.assertEqual(os.readlink(current / 'hostname'), str(tool))
+        self.assertEqual((current / 'contract').read_bytes(), contract.read_bytes())
+
+    def test_context_keeps_compiler_abi_and_existing_tool_identity(self):
+        builder = B(self.options)
+        result = builder.run()
+        path = builder.paths['objects']
+        record = jsonio.read_json(Path(path) / builder.CONTEXT)
+        mutations = (
+            lambda s: s['flags'].append('CPPFLAGS=-DCHANGED'),
+            lambda s: s['compiler'].update(version='different'),
+            lambda s: s.update(compiler_family='clang'),
+            lambda s: s['target'].update(arch='different'),
+            lambda s: s['native_toolset']['abi_flags'].update(cflags=['-m32']),
+            lambda s: s['native_toolset']['tools'].update(cmp='/different/cmp'),
+            lambda s: s['native_toolset']['tools'].pop('cmp'),
+            lambda s: s['environment'].update(PATH=':'.join(reversed(s['environment']['PATH'].split(':')))),
+            lambda s: s['python'].update(sha256='0' * 64))
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                changed = copy.deepcopy(result['signature'])
+                mutate(changed)
+                with patch.object(builder, 'context_signature', return_value=changed):
+                    self.assertFalse(builder.compatible_context(record, path))
+        # Migrate the former fixed routing name without rewriting its mapping.
+        legacy = copy.deepcopy(record)
+        legacy['sources']['os']['path'] = '/former/source-checkout'
+        legacy['signature']['environment']['EMBER_NATIVE_TOOLS'] = str(Path(builder.paths['tools']) / 'native-routing')
+        self.assertTrue(builder.compatible_context(legacy, path))
+
+    def test_native_contract_rebinding_or_new_compiler_binding_refuses_reuse(self):
+        self.run_builder()
+        contract = Path(self.options['os']) / 'tools/native-tools/contract'
+        original = contract.read_text()
+        for content in (original.replace('cmp cmp -', 'cmp sh -'),
+                        original + 'c++ cxx HOST_CXX\n'):
+            with self.subTest(contract=content):
+                write(contract, content)
+                commit(self.options['os'])
+                self.refusal_unchanged('incompatible object context',
+                    destination=self.options['sdk'] + '/stages/next')
 
     def test_incompatible_compiler_cache(self):
         self.run_builder(); path = Path(self.options['compiler']) / 'bin/aarch64--netbsd-gcc'
