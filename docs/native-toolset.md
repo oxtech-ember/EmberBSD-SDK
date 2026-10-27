@@ -47,6 +47,10 @@ The GCC alternative supports generic and `llvm-` archive and symbol names.
 Package queries prefer `sbin/pkg_info`, then `bin/pkg_info`.
 The `otool` role also supports `bin/llvm-otool`.
 The install role prefers `bsdinstall`; yacc also supports `byacc`.
+The `hostname` role prefers `bin/hostname`, then `gnu/bin/hostname`, then
+`libexec/gettext/hostname` installed by the common Ports `gettext-tools` package.
+That provider supports the read-only full and `-s` short-name queries used by
+OS build metadata; it needs no copied binary or compatibility symlink.
 Other role names select `bin/<role>` or `gnu/bin/<role>`; `pkg-config` also supports `pkgconf`.
 The build search path includes `bin` and `gnu/bin` inside the prefix.
 Clang uses its integrated assembler and the LLVM linker reported by its driver.

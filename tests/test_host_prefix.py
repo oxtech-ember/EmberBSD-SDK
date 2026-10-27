@@ -129,6 +129,31 @@ class HostPrefixTests(TemporaryCase):
         self.assertIn(str(self.fixture.root / 'sbin'), selected.path.split(os.pathsep))
         self.assertEqual(self.fixture.queries, [])
 
+    def test_hostname_accepts_the_installed_gettext_tool_and_preserves_priority(self):
+        names = ('bin/hostname', 'gnu/bin/hostname', 'libexec/gettext/hostname')
+        paths = [self.write('host-pkg-llvm/' + name, header(62, 2), 0o755)
+                 for name in names]
+        for selected_path in paths:
+            selected = self.fixture.load(roles=('hostname',))
+            self.assertEqual(selected.tool('hostname'), str(selected_path))
+            self.assertIn(str(selected_path.parent), selected.path.split(os.pathsep))
+            selected_path.unlink()
+        self.assertEqual(self.fixture.queries, [])
+
+    def test_gettext_hostname_keeps_native_and_interpreter_checks(self):
+        name = 'host-pkg-llvm/libexec/gettext/hostname'
+        selected_path = self.write(name, header(183, 2), 0o755)
+        with self.assertRaisesRegex(SDKError, 'expected a native executable'):
+            self.fixture.load(roles=('hostname',))
+        self.write(name, b'#!/bin/sh\n', 0o755)
+        with self.assertRaisesRegex(SDKError, 'escapes host prefix'):
+            self.fixture.load(roles=('hostname',))
+        selected_path.unlink()
+        selected_path.symlink_to(self.write('outside-hostname', header(62, 2), 0o755))
+        with self.assertRaisesRegex(SDKError, 'escapes host prefix'):
+            self.fixture.load(roles=('hostname',))
+        self.assertEqual(self.fixture.queries, [])
+
     def test_named_command_has_priority_and_tar_accepts_bsdtar(self):
         for name in ('patch', 'nbpatch', 'nbtar', 'bsdtar'):
             self.fixture.write(name, header(62, 2))
