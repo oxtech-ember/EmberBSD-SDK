@@ -4,10 +4,12 @@ import hashlib
 import subprocess
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 
+from test_core import SDK_SOURCE  # noqa: F401  # puts the SDK sources on sys.path
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.target_acceptance import (CHECKS, GUEST_CHECKS, HOST_CHECKS,
-    _clean_source_revision, _copy_runtime, _select_os_sources, parse_guest_log)
+    _clean_source_revision, _copy_runtime, _select_os_sources, parse_guest_log, run)
 
 PORTS_GUEST_MARKERS = ('target_c11', 'target_cxx20', 'libc_aliases',
                        'base_loader_smoke', 'fork_cas')
@@ -109,6 +111,23 @@ class RuntimePlacementTests(unittest.TestCase):
 
 
 class SourceRoleTests(unittest.TestCase):
+    def test_run_reaches_profile_validation_after_output_path_checks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs = {}
+            for name in ('os_source', 'os_test_source', 'ports_source', 'os_build',
+                         'sysroot', 'target_prefix', 'host_prefix'):
+                path = root / name
+                path.mkdir()
+                inputs[name] = str(path)
+            sdk_source = Path(__file__).resolve().parents[1]
+            options = SimpleNamespace(
+                sdk_source=str(sdk_source), output=str(root / 'acceptance-output'),
+                compiler_family='clang', **inputs)
+            with self.assertRaisesRegex(SDKError, 'expected a regular file'):
+                run(options)
+            self.assertFalse(Path(options.output).exists())
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
