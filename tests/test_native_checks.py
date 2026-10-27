@@ -9,7 +9,7 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from test_core import TemporaryCase, SDK_SOURCE
+from test_core import TemporaryCase, SDK_SOURCE, header
 from test_host_clang import ClangFixture
 from emberbsd_sdk import native_checks
 from emberbsd_sdk.errors import SDKError, CommandError
@@ -19,7 +19,11 @@ class NativeCheckTests(TemporaryCase):
     def setUp(self):
         super().setUp()
         self.fixture = ClangFixture(self.root)
-        self.native = self.fixture.load(('cc', 'cxx', 'cpp', 'sh', 'python', 'ar'))
+        self.fixture.write('nawk', header(62, 2))
+        cat = self.fixture.root / 'gnu/bin/cat'
+        cat.parent.mkdir(parents=True)
+        cat.write_bytes(header(62, 2)); cat.chmod(0o755)
+        self.native = self.fixture.load(('cc', 'cxx', 'cpp', 'sh', 'python', 'ar', 'awk', 'cat'))
         self.bindings = self.root / 'bindings'
 
     def test_environment_removes_ambient_target_and_build_search_inputs(self):
@@ -34,8 +38,11 @@ class NativeCheckTests(TemporaryCase):
         self.assertEqual(env['AR'], self.native.tool('ar'))
         self.assertEqual(env['PYTHON'], self.native.tool('python'))
         self.assertEqual(env['SHELL'], self.native.tool('sh'))
+        self.assertEqual(env['AWK'], self.native.tool('awk'))
         self.assertEqual(env['PATH'], str(self.bindings) + os.pathsep + self.native.path)
         self.assertEqual(os.readlink(self.bindings/'sh'), self.native.tool('sh'))
+        self.assertEqual(os.readlink(self.bindings/'awk'), self.native.tool('awk'))
+        self.assertEqual(os.readlink(self.bindings/'cat'), self.native.tool('cat'))
         self.assertEqual(os.readlink(self.bindings/'python3'), self.native.tool('python'))
         recorded = json.loads((self.bindings/'commands.json').read_text())
         self.assertEqual(recorded['flags']['cflags'], ['-O1'])

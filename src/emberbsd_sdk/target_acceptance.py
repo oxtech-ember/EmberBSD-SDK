@@ -10,7 +10,7 @@ import re
 import shutil
 import sys
 
-from . import jsonio, native_toolset, os_release_builder, process, provenance
+from . import jsonio, native_checks, native_toolset, os_release_builder, process, provenance
 from . import paths
 from .errors import SDKError
 from .inventory import sha256_file
@@ -107,6 +107,18 @@ def _select_os_sources(os_build_commit, os_source, os_test_source):
         _require(source.is_file() and not source.is_symlink(),
                  'OS test source snapshot is missing required input: ' + str(source))
     return build_revision, test_revision
+
+
+def _install_diagnostic_runcom(os_test_source, root):
+    """Install the acceptance-only init entrypoint into the disposable root."""
+    source = os_test_source / 'ember/image/target-acceptance-rc'
+    _require(source.is_file() and not source.is_symlink(),
+             'OS test source is missing the diagnostic /etc/rc')
+    destination = root / 'etc/rc'
+    _require(not destination.exists() and not destination.is_symlink(),
+             'base set unexpectedly contains /etc/rc')
+    shutil.copy2(source, destination)
+    os.chmod(destination, 0o755)
 
 
 def _copy_runtime(sysroot, test_bundle, root, compiler_family):
@@ -208,7 +220,8 @@ def run(options):
     _require((destination / 'dest/etc/MAKEDEV').is_file(), 'same-build DESTDIR/MAKEDEV is missing')
 
     native = native_toolset.load_host_prefix(str(host_prefix),
-        required_roles={'cc', 'cxx', 'cpp', 'python', 'sh', 'tar', 'qemu-system-aarch64'},
+        required_roles={'cc', 'cxx', 'cpp', 'python', 'sh', 'tar', 'qemu-system-aarch64',
+                        'awk', 'rm', 'sed', 'grep', 'cat', 'mv'},
         compiler_family='clang')
     _require(Path(sys.executable).resolve() == Path(native.tool('python')).resolve(),
              'controller Python differs from selected native SDK Python')
@@ -262,23 +275,21 @@ def run(options):
                        output / 'extract-base.log', env=process.sanitized_environment({'PATH': native.path}))
     _copy_test_bundle(tests, root)
     _copy_runtime(sysroot, tests, root, options.compiler_family)
-    shutil.copy2(os_test_source / 'ember/image/target-acceptance-rc', root / 'etc/target-acceptance-rc')
-    os.chmod(root / 'etc/target-acceptance-rc', 0o755)
+    _install_diagnostic_runcom(os_test_source, root)
     nonce = __import__('secrets').token_hex(16)
     (root / 'etc/emberbsd-target-acceptance.nonce').write_text(nonce + '\n')
     (root / 'etc/emberbsd-target-acceptance-root-device').write_text(options.root_device + '\n')
     (root / 'etc/fstab').write_text(f'/dev/{options.root_device} / ffs ro 1 1\n')
-    local = root / 'etc/rc.local'
-    existing = local.read_text() if local.exists() else '#!/bin/sh\n'
-    local.write_text(existing.rstrip() + '\nexec /etc/target-acceptance-rc\n')
-    os.chmod(local, 0o755)
-
     image = work / 'root.ffs'
     image_helper = os_test_source / 'ember/image/target-acceptance-root.sh'
+    image_bindings = work / 'native-bindings'
+    image_env = native_checks.check_environment(native, bindings=image_bindings,
+                                                 environment={'LC_ALL': 'C'})
+    image_env['HOST_SH'] = native.tool('sh')
     process.run_logged([native.tool('sh'), str(image_helper), str(root),
         str(destination / 'dest'), str(tools), str(os_source), options.root_device,
         str(image), native.tool('sh')], output / 'makefs.log',
-        env=process.sanitized_environment({'PATH': native.path + os.pathsep + os.defpath}))
+        env=image_env)
     kernel = work / 'netbsd-EMBER64'
     with gzip.open(kernel_gz, 'rb') as source, kernel.open('xb') as target:
         shutil.copyfileobj(source, target)
