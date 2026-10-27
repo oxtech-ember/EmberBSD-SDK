@@ -209,6 +209,17 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
     write(os_source / 'build.sh', '#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' -B ' + shlex.quote(str(os_source / 'fixture-producer.py')) + ' "$@"\n', 0o755)
     shutil.copytree(SDK_SOURCE / 'src', root / 'sdk-source/src', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     recipe_fixture(ports, root / 'libedit.tar.gz')
+    for name, package, script in (
+        ('libarchive', 'archivers/libarchive', 'scripts/libarchive-source.py'),
+        ('libevent', 'devel/libevent', 'scripts/source-inputs/libevent/source.py'),
+    ):
+        source = root / (name + '-source')
+        source.mkdir()
+        write(source / 'receipt.json', json.dumps(dict(format='emberbsd-prepared-source',
+            version=1, package=package, identity={'fixture': name}, tree_sha256='0' * 64)))
+        write(ports / script, 'import sys\nfrom pathlib import Path\na=sys.argv[1:]\n'
+              'source=a[a.index("--source")+1] if "--source" in a else a[a.index("verify")+1]\n'
+              'print((Path(source)/"receipt.json").read_text())\n')
     for path in (os_source, ports, root / 'sdk-source'):
         git(path, 'init', '-q'); commit(path)
     prepare_source(ports, root / 'libedit.tar.gz', root / 'libedit-source')
@@ -218,10 +229,27 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
         write(native / name, '#!/bin/sh\nexit 0\n', 0o755)
     (native / 'python').symlink_to(os.path.realpath(sys.executable))
     (native / 'sh').symlink_to(os.path.realpath(shutil.which('sh')))
-    return {key: str(value) for key, value in ({'compiler-family': 'gcc', 'sdk': sdk, 'os': os_source, 'ports': ports, 'compiler': compiler, 'runtime-work': work, 'gcc-archive': root / 'gcc.tar.xz', 'pkgsrc': root / 'pkgsrc', 'target': target, 'jobs': '2', 'python': sys.executable, 'sdk-source': root / 'sdk-source', 'libedit-source': root / 'libedit-source', 'llvm-source': llvm_source, 'host-prefix': native, 'host-binutils': root / 'host-binutils'} | {'host-cc': native / 'cc', 'host-cxx': native / 'cxx'}).items()}
+    return {key: str(value) for key, value in ({'compiler-family': 'gcc', 'sdk': sdk, 'os': os_source, 'ports': ports, 'compiler': compiler, 'runtime-work': work, 'gcc-archive': root / 'gcc.tar.xz', 'pkgsrc': root / 'pkgsrc', 'target': target, 'jobs': '2', 'python': sys.executable, 'sdk-source': root / 'sdk-source', 'libedit-source': root / 'libedit-source', 'libarchive-source': root / 'libarchive-source', 'libevent-source': root / 'libevent-source', 'llvm-source': llvm_source, 'host-prefix': native, 'host-binutils': root / 'host-binutils'} | {'host-cc': native / 'cc', 'host-cxx': native / 'cxx'}).items()}
 
 
 class BuilderTests(TemporaryCase):
+    def test_common_source_missing_and_wrong_package_are_refused(self):
+        for name in ('libarchive', 'libevent'):
+            options = dict(self.options)
+            options.pop(name + '-source')
+            with self.assertRaisesRegex(SDKError, '--' + name + '-source'):
+                B(options).preflight()
+            path = Path(self.options[name + '-source']) / 'receipt.json'
+            original = path.read_text()
+            record = json.loads(original)
+            record['package'] = 'other/package'
+            path.write_text(json.dumps(record))
+            try:
+                with self.assertRaisesRegex(SDKError, 'invalid ' + name):
+                    B(self.options).preflight()
+            finally:
+                path.write_text(original)
+
     def setUp(self):
         super().setUp()
         self.options = fixture(self.root)

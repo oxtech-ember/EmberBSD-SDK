@@ -17,6 +17,8 @@ They do not define another toolchain recipe. The migration originates in
 and its `ember/tests/release-*.rb` contracts. The source license is BSD-2-Clause.
 
 See [libedit preparation](libedit.md) for the mandatory `--libedit-source` input.
+Prepare and select the common Ports libarchive and libevent sources as
+described in [sysroot preparation](sysroot.md); release builds require both.
 The `--host-binutils` work directory selects the matching common BFD and
 `elfedit` build used by OS host tools; see the [sysroot inputs](sysroot.md#required-inputs).
 
@@ -48,14 +50,16 @@ Canonical version behavior follows OS commit
 `70368a97ed5be79e3594d9f596e0e57b8a781593`.
 
 ```sh
-python3 scripts/build-os-release.py --help
-python3 scripts/build-os-release.py \
+/absolute/host-pkg-llvm/bin/python3.15 -B scripts/build-os-release.py --help
+/absolute/host-pkg-llvm/bin/python3.15 -B scripts/build-os-release.py \
   --profile aarch64-sysroot \
   --sdk-source /absolute/EmberBSD-SDK \
   --sdk /absolute/prebuild-sdk-aarch64 \
   --os-source /absolute/EmberBSD \
   --ports /absolute/EmberBSD-Ports \
   --libedit-source /absolute/prepared-libedit \
+  --libarchive-source /absolute/prepared-libarchive \
+  --libevent-source /absolute/prepared-libevent \
   --host-prefix /absolute/host-pkg-llvm \
   --host-binutils /absolute/binutils-aarch64 \
   --compiler /absolute/host-pkg-llvm \

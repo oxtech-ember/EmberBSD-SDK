@@ -60,6 +60,7 @@ class LLVMBuilderTests(TemporaryCase):
         base = dict(sdk='/unused/sdk', ports='/unused/ports', compiler='/unused/compiler',
                     runtime_work='/unused/runtime', jobs='2',
                     sdk_source=str(SDK_SOURCE), libedit_source='/unused/libedit',
+                    libarchive_source='/unused/libarchive', libevent_source='/unused/libevent',
                     host_prefix='/unused/host', host_binutils='/unused/host-binutils',
                     llvm_source='/unused/llvm')
 
@@ -209,9 +210,13 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         class Headers(LLVMPhaseBuilder, ClangBuilder):
             pass
         builder, _ = self.builder(builder_type=lambda options:Headers(options, 'headers'))
+        builder.options.pop('libarchive-source')
+        builder.options.pop('libevent-source')
         receipt = builder.preflight()
         self.assertEqual(len(receipt['plan']), 1)
         self.assertEqual(receipt['plan'][0][-2:], ['tools', 'bootstrap-headers'])
+        self.assertFalse(any('EMBER_LIBARCHIVE_SOURCE=' in arg or 'EMBER_LIBEVENT_SOURCE=' in arg
+                             for arg in receipt['plan'][0]))
         self.assertIn('EMBER_HOST_BFD_CONFIG=' + builder.options['host-binutils'] + '/host-bfd.mk', receipt['plan'][0])
         for name in ('stdio.h','sys/types.h','sys/param.h','stdint.h','limits.h','math.h','pthread.h'):
             write(Path(builder.paths['destination'])/'usr/include'/name, '/* base header */\n')
