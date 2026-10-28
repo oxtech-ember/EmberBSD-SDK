@@ -434,6 +434,11 @@ class LLVMBuilderTests(TemporaryCase):
                 self.assertIs(cli('--no-base-cxx')['base-cxx'], False)
                 self.assertIs(cli('--base-cxx')['base-cxx'], True)
                 self.assertIs(cli('--compiler-family', 'gcc')['base-cxx'], False)
+                # Releases select private LLVM coordinator outputs as sysroots do.
+                selected = cli('--llvm-objects', '/unused/sdk/obj/llvm-private',
+                               '--llvm-stages', '/unused/sdk/stages/llvm-private')
+                self.assertEqual(selected['llvm-objects'], '/unused/sdk/obj/llvm-private')
+                self.assertEqual(selected['llvm-stages'], '/unused/sdk/stages/llvm-private')
 
     def test_bootstrap_phases_keep_base_aliases_disabled(self):
         options = {'sdk': '/sdk', 'runtime-work': '/sdk/obj/runtime',
