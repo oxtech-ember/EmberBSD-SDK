@@ -599,6 +599,25 @@ class BuilderTests(TemporaryCase):
         legacy['signature']['environment']['EMBER_NATIVE_TOOLS'] = str(Path(builder.paths['tools']) / 'native-routing')
         self.assertTrue(builder.compatible_context(legacy, path))
 
+    def test_context_from_os_revision_without_native_contract_is_incompatible(self):
+        builder = B(self.options)
+        builder.run()
+        path = builder.paths['objects']
+        record = jsonio.read_json(Path(path) / builder.CONTEXT)
+        contract = Path(self.options['os']) / 'tools/native-tools/contract'
+        content = contract.read_text()
+        git(self.options['os'], 'rm', '-q', 'tools/native-tools/contract')
+        commit(self.options['os'])
+        without = git(self.options['os'], 'rev-parse', 'HEAD')
+        write(contract, content)
+        commit(self.options['os'])
+        # An older OS revision has no rows to compare with the selected
+        # contract; reuse is refused instead of failing in git show.
+        legacy = copy.deepcopy(record)
+        legacy['sources']['os']['commit'] = without
+        legacy['signature']['environment']['EMBER_NATIVE_TOOLS'] = str(Path(builder.paths['tools']) / 'native-routing')
+        self.assertFalse(builder.compatible_context(legacy, path))
+
     def test_native_contract_rebinding_or_new_compiler_binding_refuses_reuse(self):
         self.run_builder()
         contract = Path(self.options['os']) / 'tools/native-tools/contract'

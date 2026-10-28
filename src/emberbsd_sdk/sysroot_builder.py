@@ -448,8 +448,14 @@ class SysrootBuilder:
                 # Compare the actual OS-owned rows from both source revisions.
                 # Existing commands/bindings cannot change during object reuse.
                 source = record['sources']['os']
+                contract = 'tools/native-tools/contract'
+                # Objects from an OS revision without the contract have no
+                # recorded rows to compare, so they cannot be reused.
+                if self.git(self.sources['os']['path'], 'ls-tree', '--name-only',
+                            source['commit'], '--', contract) != contract:
+                    return False
                 data = self.git(self.sources['os']['path'], 'show', source['commit'] +
-                                ':tools/native-tools/contract') + '\n'
+                                ':' + contract) + '\n'
                 old_rows = data.splitlines()
                 new_rows = Path(self.native_contract).read_text(encoding='ascii').splitlines()
                 if (old_rows[:1] != new_rows[:1] or
