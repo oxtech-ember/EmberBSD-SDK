@@ -773,6 +773,13 @@ C analysis or memory acceptance. Those remain separate gates.
 
 ## Fixed Ports Byacc profile
 
+This section describes the retired GCC16 profile and its original source
+snapshot. Its fixed manifest and two patches are historical identities; they
+must not be used to select or prepare the active Ports recipe. Current byacc is
+built through the ordinary Ports recipe and its complete `distinfo` patch set.
+For the first Darwin prefix, use [the initial Ports bootstrap](darwin-bootstrap.md)
+with explicit initial tools. Existing history checks keep their original pin.
+
 `byacc-bootstrap` uses `pkgsrc/devel/byacc/bootstrap.json` from the selected Ports source.
 It is a Ports-owned release profile, separate from the Git-owned OS stage list above.
 The `program` fields are `owner`, `source`, `manifest`, `archive`, and ordered `patches`.
