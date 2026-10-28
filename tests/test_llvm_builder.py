@@ -87,6 +87,36 @@ class LLVMBuilderTests(TemporaryCase):
             '--sdk-source', '/sdk', '--git', '/host/git', 'verify-source',
             '--source', '/prepared/byacc'])
 
+    def test_source_comparison_uses_selected_prefix_patch_and_archive(self):
+        from types import SimpleNamespace
+        prefix = self.root / 'host'
+        prefix.mkdir()
+        patch_tool = prefix / 'patch'
+        patch_tool.write_text('fixture')
+        patch_tool.chmod(0o755)
+        archive = self.root / 'byacc.tgz'
+        archive.write_text('archive')
+        builder = SysrootBuilder({'source-patch': str(patch_tool), 'byacc-archive': str(archive)})
+        builder.native = SimpleNamespace(bundle_root=str(prefix), tool=lambda name: str(patch_tool))
+        builder.paths = {'python': '/host/python', 'ports': '/ports',
+                         'sdk-source': '/sdk', 'byacc-source': '/prepared/byacc'}
+        builder.git_command = '/host/git'
+        builder.environment = {}
+        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'devel/byacc'}
+        with patch('emberbsd_sdk.sysroot_builder.native_toolset.load_host_prefix',
+                   return_value=SimpleNamespace(tool=lambda name: str(patch_tool))) as load, \
+                patch('emberbsd_sdk.sysroot_builder.process.capture',
+                      return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
+            builder.verify_common_sources()
+        self.assertEqual(load.call_args.kwargs['required_roles'], {'gpatch'})
+        self.assertEqual(run.call_args.args[0][-4:], ['--patch', str(patch_tool), '--archive', str(archive)])
+        builder.options['source-patch'] = str(archive)
+        archive.chmod(0o755)
+        with patch('emberbsd_sdk.sysroot_builder.native_toolset.load_host_prefix',
+                   return_value=SimpleNamespace(tool=lambda name: str(patch_tool))):
+            with self.assertRaisesRegex(SDKError, 'differs from the selected native gpatch'):
+                builder.verify_common_sources()
+
     def test_optional_x11_source_is_verified_by_its_owner(self):
         builder = SysrootBuilder({})
         builder.paths = {'python': '/host/python', 'ports': '/ports',

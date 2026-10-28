@@ -80,6 +80,17 @@ class HostPrefixTests(TemporaryCase):
             self.fixture.load(roles=('ninja',))
         self.assertEqual(self.fixture.queries, [])
 
+    def test_gpatch_checks_native_cpu_and_interpreter(self):
+        self.fixture.write('gpatch', header(62, 2))
+        self.assertEqual(self.fixture.load(roles=('gpatch',)).tool('gpatch'),
+                         str(self.fixture.root / 'bin/gpatch'))
+        self.fixture.write('gpatch', header(183, 2))
+        with self.assertRaises(SDKError):
+            self.fixture.load(roles=('gpatch',))
+        self.fixture.write('gpatch', b'#!/bin/sh\n')
+        with self.assertRaisesRegex(SDKError, 'escapes host prefix'):
+            self.fixture.load(roles=('gpatch',))
+
     def test_source_tools_do_not_require_a_compiler(self):
         self.fixture.write('git', header(62, 2))
         self.fixture.write('patch', header(62, 2))

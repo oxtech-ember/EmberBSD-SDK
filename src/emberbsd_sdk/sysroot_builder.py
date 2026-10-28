@@ -495,6 +495,12 @@ class SysrootBuilder:
 
     def verify_common_sources(self):
         result = {}
+        patch = self.options.get('source-patch')
+        if patch:
+            patch = self.executable(patch)
+            selector = native_toolset.load_host_prefix(self.native.bundle_root, required_roles={'gpatch'})
+            if patch != self.executable(selector.tool('gpatch')):
+                raise SDKError('source patch differs from the selected native gpatch')
         for name, package, argv in (
             ('libarchive', 'archivers/libarchive', ['scripts/libarchive-source.py', 'verify']),
             ('libevent', 'devel/libevent', ['scripts/source-inputs/libevent/source.py']),
@@ -511,6 +517,12 @@ class SysrootBuilder:
                 command += ['verify', self.paths[name + '-source'], '--sdk-source', self.paths['sdk-source'], '--git', self.git_command]
             else:
                 command += ['--sdk-source', self.paths['sdk-source'], '--git', self.git_command, 'verify-source', '--source', self.paths[name + '-source']]
+            if name in ('libarchive', 'libevent', 'byacc') and patch:
+                command += ['--patch', patch]
+            if name in ('libevent', 'byacc') and self.options.get(name + '-archive'):
+                archive = paths.canonical_existing(self.options[name + '-archive'])
+                paths.regular_file(archive)
+                command += ['--archive', archive]
             record = jsonio.loads_json(process.capture(command, env=self.environment).stdout)
             if (not isinstance(record, dict) or record.get('format') != 'emberbsd-prepared-source' or
                     type(record.get('version')) is not int or record['version'] != 1 or

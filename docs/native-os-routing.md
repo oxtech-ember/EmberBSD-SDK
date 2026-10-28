@@ -43,6 +43,12 @@ queries the OS base yacc and host yacc makefiles and requires each effective
 `IDIST` to select that source. Without the option, older OS revisions retain
 their existing behavior.
 
+For common libarchive, libevent and byacc sources prepared with package-scoped
+identity, select `--source-patch` inside the host prefix. To compare libevent
+or byacc records when source inputs changed, also select
+the current `--libevent-archive` or `--byacc-archive`; the owner checks the
+archive and full patch set before comparing the prepared payload.
+
 The release builder also accepts `--x11-source`, the tree prepared by the Ports
 `scripts/source-inputs/xsrc` owner from the NetBSD 11.0 `xsrc.tgz` set. It is
 valid only for the Clang `aarch64-sysroot` profile. The SDK verifies the

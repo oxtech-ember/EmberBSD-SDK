@@ -23,6 +23,9 @@ def main():
         parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix'}.get(name))
     for name in ('libarchive-source', 'libevent-source', 'byacc-source'):
         parser.add_argument('--' + name, action=UniqueOption, help='required for the OS base build')
+    parser.add_argument('--source-patch', action=UniqueOption, help='selected patch executable inside the native prefix')
+    for name in ('libevent-archive', 'byacc-archive'):
+        parser.add_argument('--' + name, action=UniqueOption, help='archive for comparing changed source inputs')
     parser.add_argument('--host-compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
                         help='Clang by default; select GCC explicitly for a platform exception')
     parser.add_argument('--compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
