@@ -90,7 +90,7 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
         f'EMBER_LIBEDIT_SOURCE={paths["libedit-source"]}',
         f'MKREPRO_TIMESTAMP={timestamp}', f'EMBER_BUILD_ID={sha}', f'BUILDINFO=EmberBSD:{sha}',
         f'KERNOBJDIR={paths["objects"]}/kernels'] + (native_host_flags(native_selection) if native_selection is not None else [])
-    for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit'):
+    for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi'):
         if name + '-source' in paths:
             flags.append(f'EMBER_{name.upper()}_SOURCE={paths[name + "-source"]}')
     if any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source')) and native_selection is not None:
@@ -144,7 +144,7 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
                         [make, '-C', paths['os'] + '/etc', overlay, 'release'],
                         *commands[1:]]
     source_flags = [f'EMBER_{name.upper()}_SOURCE={paths[name + "-source"]}'
-                    for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit') if name + '-source' in paths]
+                    for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi') if name + '-source' in paths]
     if any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source')) and native_selection is not None:
         source_flags += gnu_target_host_flags(native_selection)
     for command in commands:
@@ -209,9 +209,9 @@ def validate_profile(profile, sha, target):
     if 'common_sources' in signature:
         common_sources = signature['common_sources']
         check(isinstance(common_sources, dict) and {'libarchive', 'libevent'} <= set(common_sources) <=
-              {'libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'x11'}, 'Invalid common source selection')
+              {'libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'x11'}, 'Invalid common source selection')
         check(('x11' in common_sources) == ('x11-source' in paths), 'Mixed X11 source selection')
-        for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'), ('diffutils', 'devel/diffutils'), ('grep', 'textproc/grep'), ('ekermit', 'comms/ekermit'),
+        for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'), ('diffutils', 'devel/diffutils'), ('grep', 'textproc/grep'), ('ekermit', 'comms/ekermit'), ('nvi', 'editors/nvi'),
                               ('x11', X11_PACKAGE)):
             if name not in common_sources:
                 continue

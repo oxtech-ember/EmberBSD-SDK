@@ -130,6 +130,24 @@ class LLVMBuilderTests(TemporaryCase):
             builder.require_ekermit_source_support()
             run.assert_not_called()
 
+    def test_nvi_source_requires_real_os_producer(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'os': str(self.root / 'os'), 'nvi-source': '/prepared/nvi', 'tools': '/build/tools'}
+        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
+        builder.environment = {}
+        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/old/dist\n')):
+            with self.assertRaisesRegex(SDKError, 'does not support EMBER_NVI_SOURCE'):
+                builder.require_nvi_source_support()
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/prepared/nvi\n')) as run:
+            builder.require_nvi_source_support()
+        self.assertIn('/os/external/bsd/nvi/usr.bin/nvi', run.call_args.args[0][5])
+        del builder.paths['nvi-source']
+        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
+            builder.require_nvi_source_support()
+            run.assert_not_called()
+
     def test_optional_ekermit_source_verified_by_owner(self):
         from types import SimpleNamespace
         builder = SysrootBuilder({})
@@ -140,6 +158,17 @@ class LLVMBuilderTests(TemporaryCase):
         with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
             self.assertEqual(builder.verify_common_sources(), {'ekermit': record})
         self.assertIn('/ports/scripts/source-inputs/ekermit/source.py', run.call_args.args[0])
+
+    def test_optional_nvi_source_verified_by_owner(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'nvi-source': '/prepared/nvi'}
+        builder.git_command = '/host/git'
+        builder.environment = {}
+        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'editors/nvi'}
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
+            self.assertEqual(builder.verify_common_sources(), {'nvi': record})
+        self.assertIn('/ports/scripts/source-inputs/nvi/source.py', run.call_args.args[0])
 
     def test_rcs_source_requires_real_os_producer(self):
         from types import SimpleNamespace
@@ -1140,6 +1169,21 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.paths['ekermit-source'] = '/prepared/ekermit'
         builder.signature['common_sources']['ekermit'] = {'tree_sha256': 'a' * 64}
         builder.signature['flags'].append('EMBER_EKERMIT_SOURCE=/prepared/ekermit')
+        self.assertTrue(builder.compatible_context(records[tools], tools))
+        self.assertTrue(builder.compatible_context(records[objects], objects))
+        builder.llvm_phase = 'base'
+        self.assertFalse(builder.compatible_context(records[objects], objects))
+
+    def test_nvi_selection_reuses_headers_and_native_tools(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        tools, objects = builder.paths['tools'], builder.paths['objects']
+        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+        builder.paths['nvi-source'] = '/prepared/nvi'
+        builder.signature['common_sources']['nvi'] = {'tree_sha256': 'a' * 64}
+        builder.signature['flags'].append('EMBER_NVI_SOURCE=/prepared/nvi')
         self.assertTrue(builder.compatible_context(records[tools], tools))
         self.assertTrue(builder.compatible_context(records[objects], objects))
         builder.llvm_phase = 'base'

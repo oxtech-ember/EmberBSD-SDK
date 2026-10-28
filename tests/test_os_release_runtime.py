@@ -41,6 +41,21 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
         for command in commands:
             self.assertIn('EMBER_EKERMIT_SOURCE=/sdk/ekermit-source', command)
 
+    def test_optional_nvi_source_reaches_release_and_set_checks(self):
+        paths = {name: '/sdk/' + name for name in (
+            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
+            'libedit-source', 'nvi-source', 'objects', 'tools', 'destination', 'os')}
+        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
+                     'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
+                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
+        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
+                            '/host/sh', compiler_family='clang', base_cxx=True,
+                            install_base_cxx=True, native_selection=selection)
+        self.assertIn('EMBER_NVI_SOURCE=/sdk/nvi-source', flags)
+        for command in commands:
+            self.assertIn('EMBER_NVI_SOURCE=/sdk/nvi-source', command)
+
     def test_optional_diffutils_source_reaches_release_and_set_checks(self):
         paths = {name: '/sdk/' + name for name in (
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',

@@ -95,3 +95,8 @@ profile then sets `MKX11=yes` and `X11SRCDIR`, adds `xbase xcomp xetc xfont
 xserver` to `MAKETARSETS`, and requires those sets as outputs. The xsrc
 identity is part of the native tools context because OS tools build X11 font
 tools from it. Without the option the profile keeps `MKX11=no`.
+
+The optional `--nvi-source` selects the common Ports nvi source for the
+native OS producer. `--nvi-archive` and `--source-patch` support verification
+when the effective Ports inputs change. Native nvi uses the base DB1 API;
+the separate package uses Berkeley DB 18.
