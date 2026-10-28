@@ -36,6 +36,12 @@ prints `HOLD` and retains the resource. Inspect the outer owned build session
 before reuse. Uncatchable process termination and host failure cannot preserve
 a process-owned flock fence.
 
+When selected, the Darwin native make configuration exposes the same service as
+`EMBERBSD_DARWIN_LINKER_LAUNCHER`, a shell-quoted argument prefix, and
+`EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER`, a CMake argument list. Consumers append
+their selected compiler command to the appropriate form. The existing
+`EMBERBSD_GCC16_LINKER_LAUNCHER` remains available to GCC bootstrap consumers.
+
 For CMake, set `CMAKE_C_LINKER_LAUNCHER` and `CMAKE_CXX_LINKER_LAUNCHER` to the
 semicolon-separated Python executable, launcher path and its four option
 arguments. These launchers apply to executable, shared-library and module links.

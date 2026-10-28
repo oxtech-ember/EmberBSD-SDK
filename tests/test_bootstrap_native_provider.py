@@ -155,6 +155,7 @@ class NativeProviderTests(unittest.TestCase):
         values = self.values()
         words = shlex.split(values['EMBERBSD_GCC16_LINKER_LAUNCHER'])
         self.assertEqual(values['EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER'].split(';'), words)
+        self.assertEqual(shlex.split(values['EMBERBSD_DARWIN_LINKER_LAUNCHER']), words)
         self.assertEqual(words, ['/selected/control-python', '/selected/sdk/scripts/link-launcher.py',
             '--lock-root', case.plan['resources']['lock_root'], '--context',
             case.plan['resources']['heavy_link_context'], '--'])

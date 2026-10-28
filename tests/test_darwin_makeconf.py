@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
+import shlex
 import struct
 from unittest.mock import patch
 
@@ -98,7 +99,17 @@ class DarwinMakeconfTests(TemporaryCase):
             words = [self.tools['cc'], str(SDK_SOURCE / 'scripts/link-launcher.py'),
                      '--lock-root', str(self.root / 'work'), '--context', str(self.root / 'work/heavy-link'), '--']
             self.assertIn('EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER= ' + ';'.join(words) + '\n', data)
+            value = next(line.split('= ', 1)[1] for line in data.splitlines()
+                         if line.startswith('EMBERBSD_DARWIN_LINKER_LAUNCHER= '))
+            self.assertEqual(shlex.split(value), words)
             self.assertEqual('EMBERBSD_GCC16_LINKER_LAUNCHER=' in data, family == 'gcc')
+
+    def test_launcher_preserves_existing_safe_path_boundary(self):
+        space_root = self.root / 'lock root with spaces'
+        space_root.mkdir()
+        with self.assertRaisesRegex(SDKError, 'without make metacharacters'):
+            self.render(jobs=2, cpu_budget=2, link_python=self.tools['cc'],
+                        lock_root=space_root, heavy_link_context=space_root / 'heavy link')
 
     def test_default_jobs_follow_host_cpu_count(self):
         del self.options['jobs']

@@ -232,9 +232,11 @@ def metadata_assignments(plan, descriptor, commands, flags):
             variables['EMBERBSD_GCC16_LINKER_LAUNCHER'] = recipe_linker_launcher(plan)
         if _native_provider_profile(data['profile']['sha256']):
             variables['EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER'] = ''
+            variables['EMBERBSD_DARWIN_LINKER_LAUNCHER'] = ''
             if 'link_control' in plan:
                 from .bootstrap_recipe import recipe_cmake_linker_launcher
                 variables['EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER'] = recipe_cmake_linker_launcher(plan)
+                variables['EMBERBSD_DARWIN_LINKER_LAUNCHER'] = recipe_linker_launcher(plan)
     return variables
 
 

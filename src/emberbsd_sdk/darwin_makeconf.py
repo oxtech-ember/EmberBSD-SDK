@@ -185,6 +185,7 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
                     resources={'lock_root': _path(lock_root, directory=True, existing=True),
                                'heavy_link_context': _path(heavy_link_context)})
         variables['EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER'] = recipe_cmake_linker_launcher(link)
+        variables['EMBERBSD_DARWIN_LINKER_LAUNCHER'] = recipe_linker_launcher(link)
         if compiler_family == 'gcc':
             variables['EMBERBSD_GCC16_LINKER_LAUNCHER'] = recipe_linker_launcher(link)
     for role, command in commands.items():
