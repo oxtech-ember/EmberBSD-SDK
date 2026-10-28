@@ -108,9 +108,10 @@ class LLVMCoordinator:
         self.options = options.copy()
         self.builder_type = builder_type
         self.work = os.path.abspath(self.options['runtime-work'])
-        self.stage_root = os.path.join(self.options['sdk'], 'stages',
-                                      'llvm-bootstrap-' + self.options['target'])
-        self.object_root = os.path.join(self.options['sdk'], 'obj', 'llvm-bootstrap', self.options['target'])
+        self.stage_root = self.options.get('llvm-stages', os.path.join(self.options['sdk'], 'stages',
+                                      'llvm-bootstrap-' + self.options['target']))
+        self.object_root = self.options.get('llvm-objects', os.path.join(
+            self.options['sdk'], 'obj', 'llvm-bootstrap', self.options['target']))
         self.tools = self.options.get('tools', os.path.join(self.object_root, 'tools'))
 
     def stage_options(self, phase):
@@ -130,6 +131,8 @@ class LLVMCoordinator:
         workspace.require_target(layout, self.options['target'])
         self.headers = LLVMPhaseBuilder(self.stage_options('headers'), 'headers')
         self.headers.preflight()
+        self.headers.output_path(self.object_root, os.path.join(self.headers.paths['sdk'], 'obj'))
+        self.headers.output_path(self.stage_root, os.path.join(self.headers.paths['sdk'], 'stages'))
         self.work = self.headers.output_path(self.work, os.path.join(self.headers.paths['sdk'], 'obj'))
         for name, value in self.headers.paths.items():
             if name != 'sdk':

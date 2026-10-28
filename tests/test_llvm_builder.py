@@ -202,6 +202,39 @@ class LLVMBuilderTests(TemporaryCase):
             self.assertIn('MKLIBCXX=no', llvm_flags(
                 selected_paths, phase=phase, base_cxx=True))
 
+    def test_coordinator_uses_selected_stage_and_object_directories(self):
+        options = {'sdk': '/sdk', 'runtime-work': '/sdk/obj/runtime', 'target': 'aarch64',
+                   'llvm-objects': '/sdk/obj/alternate', 'llvm-stages': '/sdk/stages/alternate'}
+        coordinator = LLVMCoordinator(options, SysrootBuilder)
+        headers = coordinator.stage_options('headers')
+        self.assertEqual(headers['objects'], '/sdk/obj/alternate/headers')
+        self.assertEqual(headers['destination'], '/sdk/stages/alternate/headers')
+        self.assertEqual(headers['tools'], '/sdk/obj/alternate/tools')
+
+    def test_coordinator_roots_stay_inside_shared_workspace(self):
+        sdk = self.root / 'sdk'
+        (sdk / 'obj').mkdir(parents=True)
+        (sdk / 'stages').mkdir()
+        options = {'sdk': str(sdk), 'runtime-work': str(sdk / 'obj/runtime'),
+                   'target': 'aarch64', 'llvm-objects': str(sdk / 'obj/alternate'),
+                   'llvm-stages': str(sdk / 'stages/alternate')}
+        class Header:
+            output_path = SysrootBuilder.output_path
+            def __init__(self, selected, phase):
+                self.logical_sdk = str(sdk)
+                self.paths = {'sdk': str(sdk)}
+            def preflight(self):
+                pass
+        def prepare(selected):
+            with patch('emberbsd_sdk.llvm_sysroot.workspace.inspect_layout', return_value={}), \
+                    patch('emberbsd_sdk.llvm_sysroot.workspace.require_target'), \
+                    patch('emberbsd_sdk.llvm_sysroot.LLVMPhaseBuilder', Header):
+                LLVMCoordinator(selected, SysrootBuilder).prepare()
+        prepare(options)
+        for name in ('llvm-objects', 'llvm-stages'):
+            with self.subTest(name=name), self.assertRaisesRegex(SDKError, 'output must be inside'):
+                prepare({**options, name: str(self.root / 'outside')})
+
     def test_base_cxx_option_type_is_checked_before_compiler_selection(self):
         with self.assertRaisesRegex(SDKError, 'must be boolean'):
             SysrootBuilder({'compiler-family': 'gcc', 'base-cxx': 'false'}).preflight()

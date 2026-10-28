@@ -49,6 +49,11 @@ or byacc records when source inputs changed, also select
 the current `--libevent-archive` or `--byacc-archive`; the owner checks the
 archive and full patch set before comparing the prepared payload.
 
+The sysroot builder accepts `--llvm-objects` and `--llvm-stages` to select
+LLVM coordinator subdirectories inside the existing SDK's `obj` and `stages`
+directories when a different build context must be retained alongside an
+existing one. Existing contexts and stages are not overwritten.
+
 The release builder also accepts `--x11-source`, the tree prepared by the Ports
 `scripts/source-inputs/xsrc` owner from the NetBSD 11.0 `xsrc.tgz` set. It is
 valid only for the Clang `aarch64-sysroot` profile. The SDK verifies the

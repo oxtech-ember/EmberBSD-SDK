@@ -37,6 +37,10 @@ def main():
                         help='reuse a completed common LLVM runtime; otherwise build its prerequisites')
     parser.add_argument('--llvm-bootstrap-stage', action=UniqueOption,
                         help='verified bootstrap runtime consumed by the full runtime')
+    parser.add_argument('--llvm-objects', action=UniqueOption,
+                        help='LLVM coordinator object directory inside SDK/obj')
+    parser.add_argument('--llvm-stages', action=UniqueOption,
+                        help='LLVM coordinator stage directory inside SDK/stages')
     parser.add_argument('--base-cxx', action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS,
                         help='install the selected LLVM libc++ headers and linker aliases into the OS base paths (default for Clang)')
     for name in ('destination', 'objects', 'tools'):
