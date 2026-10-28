@@ -21,7 +21,7 @@ def main():
     parser = argparse.ArgumentParser(description='Build an EmberBSD OS sysroot with a native Ports prefix.')
     for name in ('sdk', 'os', 'ports', 'compiler', 'runtime-work', 'target', 'jobs', 'sdk-source', 'libedit-source', 'host-prefix', 'host-binutils'):
         parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix'}.get(name))
-    for name in ('libarchive-source', 'libevent-source'):
+    for name in ('libarchive-source', 'libevent-source', 'byacc-source'):
         parser.add_argument('--' + name, action=UniqueOption, help='required for the OS base build')
     parser.add_argument('--host-compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
                         help='Clang by default; select GCC explicitly for a platform exception')

@@ -46,6 +46,47 @@ class ClangBuilder(B):
 
 
 class LLVMBuilderTests(TemporaryCase):
+    def test_byacc_source_requires_supported_os_producer(self):
+        builder = SysrootBuilder({})
+        builder.paths = {'os': str(self.root / 'os'), 'byacc-source': '/prepared/byacc',
+                         'tools': '/build/tools'}
+        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
+        builder.environment = {}
+        from types import SimpleNamespace
+        builder.native = SimpleNamespace(tool=lambda name: '/host/bmake')
+        answer = lambda value: SimpleNamespace(stdout=value.encode())
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   side_effect=[answer('/prepared/byacc'), answer('/old/dist')]):
+            with self.assertRaisesRegex(SDKError, 'does not support EMBER_BYACC_SOURCE'):
+                builder.require_byacc_source_support()
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   side_effect=[answer('/prepared/byacc'), answer('/prepared/byacc')]) as run:
+            builder.require_byacc_source_support()
+        self.assertEqual(run.call_count, 2)
+        self.assertIn('/os/external/bsd/byacc/bin', run.call_args_list[0].args[0][5])
+        self.assertIn('/os/tools/yacc', run.call_args_list[1].args[0][5])
+        del builder.paths['byacc-source']
+        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
+            builder.require_byacc_source_support()
+            run.assert_not_called()
+
+    def test_optional_byacc_source_is_verified_by_its_owner(self):
+        builder = SysrootBuilder({})
+        builder.paths = {'python': '/host/python', 'ports': '/ports',
+                         'sdk-source': '/sdk', 'byacc-source': '/prepared/byacc'}
+        builder.git_command = '/host/git'
+        builder.environment = {}
+        record = {'format': 'emberbsd-prepared-source', 'version': 1,
+                  'package': 'devel/byacc'}
+        from types import SimpleNamespace
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
+            self.assertEqual(builder.verify_common_sources(), {'byacc': record})
+        self.assertEqual(run.call_args.args[0], [
+            '/host/python', '-B', '/ports/scripts/source-inputs/byacc/source.py',
+            '--sdk-source', '/sdk', '--git', '/host/git', 'verify-source',
+            '--source', '/prepared/byacc'])
+
     def test_base_cxx_builder_default_tracks_family_and_explicit_value(self):
         self.assertIs(SysrootBuilder({'compiler-family': 'clang'}).options['base-cxx'], True)
         self.assertIs(SysrootBuilder({'compiler-family': 'gcc'}).options['base-cxx'], False)
@@ -648,3 +689,32 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.paths['host-binutils'] = bfd
         builder.signature['native_toolset'] = {'different': True}
         self.assertNotEqual(builder.context_signature(builder.paths['tools']), before)
+
+    def test_byacc_source_changes_invalidate_native_tools(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        tool_path = builder.paths['tools']
+        original = builder.context_signature(tool_path)
+        record = {'signature': copy.deepcopy(original)}
+        builder.paths['byacc-source'] = '/prepared/byacc-one'
+        builder.signature['common_sources']['byacc'] = {'tree_sha256': 'a' * 64}
+        self.assertFalse(builder.compatible_context(record, tool_path))
+        selected = builder.context_signature(tool_path)
+        record['signature'] = copy.deepcopy(selected)
+        builder.signature['common_sources']['byacc']['tree_sha256'] = 'b' * 64
+        self.assertFalse(builder.compatible_context(record, tool_path))
+        builder.signature['common_sources']['byacc']['tree_sha256'] = 'a' * 64
+        builder.paths['byacc-source'] = '/prepared/byacc-two'
+        self.assertFalse(builder.compatible_context(record, tool_path))
+
+    def test_header_objects_do_not_depend_on_byacc_source(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        object_path = builder.paths['objects']
+        record = {'signature': copy.deepcopy(builder.context_signature(object_path))}
+        builder.paths['byacc-source'] = '/prepared/byacc'
+        builder.signature['common_sources']['byacc'] = {'tree_sha256': 'a' * 64}
+        builder.signature['flags'].append('EMBER_BYACC_SOURCE=/prepared/byacc')
+        self.assertTrue(builder.compatible_context(record, object_path))

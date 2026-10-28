@@ -420,7 +420,8 @@ class SysrootBuilder:
                     signature['flags'] = [flag for flag in signature['flags']
                                           if not flag.startswith(('EMBER_LLVM_SOURCE=',
                                                                   'EMBER_LIBARCHIVE_SOURCE=',
-                                                                  'EMBER_LIBEVENT_SOURCE='))]
+                                                                  'EMBER_LIBEVENT_SOURCE=',
+                                                                  'EMBER_BYACC_SOURCE='))]
             previous, selected = old['native_toolset'], new['native_toolset']
             if any(selected['tools'].get(role) != value
                    for role, value in previous['tools'].items()):
@@ -470,10 +471,14 @@ class SysrootBuilder:
             return self.signature
         # OS native tools do not link the target runtime. Reuse their one tree
         # while target object directories distinguish headers, C base and C++.
-        return dict(scope='llvm-native-tools', host_binutils=self.paths['host-binutils'],
+        signature = dict(scope='llvm-native-tools', host_binutils=self.paths['host-binutils'],
                     **{name: self.signature[name] for name in
             ('host', 'target', 'compiler', 'host_tools', 'native_toolset', 'native_inputs',
              'environment', 'tools', 'python', 'process_backend')})
+        if 'byacc-source' in self.paths:
+            signature['byacc_source'] = {'path': self.paths['byacc-source'],
+                                         'record': self.signature['common_sources']['byacc']}
+        return signature
 
     def verify_llvm_source(self):
         result = process.capture(self.llvm_source_command, env=self.environment)
@@ -489,7 +494,10 @@ class SysrootBuilder:
         for name, package, argv in (
             ('libarchive', 'archivers/libarchive', ['scripts/libarchive-source.py', 'verify']),
             ('libevent', 'devel/libevent', ['scripts/source-inputs/libevent/source.py']),
+            ('byacc', 'devel/byacc', ['scripts/source-inputs/byacc/source.py']),
         ):
+            if name + '-source' not in self.paths:
+                continue
             command = [self.paths['python'], '-B', os.path.join(self.paths['ports'], argv[0])]
             if name == 'libarchive':
                 command += ['verify', self.paths[name + '-source'], '--sdk-source', self.paths['sdk-source'], '--git', self.git_command]
@@ -526,6 +534,26 @@ class SysrootBuilder:
                 raise SDKError(f'selected SDK source differs from loaded implementation: {module.name}')
             module_hashes[module.name] = digest
         return dict(path=python, sha256=inventory.sha256_file(self.executable(python)), version=result['version'], api_version=API_VERSION, modules=module_hashes)
+
+    def require_byacc_source_support(self):
+        if 'byacc-source' not in self.paths:
+            return
+        root = self.paths['os']
+        env = dict(self.environment)
+        env.pop('EMBER_NATIVE_TOOLS', None)
+        for producer in ('external/bsd/byacc/bin', 'tools/yacc'):
+            command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
+                       '-C', os.path.join(root, producer), 'MAKECONF=/dev/null', '_SRC_TOP_=',
+                       'NETBSDSRCDIR=' + root, 'MACHINE=' + self.target['machine'],
+                       'MACHINE_ARCH=' + self.target['arch'], 'USETOOLS=yes',
+                       'TOOLDIR=' + self.paths['tools'],
+                       'EMBER_BYACC_SOURCE=' + self.paths['byacc-source'], '-V', '${IDIST}']
+            try:
+                selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
+            except (SDKError, UnicodeError) as exc:
+                raise SDKError(f'selected OS cannot resolve byacc source for {producer}') from exc
+            if selected != self.paths['byacc-source']:
+                raise SDKError(f'selected OS does not support EMBER_BYACC_SOURCE for {producer}')
 
     def preflight(self):
         process.require_posix()
@@ -570,7 +598,7 @@ class SysrootBuilder:
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
-        input_names += [name for name in ('libarchive-source', 'libevent-source') if self.options.get(name)]
+        input_names += [name for name in ('libarchive-source', 'libevent-source', 'byacc-source') if self.options.get(name)]
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
                         if clang else ['runtime-work', 'gcc-archive', 'pkgsrc'])
         if clang and self.llvm_phase == 'final':
@@ -623,10 +651,11 @@ class SysrootBuilder:
         paths.regular_file(os.path.join(self.paths['ports'], verifier))
         paths.regular_file(os.path.join(self.paths['ports'], PRODUCER))
         self.sources = {name: self.source(self.paths[name], name) for name in ('os', 'ports')}
+        self.require_byacc_source_support()
         self.sources['sdk'] = self.source(self.paths['sdk-source'], 'sdk')
         self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command)
         self.common_source_records = (self.verify_common_sources()
-                                      if all(name + '-source' in self.paths for name in ('libarchive', 'libevent'))
+                                      if any(name + '-source' in self.paths for name in ('libarchive', 'libevent', 'byacc'))
                                       else {})
         self.python = self.python_identity()
         self.git(self.paths['os'], 'ls-files', '--error-unmatch', 'build.sh', 'Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk')
@@ -669,7 +698,7 @@ class SysrootBuilder:
         self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}',
                        f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
         self.flags += [f'EMBER_{name.upper()}_SOURCE={self.paths[name + "-source"]}'
-                       for name in ('libarchive', 'libevent') if name + '-source' in self.paths]
+                       for name in ('libarchive', 'libevent', 'byacc') if name + '-source' in self.paths]
         self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, native_toolset=self.native_selection, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
         self.signature['native_inputs'] = self.native_inputs
         self.signature['compiler_family'] = self.compiler_family()

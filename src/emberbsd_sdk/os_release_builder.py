@@ -61,7 +61,7 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
         f'EMBER_LIBEDIT_SOURCE={paths["libedit-source"]}',
         f'MKREPRO_TIMESTAMP={timestamp}', f'EMBER_BUILD_ID={sha}', f'BUILDINFO=EmberBSD:{sha}',
         f'KERNOBJDIR={paths["objects"]}/kernels'] + (native_host_flags(native_selection) if native_selection is not None else [])
-    for name in ('libarchive', 'libevent'):
+    for name in ('libarchive', 'libevent', 'byacc'):
         if name + '-source' in paths:
             flags.append(f'EMBER_{name.upper()}_SOURCE={paths[name + "-source"]}')
     # Current preflight requires BFD; historical command records predate it.
@@ -110,7 +110,7 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
                         [make, '-C', paths['os'] + '/etc', overlay, 'release'],
                         *commands[1:]]
     source_flags = [f'EMBER_{name.upper()}_SOURCE={paths[name + "-source"]}'
-                    for name in ('libarchive', 'libevent') if name + '-source' in paths]
+                    for name in ('libarchive', 'libevent', 'byacc') if name + '-source' in paths]
     for command in commands:
         if command[0].startswith(paths['tools'] + '/bin/nbmake-'):
             command[-1:-1] = source_flags
@@ -172,9 +172,11 @@ def validate_profile(profile, sha, target):
     paths = receipt['paths']
     if 'common_sources' in signature:
         common_sources = signature['common_sources']
-        check(isinstance(common_sources, dict) and set(common_sources) == {'libarchive', 'libevent'},
+        check(isinstance(common_sources, dict) and set(common_sources) in ({'libarchive', 'libevent'}, {'libarchive', 'libevent', 'byacc'}),
               'Invalid common source selection')
-        for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent')):
+        for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'), ('byacc', 'devel/byacc')):
+            if name not in common_sources:
+                continue
             record = common_sources[name]
             check(isinstance(record, dict) and record.get('format') == 'emberbsd-prepared-source' and
                   type(record.get('version')) is int and record['version'] == 1 and

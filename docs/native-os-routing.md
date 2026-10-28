@@ -35,3 +35,10 @@ Users do not supply a separate contract receipt.
 The OS contract can bind selected `cp` and `rm` roles to `HOST_MV_CP` and
 `HOST_MV_RM`. Host `mv` uses these fixed children for cross-device moves.
 Missing roles fail mapping publication before any tool runs.
+
+The sysroot and release builders accept an optional `--byacc-source` prepared
+by the common Ports byacc source owner. When selected, they verify its prepared
+tree and pass `EMBER_BYACC_SOURCE` to OS producers. Before building, the SDK
+queries the OS base yacc and host yacc makefiles and requires each effective
+`IDIST` to select that source. Without the option, older OS revisions retain
+their existing behavior.
