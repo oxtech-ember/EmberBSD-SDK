@@ -23,6 +23,21 @@ def archive(entries, mtime=1):
 
 
 class GitilesTests(TemporaryCase):
+    def test_explicit_limits_remain_bounded_and_validate(self):
+        rows = [('dir/a', b'abcdef', 'file'), ('dir/b', b'ghijk', 'file')]
+        tree = gitiles.tree_hash({'dir/a': ('100644', b'abcdef'), 'dir/b': ('100644', b'ghijk')})
+        raw = archive(rows)
+        expected = gitiles.normalize(raw, tree)
+        self.assertEqual(expected, gitiles.normalize(raw, tree, max_archive=len(raw),
+                                                    max_content=11, max_members=2))
+        for limits in ({'max_archive': len(raw)-1}, {'max_content': 10},
+                       {'max_members': 1}, {'max_archive': 0}, {'max_content': True}):
+            with self.subTest(limits=limits), self.assertRaises(gitiles.SourceError):
+                gitiles.normalize(raw, tree, **limits)
+        with self.assertRaises(gitiles.SourceError):
+            gitiles.normalize(archive([('../outside', b'x', 'file')]), tree,
+                              max_archive=1_000_000, max_content=1_000_000, max_members=100)
+
     def test_timestamp_normalization_and_named_root_extraction(self):
         rows = [('dir/source', b'content', 'file')]
         tree = gitiles.tree_hash({'dir/source': ('100644', b'content')})

@@ -55,16 +55,20 @@ def tree_hash(files):
     return digest(root).hex()
 
 
-def read_gitiles(raw, expected_tree):
-    require(len(raw) <= MAX_ARCHIVE, 'GN source archive is too large')
+def read_gitiles(raw, expected_tree, *, max_archive=MAX_ARCHIVE,
+                 max_content=MAX_CONTENT, max_members=MAX_MEMBERS):
+    require(all(type(value) is int and value > 0 for value in
+                (max_archive, max_content, max_members)), 'invalid Gitiles archive limits')
+    max_tar = max(10240, max_content + max_members * 4096)
+    require(len(raw) <= max_archive, 'GN source archive is too large')
     with gzip.GzipFile(fileobj=io.BytesIO(raw), mode='rb') as compressed:
-        unpacked = compressed.read(MAX_TAR + 1)
-    require(len(unpacked) <= MAX_TAR, 'expanded GN archive is too large')
+        unpacked = compressed.read(max_tar + 1)
+    require(len(unpacked) <= max_tar, 'expanded GN archive is too large')
     files, seen, folded, directories = {}, set(), {}, set()
     total = 0
     with tarfile.open(fileobj=io.BytesIO(unpacked), mode='r:') as archive:
         for member in archive:
-            require(len(seen) < MAX_MEMBERS, 'too many GN source entries')
+            require(len(seen) < max_members, 'too many GN source entries')
             name = member.name.rstrip('/') if member.isdir() else member.name
             path = PurePosixPath(name)
             require(name and str(path) == name and not path.is_absolute() and
@@ -84,7 +88,7 @@ def read_gitiles(raw, expected_tree):
             if member.isdir():
                 directories.add(name)
                 continue
-            require(0 <= member.size <= MAX_CONTENT - total, 'GN source content is too large')
+            require(0 <= member.size <= max_content - total, 'GN source content is too large')
             require(member.mode & 0o7777 in (0o644, 0o755), 'unsupported GN source file mode')
             total += member.size
             stream = archive.extractfile(member)
@@ -121,7 +125,9 @@ def normalized_tar(files, *, root_name=None):
 
 
 
-def normalize(raw, expected_tree, *, root_name=None):
+def normalize(raw, expected_tree, *, root_name=None, max_archive=MAX_ARCHIVE,
+              max_content=MAX_CONTENT, max_members=MAX_MEMBERS):
     """Return a deterministic tar after verifying the exact Git tree."""
     require(isinstance(expected_tree, str) and re.fullmatch("[0-9a-f]{40}", expected_tree), "invalid Git tree")
-    return normalized_tar(read_gitiles(raw, expected_tree), root_name=root_name)
+    return normalized_tar(read_gitiles(raw, expected_tree, max_archive=max_archive,
+                                      max_content=max_content, max_members=max_members), root_name=root_name)
