@@ -98,3 +98,15 @@ sysroot, standard-header directory, and lower deployment overrides. If no
 macOS deployment option is supplied, it sets the selected minimum explicitly.
 Response-file options are inspected too. Target builds use their own application
 binding; this native selection is not a target sysroot or target runtime.
+
+The same explicit `native_cxx_runtime` selection can be passed to
+`check_environment` or `run_check`; their existing calls without it are
+unchanged. The Darwin Ports configuration accepts the same selection with a
+caller-owned binding directory and selected native Python. Its CLI exposes
+`--native-cxx-include`, `--native-cxx-library`, repeatable
+`--native-cxx-target`, `--native-cxx-deployment`, `--native-cxx-bindings`,
+and `--native-cxx-python`; supply them together. The selected macOS SDK is the
+runtime sysroot. The first explicitly selected native target is bound as the C++
+default, and later caller targets are still checked. Only the C++ compiler is
+routed through the adapter; initial
+bootstrap and target compiler selections remain separate.

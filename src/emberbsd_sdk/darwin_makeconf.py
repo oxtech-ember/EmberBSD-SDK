@@ -82,7 +82,8 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
                    utility_bin, makefiles, macos_sdk, deployment, tools, compiler_args,
                    tool_roots, jobs=None, ldflags=(), source_tools=(), tool_phase='full',
                    compiler_family='clang', cpu_budget=None, link_python=None,
-                   lock_root=None, heavy_link_context=None, sdk_source=None):
+                   lock_root=None, heavy_link_context=None, sdk_source=None,
+                   native_cxx_runtime=None, native_cxx_bindings=None, native_cxx_python=None):
     """Render explicit inputs. Do not run tools, compiler queries, or a build.
 
     Initial tools can use several declared roots before the final Ports prefix
@@ -207,8 +208,6 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
         variables['NATIVE_PKG_' + role[4:].upper() + '_CMD'] = tools[role]
     for role, path in utilities.items():
         variables['EMBERBSD_DARWIN_TOOL.' + role] = path
-    data = render_variables(variables, profile, nested_ldflags=True,
-                            comment='Explicit initial Darwin tools. Package policy belongs to Ports.')
     created = _mapping(utility_bin, utilities)
     temporary = None
     try:
@@ -216,6 +215,41 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
             _member(selected, (*roots, utility_bin), host, search_path=utility_bin)
         if link_python is not None:
             _member(link_python, (*roots, utility_bin), host, search_path=utility_bin)
+        native_selection = (native_cxx_runtime, native_cxx_bindings, native_cxx_python)
+        _require(all(value is not None for value in native_selection) or
+                 all(value is None for value in native_selection),
+                 'native C++ runtime, binding directory and Python must be selected together')
+        if native_cxx_runtime is not None:
+            from . import compiler_bindings
+            _require(isinstance(native_cxx_runtime, dict) and set(native_cxx_runtime) ==
+                     {'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment'},
+                     'invalid native C++ runtime selection')
+            _require(compiler_family == 'clang', 'native C++ runtime requires selected Clang')
+            targets = native_cxx_runtime.get('targets')
+            _require(isinstance(targets, (list, tuple)) and bool(targets) and
+                     all(isinstance(target, str) and
+                         re.fullmatch(r'(?:arm64|aarch64)-apple-(?:darwin|macosx?)[0-9.]*', target)
+                         for target in targets),
+                     'native C++ runtime targets differ from selected Darwin arm64 host')
+            _require(native_cxx_runtime.get('sysroot') == sdk,
+                     'native C++ runtime sysroot differs from selected macOS SDK')
+            _require(compiler_bindings._deployment_version(deployment) >=
+                     compiler_bindings._deployment_version(native_cxx_runtime.get('deployment')),
+                     'configured deployment is older than the native C++ runtime')
+            binding = _path(native_cxx_bindings)
+            _require(_inside(binding, work) and binding not in (utility_bin, output) and
+                     not _inside(binding, utility_bin) and not _inside(utility_bin, binding) and
+                     not _inside(output, binding), 'native binding must be in work root')
+            python = _path(native_cxx_python, existing=True)
+            _member(python, (*roots, utility_bin), host, search_path=utility_bin)
+            compiler_bindings._native_cxx_options(native_cxx_runtime, commands['cxx'][1:])
+            bound_commands = dict(commands, cxx=[*commands['cxx'], '--target=' + targets[0]])
+            adapters = compiler_bindings.bind_compilers(binding, commands=bound_commands,
+                flags=dict(cppflags=[], cflags=[], cxxflags=[], ldflags=[]),
+                python=python, native_cxx_runtime=native_cxx_runtime)
+            variables['EMBERBSD_DARWIN_SEED_CXX'] = shlex.join([adapters['cxx']])
+        data = render_variables(variables, profile, nested_ldflags=True,
+                                comment='Explicit initial Darwin tools. Package policy belongs to Ports.')
         with tempfile.NamedTemporaryFile(prefix='.darwin-makeconf-', dir=os.path.dirname(output),
                                          delete=False) as stream:
             temporary = stream.name

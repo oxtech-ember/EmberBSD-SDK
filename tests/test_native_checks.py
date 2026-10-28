@@ -52,6 +52,28 @@ class NativeCheckTests(TemporaryCase):
         for name in ('SDKROOT', 'CPATH', 'LIBRARY_PATH', 'PYTHONPATH'):
             self.assertNotIn(name, env)
 
+    def test_explicit_native_cxx_pair_reaches_the_shared_binding(self):
+        headers = self.root/'headers'; headers.mkdir()
+        library = self.root/'library'; library.mkdir()
+        sdk = self.root/'sdk'; sdk.mkdir()
+        selection = dict(include_dir=str(headers), library_dir=str(library),
+                         sysroot=str(sdk), targets=['arm64-apple-macos'], deployment='26.0')
+        native = SimpleNamespace(tools=self.native.tools, command=self.native.command,
+            path=self.native.path, abi_flags=self.native.abi_flags, host={'os':'Darwin', 'cpu':'aarch64'},
+            compiler={'family':'clang', 'triplet':'arm64-apple-macos'})
+        env = native_checks.check_environment(native, bindings=self.bindings,
+                                              native_cxx_runtime=selection)
+        recorded = json.loads((self.bindings/'commands.json').read_text())
+        self.assertEqual(recorded['version'], 2)
+        self.assertEqual(recorded['native_cxx_runtime'], selection)
+        self.assertEqual(env['CXX'], str(self.bindings/'cxx'))
+        with self.assertRaisesRegex(SDKError, 'host triplet'):
+            native_checks.check_environment(native, bindings=self.root/'other-bindings',
+                native_cxx_runtime=dict(selection, targets=['x86_64-apple-darwin']))
+        with self.assertRaisesRegex(SDKError, 'selected Darwin host'):
+            native_checks.check_environment(native, bindings=self.root/'other-bindings',
+                native_cxx_runtime=dict(selection, targets=['arm64-apple-macos', 'x86_64-apple-darwin']))
+
     def test_selected_abi_flags_precede_explicit_extra_flags(self):
         native = SimpleNamespace(tools=self.native.tools, command=self.native.command,
             path=self.native.path, abi_flags=dict(self.native.abi_flags,

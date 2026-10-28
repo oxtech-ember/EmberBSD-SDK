@@ -79,6 +79,47 @@ class DarwinMakeconfTests(TemporaryCase):
         self.assertIn('EMBERBSD_SDK_SOURCE= ' + source + '\n',
                       Path(self.options['output']).read_text())
 
+    def test_explicit_native_runtime_routes_cxx_through_common_binding(self):
+        import json
+        include = self.root/'headers'; include.mkdir()
+        lib = self.root/'library'; lib.mkdir()
+        python = str(self.write('initial/bin/python', Path(self.tools['cc']).read_bytes(), 0o755))
+        runtime = dict(include_dir=str(include), library_dir=str(lib),
+                       sysroot=self.options['macos_sdk'], targets=['arm64-apple-macos'],
+                       deployment='26.0')
+        binding = str(self.root/'work/native-cxx')
+        self.render(deployment='26.0', native_cxx_runtime=runtime,
+                    native_cxx_bindings=binding, native_cxx_python=python)
+        data = Path(self.options['output']).read_text()
+        self.assertIn('EMBERBSD_DARWIN_SEED_CXX= ' + binding + '/cxx\n', data)
+        self.assertIn('EMBERBSD_DARWIN_SEED_CC= ' + self.tools['cc'], data)
+        record = json.loads(Path(binding, 'commands.json').read_text())
+        self.assertEqual(record['native_cxx_runtime'], runtime)
+        self.assertEqual(record['commands']['cxx']['argv'][0], self.tools['cxx'])
+        self.assertEqual(record['commands']['cxx']['argv'][-1], '--target=arm64-apple-macos')
+
+    def test_native_runtime_rejects_incomplete_or_incompatible_inputs(self):
+        include = self.root/'headers'; include.mkdir()
+        lib = self.root/'library'; lib.mkdir()
+        python = str(self.write('initial/bin/python', Path(self.tools['cc']).read_bytes(), 0o755))
+        runtime = dict(include_dir=str(include), library_dir=str(lib),
+                       sysroot=self.options['macos_sdk'], targets=['arm64-apple-macos'],
+                       deployment='26.0')
+        base = dict(native_cxx_runtime=runtime, native_cxx_bindings=str(self.root/'work/bindings'),
+                    native_cxx_python=python)
+        for changes in ({'native_cxx_python':None}, {'deployment':'25.0'},
+                        {'compiler_family':'gcc', 'deployment':'26.0'},
+                        {'native_cxx_runtime':dict(runtime, sysroot='/foreign'), 'deployment':'26.0'},
+                        {'native_cxx_runtime':dict(runtime, targets=['x86_64-apple-macos']),
+                         'deployment':'26.0'},
+                        {'native_cxx_runtime':dict(runtime, targets=['arm64-unknown-netbsd']),
+                         'deployment':'26.0'},
+                        {'compiler_args':dict(self.options['compiler_args'],
+                             cxx=['--target=x86_64-unknown-netbsd']), 'deployment':'26.0'},
+                        {'native_cxx_bindings':self.options['utility_bin'], 'deployment':'26.0'}):
+            with self.subTest(changes=changes), self.assertRaises(SDKError):
+                self.render(**(base | changes))
+
     def test_default_family_selects_clang_without_gcc_policy_inputs(self):
         result = self.render()
         data = Path(self.options['output']).read_text()
@@ -314,6 +355,26 @@ class DarwinMakeconfTests(TemporaryCase):
         self.assertIn('EMBERBSD_DARWIN_JOBS= 18\n', data)
         self.assertIn('EMBERBSD_DARWIN_CPU_BUDGET= 18\n', data)
         self.assertIn('EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER=', data)
+
+    def test_cli_selects_explicit_native_runtime(self):
+        include = self.root/'headers'; include.mkdir()
+        library = self.root/'library'; library.mkdir()
+        python = str(self.write('initial/bin/python', Path(self.tools['cc']).read_bytes(), 0o755))
+        binding = str(self.root/'work/native-cxx')
+        self.options['deployment'] = '26.0'
+        args = ('--native-cxx-include', str(include), '--native-cxx-library', str(library),
+                '--native-cxx-deployment', '26.0', '--native-cxx-bindings', binding,
+                '--native-cxx-python', python, '--native-cxx-target', 'arm64-apple-macos')
+        code, stdout, stderr = self.cli(args)
+        self.assertEqual((code, stderr), (0, ''))
+        self.assertIn('EMBERBSD_DARWIN_SEED_CXX= ' + binding + '/cxx\n',
+                      Path(json.loads(stdout)['makeconf']).read_text())
+
+    def test_cli_rejects_partial_native_runtime(self):
+        code, stdout, stderr = self.cli(('--native-cxx-include', '/partial'))
+        self.assertEqual((code, stdout), (1, ''))
+        self.assertIn('select all native C++ runtime inputs together', stderr)
+        self.assertFalse(Path(self.options['output']).exists())
 
     def test_cli_reports_duplicate_tool_without_traceback_or_output(self):
         code, stdout, stderr = self.cli(('--tool', 'awk=' + self.tools['awk']))

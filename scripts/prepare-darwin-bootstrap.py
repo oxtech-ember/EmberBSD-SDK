@@ -36,6 +36,9 @@ def main(argv=None):
     parser.add_argument('--link-python', action=UniqueOption, help='explicit native Python for the shared SDK linker launcher')
     parser.add_argument('--lock-root', action=UniqueOption, help='existing shared linker lock directory')
     parser.add_argument('--heavy-link-context', action=UniqueOption, help='shared heavy-link resource path')
+    for name in ('include', 'library', 'deployment', 'bindings', 'python'):
+        parser.add_argument('--native-cxx-' + name, action=UniqueOption)
+    parser.add_argument('--native-cxx-target', action='append', default=[])
     parser.add_argument('--tool-phase', choices=('initial', 'full'), action=UniqueOption)
     parser.add_argument('--compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
                         help='Clang by default; select GCC explicitly for a platform exception')
@@ -57,13 +60,22 @@ def main(argv=None):
         options = {name: getattr(args, name) for name in (
             'pkgsrc', 'output', 'prefix', 'work_root', 'distfiles', 'packages', 'pkgdb',
             'utility_bin', 'makefiles', 'macos_sdk', 'deployment')}
+        native_fields = (args.native_cxx_include, args.native_cxx_library,
+                         args.native_cxx_deployment, args.native_cxx_bindings,
+                         args.native_cxx_python, args.native_cxx_target)
+        if any(native_fields) and not all(native_fields):
+            raise SDKError('select all native C++ runtime inputs together')
+        runtime = (dict(include_dir=args.native_cxx_include, library_dir=args.native_cxx_library,
+                        sysroot=args.macos_sdk, targets=args.native_cxx_target,
+                        deployment=args.native_cxx_deployment) if all(native_fields) else None)
         result = write_makeconf(**options, tools=tools, tool_roots=args.tool_root,
             compiler_args={role: getattr(args, role + '_arg') for role in ('cc', 'cxx', 'cpp')},
             ldflags=args.ldflag, source_tools=args.source_tool,
             jobs=args.jobs, tool_phase=args.tool_phase or 'full',
             compiler_family=args.compiler_family or 'clang', cpu_budget=args.cpu_budget,
             link_python=args.link_python, lock_root=args.lock_root, heavy_link_context=args.heavy_link_context,
-            sdk_source=str(source))
+            sdk_source=str(source), native_cxx_runtime=runtime,
+            native_cxx_bindings=args.native_cxx_bindings, native_cxx_python=args.native_cxx_python)
         print(json.dumps(result, indent=2))
         return 0
     except Exception as error:
