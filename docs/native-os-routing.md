@@ -46,7 +46,9 @@ their existing behavior.
 The optional `--texinfo-source` selects the Ports prepared Texinfo source for
 the OS C-only producer and passes `EMBER_TEXINFO_SOURCE`. The SDK queries the
 actual producer for its effective source and C-only configure option; older OS
-revisions that do not select this source are refused when the option is used. Its omitted Perl test
+revisions that do not select this source are refused when the option is used.
+The selected host prefix provides GNU make, and the checked native compiler
+provides the GNU build triple for this target producer. Its omitted Perl test
 fixture makes it unsuitable for a full Perl/text producer. Native makeinfo and
 install-info come from the selected host prefix.
 

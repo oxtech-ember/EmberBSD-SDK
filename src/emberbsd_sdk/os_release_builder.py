@@ -13,7 +13,7 @@ import shutil
 from .errors import SDKError
 from . import inventory, jsonio, libedit, llvm_runtime, llvm_runtime_install
 from .target_toolchain import validate_clang_identity
-from .sysroot_builder import (SysrootBuilder, native_host_flags, check_native_command_identity,
+from .sysroot_builder import (SysrootBuilder, native_host_flags, gnu_target_host_flags, check_native_command_identity,
                               validate_native_binding)
 from .targets import target_definition
 from .os_release import check, full_hash, tag, images, product_version, source_version, KERNEL, SYSROOT_SETS
@@ -93,6 +93,8 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
     for name in ('libarchive', 'libevent', 'byacc', 'texinfo'):
         if name + '-source' in paths:
             flags.append(f'EMBER_{name.upper()}_SOURCE={paths[name + "-source"]}')
+    if 'texinfo-source' in paths and native_selection is not None:
+        flags += gnu_target_host_flags(native_selection)
     # Current preflight requires BFD; historical command records predate it.
     if 'host-binutils' in paths:
         flags.append(f'EMBER_HOST_BFD_CONFIG={paths["host-binutils"]}/host-bfd.mk')
@@ -143,6 +145,8 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
                         *commands[1:]]
     source_flags = [f'EMBER_{name.upper()}_SOURCE={paths[name + "-source"]}'
                     for name in ('libarchive', 'libevent', 'byacc', 'texinfo') if name + '-source' in paths]
+    if 'texinfo-source' in paths and native_selection is not None:
+        source_flags += gnu_target_host_flags(native_selection)
     for command in commands:
         if command[0].startswith(paths['tools'] + '/bin/nbmake-'):
             command[-1:-1] = source_flags

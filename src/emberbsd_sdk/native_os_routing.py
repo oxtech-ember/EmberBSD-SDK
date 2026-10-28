@@ -35,6 +35,12 @@ def native_host_flags(selection):
     return result
 
 
+def gnu_target_host_flags(selection):
+    """Select GNU target build tools from the same checked host prefix."""
+    return ['HOST_GMAKE=' + selection['tools']['gmake'],
+            'EMBER_HOST_GNU_TRIPLE=' + selection['compiler']['triplet']]
+
+
 def native_path(selection):
     directories = [os.path.dirname(path) for _, path in sorted(selection['tools'].items())]
     if selection['format'] == 'emberbsd-host-prefix':

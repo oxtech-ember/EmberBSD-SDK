@@ -77,7 +77,8 @@ class LLVMBuilderTests(TemporaryCase):
         builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
         builder.environment = {}
         from types import SimpleNamespace
-        builder.native = SimpleNamespace(tool=lambda name: '/host/bmake')
+        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name,
+                                         compiler={'triplet': 'aarch64-apple-darwin27.0.0'})
         answer = lambda value: SimpleNamespace(stdout=value.encode())
         with patch('emberbsd_sdk.sysroot_builder.process.capture',
                    return_value=answer('/old/dist\n--disable-perl-tools\n')):
@@ -91,10 +92,26 @@ class LLVMBuilderTests(TemporaryCase):
                    return_value=answer('/prepared/texinfo\n--disable-perl-tools\n')) as run:
             builder.require_texinfo_source_support()
         self.assertIn('/os/external/gpl2/texinfo', run.call_args.args[0][5])
+        self.assertIn('HOST_GMAKE=/host/gmake', run.call_args.args[0])
+        self.assertIn('HOST_SH=/host/sh', run.call_args.args[0])
+        self.assertIn('EMBER_HOST_GNU_TRIPLE=aarch64-apple-darwin27.0.0', run.call_args.args[0])
         del builder.paths['texinfo-source']
         with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
             builder.require_texinfo_source_support()
             run.assert_not_called()
+
+    def test_texinfo_selects_gmake_only_when_requested(self):
+        root = self.root / 'os'
+        contract = root / 'tools/native-tools/contract'
+        contract.parent.mkdir(parents=True)
+        contract.write_text('EmberBSD-native-tools 1\ncmp cmp -\nmake make MAKE\nreadlink readlink -\nsh sh HOST_SH\n')
+        builder = SysrootBuilder({'os': str(root), 'host-prefix': '/host'})
+        with patch('emberbsd_sdk.sysroot_builder.native_toolset.load_host_prefix') as load:
+            builder.load_native_toolset()
+            self.assertNotIn('gmake', load.call_args.kwargs['required_roles'])
+            builder.options['texinfo-source'] = '/source/texinfo'
+            builder.load_native_toolset()
+            self.assertIn('gmake', load.call_args.kwargs['required_roles'])
 
     def test_optional_texinfo_source_is_verified_by_its_owner(self):
         builder = SysrootBuilder({})

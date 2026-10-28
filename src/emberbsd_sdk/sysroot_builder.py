@@ -18,7 +18,7 @@ import sysconfig
 import time
 from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, process, provenance, workspace
 from .errors import SDKError, ProcessOwnershipError
-from .native_os_routing import native_host_flags, native_path
+from .native_os_routing import gnu_target_host_flags, native_host_flags, native_path
 from .targets import TARGETS, target_definition
 
 NATIVE_INPUTS = ('native-toolset', 'native-toolset-sha256',
@@ -156,6 +156,8 @@ class SysrootBuilder:
         self.native_contract_sha256 = inventory.sha256_file(contract)
         _, _, roles = native_os_routing.read_native_os_contract(contract, sha256=self.native_contract_sha256)
         self.native_contract = contract
+        if self.options.get('texinfo-source'):
+            roles = roles | {'gmake'}
         return native_toolset.load_host_prefix(self.options['host-prefix'], required_roles=roles | {'python'},
             compiler_family=self.options.get('host-compiler-family', 'clang'))
 
@@ -422,7 +424,9 @@ class SysrootBuilder:
                                                                   'EMBER_LIBARCHIVE_SOURCE=',
                                                                   'EMBER_LIBEVENT_SOURCE=',
                                                                   'EMBER_BYACC_SOURCE=',
-                                                                  'EMBER_TEXINFO_SOURCE='))]
+                                                                  'EMBER_TEXINFO_SOURCE=',
+                                                                  'HOST_GMAKE=',
+                                                                  'EMBER_HOST_GNU_TRIPLE='))]
             previous, selected = old['native_toolset'], new['native_toolset']
             if any(selected['tools'].get(role) != value
                    for role, value in previous['tools'].items()):
@@ -589,6 +593,9 @@ class SysrootBuilder:
                    'MACHINE_ARCH=' + self.target['arch'], 'USETOOLS=yes',
                    'TOOLDIR=' + self.paths['tools'],
                    'EMBER_TEXINFO_SOURCE=' + self.paths['texinfo-source'],
+                   'HOST_GMAKE=' + self.native.tool('gmake'),
+                   'HOST_SH=' + self.native.tool('sh'),
+                   'EMBER_HOST_GNU_TRIPLE=' + self.native.compiler['triplet'],
                    '-V', '${GNU_SOURCE}', '-V', '${GNU_CONFIGURE_ARGS}']
         try:
             output = process.capture(command, env=env).stdout.decode('utf-8').splitlines()
@@ -744,6 +751,8 @@ class SysrootBuilder:
                        f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
         self.flags += [f'EMBER_{name.upper()}_SOURCE={self.paths[name + "-source"]}'
                        for name in ('libarchive', 'libevent', 'byacc', 'texinfo') if name + '-source' in self.paths]
+        if 'texinfo-source' in self.paths:
+            self.flags += gnu_target_host_flags(self.native_selection)
         self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, native_toolset=self.native_selection, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
         self.signature['native_inputs'] = self.native_inputs
         self.signature['compiler_family'] = self.compiler_family()
