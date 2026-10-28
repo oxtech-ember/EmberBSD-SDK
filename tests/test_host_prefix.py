@@ -218,6 +218,16 @@ class HostPrefixTests(TemporaryCase):
                 self.assertEqual(self.fixture.load(roles=(role,)).tool(role), str(second))
         self.assertEqual(self.fixture.queries, [])
 
+    def test_otool_preference_tracks_explicit_compiler_family(self):
+        old = self.write('host-pkg-llvm/bin/otool', header(62, 2), 0o755)
+        llvm = self.write('host-pkg-llvm/bin/llvm-otool', header(62, 2), 0o755)
+        self.assertEqual(self.fixture.load(roles=('otool',), compiler_family='clang').tool('otool'), str(llvm))
+        self.assertEqual(self.fixture.load(roles=('otool',), compiler_family='gcc').tool('otool'), str(old))
+        llvm.unlink()
+        llvm.symlink_to('/bin/sh')
+        with self.assertRaisesRegex(SDKError, 'escapes host prefix'):
+            self.fixture.load(roles=('otool',), compiler_family='clang')
+
     def test_package_query_and_otool_aliases_cannot_escape_prefix(self):
         external = self.write('outside-tool', header(62, 2), 0o755)
         for role, name in (('pkg_info', 'sbin/pkg_info'), ('pkg_info', 'bin/pkg_info'),

@@ -47,6 +47,7 @@ _NAMES = {'cc': ('gcc16/bin/gcc', 'bin/gcc-16', 'bin/gcc16', 'bin/gcc'),
 _COMPONENTS = ('cc1', 'cc1plus', 'collect2', 'lto1', 'lto-wrapper', 'as', 'ld')
 _CLANG_NAMES = {'cc': ('bin/clang',), 'cxx': ('bin/clang++',),
                 'cpp': ('bin/clang-cpp',), 'as': ('bin/clang-as',),
+                'otool': ('bin/llvm-otool', 'bin/otool'),
                 **{role: ('bin/llvm-' + role,) for role in
                    ('ar', 'ranlib', 'nm', 'strip', 'objcopy', 'objdump', 'readelf')}}
 
