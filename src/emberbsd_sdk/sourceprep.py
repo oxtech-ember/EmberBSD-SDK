@@ -16,6 +16,8 @@ from .errors import SDKError
 MAX_ARCHIVE_MEMBERS = 100000
 MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
 SOURCE_PREPARATION_API = 2
+# extract_archive accepts skip_directories (compatible API 2 extension).
+ARCHIVE_SKIP_DIRECTORIES_API = 1
 
 
 def archive_hashes(data):
@@ -26,11 +28,14 @@ def archive_hashes(data):
 
 
 def extract_archive(archive, destination, root_name, label, *, components=None,
-                    max_members=MAX_ARCHIVE_MEMBERS, max_bytes=MAX_EXTRACTED_BYTES):
+                    max_members=MAX_ARCHIVE_MEMBERS, max_bytes=MAX_EXTRACTED_BYTES,
+                    skip_directories=()):
     """Extract selected source components with explicit resource bounds.
 
     Defaults preserve the original regular-file-only contract. Links and special
     files remain unsupported, including in explicitly selected components.
+    skip_directories names exact path components below the root, such as VCS
+    metadata directories, whose members are omitted before any other check.
     """
     def safe_name(name):
         return (isinstance(name, str) and name and not name.startswith('/') and
@@ -48,6 +53,11 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
         components = tuple(components)
         if not components or not all(safe_name(name) for name in components):
             raise SDKError(f'invalid {label} source components')
+    if isinstance(skip_directories, str):
+        raise SDKError(f'invalid {label} skipped directories')
+    skip_directories = frozenset(skip_directories)
+    if not all(safe_name(name) and '/' not in name for name in skip_directories):
+        raise SDKError(f'invalid {label} skipped directories')
     destination = Path(destination)
     if not destination.is_dir() or destination.is_symlink():
         raise SDKError(f'{label} extraction destination must be a real directory')
@@ -75,6 +85,8 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
             if parts[0] != root_name or not safe_name(name):
                 raise SDKError(f'unsafe {label} archive path')
             relative = '/'.join(parts[1:])
+            if skip_directories.intersection(parts[1:]):
+                continue
             if components is not None and relative:
                 chosen = [component for component in components
                           if relative == component or relative.startswith(component + '/')]

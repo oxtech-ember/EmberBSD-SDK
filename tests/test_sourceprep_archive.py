@@ -118,6 +118,41 @@ class SourceArchiveTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, 'duplicate'):
             self.extract(components=('libcxx',))
 
+    def cvs_fixture(self):
+        with tarfile.open(self.archive, 'w') as packed:
+            for name, data in (('Makefile', b'all:\n'), ('CVS/Root', b':ext:cvs\n'),
+                               ('lib/Config', b'x'), ('lib/CVS/Entries', b'D\n')):
+                member = tarfile.TarInfo('source/' + name)
+                member.size = len(data)
+                packed.addfile(member, io.BytesIO(data))
+            # Release source sets record CVS metadata as hard links.
+            link = tarfile.TarInfo('source/lib/CVS/Root')
+            link.type = tarfile.LNKTYPE; link.linkname = 'source/CVS/Root'
+            packed.addfile(link)
+
+    def test_skipped_metadata_directories_are_omitted_before_link_checks(self):
+        self.cvs_fixture()
+        self.extract(skip_directories=('CVS',), max_bytes=6)
+        root = self.output / 'source'
+        self.assertEqual(sorted(str(p.relative_to(root)) for p in root.rglob('*')),
+                         ['Makefile', 'lib', 'lib/Config'])
+
+    def test_metadata_links_are_refused_without_skip(self):
+        self.cvs_fixture()
+        with self.assertRaisesRegex(SDKError, 'link or special'):
+            self.extract()
+
+    def test_skipped_directories_still_count_toward_member_bound(self):
+        self.cvs_fixture()
+        with self.assertRaisesRegex(SDKError, 'too many members'):
+            self.extract(skip_directories=('CVS',), max_members=4)
+
+    def test_invalid_skipped_directories_are_refused(self):
+        self.cvs_fixture()
+        for value in ('CVS', ('a/CVS',), ('..',), ('',)):
+            with self.subTest(value=value), self.assertRaisesRegex(SDKError, 'skipped directories'):
+                self.extract(skip_directories=value)
+
     def test_missing_component_and_invalid_limits_are_refused(self):
         self.pack([('libcxx/file', b'x', None)])
         for options in ({'components': ('libunwind',)}, {'max_members': True},

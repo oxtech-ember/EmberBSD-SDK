@@ -255,3 +255,9 @@ runtime source subset above contains no links.
 The caller owns an empty staging directory and removes partial output after a
 failure. Defaults retain the original 100,000-member, 256 MiB, no-links behavior
 used by libedit and libelf preparation.
+
+`skip_directories` names exact path components below the archive root whose
+members are omitted before safety and link checks, while still counting toward
+the member bound. Callers check `sourceprep.ARCHIVE_SKIP_DIRECTORIES_API == 1`.
+The NetBSD `xsrc.tgz` release set uses it for `CVS` metadata, which the set
+records as hard links.
