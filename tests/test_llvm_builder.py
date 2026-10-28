@@ -115,15 +115,23 @@ class LLVMBuilderTests(TemporaryCase):
                                          compiler={'triplet': 'aarch64-apple-darwin27.0.0'})
         answer = lambda value: SimpleNamespace(stdout=value.encode())
         with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=answer('/old/dist\n--disable-perl-tools\n')):
+                   return_value=answer('/old/dist\n--disable-perl-tools --enable-native-c-only-tools\ntools/gnulib/lib tools/info\nmakedoc\ntools/gnulib/lib tools/info\n')):
             with self.assertRaisesRegex(SDKError, 'does not support EMBER_TEXINFO_SOURCE'):
                 builder.require_texinfo_source_support()
         with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=answer('/prepared/texinfo\n--enable-perl-tools\n')):
+                   return_value=answer('/prepared/texinfo\n--enable-perl-tools\ntools/gnulib/lib tools/info\nmakedoc\ntools/gnulib/lib tools/info\n')):
             with self.assertRaisesRegex(SDKError, 'does not support EMBER_TEXINFO_SOURCE'):
                 builder.require_texinfo_source_support()
         with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=answer('/prepared/texinfo\n--disable-perl-tools\n')) as run:
+                   return_value=answer('/prepared/texinfo\n--disable-perl-tools\ntools/gnulib/lib tools/info\nmakedoc\ntools/gnulib/lib tools/info\n')):
+            with self.assertRaisesRegex(SDKError, 'does not support EMBER_TEXINFO_SOURCE'):
+                builder.require_texinfo_source_support()
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   return_value=answer('/prepared/texinfo\n--disable-perl-tools --enable-native-c-only-tools\ntools/gnulib/lib tools/info\nmakedoc\n\n')):
+            with self.assertRaisesRegex(SDKError, 'does not support EMBER_TEXINFO_SOURCE'):
+                builder.require_texinfo_source_support()
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   return_value=answer('/prepared/texinfo\n--disable-perl-tools --enable-native-c-only-tools\ntools/gnulib/lib tools/info\nmakedoc\ntools/gnulib/lib tools/info\n')) as run:
             builder.require_texinfo_source_support()
         self.assertIn('/os/external/gpl2/texinfo/bin', run.call_args.args[0][5])
         self.assertIn('HOST_GMAKE=/host/gmake', run.call_args.args[0])

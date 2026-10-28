@@ -605,15 +605,26 @@ class SysrootBuilder:
                    'EMBER_TEXINFO_SOURCE=' + self.paths['texinfo-source'],
                    'HOST_GMAKE=' + self.native.tool('gmake'),
                    'HOST_SH=' + self.native.tool('sh'),
+                   'HOST_CC=' + self.native.tool('cc'),
+                   'HOST_CXX=' + self.native.tool('cxx'),
+                   'HOST_AR=' + self.native.tool('ar'),
+                   'HOST_RANLIB=' + self.native.tool('ranlib'),
+                   'HOST_LD=' + self.native.tool('ld'),
                    'EMBER_HOST_GNU_TRIPLE=' + self.native.compiler['triplet'],
-                   '-V', '${GNU_SOURCE}', '-V', '${GNU_CONFIGURE_ARGS}']
+                   '-V', '${GNU_SOURCE}', '-V', '${GNU_CONFIGURE_ARGS}',
+                   '-V', '${GNU_HOST_MAKE_DIRS}', '-V', '${GNU_HOST_MAKE_TARGETS.tools/info}',
+                   '-V', '${_GNU_HOST_CONTEXT}']
         try:
             output = process.capture(command, env=env).stdout.decode('utf-8').splitlines()
-            flags = shlex.split(output[1]) if len(output) == 2 else []
+            flags = shlex.split(output[1]) if len(output) == 5 else []
         except (SDKError, UnicodeError, ValueError) as exc:
             raise SDKError('selected OS cannot resolve the Texinfo C-only producer') from exc
-        if (len(output) != 2 or output[0] != self.paths['texinfo-source'] or
-                '--disable-perl-tools' not in flags or '--enable-perl-tools' in flags):
+        if (len(output) != 5 or output[0] != self.paths['texinfo-source'] or
+                '--disable-perl-tools' not in flags or '--enable-perl-tools' in flags or
+                '--enable-native-c-only-tools' not in flags or
+                output[2].split() != ['tools/gnulib/lib', 'tools/info'] or
+                output[3].strip() != 'makedoc' or
+                any(path not in output[4] for path in ('tools/gnulib/lib', 'tools/info'))):
             raise SDKError('selected OS does not support EMBER_TEXINFO_SOURCE in C-only mode')
 
     def require_rcs_source_support(self):
