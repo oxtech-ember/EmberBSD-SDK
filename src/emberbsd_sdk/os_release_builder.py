@@ -18,8 +18,33 @@ from .sysroot_builder import (SysrootBuilder, native_host_flags, check_native_co
 from .targets import target_definition
 from .os_release import check, full_hash, tag, images, product_version, source_version, KERNEL, SYSROOT_SETS
 
+# Optional Clang-only aarch64 X11 sets built from the prepared xsrc input.
+X11_SETS = ['xbase.tar.xz', 'xcomp.tar.xz', 'xetc.tar.xz', 'xfont.tar.xz', 'xserver.tar.xz']
+X11_PACKAGE = 'netbsd/xsrc'
 
-def flags_for(target, compiler_family=None):
+
+def release_sets(x11=False):
+    return SYSROOT_SETS + (X11_SETS if x11 else [])
+
+
+def require_x11_profile(target, compiler_family):
+    check(target == 'aarch64' and compiler_family == 'clang',
+          'X11 sets require the Clang aarch64-sysroot profile')
+
+
+def check_x11_pin(os_root, record):
+    """Bind the prepared xsrc identity to the archive pinned by the OS source."""
+    pin = jsonio.read_json(os.path.join(os_root, 'ember/source.json'))
+    identity = record.get('identity') if isinstance(record, dict) else None
+    check(isinstance(pin, dict) and isinstance(identity, dict) and
+          isinstance(pin.get('x11SourceSha512'), str) and
+          full_hash(pin['x11SourceSha512'], 128) and
+          identity.get('sha512') == pin['x11SourceSha512'] and
+          identity.get('url') == pin.get('x11SourceUrl'),
+          'Prepared X11 source differs from the OS x11Source pin')
+
+
+def flags_for(target, compiler_family=None, x11=False):
     # OS make owns the toolchain and staged runtime integration. HAVE_GCC stays
     # an upstream source selector; it must not be set to 16 for an external GCC.
     common = list(SysrootBuilder.FLAGS)
@@ -29,6 +54,9 @@ def flags_for(target, compiler_family=None):
     if target == 'amd64':
         replacements.update(MKKMOD='yes', MKMAN='yes', MKHTML='yes', MKDOC='yes',
                             MKINFO='yes', MKATF='yes', MKKYUA='yes', MKLINT='yes')
+    if x11:
+        require_x11_profile(target, compiler_family)
+        replacements['MKX11'] = 'yes'
     common = [v for v in common if v.split('=', 1)[0] not in replacements]
     if compiler_family == 'clang':
         replacements.pop('MKLIBSTDCXX')
@@ -51,7 +79,8 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
     cxx = host['c++']['path'] if native_selection is None else native_selection['tools']['cxx']
     runtime_flags = [f'EXTERNAL_TOOLCHAIN={paths["compiler"]}',
                      f'EMBER_EXTERNAL_GCC_RUNTIME={paths["runtime-prefix"]}']
-    common = flags_for(target, compiler_family)
+    x11 = 'x11-source' in paths
+    common = flags_for(target, compiler_family, x11)
     if compiler_family == 'clang':
         from .llvm_sysroot import llvm_flags
         runtime_flags = llvm_flags(paths, phase='final', base_cxx=base_cxx)
@@ -67,6 +96,8 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
     # Current preflight requires BFD; historical command records predate it.
     if 'host-binutils' in paths:
         flags.append(f'EMBER_HOST_BFD_CONFIG={paths["host-binutils"]}/host-bfd.mk')
+    if x11:
+        flags.append('X11SRCDIR=' + paths['x11-source'])
     if compiler_family == 'gcc':
         flags.append('EMBER_COMPILER_FAMILY=' + compiler_family)
         if 'llvm-source' in paths:
@@ -76,7 +107,8 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
         position = flags.index(f'MKREPRO_TIMESTAMP={timestamp}')
         flags[position:position] = [f'HOST_CC={cc}', f'HOST_CXX={cxx}']
     if target == 'aarch64':
-        flags += ['RELEASEMACHINEDIR=evbarm-aarch64', 'MAKETARSETS=base comp', 'MKDEBUGKERNEL=no']
+        sets = ' '.join(name.split('.', 1)[0] for name in release_sets(x11))
+        flags += ['RELEASEMACHINEDIR=evbarm-aarch64', 'MAKETARSETS=' + sets, 'MKDEBUGKERNEL=no']
     else:
         flags += ['KERNEL_SETS=GENERIC', 'BUILD_KERNELS=INSTALL',
                   'MAKEFLAGS=KERNEL_SETS=GENERIC BUILD_KERNELS=INSTALL',
@@ -172,9 +204,11 @@ def validate_profile(profile, sha, target):
     paths = receipt['paths']
     if 'common_sources' in signature:
         common_sources = signature['common_sources']
-        check(isinstance(common_sources, dict) and set(common_sources) in ({'libarchive', 'libevent'}, {'libarchive', 'libevent', 'byacc'}),
-              'Invalid common source selection')
-        for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'), ('byacc', 'devel/byacc')):
+        check(isinstance(common_sources, dict) and {'libarchive', 'libevent'} <= set(common_sources) <=
+              {'libarchive', 'libevent', 'byacc', 'x11'}, 'Invalid common source selection')
+        check(('x11' in common_sources) == ('x11-source' in paths), 'Mixed X11 source selection')
+        for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'), ('byacc', 'devel/byacc'),
+                              ('x11', X11_PACKAGE)):
             if name not in common_sources:
                 continue
             record = common_sources[name]
@@ -208,7 +242,10 @@ def validate_profile(profile, sha, target):
     check(set(environment).issubset({'PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'USER', 'LOGNAME', 'LC_ALL', 'MAKECONF',
                                    'GIT_OPTIONAL_LOCKS', 'GIT_NO_LAZY_FETCH', 'PYTHONDONTWRITEBYTECODE', 'EMBER_NATIVE_TOOLS'}) and
           environment['LC_ALL'] == 'C' and environment['MAKECONF'] == '/dev/null', 'Uncontrolled build environment')
-    outputs = ([KERNEL] + ['release/evbarm-aarch64/binary/sets/' + n for n in SYSROOT_SETS] if target == 'aarch64'
+    x11 = 'x11-source' in paths
+    if x11:
+        require_x11_profile(target, signature.get('compiler_family'))
+    outputs = ([KERNEL] + ['release/evbarm-aarch64/binary/sets/' + n for n in release_sets(x11)] if target == 'aarch64'
                else ['release/images/' + n for n in images(version)])
     check(set(profile['output_sha256']) == set(outputs) and all(full_hash(h) for h in profile['output_sha256'].values()), 'Incomplete output hashes')
     check(receipt['outputs'] == profile['output_sha256'], 'Mixed output receipts')
@@ -217,7 +254,7 @@ def validate_profile(profile, sha, target):
 class OSReleaseBuilder(SysrootBuilder):
     def __init__(self, options):
         target = options.get('target')
-        self.FLAGS = flags_for(target, options.get('compiler-family', 'clang'))
+        self.FLAGS = flags_for(target, options.get('compiler-family', 'clang'), bool(options.get('x11-source')))
         super().__init__(options)
 
     def configure_signature(self):
@@ -225,6 +262,9 @@ class OSReleaseBuilder(SysrootBuilder):
             raise SDKError('base C++ selection must be boolean')
         if self.options.get('base-cxx', False) and self.compiler_family() != 'clang':
             raise SDKError('base C++ aliases require the selected Clang runtime')
+        if 'x11-source' in self.paths:
+            require_x11_profile(self.options['target'], self.compiler_family())
+            check_x11_pin(self.paths['os'], self.common_source_records.get('x11'))
         self.timestamp = self.source_timestamp()
         self.product_version = source_version(Path(self.paths['os'], 'share/mk/bsd.own.mk').read_text())
         self.signature['product_version'] = self.product_version
@@ -288,7 +328,7 @@ class OSReleaseBuilder(SysrootBuilder):
                                                        self.runtime_record['manifest'])
         self.receipt['libedit_installation'] = libedit.validate_installation(
             output / 'dest', self.libedit_record, self.target['elf'])
-        names = ([KERNEL] + ['release/evbarm-aarch64/binary/sets/' + n for n in SYSROOT_SETS]
+        names = ([KERNEL] + ['release/evbarm-aarch64/binary/sets/' + n for n in release_sets('x11-source' in self.paths)]
                  if self.options['target'] == 'aarch64' else ['release/images/' + n for n in images(self.product_version)])
         hashes = {}
         for name in names:

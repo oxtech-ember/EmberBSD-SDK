@@ -22,6 +22,8 @@ def main():
     for name in ('sdk', 'os-source', 'ports', 'compiler', 'runtime-work', 'jobs', 'sdk-source', 'libedit-source', 'libarchive-source', 'libevent-source', 'host-prefix', 'host-binutils'):
         parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix'}.get(name))
     parser.add_argument('--byacc-source', action=UniqueOption, help='prepared common Ports byacc source')
+    parser.add_argument('--x11-source', action=UniqueOption,
+                        help='prepared Ports xsrc source; builds the X11 sets (Clang aarch64-sysroot only)')
     parser.add_argument('--host-compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
                         help='Clang by default; select GCC explicitly for a platform exception')
     parser.add_argument('--compiler-family', choices=('clang', 'gcc'), action=UniqueOption,

@@ -19,6 +19,57 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
         for command in commands:
             self.assertIn('EMBER_BYACC_SOURCE=/sdk/byacc-source', command)
 
+    def x11_flags(self, target='aarch64', family='clang', x11=True):
+        paths = {name: '/sdk/' + name for name in (
+            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
+            'libedit-source', 'objects', 'tools', 'destination', 'os')}
+        if x11:
+            paths['x11-source'] = '/sdk/xsrc'
+        host = {'cc': {'path': '/sdk/host/bin/clang'}, 'c++': {'path': '/sdk/host/bin/clang++'}}
+        return producer_commands(target, paths, host, 'a' * 40, 1, '2', '/sdk/host/bin/sh',
+                                 compiler_family=family, base_cxx=family == 'clang')
+
+    def test_x11_source_selects_x11_profile_and_sets(self):
+        flags, commands = self.x11_flags()
+        self.assertIn('MKX11=yes', flags)
+        self.assertNotIn('MKX11=no', flags)
+        self.assertIn('X11SRCDIR=/sdk/xsrc', flags)
+        self.assertIn('MAKETARSETS=base comp xbase xcomp xetc xfont xserver', flags)
+        for command in commands:
+            if command[0] == '/sdk/host/bin/sh':
+                self.assertIn('MKX11=yes', command)
+                self.assertIn('X11SRCDIR=/sdk/xsrc', command)
+
+    def test_default_profile_keeps_x11_disabled(self):
+        flags, _ = self.x11_flags(x11=False)
+        self.assertIn('MKX11=no', flags)
+        self.assertNotIn('MKX11=yes', flags)
+        self.assertFalse(any(flag.startswith('X11SRCDIR=') for flag in flags))
+        self.assertIn('MAKETARSETS=base comp', flags)
+
+    def test_x11_profile_requires_clang_aarch64(self):
+        from emberbsd_sdk.errors import SDKError
+        for target, family in (('amd64', 'clang'), ('aarch64', 'gcc')):
+            with self.subTest(target=target, family=family), \
+                    self.assertRaisesRegex(SDKError, 'X11 sets require'):
+                self.x11_flags(target, family)
+
+    def test_x11_source_must_match_os_pin(self):
+        import json, tempfile
+        from pathlib import Path
+        from emberbsd_sdk.errors import SDKError
+        from emberbsd_sdk.os_release_builder import check_x11_pin
+        url = 'https://cdn.netbsd.org/pub/NetBSD/NetBSD-11.0/source/sets/xsrc.tgz'
+        with tempfile.TemporaryDirectory() as root:
+            (Path(root) / 'ember').mkdir()
+            (Path(root) / 'ember/source.json').write_text(json.dumps(
+                {'x11SourceUrl': url, 'x11SourceSha512': 'a' * 128}))
+            check_x11_pin(root, {'identity': {'url': url, 'sha512': 'a' * 128}})
+            for identity in ({'url': url, 'sha512': 'b' * 128},
+                             {'url': url + '.old', 'sha512': 'a' * 128}, {}):
+                with self.subTest(identity=identity), self.assertRaisesRegex(SDKError, 'x11Source pin'):
+                    check_x11_pin(root, {'identity': identity})
+
     def test_common_sources_reach_release_and_direct_make_commands(self):
         paths = {name: '/sdk/' + name for name in (
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',

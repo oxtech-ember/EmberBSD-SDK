@@ -42,3 +42,13 @@ tree and pass `EMBER_BYACC_SOURCE` to OS producers. Before building, the SDK
 queries the OS base yacc and host yacc makefiles and requires each effective
 `IDIST` to select that source. Without the option, older OS revisions retain
 their existing behavior.
+
+The release builder also accepts `--x11-source`, the tree prepared by the Ports
+`scripts/source-inputs/xsrc` owner from the NetBSD 11.0 `xsrc.tgz` set. It is
+valid only for the Clang `aarch64-sysroot` profile. The SDK verifies the
+prepared tree through that owner and requires its archive URL and SHA512 to
+equal `x11SourceUrl` and `x11SourceSha512` in the OS `ember/source.json`. The
+profile then sets `MKX11=yes` and `X11SRCDIR`, adds `xbase xcomp xetc xfont
+xserver` to `MAKETARSETS`, and requires those sets as outputs. The xsrc
+identity is part of the native tools context because OS tools build X11 font
+tools from it. Without the option the profile keeps `MKX11=no`.

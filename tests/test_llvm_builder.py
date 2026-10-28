@@ -87,6 +87,26 @@ class LLVMBuilderTests(TemporaryCase):
             '--sdk-source', '/sdk', '--git', '/host/git', 'verify-source',
             '--source', '/prepared/byacc'])
 
+    def test_optional_x11_source_is_verified_by_its_owner(self):
+        builder = SysrootBuilder({})
+        builder.paths = {'python': '/host/python', 'ports': '/ports',
+                         'sdk-source': '/sdk', 'x11-source': '/prepared/xsrc'}
+        builder.git_command = '/host/git'
+        builder.environment = {}
+        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'netbsd/xsrc'}
+        from types import SimpleNamespace
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
+            self.assertEqual(builder.verify_common_sources(), {'x11': record})
+        self.assertEqual(run.call_args.args[0], [
+            '/host/python', '-B', '/ports/scripts/source-inputs/xsrc/source.py',
+            '--sdk-source', '/sdk', 'verify-source', '--source', '/prepared/xsrc'])
+        record['package'] = 'devel/other'
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   return_value=SimpleNamespace(stdout=json.dumps(record))), \
+                self.assertRaisesRegex(SDKError, 'invalid x11 prepared source'):
+            builder.verify_common_sources()
+
     def test_base_cxx_builder_default_tracks_family_and_explicit_value(self):
         self.assertIs(SysrootBuilder({'compiler-family': 'clang'}).options['base-cxx'], True)
         self.assertIs(SysrootBuilder({'compiler-family': 'gcc'}).options['base-cxx'], False)
@@ -718,3 +738,17 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.signature['common_sources']['byacc'] = {'tree_sha256': 'a' * 64}
         builder.signature['flags'].append('EMBER_BYACC_SOURCE=/prepared/byacc')
         self.assertTrue(builder.compatible_context(record, object_path))
+
+    def test_x11_source_changes_invalidate_native_tools(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        tool_path = builder.paths['tools']
+        record = {'signature': copy.deepcopy(builder.context_signature(tool_path))}
+        builder.paths['x11-source'] = '/prepared/xsrc'
+        builder.signature['common_sources']['x11'] = {'tree_sha256': 'a' * 64}
+        self.assertFalse(builder.compatible_context(record, tool_path))
+        record['signature'] = copy.deepcopy(builder.context_signature(tool_path))
+        self.assertTrue(builder.compatible_context(record, tool_path))
+        builder.signature['common_sources']['x11']['tree_sha256'] = 'b' * 64
+        self.assertFalse(builder.compatible_context(record, tool_path))

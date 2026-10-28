@@ -93,6 +93,9 @@ the real installer and sets overlay. Neither schema establishes target
 execution or runtime acceptance.
 
 Both Clang profiles omit native bootstrap compiler commands, X11 and rump.
+The `aarch64-sysroot` release build can add the X11 sets with `--x11-source`
+(see `native-os-routing.md`); published sysroot manifests still require
+`MKX11=no`.
 The outer AArch64 sysroot and amd64 release manifests remain version 3 for
 either Clang build-profile schema. The explicit GCC alternative retains build
 profile schema 3 and the version 2 kit wrapper. For GCC and historical Clang

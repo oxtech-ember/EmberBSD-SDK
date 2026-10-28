@@ -478,6 +478,10 @@ class SysrootBuilder:
         if 'byacc-source' in self.paths:
             signature['byacc_source'] = {'path': self.paths['byacc-source'],
                                          'record': self.signature['common_sources']['byacc']}
+        if 'x11-source' in self.paths:
+            # OS tools build X11 host font tools from X11SRCDIR.
+            signature['x11_source'] = {'path': self.paths['x11-source'],
+                                       'record': self.signature['common_sources']['x11']}
         return signature
 
     def verify_llvm_source(self):
@@ -495,11 +499,15 @@ class SysrootBuilder:
             ('libarchive', 'archivers/libarchive', ['scripts/libarchive-source.py', 'verify']),
             ('libevent', 'devel/libevent', ['scripts/source-inputs/libevent/source.py']),
             ('byacc', 'devel/byacc', ['scripts/source-inputs/byacc/source.py']),
+            ('x11', 'netbsd/xsrc', ['scripts/source-inputs/xsrc/source.py']),
         ):
             if name + '-source' not in self.paths:
                 continue
             command = [self.paths['python'], '-B', os.path.join(self.paths['ports'], argv[0])]
-            if name == 'libarchive':
+            if name == 'x11':
+                # The xsrc pin is an archive identity; it inspects no Git input.
+                command += ['--sdk-source', self.paths['sdk-source'], 'verify-source', '--source', self.paths[name + '-source']]
+            elif name == 'libarchive':
                 command += ['verify', self.paths[name + '-source'], '--sdk-source', self.paths['sdk-source'], '--git', self.git_command]
             else:
                 command += ['--sdk-source', self.paths['sdk-source'], '--git', self.git_command, 'verify-source', '--source', self.paths[name + '-source']]
@@ -598,7 +606,7 @@ class SysrootBuilder:
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
-        input_names += [name for name in ('libarchive-source', 'libevent-source', 'byacc-source') if self.options.get(name)]
+        input_names += [name for name in ('libarchive-source', 'libevent-source', 'byacc-source', 'x11-source') if self.options.get(name)]
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
                         if clang else ['runtime-work', 'gcc-archive', 'pkgsrc'])
         if clang and self.llvm_phase == 'final':
@@ -655,7 +663,7 @@ class SysrootBuilder:
         self.sources['sdk'] = self.source(self.paths['sdk-source'], 'sdk')
         self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command)
         self.common_source_records = (self.verify_common_sources()
-                                      if any(name + '-source' in self.paths for name in ('libarchive', 'libevent', 'byacc'))
+                                      if any(name + '-source' in self.paths for name in ('libarchive', 'libevent', 'byacc', 'x11'))
                                       else {})
         self.python = self.python_identity()
         self.git(self.paths['os'], 'ls-files', '--error-unmatch', 'build.sh', 'Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk')
