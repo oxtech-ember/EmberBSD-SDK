@@ -81,6 +81,13 @@ the OS producer and passes `EMBER_EKERMIT_SOURCE` to sysroot, release and set
 checks. When source inputs changed, `--ekermit-archive` and `--source-patch`
 allow the owner to compare the prepared payload.
 
+The optional `--tdb-source` selects the prepared common Ports TDB source for
+OS headers, the target library and release/set producers. The selected host
+Python is passed only for this Waf producer. When preparation inputs change,
+`--tdb-archive` and `--source-patch` let the owner compare the full prepared
+payload. The OS producer supplies its target configuration independently of
+the machine used for runtime tests.
+
 The sysroot builder accepts `--llvm-objects` and `--llvm-stages` to select
 LLVM coordinator subdirectories inside the existing SDK's `obj` and `stages`
 directories when a different build context must be retained alongside an

@@ -90,9 +90,11 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
         f'EMBER_LIBEDIT_SOURCE={paths["libedit-source"]}',
         f'MKREPRO_TIMESTAMP={timestamp}', f'EMBER_BUILD_ID={sha}', f'BUILDINFO=EmberBSD:{sha}',
         f'KERNOBJDIR={paths["objects"]}/kernels'] + (native_host_flags(native_selection) if native_selection is not None else [])
-    for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi'):
+    for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb'):
         if name + '-source' in paths:
             flags.append(f'EMBER_{name.upper()}_SOURCE={paths[name + "-source"]}')
+    if 'tdb-source' in paths and native_selection is not None:
+        flags.append('HOST_PYTHON=' + native_selection['tools']['python'])
     if any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source')) and native_selection is not None:
         flags += gnu_target_host_flags(native_selection)
     # Current preflight requires BFD; historical command records predate it.
@@ -144,7 +146,9 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
                         [make, '-C', paths['os'] + '/etc', overlay, 'release'],
                         *commands[1:]]
     source_flags = [f'EMBER_{name.upper()}_SOURCE={paths[name + "-source"]}'
-                    for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi') if name + '-source' in paths]
+                    for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb') if name + '-source' in paths]
+    if 'tdb-source' in paths and native_selection is not None:
+        source_flags.append('HOST_PYTHON=' + native_selection['tools']['python'])
     if any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source')) and native_selection is not None:
         source_flags += gnu_target_host_flags(native_selection)
     for command in commands:

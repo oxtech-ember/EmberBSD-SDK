@@ -238,6 +238,40 @@ class LLVMBuilderTests(TemporaryCase):
             self.assertEqual(builder.verify_common_sources(), {'diffutils': record})
         self.assertIn('/ports/scripts/source-inputs/diffutils/source.py', run.call_args.args[0])
 
+    def test_tdb_source_requires_real_os_producer(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'os': str(self.root / 'os'), 'tdb-source': '/prepared/tdb', 'tools': '/build/tools'}
+        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
+        builder.environment = {}
+        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   return_value=SimpleNamespace(stdout=b'/old/dist\n')):
+            with self.assertRaisesRegex(SDKError, 'does not support EMBER_TDB_SOURCE'):
+                builder.require_tdb_source_support()
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   return_value=SimpleNamespace(stdout=b'/prepared/tdb\n')) as run:
+            builder.require_tdb_source_support()
+        self.assertIn('/os/external/bsd/tdb/lib', run.call_args.args[0][5])
+        self.assertIn('HOST_PYTHON=/host/python', run.call_args.args[0])
+        del builder.paths['tdb-source']
+        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
+            builder.require_tdb_source_support()
+            run.assert_not_called()
+
+    def test_optional_tdb_source_verified_by_owner(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'python': '/host/python', 'ports': '/ports',
+                         'sdk-source': '/sdk', 'tdb-source': '/prepared/tdb'}
+        builder.git_command = '/host/git'
+        builder.environment = {}
+        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'databases/tdb'}
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
+            self.assertEqual(builder.verify_common_sources(), {'tdb': record})
+        self.assertIn('/ports/scripts/source-inputs/tdb/source.py', run.call_args.args[0])
+
     def test_grep_source_requires_real_os_producer(self):
         from types import SimpleNamespace
         builder = SysrootBuilder({})
@@ -1156,6 +1190,21 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.signature['environment']['PATH'] = native_path(builder.signature['native_toolset'])
         for path in (tools, objects):
             self.assertTrue(builder.compatible_context(records[path], path))
+        builder.llvm_phase = 'base'
+        self.assertFalse(builder.compatible_context(records[objects], objects))
+
+    def test_tdb_selection_changes_headers_but_not_native_tools(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        tools, objects = builder.paths['tools'], builder.paths['objects']
+        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+        builder.paths['tdb-source'] = '/prepared/tdb'
+        builder.signature['common_sources']['tdb'] = {'tree_sha256': 'a' * 64}
+        builder.signature['flags'].extend(('EMBER_TDB_SOURCE=/prepared/tdb', 'HOST_PYTHON=/host/python'))
+        self.assertTrue(builder.compatible_context(records[tools], tools))
+        self.assertFalse(builder.compatible_context(records[objects], objects))
         builder.llvm_phase = 'base'
         self.assertFalse(builder.compatible_context(records[objects], objects))
 

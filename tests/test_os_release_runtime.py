@@ -73,6 +73,23 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             for command in commands:
                 self.assertIn(flag, command)
 
+    def test_optional_tdb_source_reaches_release_and_set_checks(self):
+        paths = {name: '/sdk/' + name for name in (
+            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
+            'libedit-source', 'tdb-source', 'nvi-source', 'objects', 'tools', 'destination', 'os')}
+        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++', 'python': '/host/python'},
+                     'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
+                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
+        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
+                            '/host/sh', compiler_family='clang', base_cxx=True,
+                            install_base_cxx=True, native_selection=selection)
+        for flag in ('EMBER_TDB_SOURCE=/sdk/tdb-source', 'EMBER_NVI_SOURCE=/sdk/nvi-source',
+                     'HOST_PYTHON=/host/python'):
+            self.assertIn(flag, flags)
+            for command in commands:
+                self.assertIn(flag, command)
+
     def test_optional_grep_source_reaches_release_and_set_checks(self):
         paths = {name: '/sdk/' + name for name in (
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
