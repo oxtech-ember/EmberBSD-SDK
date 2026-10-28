@@ -301,7 +301,9 @@ class DarwinMakeconfTests(TemporaryCase):
         code, stdout, stderr = self.cli()
         self.assertEqual((code, stderr), (0, ''))
         self.assertEqual(json.loads(stdout)['makeconf'], self.options['output'])
-        self.assertIn('-B/explicit/driver/ -specs=/explicit/seed.specs', Path(self.options['output']).read_text())
+        data = Path(self.options['output']).read_text()
+        self.assertIn('-B/explicit/driver/ -specs=/explicit/seed.specs', data)
+        self.assertIn('EMBERBSD_SDK_SOURCE= ' + str(SDK_SOURCE) + '\n', data)
 
     def test_cli_persists_parallel_inputs(self):
         self.options.update(jobs=18, cpu_budget=18, link_python=self.tools['cc'],
