@@ -9,6 +9,23 @@ from emberbsd_sdk.os_release_builder import producer_commands
 
 
 class ReleaseRuntimeSequenceTests(unittest.TestCase):
+    def test_optional_rcs_source_reaches_release_and_set_checks(self):
+        paths = {name: '/sdk/' + name for name in (
+            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
+            'libedit-source', 'rcs-source', 'objects', 'tools', 'destination', 'os')}
+        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++', 'gmake': '/host/gmake'},
+                     'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
+                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
+        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
+                            '/host/sh', compiler_family='clang', base_cxx=True,
+                            install_base_cxx=True, native_selection=selection)
+        for flag in ('EMBER_RCS_SOURCE=/sdk/rcs-source', 'HOST_GMAKE=/host/gmake',
+                     'EMBER_HOST_GNU_TRIPLE=aarch64-apple-darwin27.0.0'):
+            self.assertIn(flag, flags)
+            for command in commands:
+                self.assertIn(flag, command)
+
     def test_optional_texinfo_source_reaches_release_commands(self):
         paths = {name: '/sdk/' + name for name in (
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',

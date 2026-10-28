@@ -70,6 +70,40 @@ class LLVMBuilderTests(TemporaryCase):
             builder.require_byacc_source_support()
             run.assert_not_called()
 
+    def test_rcs_source_requires_real_os_producer(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'os': str(self.root / 'os'), 'rcs-source': '/prepared/rcs', 'tools': '/build/tools'}
+        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
+        builder.environment = {}
+        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name,
+                                         compiler={'triplet': 'aarch64-apple-darwin27.0.0'})
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   return_value=SimpleNamespace(stdout=b'/old/dist\n')):
+            with self.assertRaisesRegex(SDKError, 'does not support EMBER_RCS_SOURCE'):
+                builder.require_rcs_source_support()
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   return_value=SimpleNamespace(stdout=b'/prepared/rcs\n')) as run:
+            builder.require_rcs_source_support()
+        self.assertIn('/os/external/gpl2/rcs/gnu', run.call_args.args[0][5])
+        self.assertIn('HOST_GMAKE=/host/gmake', run.call_args.args[0])
+        del builder.paths['rcs-source']
+        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
+            builder.require_rcs_source_support()
+            run.assert_not_called()
+
+    def test_optional_rcs_source_verified_by_owner(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'rcs-source': '/prepared/rcs'}
+        builder.git_command = '/host/git'
+        builder.environment = {}
+        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'devel/rcs'}
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
+            self.assertEqual(builder.verify_common_sources(), {'rcs': record})
+        self.assertIn('/ports/scripts/source-inputs/rcs/source.py', run.call_args.args[0])
+
     def test_texinfo_source_requires_real_c_only_os_producer(self):
         builder = SysrootBuilder({})
         builder.paths = {'os': str(self.root / 'os'), 'texinfo-source': '/prepared/texinfo',
@@ -110,6 +144,10 @@ class LLVMBuilderTests(TemporaryCase):
             builder.load_native_toolset()
             self.assertNotIn('gmake', load.call_args.kwargs['required_roles'])
             builder.options['texinfo-source'] = '/source/texinfo'
+            builder.load_native_toolset()
+            self.assertIn('gmake', load.call_args.kwargs['required_roles'])
+            del builder.options['texinfo-source']
+            builder.options['rcs-source'] = '/source/rcs'
             builder.load_native_toolset()
             self.assertIn('gmake', load.call_args.kwargs['required_roles'])
 
@@ -869,6 +907,24 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertTrue(builder.compatible_context(header_record, object_path))
         builder.llvm_phase = 'base'
         self.assertFalse(builder.compatible_context(base_record, object_path))
+
+    def test_rcs_selection_reuses_headers_and_native_tools_with_new_gmake(self):
+        from emberbsd_sdk.native_os_routing import native_path
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        tools, objects = builder.paths['tools'], builder.paths['objects']
+        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+        builder.paths['rcs-source'] = '/prepared/rcs'
+        builder.signature['common_sources']['rcs'] = {'tree_sha256': 'a' * 64}
+        builder.signature['flags'].append('EMBER_RCS_SOURCE=/prepared/rcs')
+        builder.signature['native_toolset']['tools']['gmake'] = str(Path(builder.signature['native_toolset']['tools']['cc']).parent / 'gmake')
+        builder.signature['environment']['PATH'] = native_path(builder.signature['native_toolset'])
+        for path in (tools, objects):
+            self.assertTrue(builder.compatible_context(records[path], path))
+        builder.llvm_phase = 'base'
+        self.assertFalse(builder.compatible_context(records[objects], objects))
 
     def test_header_objects_do_not_depend_on_byacc_source(self):
         builder, _ = self.builder()

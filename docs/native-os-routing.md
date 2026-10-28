@@ -58,6 +58,13 @@ byacc or Texinfo records when source inputs changed, also select
 the corresponding `--libevent-archive`, `--byacc-archive` or `--texinfo-archive`; the owner checks the
 archive and full patch set before comparing the prepared payload.
 
+The optional `--rcs-source` selects the common Ports RCS source for the OS
+producer, with the same checked GNU make and native compiler triplet. The SDK
+queries the producer's effective source and passes `EMBER_RCS_SOURCE` to the
+sysroot and release commands. When changed prepared inputs need comparison,
+provide `--rcs-archive` and `--source-patch`; the owner uses the selected
+prefix lzip to compare the full prepared payload.
+
 The sysroot builder accepts `--llvm-objects` and `--llvm-stages` to select
 LLVM coordinator subdirectories inside the existing SDK's `obj` and `stages`
 directories when a different build context must be retained alongside an

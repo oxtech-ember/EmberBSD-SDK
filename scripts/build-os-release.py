@@ -22,9 +22,10 @@ def main():
     for name in ('sdk', 'os-source', 'ports', 'compiler', 'runtime-work', 'jobs', 'sdk-source', 'libedit-source', 'libarchive-source', 'libevent-source', 'host-prefix', 'host-binutils'):
         parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix'}.get(name))
     parser.add_argument('--texinfo-source', action=UniqueOption, help='prepared common Ports Texinfo C-only source')
+    parser.add_argument('--rcs-source', action=UniqueOption, help='prepared common Ports RCS source')
     parser.add_argument('--byacc-source', action=UniqueOption, help='prepared common Ports byacc source')
     parser.add_argument('--source-patch', action=UniqueOption, help='selected patch executable inside the native prefix')
-    for name in ('libevent-archive', 'byacc-archive', 'texinfo-archive'):
+    for name in ('libevent-archive', 'byacc-archive', 'texinfo-archive', 'rcs-archive'):
         parser.add_argument('--' + name, action=UniqueOption, help='archive for comparing changed source inputs')
     parser.add_argument('--x11-source', action=UniqueOption,
                         help='prepared Ports xsrc source; builds the X11 sets (Clang aarch64-sysroot only)')
