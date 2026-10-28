@@ -12,7 +12,7 @@ revision, an OS test/helper source snapshot, the shared Ports source, the
 selected sysroot and target compiler, and one native prefix. It extracts the
 build's base set, adds the test programs, selected runtime libraries, and the
 diagnostic `/etc/rc`, builds the root with that build's `nbmakefs`, `nbmtree`
-and `DESTDIR/etc/MAKEDEV`, then boots the build's `netbsd-EMBER64.gz`. The root
+and `DESTDIR/dev/MAKEDEV`, then boots the build's `netbsd-EMBER64.gz`. The root
 device is mandatory; the runner does not assume a QEMU unit number. It verifies
 the mounted root is read-only and uses tmpfs for test scratch files.
 
@@ -35,7 +35,7 @@ Select `--compiler-family gcc` explicitly for the GCC alternative. Do not pass
 `--host-prefix` to the Ports GCC consumer; the SDK still requires its selected
 native prefix for the host controller and QEMU. The runner requires clean
 committed source snapshots. `--os-source` must match the completed OS build and
-supplies same-build `DESTDIR/etc/MAKEDEV` and OS metadata to the root-image
+supplies same-build `DESTDIR/dev/MAKEDEV` and OS metadata to the root-image
 helper. `--os-test-source` supplies the C regressions and guest/root-helper
 scripts; it defaults to `--os-source`. Its revision and file inventory are
 recorded separately from the OS build revision, so adding acceptance tests or

@@ -10,7 +10,7 @@ from test_core import SDK_SOURCE, git_environment  # noqa: F401  # puts the SDK 
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.target_acceptance import (CHECKS, GUEST_CHECKS, HOST_CHECKS,
     _clean_source_revision, _copy_runtime, _install_diagnostic_runcom,
-    _select_os_sources, parse_guest_log, run)
+    _select_os_sources, _require_os_makedev, parse_guest_log, run)
 
 PORTS_GUEST_MARKERS = ('target_c11', 'target_cxx20', 'libc_aliases',
                        'base_loader_smoke', 'fork_cas')
@@ -21,6 +21,20 @@ def valid_log(nonce='fixture-123'):
                        for name in PORTS_GUEST_MARKERS)
     return (f'boot noise\nEMBERBSD-ACCEPTANCE {nonce} ROOT /dev/ld0a ffs ro,local\n'
             f'{checks}\nEMBERBSD-ACCEPTANCE {nonce} COMPLETE\n').encode()
+
+
+class MakeDevLocationTests(unittest.TestCase):
+    def test_generated_makedev_uses_os_installed_dev_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'dest/dev').mkdir(parents=True)
+            (root / 'dest/dev/MAKEDEV').write_text('fixture')
+            self.assertEqual(_require_os_makedev(root), root / 'dest/dev/MAKEDEV')
+            (root / 'dest/dev/MAKEDEV').unlink()
+            (root / 'dest/etc').mkdir()
+            (root / 'dest/etc/MAKEDEV').write_text('wrong location')
+            with self.assertRaisesRegex(SDKError, 'MAKEDEV'):
+                _require_os_makedev(root)
 
 
 class TargetAcceptanceProtocolTests(unittest.TestCase):

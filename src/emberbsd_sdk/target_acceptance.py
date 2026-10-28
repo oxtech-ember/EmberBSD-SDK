@@ -182,6 +182,12 @@ def _copy_test_bundle(bundle, root):
         shutil.copy2(source, destination)
 
 
+def _require_os_makedev(destination):
+    path = destination / 'dest/dev/MAKEDEV'
+    _require(path.is_file(), 'same-build DESTDIR/MAKEDEV is missing')
+    return path
+
+
 def run(options):
     sdk_source = Path(options.sdk_source).resolve(strict=True)
     running_sdk_source = Path(__file__).resolve().parents[2]
@@ -217,7 +223,7 @@ def run(options):
     receipt_paths = profile['sdk_receipt']['paths']
     tools = Path(receipt_paths['tools']).resolve(strict=True)
     destination = Path(receipt_paths['destination']).resolve(strict=True)
-    _require((destination / 'dest/etc/MAKEDEV').is_file(), 'same-build DESTDIR/MAKEDEV is missing')
+    _require_os_makedev(destination)
 
     native = native_toolset.load_host_prefix(str(host_prefix),
         required_roles={'cc', 'cxx', 'cpp', 'python', 'sh', 'tar', 'qemu-system-aarch64',
