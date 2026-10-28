@@ -22,8 +22,12 @@ flags, OS headers and output bytes retain their checks. C base and final
 objects continue to depend on the selected LLVM runtime source.
 
 `--llvm-runtime-stage` explicitly reuses a completed full runtime and skips
-the prerequisite coordinator. Its LLVM version, target, source archive,
-recipe files and OS revision must match the selected inputs. The final SDK
+the prerequisite coordinator. Its LLVM version, target, source archive and recipe files must match the
+selected inputs. Select a runtime whose
+ABI is compatible with the chosen OS, including libc, C++ ABI, TLS and unwinder;
+matching an OS commit alone does not establish compatibility. The manifest
+retains the OS revision that actually produced the runtime, which may differ
+from the final OS revision. The final SDK
 copies `usr/pkg/llvm`; it does not substitute a GCC runtime. GCC retains its
 explicit `--compiler-family gcc --gcc-archive ... --pkgsrc ...` path.
 The final Clang build enables the base libc++ install paths by default on

@@ -470,13 +470,16 @@ class BuilderReleaseTests(TemporaryCase):
         class ClangRelease(OSReleaseBuilder):
             compiler = llvm_fixtures.ClangBuilder.compiler
         options = release_fixture(self.root, 'aarch64')
-        builder, _ = llvm_fixtures.LLVMBuilderTests.builder(self, options, ClangRelease)
+        builder, runtime = llvm_fixtures.LLVMBuilderTests.builder(self, options, ClangRelease)
+        llvm_fixtures.write(Path(builder.options['os']) / 'changed', 'new source')
+        llvm_fixtures.commit(builder.options['os'])
         with patch('emberbsd_sdk.native_runtime_install.NativeRuntimeInstaller',
                    FixtureNativeRuntimeInstaller):
             receipt = builder.run()
         output = Path(builder.paths['destination'])
         profile = jsonio.read_json(output / 'build-profile.json')
         self.assertEqual((profile['schema'], receipt['version']), (5, 5))
+        self.assertNotEqual(receipt['sources']['os']['commit'], runtime.record['base']['os_revision'])
         self.assertIn('MKLIBCXX=yes', receipt['signature']['flags'])
         validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
         manifest = kit.prepare(output, self.root / 'common-runtime-kit', 'aarch64-sysroot')

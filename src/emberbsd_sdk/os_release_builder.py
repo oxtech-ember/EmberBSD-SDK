@@ -153,7 +153,6 @@ def validate_profile(profile, sha, target):
         runtime = llvm_runtime.validate_identity(signature['runtime']['manifest'], target=target,
                                                  required_components=llvm_runtime.FULL_COMPONENTS)
         check(runtime['llvm_version'] == compiler['version'] and
-              runtime['base']['os_revision'] == sha and
               runtime['source'] == {key: signature['llvm_source']['source'][key] for key in ('archive', 'sha512')},
               'Mixed common LLVM runtime identity')
     else:

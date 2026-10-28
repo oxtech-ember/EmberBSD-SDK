@@ -200,7 +200,6 @@ def _provenance(receipt, target):
             runtime = llvm_runtime.validate_identity(signature['runtime']['manifest'], target=target,
                                                      required_components=llvm_runtime.FULL_COMPONENTS)
             if (runtime['llvm_version'] != compiler['version'] or
-                    runtime['base']['os_revision'] != receipt['sources']['os']['commit'] or
                     runtime['source'] != {key: signature['llvm_source']['source'][key]
                                          for key in ('archive', 'sha512')}):
                 raise SDKError('export LLVM runtime differs from its compiler or source inputs')
@@ -424,8 +423,7 @@ def validate_manifest(m, *, target, max_bytes=MAX_BYTES):
             record = llvm_runtime.validate_identity(runtime['manifest'], target=target,
                 required_components=llvm_runtime.FULL_COMPONENTS)
             if (_hash_json(runtime) != provenance['runtime_sha256'] or
-                    record['llvm_version'] != compiler['version'] or
-                    record['base']['os_revision'] != provenance['sources']['os']):
+                    record['llvm_version'] != compiler['version']):
                 raise SDKError('transfer runtime differs from compiler or source provenance')
             _mode(runtime['root_mode'])
             _validate_rows(runtime['inventory'], max_bytes)

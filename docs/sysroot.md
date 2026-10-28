@@ -162,8 +162,9 @@ The C-base phase may consume bootstrap archives from an ancestor OS revision
 when the preserved header files and symlinks still match their measured runtime
 inputs. It compares those inputs again with the newly installed base headers
 before qualifying the result. A changed header leaves that stage incomplete;
-it requires rebuilding the affected runtime. This does not relax the final
-C++ runtime's exact OS revision or measured base-library checks.
+it requires rebuilding the affected runtime. The explicitly selected full
+runtime may originate from a different OS revision; select one compatible
+with the final OS ABI, including libc and C++ runtime interfaces.
 
 With the full selected runtime, the OS source provides these operations:
 

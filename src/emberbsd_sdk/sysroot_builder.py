@@ -310,8 +310,8 @@ class SysrootBuilder:
                     record['source'] != {key: self.llvm_source_record['source'][key]
                                          for key in ('archive', 'sha512')}):
                 raise SDKError('LLVM runtime compiler or common source differs from selection')
-            if record['base']['os_revision'] != self.sources['os']['commit']:
-                if self.llvm_phase != 'base' or base is None:
+            if self.llvm_phase == 'base' and record['base']['os_revision'] != self.sources['os']['commit']:
+                if base is None:
                     raise SDKError('LLVM runtime base OS differs from selection')
                 # Bootstrap archives depend on measured headers, not the entire
                 # later OS tree. The base phase checks its new headers again

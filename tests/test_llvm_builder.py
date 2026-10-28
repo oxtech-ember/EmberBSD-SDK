@@ -458,12 +458,14 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
             builder.preflight()
         self.assertFalse(Path(builder.options['destination']).exists())
 
-    def test_final_runtime_keeps_exact_os_revision(self):
-        builder, _ = self.builder()
+    def test_selected_final_runtime_retains_its_original_os_revision(self):
+        builder, runtime = self.builder()
+        old = runtime.record['base']['os_revision']
         write(Path(builder.options['os']) / 'changed', 'new source')
         commit(builder.options['os'])
-        with self.assertRaisesRegex(SDKError, 'base OS differs'):
-            builder.preflight()
+        receipt = builder.run()
+        self.assertNotEqual(receipt['sources']['os']['commit'], old)
+        self.assertEqual(receipt['signature']['runtime']['manifest']['base']['os_revision'], old)
 
     def test_final_dispatch_installs_default_base_aliases(self):
         builder, runtime = self.builder()
@@ -611,6 +613,8 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
     def test_clang_transfer_is_explicit_and_preserves_historical_format(self):
         builder, runtime = self.builder()
         builder.options['base-cxx'] = False
+        write(Path(builder.options['os']) / 'changed', 'new source')
+        commit(builder.options['os'])
         receipt = builder.run()
         bundle = self.root / 'bundle'
         exported = sysroot_transfer.export_sysroot(builder.paths['destination'], bundle, target='aarch64')
