@@ -23,10 +23,10 @@ def main():
         parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix'}.get(name))
     parser.add_argument('--runtime-work', action=UniqueOption,
                         help='required for GCC or to build an LLVM runtime; not needed with a selected LLVM stage')
-    for name in ('libarchive-source', 'libevent-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source'):
+    for name in ('libarchive-source', 'libevent-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'ekermit-source'):
         parser.add_argument('--' + name, action=UniqueOption, help='required for the OS base build')
     parser.add_argument('--source-patch', action=UniqueOption, help='selected patch executable inside the native prefix')
-    for name in ('libevent-archive', 'byacc-archive', 'texinfo-archive', 'rcs-archive', 'diffutils-archive'):
+    for name in ('libevent-archive', 'byacc-archive', 'texinfo-archive', 'rcs-archive', 'diffutils-archive', 'ekermit-archive'):
         parser.add_argument('--' + name, action=UniqueOption, help='archive for comparing changed source inputs')
     parser.add_argument('--host-compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
                         help='Clang by default; select GCC explicitly for a platform exception')
