@@ -160,6 +160,14 @@ class HostPrefix:
                     driver_components=dict(self.driver_components))
 
 
+def validate_host_executable(prefix, executable, host, *, search_path):
+    """Validate a selected host executable and its interpreter inside prefix."""
+    _require(os.path.isabs(prefix) and os.path.isabs(executable),
+             "native prefix and executable must be absolute")
+    root = canonical_existing(prefix)
+    return _member(executable, root, host, search_path=search_path)
+
+
 def _member(path, root, host, *, search_path, binary=False, seen=()):
     """Check both path spellings and every script interpreter before execution."""
     real = canonical_existing(path)

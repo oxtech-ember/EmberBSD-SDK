@@ -35,6 +35,11 @@ and OS process services are normal host inputs. Keep native ABI paths out of
 target include, library, and pkg-config searches.
 Git source inspection and documentation checks are separate from artifact builds.
 
+Explicit producers can call `host_prefix.validate_host_executable(prefix, executable,
+host, search_path=...)` for a selected host executable and each resolved compiler
+component. It checks prefix containment, host architecture and script interpreters;
+producer-specific target and compiler identity checks remain the caller’s responsibility.
+
 ## Producer routing
 
 Select native and target tools separately through the producer interface.

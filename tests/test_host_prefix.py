@@ -75,6 +75,18 @@ class HostPrefixTests(TemporaryCase):
             self.assertTrue(argv[0].startswith(str(self.fixture.root) + '/'))
             self.assertEqual(env['PATH'], selected.path)
 
+    def test_public_executable_check_rejects_foreign_and_external_interpreter(self):
+        from emberbsd_sdk.host_prefix import validate_host_executable
+        tool = self.fixture.write("selected-gcc", header(62, 2))
+        args = (str(self.fixture.root), str(tool), self.fixture.host)
+        self.assertEqual(validate_host_executable(*args, search_path=str(tool.parent)), str(tool))
+        self.fixture.write("selected-gcc", header(183, 2))
+        with self.assertRaises(SDKError):
+            validate_host_executable(*args, search_path=str(tool.parent))
+        self.fixture.write("selected-gcc", b"#!/bin/sh\n")
+        with self.assertRaises(SDKError):
+            validate_host_executable(*args, search_path=str(tool.parent))
+
     def test_missing_tool_is_not_found_in_ambient_path(self):
         with self.assertRaisesRegex(SDKError, 'missing native tool.*ninja'):
             self.fixture.load(roles=('ninja',))
