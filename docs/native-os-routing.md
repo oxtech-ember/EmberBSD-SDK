@@ -65,6 +65,12 @@ sysroot and release commands. When changed prepared inputs need comparison,
 provide `--rcs-archive` and `--source-patch`; the owner uses the selected
 prefix lzip to compare the full prepared payload.
 
+The optional `--diffutils-source` selects the common Ports diffutils source
+for the OS producer and passes `EMBER_DIFFUTILS_SOURCE` to sysroot, release,
+and set checks. GNU make and the native compiler triplet are selected from the
+same host prefix. For changed source inputs, `--diffutils-archive` and
+`--source-patch` allow the owner to compare a freshly prepared payload.
+
 The sysroot builder accepts `--llvm-objects` and `--llvm-stages` to select
 LLVM coordinator subdirectories inside the existing SDK's `obj` and `stages`
 directories when a different build context must be retained alongside an
