@@ -16,8 +16,10 @@ from . import elf, jsonio, paths, publication
 from .errors import SDKError
 
 COMPILER_BINDINGS_API = 3
+NATIVE_CXX_RUNTIME_BINDING_API = 1
 # Keep compiler-only mappings byte-compatible with existing bindings.
 _FORMAT_VERSION = 1
+_NATIVE_FORMAT_VERSION = 2
 _DIRECT_ROLES = {'as', 'ld'}
 _ROLES = {'cc', 'cxx', 'cpp', 'csa'} | _DIRECT_ROLES
 _FLAGS = {'cppflags', 'cflags', 'cxxflags', 'ldflags'}
@@ -69,13 +71,113 @@ def _predicted_runtime_path(role, operation):
     return role == 'cxx' and not _NO_CXX_LIBRARY.intersection(operation)
 
 
+def _deployment_version(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,2}", value):
+        raise SDKError("invalid native macOS deployment version")
+    return tuple(int(part) for part in (value.split(".") + ["0", "0"])[:3])
+
+
+def _native_cxx_options(runtime, arguments):
+    """Return selected native header/link defaults without overriding caller options."""
+    words = _operation_words(arguments)
+    if '--' in words:
+        words = words[:words.index('--')]
+    stdlib = None
+    explicit_headers = []
+    deployment = None
+    explicit_target = None
+    explicit_sysroot = None
+    explicit_arches = []
+    explicit_abi_overrides = []
+    iterator = iter(words)
+    for word in iterator:
+        if word.startswith('-stdlib='):
+            stdlib = word.split('=', 1)[1]
+        elif word == '-stdlib++-isystem':
+            explicit_headers.append(next(iterator, ''))
+        elif word.startswith('-stdlib++-isystem='):
+            explicit_headers.append(word.split('=', 1)[1])
+        elif word.startswith(('-mmacos-version-min=', '-mmacosx-version-min=')):
+            deployment = word.split('=', 1)[1]
+        elif re.match(r'-m(?:ios|iphoneos|tvos|watchos|visionos).*version-min=', word):
+            raise SDKError('foreign deployment target in native C++ binding')
+        elif word in ('--target', '-target'):
+            explicit_target = next(iterator, '')
+        elif word == '-arch':
+            explicit_arches.append(next(iterator, ''))
+        elif word in ('-m32', '-m64', '-m16') or word.startswith('-mabi='):
+            explicit_abi_overrides.append(word)
+        elif word == '-Xclang':
+            forwarded = next(iterator, '')
+            if forwarded in ('-triple', '-isysroot', '-target-abi') or forwarded.startswith(
+                    ('-triple=', '-isysroot=', '-target-abi=')):
+                raise SDKError('native C++ binding cannot inspect forwarded target or sysroot overrides')
+        elif word.startswith('--target='):
+            explicit_target = word.split('=', 1)[1]
+        elif word in ('--sysroot', '-isysroot'):
+            explicit_sysroot = next(iterator, '')
+        elif word.startswith('--sysroot='):
+            explicit_sysroot = word.split('=', 1)[1]
+        elif word.startswith('-isysroot') and word != '-isysroot':
+            explicit_sysroot = word[len('-isysroot'):].removeprefix('=')
+        elif word in ('-I', '-isystem', '-iquote', '-idirafter', '-o', '-include',
+                      '-imacros', '-L', '-l', '-Xlinker', '-MF', '-MT',
+                      '-MQ', '-resource-dir', '--gcc-toolchain', '-B', '-x'):
+            next(iterator, None)
+    if explicit_target is not None and explicit_target not in runtime['targets']:
+        raise SDKError('target differs from selected native C++ runtime')
+    native_arches = {target.split('-', 1)[0] for target in runtime['targets']}
+    if any(arch not in native_arches for arch in explicit_arches):
+        raise SDKError('architecture differs from selected native C++ runtime')
+    if any(option != '-m64' or native_arches != {'x86_64'}
+           for option in explicit_abi_overrides):
+        raise SDKError('unsupported ABI override for selected native C++ runtime')
+    if explicit_sysroot is not None and (
+            runtime['sysroot'] is None or
+            os.path.realpath(explicit_sysroot) != runtime['sysroot']):
+        raise SDKError('sysroot differs from selected native C++ runtime')
+    minimum = _deployment_version(runtime['deployment'])
+    if deployment is not None and _deployment_version(deployment) < minimum:
+        raise SDKError('deployment target is older than selected native C++ runtime')
+    if explicit_target:
+        match = re.search(r'-apple-macosx?([0-9]+(?:\.[0-9]+){0,2})$', explicit_target)
+        if match and _deployment_version(match.group(1)) < minimum:
+            raise SDKError('target is older than selected native C++ runtime')
+    if stdlib not in (None, 'libc++'):
+        return [], []
+    if any(os.path.realpath(header) != runtime['include_dir'] for header in explicit_headers):
+        raise SDKError('C++ standard headers differ from selected native runtime')
+    no_headers = bool(explicit_headers) or bool({'-nostdinc', '-nostdinc++', '-nostdlibinc'} & set(words))
+    headers = [] if no_headers else [
+        '--start-no-unused-arguments', '-stdlib++-isystem', runtime['include_dir'],
+        '--end-no-unused-arguments']
+    if deployment is None:
+        headers = ['-mmacosx-version-min=' + runtime['deployment']] + headers
+    libraries = [] if _NO_CXX_LIBRARY.intersection(words) or '-r' in words else [
+        '-L' + runtime['library_dir']]
+    return headers, libraries
+
+
 def compiler_argv(record, role, arguments, *, runtime_path=None):
     """Attach selected native flags without shell evaluation or lost argument words.
 
     runtime_path selects whether a link gets the bound runtime library search
     path; None selects the language prediction that execute() verifies.
     """
-    command = _words(record['commands'][role])
+    if record.get('format') != 'emberbsd-compiler-binding':
+        raise SDKError('invalid compiler binding format')
+    version = record.get('version')
+    if type(version) is not int or version not in (_FORMAT_VERSION, _NATIVE_FORMAT_VERSION):
+        raise SDKError('unsupported compiler binding version')
+    specification = record['commands'][role]
+    if version == _NATIVE_FORMAT_VERSION:
+        if (not isinstance(specification, dict) or set(specification) != {'argv'} or
+                'native_cxx_runtime' not in record):
+            raise SDKError('invalid native compiler binding record')
+        specification = specification['argv']
+    elif 'native_cxx_runtime' in record:
+        raise SDKError('native C++ runtime requires compiler binding version 2')
+    command = _words(specification)
     arguments = _words(arguments)
     if role in _DIRECT_ROLES:
         # Assembler and linker arguments have their own syntax and response
@@ -89,6 +191,12 @@ def compiler_argv(record, role, arguments, *, runtime_path=None):
                                  flags['cflags'] if role in ('cc', 'csa') else [])
     link = operation is not None
     linker = flags['ldflags'] + record.get('link_flags', {}).get(role, []) if link else []
+    if role == 'cxx' and 'native_cxx_runtime' in record:
+        native_headers, native_libraries = _native_cxx_options(
+            record['native_cxx_runtime'], command[1:] + prefix + arguments + linker)
+        prefix = prefix + native_headers
+        if link:
+            linker = linker + native_libraries
     if link and 'runtime_rpath' in record:
         if runtime_path is None:
             runtime_path = _predicted_runtime_path(role, operation)
@@ -133,7 +241,7 @@ def _needs_runtime(record, output):
 
 
 def bind_compilers(destination, *, commands, flags, python, aliases=None, link_flags=None,
-                   runtime_rpath=None):
+                   runtime_rpath=None, native_cxx_runtime=None):
     """Create or reuse caller-owned adapters for a previously selected toolset.
 
     This publishes command routing, not tool qualification. Callers obtain the
@@ -173,6 +281,24 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
     paths.real_directory(parent)
     record = dict(format='emberbsd-compiler-binding', version=_FORMAT_VERSION,
                   commands=commands, flags=flags, aliases=aliases)
+    if native_cxx_runtime is not None:
+        if (not isinstance(native_cxx_runtime, dict) or
+                set(native_cxx_runtime) != {'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment'}):
+            raise SDKError('native C++ runtime requires selected include, library, sysroot and targets')
+        runtime = dict(native_cxx_runtime)
+        for key in ('include_dir', 'library_dir'):
+            runtime[key] = paths.canonical_existing(runtime[key])
+            paths.real_directory(runtime[key])
+        if runtime['sysroot'] is not None:
+            runtime['sysroot'] = paths.canonical_existing(runtime['sysroot'])
+            paths.real_directory(runtime['sysroot'])
+        runtime['targets'] = _words(runtime['targets'])
+        _deployment_version(runtime['deployment'])
+        # Version 1 readers do not inspect the version field. Their _words()
+        # rejects each object below instead of silently omitting this runtime.
+        record['version'] = _NATIVE_FORMAT_VERSION
+        record['commands'] = {role:{'argv':words} for role,words in commands.items()}
+        record['native_cxx_runtime'] = runtime
     if link_flags is not None:
         record['link_flags'] = link_flags
     if runtime_rpath is not None:

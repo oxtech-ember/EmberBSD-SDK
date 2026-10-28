@@ -82,3 +82,19 @@ use it to select libc++ at C++ link without passing that option to compilation.
 Optional `runtime_rpath={"flags": [...], "libraries": [...]}` names a runtime
 search path that stays only in link outputs that need one of the named
 libraries; see application commands.
+
+For an explicitly selected Darwin native C++ runtime,
+`compiler_bindings.bind_compilers` accepts `native_cxx_runtime` with canonical
+`include_dir`, `library_dir`, `sysroot`, exact allowed `targets`, and `deployment`
+(the runtime's minimum macOS version, for example `26.0`). The caller selects
+these inputs together from the same runtime; this API does not discover them.
+`NATIVE_CXX_RUNTIME_BINDING_API == 1` advertises this optional capability.
+The binding uses record format 2, whose command objects are rejected by older
+readers; existing format 1 records retain their previous semantics.
+
+The C++ binding selects both runtime paths, preserves explicit standard-library
+and no-standard-include options, and rejects incompatible target, architecture,
+sysroot, standard-header directory, and lower deployment overrides. If no
+macOS deployment option is supplied, it sets the selected minimum explicitly.
+Response-file options are inspected too. Target builds use their own application
+binding; this native selection is not a target sysroot or target runtime.

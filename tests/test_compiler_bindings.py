@@ -4,6 +4,7 @@
 
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -227,3 +228,140 @@ class CompilerBindingTests(TemporaryCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual('"-lc++"' in result.stderr, role == 'cxx')
                     self.assertNotIn('"-lstdc++"', result.stderr)
+
+
+class NativeCxxRuntimeBindingTests(TemporaryCase):
+    def setUp(self):
+        super().setUp()
+        self.compiler = self.root / 'compiler'
+        self.compiler.write_text('#!' + sys.executable + '\nimport json,sys\n'
+                                 'print(json.dumps(sys.argv[1:]))\n')
+        self.compiler.chmod(0o755)
+        self.include = self.root / 'runtime headers'; self.include.mkdir()
+        self.lib = self.root / 'runtime lib'; self.lib.mkdir()
+        self.sdk = self.root / 'native sdk'; self.sdk.mkdir()
+        self.runtime = dict(include_dir=str(self.include), library_dir=str(self.lib),
+                            sysroot=str(self.sdk), targets=['arm64-apple-darwin'], deployment='26.0')
+        self.commands = {role:[str(self.compiler), '--selected-'+role] for role in ('cc','cxx','cpp')}
+        self.flags = dict(cppflags=[], cflags=[], cxxflags=[], ldflags=[])
+        self.tools = compiler_bindings.bind_compilers(self.root/'commands', commands=self.commands,
+                    flags=self.flags, python=sys.executable, native_cxx_runtime=self.runtime)
+
+    def invoke(self, role, args):
+        result = subprocess.run([self.tools[role], *args], cwd=self.root,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_compile_link_and_other_roles(self):
+        compile_args = self.invoke('cxx', ['-c', 'source.cc'])
+        self.assertIn('-stdlib++-isystem', compile_args)
+        self.assertIn(str(self.include), compile_args)
+        self.assertNotIn('-L'+str(self.lib), compile_args)
+        link_args = self.invoke('cxx', ['-L/custom', 'source.cc'])
+        self.assertLess(link_args.index('-L/custom'), link_args.index('-L'+str(self.lib)))
+        for role in ('cc', 'cpp'):
+            args = self.invoke(role, ['-c', 'source.c'])
+            self.assertNotIn(str(self.include), args)
+            self.assertNotIn('-L'+str(self.lib), args)
+        self.assertNotIn(str(self.include), self.invoke('cxx', ['--version']))
+
+    def test_caller_overrides_and_native_context(self):
+        for args, includes, library in (
+            (['-nostdinc++', 'source.cc'], False, True),
+            (['-nostdinc', 'source.cc'], False, True),
+            (['-stdlib++-isystem', str(self.include), 'source.cc'], True, True),
+            (['-stdlib=libstdc++', 'source.cc'], False, False),
+            (['-stdlib=libstdc++', '-stdlib++-isystem', '/user', 'source.cc'], False, False),
+            (['-stdlib=libstdc++', '-stdlib=libc++', 'source.cc'], True, True),
+            (['-nostdlib', 'source.cc'], True, False),
+            (['-nodefaultlibs', 'source.cc'], True, False),
+            (['-nostdlib++', 'source.cc'], True, False),
+            (['-r', 'source.o'], True, False),
+            (['-target', 'arm64-apple-darwin', 'source.cc'], True, True),
+            (['-arch', 'arm64', 'source.cc'], True, True),
+            (['-I', '-target', 'source.cc'], True, True),
+            (['-isysroot', str(self.sdk), 'source.cc'], True, True),
+        ):
+            with self.subTest(args=args):
+                result = self.invoke('cxx', args)
+                self.assertEqual(str(self.include) in result, includes)
+                self.assertEqual('-L'+str(self.lib) in result, library)
+
+    def test_incompatible_native_context_fails_closed(self):
+        for args in (['--target=x86_64-unknown-netbsd'], ['-arch', 'x86_64'],
+                     ['-m32'], ['--sysroot=/other'], ['-isysroot=/other'],
+                     ['-stdlib++-isystem', '/user'],
+                     ['-stdlib++-isystem', '/user', '-stdlib++-isystem', str(self.include)],
+                     ['-mmacosx-version-min=25.9'],
+                     ['-mmacos-version-min=25.9']):
+            with self.subTest(args=args):
+                result = subprocess.run([self.tools['cxx'], *args, '-c', 'source.cc'],
+                    cwd=self.root, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+        self.assertIn('-mmacosx-version-min=26.0', self.invoke('cxx', ['-c', 'source.cc']))
+        self.assertIn('-mmacos-version-min=26.0', self.invoke('cxx', ['-mmacos-version-min=26.0', '-c', 'source.cc']))
+        response = self.root/'deployment.rsp'
+        response.write_text('-mmacos-version-min=25.0 -c source.cc')
+        result = subprocess.run([self.tools['cxx'], '@'+str(response)], cwd=self.root,
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        response.write_text('-stdlib++-isystem /user -stdlib++-isystem ' +
+                            shlex.quote(str(self.include)) + ' -c source.cc')
+        result = subprocess.run([self.tools['cxx'], '@'+str(response)], cwd=self.root,
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_m64_with_explicit_x86_64_native_selection(self):
+        record = json.loads((self.root/'commands'/'commands.json').read_text())
+        record['native_cxx_runtime']['targets'] = ['x86_64-apple-darwin']
+        args = compiler_bindings.compiler_argv(record, 'cxx',
+                ['--target=x86_64-apple-darwin', '-m64', '-c', 'source.cc'])
+        self.assertIn(str(self.include), args)
+        with self.assertRaises(SDKError):
+            compiler_bindings.compiler_argv(record, 'cxx',
+                ['--target=x86_64-apple-darwin', '-m32', '-c', 'source.cc'])
+
+    def test_bound_link_flags_participate_in_native_selection(self):
+        record = json.loads((self.root/'commands'/'commands.json').read_text())
+        for flags in (['--target=x86_64-unknown-netbsd'], ['-mmacos-version-min=25.0'],
+                      ['--sysroot=/other'], ['-stdlib++-isystem', '/foreign']):
+            with self.subTest(flags=flags):
+                record['flags']['ldflags'] = flags
+                with self.assertRaises(SDKError):
+                    compiler_bindings.compiler_argv(record, 'cxx', ['source.cc'])
+                # Link-only options do not affect compile-only invocations.
+                compiler_bindings.compiler_argv(record, 'cxx', ['-c', 'source.cc'])
+        record['flags']['ldflags'] = []
+        record['link_flags'] = {'cxx':['-stdlib=libstdc++']}
+        argv = compiler_bindings.compiler_argv(record, 'cxx', ['source.cc'])
+        self.assertNotIn(str(self.include), argv)
+        self.assertNotIn('-L'+str(self.lib), argv)
+
+    def test_new_records_fail_closed_under_version_one_command_shape(self):
+        record = json.loads((self.root/'commands'/'commands.json').read_text())
+        self.assertEqual(record['version'], 2)
+        for role in ('cc', 'cxx', 'cpp'):
+            with self.subTest(role=role), self.assertRaises(SDKError):
+                # The previous reader passes commands[role] to _words directly.
+                compiler_bindings._words(record['commands'][role])
+        self.assertEqual(compiler_bindings.compiler_argv(record, 'cxx', ['--version']),
+                         [str(self.compiler), '--selected-cxx', '--version'])
+
+    def test_response_options_and_immutable_selection(self):
+        response = self.root/'caller opts.rsp'
+        response.write_text('-stdlib=libstdc++ -c source.cc')
+        args = self.invoke('cxx', ['@'+str(response)])
+        self.assertIn('@'+str(response), args)
+        self.assertNotIn(str(self.include), args)
+        self.assertNotIn('-L'+str(self.lib), args)
+        response.write_text('-Xclang -triple -Xclang x86_64-unknown-netbsd -c source.cc')
+        forwarded = subprocess.run([self.tools['cxx'], '@'+str(response)], cwd=self.root,
+                                   capture_output=True, text=True)
+        self.assertNotEqual(forwarded.returncode, 0)
+        self.assertIn('cannot inspect forwarded', forwarded.stderr)
+        other = self.root/'other'; other.mkdir()
+        with self.assertRaisesRegex(SDKError, 'differs'):
+            compiler_bindings.bind_compilers(self.root/'commands', commands=self.commands,
+                flags=self.flags, python=sys.executable,
+                native_cxx_runtime={**self.runtime, 'library_dir':str(other)})
