@@ -19,8 +19,10 @@ class UniqueOption(argparse.Action):
 
 def main():
     parser = argparse.ArgumentParser(description='Build an EmberBSD OS release with a native Ports prefix.')
-    for name in ('sdk', 'os-source', 'ports', 'compiler', 'runtime-work', 'jobs', 'sdk-source', 'libedit-source', 'libarchive-source', 'libevent-source', 'host-prefix', 'host-binutils'):
+    for name in ('sdk', 'os-source', 'ports', 'compiler', 'jobs', 'sdk-source', 'libedit-source', 'libarchive-source', 'libevent-source', 'host-prefix', 'host-binutils'):
         parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix'}.get(name))
+    parser.add_argument('--runtime-work', action=UniqueOption,
+                        help='required for GCC or to build an LLVM runtime; not needed with a selected LLVM stage')
     parser.add_argument('--texinfo-source', action=UniqueOption, help='prepared common Ports Texinfo C-only source')
     parser.add_argument('--diffutils-source', action=UniqueOption, help='prepared common Ports diffutils source')
     parser.add_argument('--rcs-source', action=UniqueOption, help='prepared common Ports RCS source')

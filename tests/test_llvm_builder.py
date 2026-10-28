@@ -46,6 +46,48 @@ class ClangBuilder(B):
 
 
 class LLVMBuilderTests(TemporaryCase):
+    def test_runtime_work_cli_plan_with_and_without_selected_stage(self):
+        options = fixture(self.root)
+        write(Path(options['os']) / 'share/mk/bsd.own.mk', 'EMBER_VERSION?= 1.0\n')
+        commit(options['os'])
+        builder, _ = self.builder(options)
+        original = dict(builder.options)
+        original.pop('runtime-work')
+        original.pop('gcc-archive', None)
+        original.pop('pkgsrc', None)
+        original.pop('base-cxx', None)
+
+        class FixtureRelease(OSReleaseBuilder, ClangBuilder):
+            pass
+
+        for script_name, module, fixture_class in (
+                ('build-sysroot.py', 'emberbsd_sdk.sysroot_builder.SysrootBuilder', ClangBuilder),
+                ('build-os-release.py', 'emberbsd_sdk.os_release_builder.OSReleaseBuilder', FixtureRelease)):
+            for family, stage, expected in (('clang', True, 0), ('clang', False, 1), ('gcc', True, 1)):
+                with self.subTest(script=script_name, family=family, stage=stage):
+                    values = dict(original, **{'compiler-family': family})
+                    if not stage:
+                        values.pop('llvm-runtime-stage')
+                        values.pop('llvm-bootstrap-stage')
+                    if script_name == 'build-os-release.py':
+                        values['os-source'] = values.pop('os')
+                        values.pop('target')
+                        values['profile'] = 'aarch64-sysroot'
+                    argv = [str(SDK_SOURCE / 'scripts' / script_name)]
+                    for key, value in values.items():
+                        argv.extend(['--' + key, str(value)])
+                    argv.append('--plan')
+                    stdout, stderr = io.StringIO(), io.StringIO()
+                    with patch(module, fixture_class), patch.object(sys, 'argv', argv), \
+                            contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), \
+                            self.assertRaises(SystemExit) as result:
+                        runpy.run_path(argv[0], run_name='__main__')
+                    self.assertEqual(result.exception.code, expected, stderr.getvalue())
+                    if expected:
+                        self.assertIn('--runtime-work', stderr.getvalue())
+                    else:
+                        self.assertEqual(json.loads(stdout.getvalue())['qualification'], 'not-built')
+
     def test_byacc_source_requires_supported_os_producer(self):
         builder = SysrootBuilder({})
         builder.paths = {'os': str(self.root / 'os'), 'byacc-source': '/prepared/byacc',

@@ -676,6 +676,12 @@ class SysrootBuilder:
         if selected != self.paths['diffutils-source']:
             raise SDKError('selected OS does not support EMBER_DIFFUTILS_SOURCE')
 
+    def require_runtime_work(self):
+        if (not self.options.get('runtime-work') and
+                (self.compiler_family() == 'gcc' or
+                 (not self.options.get('llvm-runtime-stage') and not hasattr(self, 'llvm_phase')))):
+            raise SDKError('--runtime-work is required for GCC or when building the LLVM runtime')
+
     def preflight(self):
         process.require_posix()
         if type(self.options.get('base-cxx', False)) is not bool:
@@ -683,6 +689,7 @@ class SysrootBuilder:
         clang = self.compiler_family() == 'clang'
         if self.options.get('base-cxx', False) and not clang:
             raise SDKError('base C++ aliases require the selected Clang runtime')
+        self.require_runtime_work()
         self.target = target_definition(self.options.get('target'))
         jobs = self.options.get('jobs')
         if not isinstance(jobs, str) or re.fullmatch('[1-9][0-9]*', jobs) is None:
@@ -1054,6 +1061,7 @@ class SysrootBuilder:
                                  exclude=(self.RECEIPT, self.MARKER, self.LOG))
 
     def run(self):
+        self.require_runtime_work()
         if (self.compiler_family() == 'clang' and not hasattr(self, 'llvm_phase') and
                 not self.options.get('llvm-runtime-stage')):
             from .llvm_sysroot import LLVMCoordinator

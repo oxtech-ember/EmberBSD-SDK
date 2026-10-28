@@ -19,8 +19,10 @@ class UniqueOption(argparse.Action):
 
 def main():
     parser = argparse.ArgumentParser(description='Build an EmberBSD OS sysroot with a native Ports prefix.')
-    for name in ('sdk', 'os', 'ports', 'compiler', 'runtime-work', 'target', 'jobs', 'sdk-source', 'libedit-source', 'host-prefix', 'host-binutils'):
+    for name in ('sdk', 'os', 'ports', 'compiler', 'target', 'jobs', 'sdk-source', 'libedit-source', 'host-prefix', 'host-binutils'):
         parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix'}.get(name))
+    parser.add_argument('--runtime-work', action=UniqueOption,
+                        help='required for GCC or to build an LLVM runtime; not needed with a selected LLVM stage')
     for name in ('libarchive-source', 'libevent-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source'):
         parser.add_argument('--' + name, action=UniqueOption, help='required for the OS base build')
     parser.add_argument('--source-patch', action=UniqueOption, help='selected patch executable inside the native prefix')
