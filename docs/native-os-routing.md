@@ -71,6 +71,11 @@ and set checks. GNU make and the native compiler triplet are selected from the
 same host prefix. For changed source inputs, `--diffutils-archive` and
 `--source-patch` allow the owner to compare a freshly prepared payload.
 
+The optional `--grep-source` selects the common Ports GNU grep source for
+sysroot, release and set checks. It uses the selected native GNU make and
+passes `EMBER_GREP_SOURCE` to the OS producer. When source inputs change,
+`--grep-archive` and `--source-patch` permit a fresh payload comparison.
+
 The optional `--ekermit-source` selects the common Ports E-Kermit source for
 the OS producer and passes `EMBER_EKERMIT_SOURCE` to sysroot, release and set
 checks. When source inputs changed, `--ekermit-archive` and `--source-patch`

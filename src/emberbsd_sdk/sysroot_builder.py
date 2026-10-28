@@ -156,7 +156,7 @@ class SysrootBuilder:
         self.native_contract_sha256 = inventory.sha256_file(contract)
         _, _, roles = native_os_routing.read_native_os_contract(contract, sha256=self.native_contract_sha256)
         self.native_contract = contract
-        if self.options.get('texinfo-source') or self.options.get('rcs-source') or self.options.get('diffutils-source'):
+        if self.options.get('texinfo-source') or self.options.get('rcs-source') or self.options.get('diffutils-source') or self.options.get('grep-source'):
             roles = roles | {'gmake'}
         return native_toolset.load_host_prefix(self.options['host-prefix'], required_roles=roles | {'python'},
             compiler_family=self.options.get('host-compiler-family', 'clang'))
@@ -428,6 +428,7 @@ class SysrootBuilder:
                                                                   'EMBER_TEXINFO_SOURCE=',
                                                                   'EMBER_RCS_SOURCE=',
                                                                   'EMBER_DIFFUTILS_SOURCE=',
+                                                                  'EMBER_GREP_SOURCE=',
                                                                   'EMBER_EKERMIT_SOURCE=',
                                                                   'HOST_GMAKE=',
                                                                   'EMBER_HOST_GNU_TRIPLE='))]
@@ -522,6 +523,7 @@ class SysrootBuilder:
             ('texinfo', 'devel/gtexinfo', ['scripts/source-inputs/texinfo/source.py']),
             ('rcs', 'devel/rcs', ['scripts/source-inputs/rcs/source.py']),
             ('diffutils', 'devel/diffutils', ['scripts/source-inputs/diffutils/source.py']),
+            ('grep', 'textproc/grep', ['scripts/source-inputs/grep/source.py']),
             ('ekermit', 'comms/ekermit', ['scripts/source-inputs/ekermit/source.py']),
             ('x11', 'netbsd/xsrc', ['scripts/source-inputs/xsrc/source.py']),
         ):
@@ -535,9 +537,9 @@ class SysrootBuilder:
                 command += ['verify', self.paths[name + '-source'], '--sdk-source', self.paths['sdk-source'], '--git', self.git_command]
             else:
                 command += ['--sdk-source', self.paths['sdk-source'], '--git', self.git_command, 'verify-source', '--source', self.paths[name + '-source']]
-            if name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'ekermit') and patch:
+            if name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit') and patch:
                 command += ['--patch', patch]
-            if name in ('libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'ekermit') and self.options.get(name + '-archive'):
+            if name in ('libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit') and self.options.get(name + '-archive'):
                 archive = paths.canonical_existing(self.options[name + '-archive'])
                 paths.regular_file(archive)
                 command += ['--archive', archive]
@@ -678,6 +680,29 @@ class SysrootBuilder:
         if selected != self.paths['diffutils-source']:
             raise SDKError('selected OS does not support EMBER_DIFFUTILS_SOURCE')
 
+    def require_grep_source_support(self):
+        if 'grep-source' not in self.paths:
+            return
+        root = self.paths['os']
+        env = dict(self.environment)
+        env.pop('EMBER_NATIVE_TOOLS', None)
+        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
+                   '-C', os.path.join(root, 'external/gpl2/grep/bin'), 'MAKECONF=/dev/null', '_SRC_TOP_=',
+                   'NETBSDSRCDIR=' + root, 'MACHINE=' + self.target['machine'],
+                   'MACHINE_ARCH=' + self.target['arch'], 'USETOOLS=yes',
+                   'TOOLDIR=' + self.paths['tools'],
+                   'EMBER_GREP_SOURCE=' + self.paths['grep-source'],
+                   'HOST_GMAKE=' + self.native.tool('gmake'),
+                   'HOST_SH=' + self.native.tool('sh'),
+                   'EMBER_HOST_GNU_TRIPLE=' + self.native.compiler['triplet'],
+                   '-V', '${GNU_SOURCE}']
+        try:
+            selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
+        except (SDKError, UnicodeError) as exc:
+            raise SDKError('selected OS cannot resolve the GREP producer') from exc
+        if selected != self.paths['grep-source']:
+            raise SDKError('selected OS does not support EMBER_GREP_SOURCE')
+
     def require_ekermit_source_support(self):
         if 'ekermit-source' not in self.paths:
             return
@@ -747,7 +772,7 @@ class SysrootBuilder:
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
-        input_names += [name for name in ('libarchive-source', 'libevent-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'ekermit-source', 'x11-source') if self.options.get(name)]
+        input_names += [name for name in ('libarchive-source', 'libevent-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'x11-source') if self.options.get(name)]
         if clang and self.llvm_phase != 'headers' and self.options.get('llvm-runtime-original-source'):
             input_names.append('llvm-runtime-original-source')
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
@@ -806,11 +831,12 @@ class SysrootBuilder:
         self.require_texinfo_source_support()
         self.require_rcs_source_support()
         self.require_diffutils_source_support()
+        self.require_grep_source_support()
         self.require_ekermit_source_support()
         self.sources['sdk'] = self.source(self.paths['sdk-source'], 'sdk')
         self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command)
         self.common_source_records = (self.verify_common_sources()
-                                      if any(name + '-source' in self.paths for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'ekermit', 'x11'))
+                                      if any(name + '-source' in self.paths for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'x11'))
                                       else {})
         self.python = self.python_identity()
         self.git(self.paths['os'], 'ls-files', '--error-unmatch', 'build.sh', 'Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk')
@@ -856,8 +882,8 @@ class SysrootBuilder:
         self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}',
                        f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
         self.flags += [f'EMBER_{name.upper()}_SOURCE={self.paths[name + "-source"]}'
-                       for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'ekermit') if name + '-source' in self.paths]
-        if 'texinfo-source' in self.paths or 'rcs-source' in self.paths or 'diffutils-source' in self.paths:
+                       for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit') if name + '-source' in self.paths]
+        if 'texinfo-source' in self.paths or 'rcs-source' in self.paths or 'diffutils-source' in self.paths or 'grep-source' in self.paths:
             self.flags += gnu_target_host_flags(self.native_selection)
         self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, native_toolset=self.native_selection, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
         self.signature['native_inputs'] = self.native_inputs
