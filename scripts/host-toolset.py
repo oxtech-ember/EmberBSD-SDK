@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-"""Validate one explicit native toolset and emit SDK selection JSON."""
+"""Read historical GCC16 native-toolset evidence.
+
+For current Clang or explicit GCC native-prefix selection, use the
+load_host_prefix API documented in docs/native-toolset.md.
+"""
 
 import argparse
 from pathlib import Path
@@ -18,7 +22,8 @@ from emberbsd_sdk.native_toolset import load_native_toolset
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
-    check = commands.add_parser('check', help='check pinned native producer evidence without executing tools')
+    check = commands.add_parser('check', help='check historical pinned GCC16 producer evidence without executing tools',
+                                description='Read historical GCC16 evidence; current builds use the native prefix API in docs/native-toolset.md.')
     check.add_argument('--descriptor', required=True)
     check.add_argument('--descriptor-sha256', required=True)
     check.add_argument('--producer-receipt', required=True)
