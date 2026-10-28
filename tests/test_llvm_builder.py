@@ -70,6 +70,49 @@ class LLVMBuilderTests(TemporaryCase):
             builder.require_byacc_source_support()
             run.assert_not_called()
 
+    def test_texinfo_source_requires_real_c_only_os_producer(self):
+        builder = SysrootBuilder({})
+        builder.paths = {'os': str(self.root / 'os'), 'texinfo-source': '/prepared/texinfo',
+                         'tools': '/build/tools'}
+        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
+        builder.environment = {}
+        from types import SimpleNamespace
+        builder.native = SimpleNamespace(tool=lambda name: '/host/bmake')
+        answer = lambda value: SimpleNamespace(stdout=value.encode())
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   return_value=answer('/old/dist\n--disable-perl-tools\n')):
+            with self.assertRaisesRegex(SDKError, 'does not support EMBER_TEXINFO_SOURCE'):
+                builder.require_texinfo_source_support()
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   return_value=answer('/prepared/texinfo\n--enable-perl-tools\n')):
+            with self.assertRaisesRegex(SDKError, 'does not support EMBER_TEXINFO_SOURCE'):
+                builder.require_texinfo_source_support()
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   return_value=answer('/prepared/texinfo\n--disable-perl-tools\n')) as run:
+            builder.require_texinfo_source_support()
+        self.assertIn('/os/external/gpl2/texinfo', run.call_args.args[0][5])
+        del builder.paths['texinfo-source']
+        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
+            builder.require_texinfo_source_support()
+            run.assert_not_called()
+
+    def test_optional_texinfo_source_is_verified_by_its_owner(self):
+        builder = SysrootBuilder({})
+        builder.paths = {'python': '/host/python', 'ports': '/ports',
+                         'sdk-source': '/sdk', 'texinfo-source': '/prepared/texinfo'}
+        builder.git_command = '/host/git'
+        builder.environment = {}
+        record = {'format': 'emberbsd-prepared-source', 'version': 1,
+                  'package': 'devel/gtexinfo'}
+        from types import SimpleNamespace
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
+            self.assertEqual(builder.verify_common_sources(), {'texinfo': record})
+        self.assertEqual(run.call_args.args[0], [
+            '/host/python', '-B', '/ports/scripts/source-inputs/texinfo/source.py',
+            '--sdk-source', '/sdk', '--git', '/host/git', 'verify-source',
+            '--source', '/prepared/texinfo'])
+
     def test_optional_byacc_source_is_verified_by_its_owner(self):
         builder = SysrootBuilder({})
         builder.paths = {'python': '/host/python', 'ports': '/ports',
@@ -790,6 +833,25 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.signature['common_sources']['byacc']['tree_sha256'] = 'a' * 64
         builder.paths['byacc-source'] = '/prepared/byacc-two'
         self.assertFalse(builder.compatible_context(record, tool_path))
+
+    def test_texinfo_target_source_does_not_change_native_tools_or_headers(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        tool_path = builder.paths['tools']
+        object_path = builder.paths['objects']
+        builder.llvm_phase = 'base'
+        base_record = {'signature': copy.deepcopy(builder.context_signature(object_path))}
+        builder.llvm_phase = 'headers'
+        tool_record = {'signature': copy.deepcopy(builder.context_signature(tool_path))}
+        header_record = {'signature': copy.deepcopy(builder.context_signature(object_path))}
+        builder.paths['texinfo-source'] = '/prepared/texinfo'
+        builder.signature['common_sources']['texinfo'] = {'tree_sha256': 'a' * 64}
+        builder.signature['flags'].append('EMBER_TEXINFO_SOURCE=/prepared/texinfo')
+        self.assertTrue(builder.compatible_context(tool_record, tool_path))
+        self.assertTrue(builder.compatible_context(header_record, object_path))
+        builder.llvm_phase = 'base'
+        self.assertFalse(builder.compatible_context(base_record, object_path))
 
     def test_header_objects_do_not_depend_on_byacc_source(self):
         builder, _ = self.builder()

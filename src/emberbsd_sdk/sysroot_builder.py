@@ -421,7 +421,8 @@ class SysrootBuilder:
                                           if not flag.startswith(('EMBER_LLVM_SOURCE=',
                                                                   'EMBER_LIBARCHIVE_SOURCE=',
                                                                   'EMBER_LIBEVENT_SOURCE=',
-                                                                  'EMBER_BYACC_SOURCE='))]
+                                                                  'EMBER_BYACC_SOURCE=',
+                                                                  'EMBER_TEXINFO_SOURCE='))]
             previous, selected = old['native_toolset'], new['native_toolset']
             if any(selected['tools'].get(role) != value
                    for role, value in previous['tools'].items()):
@@ -505,6 +506,7 @@ class SysrootBuilder:
             ('libarchive', 'archivers/libarchive', ['scripts/libarchive-source.py', 'verify']),
             ('libevent', 'devel/libevent', ['scripts/source-inputs/libevent/source.py']),
             ('byacc', 'devel/byacc', ['scripts/source-inputs/byacc/source.py']),
+            ('texinfo', 'devel/gtexinfo', ['scripts/source-inputs/texinfo/source.py']),
             ('x11', 'netbsd/xsrc', ['scripts/source-inputs/xsrc/source.py']),
         ):
             if name + '-source' not in self.paths:
@@ -517,9 +519,9 @@ class SysrootBuilder:
                 command += ['verify', self.paths[name + '-source'], '--sdk-source', self.paths['sdk-source'], '--git', self.git_command]
             else:
                 command += ['--sdk-source', self.paths['sdk-source'], '--git', self.git_command, 'verify-source', '--source', self.paths[name + '-source']]
-            if name in ('libarchive', 'libevent', 'byacc') and patch:
+            if name in ('libarchive', 'libevent', 'byacc', 'texinfo') and patch:
                 command += ['--patch', patch]
-            if name in ('libevent', 'byacc') and self.options.get(name + '-archive'):
+            if name in ('libevent', 'byacc', 'texinfo') and self.options.get(name + '-archive'):
                 archive = paths.canonical_existing(self.options[name + '-archive'])
                 paths.regular_file(archive)
                 command += ['--archive', archive]
@@ -575,6 +577,28 @@ class SysrootBuilder:
             if selected != self.paths['byacc-source']:
                 raise SDKError(f'selected OS does not support EMBER_BYACC_SOURCE for {producer}')
 
+    def require_texinfo_source_support(self):
+        if 'texinfo-source' not in self.paths:
+            return
+        root = self.paths['os']
+        env = dict(self.environment)
+        env.pop('EMBER_NATIVE_TOOLS', None)
+        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
+                   '-C', os.path.join(root, 'external/gpl2/texinfo'), 'MAKECONF=/dev/null', '_SRC_TOP_=',
+                   'NETBSDSRCDIR=' + root, 'MACHINE=' + self.target['machine'],
+                   'MACHINE_ARCH=' + self.target['arch'], 'USETOOLS=yes',
+                   'TOOLDIR=' + self.paths['tools'],
+                   'EMBER_TEXINFO_SOURCE=' + self.paths['texinfo-source'],
+                   '-V', '${GNU_SOURCE}', '-V', '${GNU_CONFIGURE_ARGS}']
+        try:
+            output = process.capture(command, env=env).stdout.decode('utf-8').splitlines()
+            flags = shlex.split(output[1]) if len(output) == 2 else []
+        except (SDKError, UnicodeError, ValueError) as exc:
+            raise SDKError('selected OS cannot resolve the Texinfo C-only producer') from exc
+        if (len(output) != 2 or output[0] != self.paths['texinfo-source'] or
+                '--disable-perl-tools' not in flags or '--enable-perl-tools' in flags):
+            raise SDKError('selected OS does not support EMBER_TEXINFO_SOURCE in C-only mode')
+
     def preflight(self):
         process.require_posix()
         if type(self.options.get('base-cxx', False)) is not bool:
@@ -618,7 +642,7 @@ class SysrootBuilder:
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
-        input_names += [name for name in ('libarchive-source', 'libevent-source', 'byacc-source', 'x11-source') if self.options.get(name)]
+        input_names += [name for name in ('libarchive-source', 'libevent-source', 'byacc-source', 'texinfo-source', 'x11-source') if self.options.get(name)]
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
                         if clang else ['runtime-work', 'gcc-archive', 'pkgsrc'])
         if clang and self.llvm_phase == 'final':
@@ -672,10 +696,11 @@ class SysrootBuilder:
         paths.regular_file(os.path.join(self.paths['ports'], PRODUCER))
         self.sources = {name: self.source(self.paths[name], name) for name in ('os', 'ports')}
         self.require_byacc_source_support()
+        self.require_texinfo_source_support()
         self.sources['sdk'] = self.source(self.paths['sdk-source'], 'sdk')
         self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command)
         self.common_source_records = (self.verify_common_sources()
-                                      if any(name + '-source' in self.paths for name in ('libarchive', 'libevent', 'byacc', 'x11'))
+                                      if any(name + '-source' in self.paths for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'x11'))
                                       else {})
         self.python = self.python_identity()
         self.git(self.paths['os'], 'ls-files', '--error-unmatch', 'build.sh', 'Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk')
@@ -718,7 +743,7 @@ class SysrootBuilder:
         self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}',
                        f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
         self.flags += [f'EMBER_{name.upper()}_SOURCE={self.paths[name + "-source"]}'
-                       for name in ('libarchive', 'libevent', 'byacc') if name + '-source' in self.paths]
+                       for name in ('libarchive', 'libevent', 'byacc', 'texinfo') if name + '-source' in self.paths]
         self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, native_toolset=self.native_selection, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
         self.signature['native_inputs'] = self.native_inputs
         self.signature['compiler_family'] = self.compiler_family()

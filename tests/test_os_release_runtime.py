@@ -9,6 +9,16 @@ from emberbsd_sdk.os_release_builder import producer_commands
 
 
 class ReleaseRuntimeSequenceTests(unittest.TestCase):
+    def test_optional_texinfo_source_reaches_release_commands(self):
+        paths = {name: '/sdk/' + name for name in (
+            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
+            'libedit-source', 'texinfo-source', 'objects', 'tools', 'destination', 'os')}
+        host = {'cc': {'path': '/sdk/host/bin/clang'}, 'c++': {'path': '/sdk/host/bin/clang++'}}
+        _, commands = producer_commands('aarch64', paths, host, 'a' * 40, 1, '2',
+                                        '/sdk/host/bin/sh', compiler_family='clang', base_cxx=True)
+        for command in commands:
+            self.assertIn('EMBER_TEXINFO_SOURCE=/sdk/texinfo-source', command)
+
     def test_optional_byacc_source_reaches_release_commands(self):
         paths = {name: '/sdk/' + name for name in (
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',

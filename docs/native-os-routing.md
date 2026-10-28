@@ -43,10 +43,17 @@ queries the OS base yacc and host yacc makefiles and requires each effective
 `IDIST` to select that source. Without the option, older OS revisions retain
 their existing behavior.
 
-For common libarchive, libevent and byacc sources prepared with package-scoped
+The optional `--texinfo-source` selects the Ports prepared Texinfo source for
+the OS C-only producer and passes `EMBER_TEXINFO_SOURCE`. The SDK queries the
+actual producer for its effective source and C-only configure option; older OS
+revisions that do not select this source are refused when the option is used. Its omitted Perl test
+fixture makes it unsuitable for a full Perl/text producer. Native makeinfo and
+install-info come from the selected host prefix.
+
+For common libarchive, libevent, byacc and Texinfo sources prepared with package-scoped
 identity, select `--source-patch` inside the host prefix. To compare libevent
-or byacc records when source inputs changed, also select
-the current `--libevent-archive` or `--byacc-archive`; the owner checks the
+byacc or Texinfo records when source inputs changed, also select
+the corresponding `--libevent-archive`, `--byacc-archive` or `--texinfo-archive`; the owner checks the
 archive and full patch set before comparing the prepared payload.
 
 The sysroot builder accepts `--llvm-objects` and `--llvm-stages` to select
