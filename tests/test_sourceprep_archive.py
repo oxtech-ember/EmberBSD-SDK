@@ -65,6 +65,49 @@ class SourceArchiveTests(TemporaryCase):
                                capture_output=True, check=False)
         self.assertEqual(stale.returncode, 1, stale.stderr.decode(errors='replace'))
 
+    def test_flat_layout_retains_archive_checks(self):
+        def flat(rows):
+            with tarfile.open(self.archive, "w") as packed:
+                for name, kind in rows:
+                    member = tarfile.TarInfo(name)
+                    if kind == "link":
+                        member.type = tarfile.SYMTYPE
+                        member.linkname = "elsewhere"
+                        packed.addfile(member)
+                    else:
+                        member.size = 1
+                        packed.addfile(member, io.BytesIO(b"x"))
+        flat([("C/file.c", "file"), ("CPP/file.cpp", "file")])
+        self.extract(layout="flat")
+        self.assertEqual((self.output / "source/C/file.c").read_bytes(), b"x")
+        self.assertEqual((self.output / "source/CPP/file.cpp").read_bytes(), b"x")
+        for rows in ([ ("../escape", "file") ], [("C/alias", "link")],
+                     [("C/A", "file"), ("C/a", "file")]):
+            with self.subTest(rows=rows):
+                flat(rows)
+                with self.assertRaises(SDKError):
+                    self.extract(layout="flat")
+
+    def test_flat_layout_default_limits_metadata_and_mtime(self):
+        with tarfile.open(self.archive, "w") as packed:
+            for name, data, mode, mtime in (("C/a.c", b"a", 0o755, 1643857092),
+                                            ("CPP/CVS/Root", b"x", 0o644, 1643857092)):
+                member = tarfile.TarInfo(name)
+                member.mode, member.mtime, member.size = mode, mtime, len(data)
+                packed.addfile(member, io.BytesIO(data))
+        with self.assertRaises(SDKError):
+            self.extract()
+        with self.assertRaises(SDKError):
+            self.extract(layout="unknown")
+        with self.assertRaises(SDKError):
+            self.extract(layout="flat", max_members=1)
+        (self.output / "source/C/a.c").unlink()
+        self.extract(layout="flat", skip_directories=("CVS",))
+        source = self.output / "source/C/a.c"
+        self.assertEqual(source.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(source.stat().st_mtime_ns, 1643857092 * 10**9)
+        self.assertFalse((self.output / "source/CPP/CVS").exists())
+
     def test_explicit_components_and_bounds(self):
         self.pack([('llvm/cmake/config.cmake', b'yes', None),
                    ('llvm/lib/unselected.cpp', b'unselected', None),

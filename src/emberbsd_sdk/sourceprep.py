@@ -18,6 +18,7 @@ MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
 SOURCE_PREPARATION_API = 2
 # extract_archive accepts skip_directories (compatible API 2 extension).
 ARCHIVE_SKIP_DIRECTORIES_API = 1
+ARCHIVE_FLAT_LAYOUT_API = 1
 
 
 def archive_hashes(data):
@@ -29,11 +30,12 @@ def archive_hashes(data):
 
 def extract_archive(archive, destination, root_name, label, *, components=None,
                     max_members=MAX_ARCHIVE_MEMBERS, max_bytes=MAX_EXTRACTED_BYTES,
-                    skip_directories=()):
+                    skip_directories=(), layout='rooted'):
     """Extract selected source components with explicit resource bounds.
 
     Defaults preserve the original regular-file-only contract. Links and special
     files remain unsupported, including in explicitly selected components.
+    layout='flat' places a flat archive under root_name.
     skip_directories names exact path components below the root, such as VCS
     metadata directories, whose members are omitted before any other check.
     """
@@ -42,6 +44,8 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
                 '\\' not in name and all(p not in ('', '.', '..') for p in name.split('/')) and
                 not any(ord(c) < 32 or ord(c) == 127 for c in name) and
                 unicodedata.normalize('NFC', name) == name)
+    if layout not in ('rooted', 'flat'):
+        raise SDKError(f'invalid {label} archive layout')
     if not safe_name(root_name) or '/' in root_name:
         raise SDKError(f'invalid {label} archive root')
     if (type(max_members) is not int or max_members < 1 or
@@ -82,8 +86,11 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
                 raise SDKError(f'{label} archive has too many members')
             name = member.name.rstrip('/')
             parts = name.split('/')
-            if parts[0] != root_name or not safe_name(name):
+            if not safe_name(name) or (layout == 'rooted' and parts[0] != root_name):
                 raise SDKError(f'unsafe {label} archive path')
+            if layout == 'flat':
+                parts = [root_name, *parts]
+                name = '/'.join(parts)
             relative = '/'.join(parts[1:])
             if skip_directories.intersection(parts[1:]):
                 continue
