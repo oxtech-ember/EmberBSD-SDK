@@ -80,8 +80,10 @@ of `--host-compiler-family`. Their [LLVM coordinator](llvm-runtime.md) obtains t
 first runtime from OS headers, then builds libc/CRT and the full C++ runtime.
 It never imports the GCC runtime or chooses GCC automatically. Use
 `--compiler-family gcc` only when intentionally building the GCC alternative.
-Clang sysroot receipts use version 3, transfer manifests version 2, and OS release
-profiles version 4. Historical GCC schemas retain their original meaning.
+Clang sysroot receipts use version 3 and transfer manifests version 2. OS release
+profiles use version 5 by default when the common C++ runtime is installed in
+the base; an explicit `--no-base-cxx` selects the version 4 build-only layout.
+Historical GCC schemas retain their original meaning.
 These format checks establish input consistency, not target execution or ABI
 acceptance; the completed build still needs the relevant target checks.
 Changing the compiler does not by itself change the C++ library or target ABI.
