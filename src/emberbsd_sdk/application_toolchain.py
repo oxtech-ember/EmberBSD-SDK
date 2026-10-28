@@ -14,8 +14,9 @@ IMPORT_RECORD = '.prebuild-sdk-import.json'
 def load_clang_runtime(sysroot, *, target):
     """Read the existing build/import record and verify its installed runtime.
 
-    Additional package files outside the runtime prefix are allowed. This
-    does not verify those packages or establish target execution acceptance.
+    Additional package files outside the runtime prefix and regular files in
+    its resource include directory are allowed. This does not verify those
+    additions or establish target execution acceptance.
     """
     root = paths.canonical_existing(sysroot)
     paths.real_directory(root)

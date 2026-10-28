@@ -185,7 +185,12 @@ def validate_install(root, record, *, target=None, required_components=FULL_COMP
         paths.real_directory(current)
     rows = inventory.snapshot_tree(os.path.join(root, prefix), machine=record['elf_machine'])
     rows = {prefix + '/' + name:row for name, row in rows.items()}
-    _require(_payload(rows) == (record['files'], record['symlinks']), 'LLVM runtime installed inventory changed')
+    files, symlinks = _payload(rows)
+    resource_include = os.path.relpath(runtime_paths(root, record)['llvm-resource'], root) + '/include/'
+    _require(all(files.get(name) == digest for name, digest in record['files'].items()) and
+             symlinks == record['symlinks'] and
+             all(name.startswith(resource_include) for name in files.keys() - record['files'].keys()),
+             'LLVM runtime installed inventory changed')
     _validate_artifacts(root, record)
     return record
 

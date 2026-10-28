@@ -176,7 +176,12 @@ compiler options, runtime behavior, ABI compatibility or deployment closure.
 `validate_install(sysroot, record, target=..., required_components=...)` checks
 the recorded runtime subtree after installation or transfer while allowing
 unrelated packages elsewhere in the sysroot. Every prefix ancestor must be a
-real directory. `runtime_paths(root, record)` derives the target resource and
+real directory. All declared files and links must match. Extra regular files
+are allowed only in the resource `include` directory derived from the builtins
+path; extra links or other files in the runtime prefix are rejected. This
+permits separately installed compiler headers without establishing their
+provenance. Stage validation still requires an exact inventory.
+`runtime_paths(root, record)` derives the target resource and
 static unwind paths from measured artifact locations. Completed application
 consumers use the [shared compiler commands](application-toolchain.md).
 

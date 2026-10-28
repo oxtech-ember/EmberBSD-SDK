@@ -159,6 +159,51 @@ class LLVMRuntimeTests(LLVMRuntimeFixture):
         with self.assertRaises(SDKError):
             llvm_runtime.validate_stage(self.stage)
 
+    def test_installed_runtime_allows_only_extra_regular_resource_headers(self):
+        self.full()
+        include = self.prefix / 'lib/clang/23/include'
+        include.mkdir(parents=True)
+        header = include / 'stddef.h'
+        header.write_text('compiler resource header\n')
+        self.assertEqual(llvm_runtime.validate_install(self.stage, self.record), self.record)
+        with self.assertRaisesRegex(SDKError, 'inventory'):
+            llvm_runtime.validate_stage(self.stage)
+        extra = self.write('stage/usr/pkg/llvm/lib/other', 'unexpected')
+        with self.assertRaisesRegex(SDKError, 'inventory'):
+            llvm_runtime.validate_install(self.stage, self.record)
+        extra.unlink()
+        sibling = self.write('stage/usr/pkg/llvm/lib/clang/23/include-other/extra.h', 'unexpected')
+        with self.assertRaisesRegex(SDKError, 'inventory'):
+            llvm_runtime.validate_install(self.stage, self.record)
+        sibling.unlink()
+        link = include / 'alias.h'
+        link.symlink_to('stddef.h')
+        with self.assertRaisesRegex(SDKError, 'inventory'):
+            llvm_runtime.validate_install(self.stage, self.record)
+        link.unlink()
+        link.symlink_to(self.root)
+        with self.assertRaises(SDKError):
+            llvm_runtime.validate_install(self.stage, self.record)
+
+    def test_installed_runtime_recorded_files_and_links_remain_immutable(self):
+        self.full()
+        declared = self.prefix / 'include/c++/v1/vector'
+        original = declared.read_bytes()
+        declared.write_bytes(original + b'changed')
+        with self.assertRaisesRegex(SDKError, 'inventory'):
+            llvm_runtime.validate_install(self.stage, self.record)
+        declared.unlink()
+        with self.assertRaisesRegex(SDKError, 'inventory'):
+            llvm_runtime.validate_install(self.stage, self.record)
+        declared.write_bytes(original)
+        link = self.prefix / 'lib/libc++.so'
+        link.unlink()
+        with self.assertRaisesRegex(SDKError, 'inventory'):
+            llvm_runtime.validate_install(self.stage, self.record)
+        link.symlink_to('libunwind.so.1')
+        with self.assertRaisesRegex(SDKError, 'inventory'):
+            llvm_runtime.validate_install(self.stage, self.record)
+
     def test_portable_identity_rejects_mixed_or_unsafe_inputs(self):
         for field, value in (('compiler_family', 'gcc'), ('triplet', 'x86_64--netbsd'),
                              ('elf_machine', 62), ('prefix', '../outside'),
