@@ -588,7 +588,7 @@ class SysrootBuilder:
         env = dict(self.environment)
         env.pop('EMBER_NATIVE_TOOLS', None)
         command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
-                   '-C', os.path.join(root, 'external/gpl2/texinfo'), 'MAKECONF=/dev/null', '_SRC_TOP_=',
+                   '-C', os.path.join(root, 'external/gpl2/texinfo/bin'), 'MAKECONF=/dev/null', '_SRC_TOP_=',
                    'NETBSDSRCDIR=' + root, 'MACHINE=' + self.target['machine'],
                    'MACHINE_ARCH=' + self.target['arch'], 'USETOOLS=yes',
                    'TOOLDIR=' + self.paths['tools'],

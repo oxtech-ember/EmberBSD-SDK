@@ -91,7 +91,7 @@ class LLVMBuilderTests(TemporaryCase):
         with patch('emberbsd_sdk.sysroot_builder.process.capture',
                    return_value=answer('/prepared/texinfo\n--disable-perl-tools\n')) as run:
             builder.require_texinfo_source_support()
-        self.assertIn('/os/external/gpl2/texinfo', run.call_args.args[0][5])
+        self.assertIn('/os/external/gpl2/texinfo/bin', run.call_args.args[0][5])
         self.assertIn('HOST_GMAKE=/host/gmake', run.call_args.args[0])
         self.assertIn('HOST_SH=/host/sh', run.call_args.args[0])
         self.assertIn('EMBER_HOST_GNU_TRIPLE=aarch64-apple-darwin27.0.0', run.call_args.args[0])
