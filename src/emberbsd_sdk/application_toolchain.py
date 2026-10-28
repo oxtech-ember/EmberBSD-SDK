@@ -73,7 +73,7 @@ def clang_application_commands(compiler, sysroot, runtime_record, *, runtime_roo
     # Host clang resource headers supply freestanding C builtins when the target
     # resource-dir has only compiler-rt. For C++ they must follow libc++ so
     # <cstddef> finds libc++'s <stddef.h> before the C resource header.
-    common = ['--sysroot='+root, '-resource-dir='+selected['llvm-resource']]
+    common = ['--sysroot='+root, '-resource-dir='+selected['llvm-resource'], '-nobuiltininc']
     resource_includes = ['-isystem', compiler['resource_dir']+'/include']
     for role in ('cc','cxx'):
         # --ld-path is a link operation flag. Clang diagnoses it under -c -Werror.

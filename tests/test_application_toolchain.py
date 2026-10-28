@@ -75,6 +75,8 @@ class ApplicationToolchainTests(TemporaryCase):
                         compile['cxx'].index(self.compiler['resource_dir']+'/include'))
         self.assertIn(self.compiler['resource_dir']+'/include', compile['cc'])
         cxx_headers = str(self.sysroot/self.runtime['artifacts']['cxx_headers'])
+        for role in ('cc', 'cxx', 'cpp'):
+            self.assertIn('-nobuiltininc', compile[role])
         resource_include = self.compiler['resource_dir']+'/include'
         self.assertIn(resource_include, compile['cxx'])
         self.assertLess(compile['cxx'].index(cxx_headers), compile['cxx'].index(resource_include))
