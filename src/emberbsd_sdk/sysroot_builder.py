@@ -3,6 +3,7 @@
 # Origin: EmberBSD; AI-assisted OS and Ports build orchestration.
 """Checked separate-stage OS sysroot builder. No build occurs on import."""
 
+import atexit
 import copy
 import hashlib
 import itertools
@@ -15,11 +16,24 @@ import shutil
 import signal
 import stat
 import sysconfig
+import tempfile
 import time
 from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, process, provenance, workspace
 from .errors import SDKError, ProcessOwnershipError
 from .native_os_routing import gettext_target_host_flags, gnu_target_host_flags, native_host_flags, native_path
 from .targets import TARGETS, target_definition
+
+# Shared pkgsrc exports of this process, so that every source owner check of
+# one run (preflight, before and after the build, and each LLVM phase) uses
+# a single export.  Keyed by Ports root, Ports commit, pkgsrc commit and
+# patch tool; each owner also binds the export to its current Ports inputs.
+_SHARED_PKGSRC_EXPORTS = {}
+
+
+def _remove_shared_pkgsrc_exports():
+    for directory in _SHARED_PKGSRC_EXPORTS.values():
+        shutil.rmtree(os.path.dirname(directory), ignore_errors=True)
+    _SHARED_PKGSRC_EXPORTS.clear()
 
 NATIVE_INPUTS = ('native-toolset', 'native-toolset-sha256',
                  'native-producer-receipt', 'native-producer-receipt-sha256')
@@ -537,6 +551,34 @@ class SysrootBuilder:
             raise SDKError('common LLVM source and selected compiler differ')
         return record
 
+    SHARED_EXPORT_SCRIPT = 'scripts/pkgsrc-shared-export.py'
+    SHARED_EXPORT_OWNERS = ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi')
+
+    def shared_pkgsrc_export(self, patch):
+        """Return the one pkgsrc export of this run, or None for older Ports."""
+        script = os.path.join(self.paths['ports'], self.SHARED_EXPORT_SCRIPT)
+        if not os.path.isfile(script):
+            return None
+        key = (self.paths['ports'], self.git(self.paths['ports'], 'rev-parse', 'HEAD'),
+               self.git(self.paths['ports'], 'rev-parse', 'HEAD:upstream/pkgsrc'),
+               patch, inventory.sha256_file(patch))
+        directory = _SHARED_PKGSRC_EXPORTS.get(key)
+        if directory is not None:
+            return directory
+        parent = tempfile.mkdtemp(prefix='.pkgsrc-shared-export-')
+        directory = os.path.join(parent, 'export')
+        try:
+            process.capture([self.paths['python'], '-B', script, directory,
+                             '--sdk-source', self.paths['sdk-source'], '--git', self.git_command,
+                             '--patch', patch], env=self.environment)
+        except BaseException:
+            shutil.rmtree(parent, ignore_errors=True)
+            raise
+        if not _SHARED_PKGSRC_EXPORTS:
+            atexit.register(_remove_shared_pkgsrc_exports)
+        _SHARED_PKGSRC_EXPORTS[key] = directory
+        return directory
+
     def verify_common_sources(self):
         result = {}
         patch = self.options.get('source-patch')
@@ -545,6 +587,7 @@ class SysrootBuilder:
             selector = native_toolset.load_host_prefix(self.native.bundle_root, required_roles={'gpatch'})
             if patch != self.executable(selector.tool('gpatch')):
                 raise SDKError('source patch differs from the selected native gpatch')
+        shared = None
         for name, package, argv in (
             ('libarchive', 'archivers/libarchive', ['scripts/libarchive-source.py', 'verify']),
             ('libevent', 'devel/libevent', ['scripts/source-inputs/libevent/source.py']),
@@ -578,6 +621,11 @@ class SysrootBuilder:
                 command += ['--sdk-source', self.paths['sdk-source'], '--git', self.git_command, 'verify-source', '--source', self.paths[name + '-source']]
             if name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'ntp', 'libopts', 'gettext', 'libxml2') and patch:
                 command += ['--patch', patch]
+                if name in self.SHARED_EXPORT_OWNERS:
+                    if shared is None:
+                        shared = self.shared_pkgsrc_export(patch) or ''
+                    if shared:
+                        command += ['--pkgsrc-export', shared]
             if name in ('libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'ntp', 'gettext', 'libxml2') and self.options.get(name + '-archive'):
                 archive = paths.canonical_existing(self.options[name + '-archive'])
                 paths.regular_file(archive)

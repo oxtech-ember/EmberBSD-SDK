@@ -88,6 +88,15 @@ Python is passed only for this Waf producer. When preparation inputs change,
 payload. The OS producer supplies its target configuration independently of
 the machine used for runtime tests.
 
+With `--source-patch` and a Ports revision that provides
+`scripts/pkgsrc-shared-export.py`, the SDK exports pkgsrc once per process
+for the libarchive, libevent, byacc, texinfo, RCS, diffutils, grep,
+E-Kermit and nvi owners (preflight, the checks before and after the build, and
+every LLVM phase) and passes it as `--pkgsrc-export`. The export is keyed by
+the Ports commit, the pinned pkgsrc commit and the patch tool; each owner
+also checks it against its current Ports inputs. Older Ports revisions keep
+one export per owner.
+
 The sysroot builder accepts `--llvm-objects` and `--llvm-stages` to select
 LLVM coordinator subdirectories inside the existing SDK's `obj` and `stages`
 directories when a different build context must be retained alongside an

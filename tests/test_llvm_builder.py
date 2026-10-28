@@ -568,6 +568,73 @@ class LLVMBuilderTests(TemporaryCase):
             '--sdk-source', '/sdk', '--git', '/host/git', 'verify-source',
             '--source', '/prepared/byacc'])
 
+    def test_source_owners_share_one_pkgsrc_export_per_run(self):
+        from types import SimpleNamespace
+        from emberbsd_sdk import sysroot_builder
+        ports = self.root / 'ports'
+        script = ports / SysrootBuilder.SHARED_EXPORT_SCRIPT
+        write(script, '# shared export fixture\n')
+        tool = self.root / 'host/bin/gpatch'
+        write(tool, '#!/bin/sh\n', 0o755)
+        builder = SysrootBuilder({'source-patch': str(tool)})
+        builder.paths = {'python': '/host/python', 'ports': str(ports), 'sdk-source': '/sdk',
+                         'libarchive-source': '/prepared/libarchive', 'byacc-source': '/prepared/byacc',
+                         'rcs-source': '/prepared/rcs', 'nvi-source': '/prepared/nvi',
+                         'tdb-source': '/prepared/tdb'}
+        builder.git_command = '/host/git'
+        builder.environment = {}
+        builder.native = SimpleNamespace(bundle_root='/host')
+        commits = {'HEAD': 'a' * 40, 'HEAD:upstream/pkgsrc': '1' * 40}
+        packages = {'libarchive-source.py': 'archivers/libarchive', 'byacc': 'devel/byacc', 'rcs': 'devel/rcs',
+                    'nvi': 'editors/nvi', 'tdb': 'databases/tdb'}
+        exports, owners = [], []
+        def capture(command, **kwargs):
+            if command[2] == str(script):
+                exports.append(command)
+                return SimpleNamespace(stdout=b'{}')
+            owners.append(command)
+            name = Path(command[2]).name if command[2].endswith('libarchive-source.py') else Path(command[2]).parent.name
+            return SimpleNamespace(stdout=json.dumps({'format': 'emberbsd-prepared-source', 'version': 1,
+                                                      'package': packages[name]}))
+        self.addCleanup(sysroot_builder._remove_shared_pkgsrc_exports)
+        with patch.object(sysroot_builder.native_toolset, 'load_host_prefix',
+                          return_value=SimpleNamespace(tool=lambda role: str(tool))), \
+                patch.object(builder, 'git', side_effect=lambda root, *args: commits[args[-1]]), \
+                patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=capture):
+            # Preflight, before and after the build: one export for all of them.
+            for _ in range(3):
+                builder.verify_common_sources()
+            self.assertEqual(len(exports), 1)
+            self.assertEqual(exports[0][4:], ['--sdk-source', '/sdk', '--git', '/host/git', '--patch', str(tool.resolve())])
+            shared = exports[0][3]
+            self.assertEqual(len(owners), 15)
+            for command in owners:
+                self.assertIn('--patch', command)
+                if Path(command[2]).parent.name == 'tdb':
+                    # An owner without --pkgsrc-export support keeps its own export.
+                    self.assertNotIn('--pkgsrc-export', command)
+                else:
+                    self.assertEqual(command[command.index('--pkgsrc-export') + 1], shared)
+            # A later phase builder of the same process reuses it as well.
+            later = copy.copy(builder)
+            later.verify_common_sources()
+            self.assertEqual(len(exports), 1)
+            # Another Ports commit, pkgsrc commit or patch tool needs a new export.
+            for change in (lambda: commits.update({'HEAD': 'b' * 40}),
+                           lambda: commits.update({'HEAD:upstream/pkgsrc': '2' * 40}),
+                           lambda: tool.write_text('#!/bin/sh\n# other\n')):
+                change()
+                builder.verify_common_sources()
+            self.assertEqual(len(exports), 4)
+            self.assertEqual(len({command[3] for command in exports}), 4)
+            # Ports revisions without the shared exporter keep per-owner exports.
+            script.unlink()
+            owners.clear()
+            builder.verify_common_sources()
+            self.assertEqual(len(exports), 4)
+            self.assertTrue(all('--pkgsrc-export' not in command for command in owners))
+        shutil.rmtree(Path(shared).parent)
+
     def test_source_comparison_uses_selected_prefix_patch_and_archive(self):
         from types import SimpleNamespace
         prefix = self.root / 'host'
