@@ -33,6 +33,8 @@ def main():
     parser.add_argument('--gcc-archive', action=UniqueOption, help='required only for an explicit GCC runtime')
     parser.add_argument('--pkgsrc', action=UniqueOption, help='exported catalog for the explicit GCC runtime')
     parser.add_argument('--llvm-source', action=UniqueOption, help='common Ports prepared LLVM source')
+    parser.add_argument('--llvm-runtime-original-source', action=UniqueOption,
+                        help='prepared LLVM source used by a reused runtime')
     parser.add_argument('--llvm-runtime-stage', action=UniqueOption,
                         help='reuse a completed common LLVM runtime; otherwise build its prerequisites')
     parser.add_argument('--llvm-bootstrap-stage', action=UniqueOption,

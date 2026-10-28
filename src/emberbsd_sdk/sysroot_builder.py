@@ -303,9 +303,10 @@ class SysrootBuilder:
                 base = self.paths.get('llvm-runtime-base')
             reported = jsonio.loads_json(process.capture(self.runtime_command, env=self.environment).stdout)
             llvm_runtime.validate_identity(reported, target=self.options['target'], required_components=required)
+            recipe_check = ({} if 'llvm-runtime-original-source' in self.paths else
+                dict(ports=self.paths['ports'], ports_revision=reported['recipe']['ports_revision']))
             record = llvm_runtime.validate_stage(stage, target=self.options['target'],
-                required_components=required, ports=self.paths['ports'],
-                ports_revision=reported['recipe']['ports_revision'], base=base)
+                required_components=required, base=base, **recipe_check)
             if reported != record:
                 raise SDKError('LLVM runtime producer and shared validator disagree')
             if (record['llvm_version'] != self.compiler_record['version'] or
@@ -719,6 +720,8 @@ class SysrootBuilder:
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
         input_names += [name for name in ('libarchive-source', 'libevent-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'x11-source') if self.options.get(name)]
+        if clang and self.llvm_phase != 'headers' and self.options.get('llvm-runtime-original-source'):
+            input_names.append('llvm-runtime-original-source')
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
                         if clang else ['runtime-work', 'gcc-archive', 'pkgsrc'])
         if clang and self.llvm_phase == 'final':
@@ -805,6 +808,9 @@ class SysrootBuilder:
                 prefix = self.paths['runtime-prefix']
                 self.runtime_command = producer + ['verify', '--stage', stage, '--target', self.options['target'],
                     '--phase', 'full' if self.llvm_phase == 'final' else 'bootstrap', '--git', self.git_command]
+                if 'llvm-runtime-original-source' in self.paths:
+                    self.runtime_command += ['--source', self.paths['llvm-source'],
+                        '--original-source', self.paths['llvm-runtime-original-source']]
             selected_flags = llvm_flags(self.paths, phase=self.llvm_phase,
                                         base_cxx=self.options.get('base-cxx', False))
             replaced = {value.split('=', 1)[0] for value in selected_flags}

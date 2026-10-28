@@ -878,6 +878,18 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         with self.assertRaisesRegex(SDKError, 'recipe input changed'):
             builder.verify_runtime()
 
+    def test_runtime_original_source_is_forwarded_to_owner(self):
+        builder, runtime = self.builder()
+        builder.options['llvm-runtime-original-source'] = builder.options['llvm-source']
+        builder.preflight()
+        self.assertEqual(builder.runtime_command[builder.runtime_command.index('--original-source') + 1],
+                         builder.paths['llvm-runtime-original-source'])
+        self.assertEqual(builder.verify_runtime()['manifest'], runtime.record)
+        artifact = Path(builder.paths['llvm-runtime-stage']) / runtime.record['artifacts']['builtins']
+        artifact.write_bytes(artifact.read_bytes() + b'changed')
+        with self.assertRaises(SDKError):
+            builder.verify_runtime()
+
     def test_clang_transfer_is_explicit_and_preserves_historical_format(self):
         builder, runtime = self.builder()
         builder.options['base-cxx'] = False

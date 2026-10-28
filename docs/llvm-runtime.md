@@ -23,7 +23,11 @@ objects continue to depend on the selected LLVM runtime source.
 
 `--llvm-runtime-stage` explicitly reuses a completed full runtime and skips
 the prerequisite coordinator. Its LLVM version, target, source archive and recipe files must match the
-selected inputs. Select a runtime whose
+selected inputs. If source preparation selectors or the runtime CLI changed while
+the prepared payload and build remain equivalent, pass
+`--llvm-runtime-original-source` with the prepared source used by that runtime.
+The Ports owner compares both trees, patches and build behavior before reuse.
+Select a runtime whose
 ABI is compatible with the chosen OS, including libc, C++ ABI, TLS and unwinder;
 matching an OS commit alone does not establish compatibility. The manifest
 retains the OS revision that actually produced the runtime, which may differ
