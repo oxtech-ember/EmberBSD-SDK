@@ -3,7 +3,10 @@
 """Source component extraction without links or case collisions escaping a stage."""
 
 import io
+import os
+import subprocess
 import tarfile
+import unittest
 
 from test_core import TemporaryCase
 from emberbsd_sdk.errors import SDKError
@@ -29,6 +32,38 @@ class SourceArchiveTests(TemporaryCase):
 
     def extract(self, **options):
         extract_archive(self.archive, self.output, 'source', 'fixture', **options)
+
+    def timestamp_fixture(self):
+        with tarfile.open(self.archive, 'w') as packed:
+            # Archive order deliberately differs from build dependency order.
+            for name, data, mtime in (
+                ('generated', b'generated\n', 1643858263),
+                ('input', b'input\n', 1643857092),
+                ('Makefile', b'all: generated\ngenerated: input\n\t@false\n', 1643858264),
+            ):
+                member = tarfile.TarInfo('source/' + name)
+                member.size = len(data)
+                member.mtime = mtime
+                packed.addfile(member, io.BytesIO(data))
+        self.extract()
+        return self.output / 'source'
+
+    def test_archive_mtimes_preserve_generated_file_dependency_order(self):
+        root = self.timestamp_fixture()
+        self.assertEqual((root / 'input').stat().st_mtime_ns, 1643857092 * 10**9)
+        self.assertEqual((root / 'generated').stat().st_mtime_ns, 1643858263 * 10**9)
+
+    @unittest.skipUnless(os.environ.get('SOURCEPREP_TEST_GMAKE'), 'select GNU make')
+    def test_make_does_not_rebuild_newer_archived_output(self):
+        root = self.timestamp_fixture()
+        gmake = os.environ['SOURCEPREP_TEST_GMAKE']
+        result = subprocess.run([gmake, '-q', '-f', 'Makefile', 'all'], cwd=root,
+                                capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+        os.utime(root / 'generated', (1643857091, 1643857091))
+        stale = subprocess.run([gmake, '-q', '-f', 'Makefile', 'all'], cwd=root,
+                               capture_output=True, check=False)
+        self.assertEqual(stale.returncode, 1, stale.stderr.decode(errors='replace'))
 
     def test_explicit_components_and_bounds(self):
         self.pack([('llvm/cmake/config.cmake', b'yes', None),

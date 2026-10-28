@@ -105,6 +105,10 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
                 with source, path.open('xb') as output:
                     shutil.copyfileobj(source, output)
                 path.chmod(0o755 if member.mode & 0o111 else 0o644)
+                try:
+                    os.utime(path, (member.mtime, member.mtime))
+                except (OSError, OverflowError, ValueError) as exc:
+                    raise SDKError(f'invalid {label} archive timestamp') from exc
     if components is not None and matched != set(components):
         raise SDKError(f'{label} archive is missing selected source components')
 
