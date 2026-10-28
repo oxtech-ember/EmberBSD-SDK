@@ -143,6 +143,12 @@ class ApplicationToolchainTests(TemporaryCase):
         self.assertIn('-stdlib=libc++', commands['cxx'] + cxx_flags)
         self.assertNotIn('-stdlib=libc++', commands['cxx'])
         self.assertNotIn('-stdlib=libc++', commands['cc'] + flags)
+        search = application_toolchain.clang_application_runtime_rpath(self.runtime)
+        self.assertEqual(search['libraries'], ['libc++', 'libc++abi', 'libunwind'])
+        self.assertTrue(search['flags'] and set(search['flags']) <= set(flags))
+        without = application_toolchain.clang_application_link_flags(self.compiler, self.sysroot,
+            self.runtime, runtime_rpath=False)
+        self.assertEqual(without, [word for word in flags if word not in search['flags']])
 
     def test_application_bindings_select_language_runtime_only_at_link(self):
         directory = self.root/'application-bindings'
@@ -155,6 +161,12 @@ class ApplicationToolchainTests(TemporaryCase):
             self.assertFalse(any(word.startswith(('--ld-path=','--rtlib=','--unwindlib=','-stdlib=','-Wl,')) for word in compile))
             self.assertIn('--rtlib=compiler-rt', link)
             self.assertEqual('-stdlib=libc++' in link, role == 'cxx')
+            # The runtime search path is not a fixed link flag. The binding
+            # predicts it for C++ and keeps it only if the output needs it.
+            self.assertFalse(any(word.startswith('-Wl,-rpath,') for word in record['link_flags'][role]))
+            search = record['runtime_rpath']['flags']
+            self.assertEqual(all(word in link for word in search), role == 'cxx')
+        self.assertEqual(record['runtime_rpath'], application_toolchain.clang_application_runtime_rpath(self.runtime))
 
     def test_runtime_parent_cannot_redirect_outside_sysroot(self):
         package = self.sysroot/'usr/pkg'

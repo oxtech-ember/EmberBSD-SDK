@@ -42,16 +42,25 @@ tools = application_toolchain.bind_clang_application_commands(
 
 The returned paths preserve caller argv. They add the C or C++ runtime flags
 only for link operations. Do not add the same runtime flags again through
-global LDFLAGS. Selected bindings are immutable and reused only for identical
-commands. The shared binding's POSIX response-file and option-terminator
-limits are documented in [native checks](native-checks.md).
+global LDFLAGS. The target search path of libc++, libc++abi and libunwind
+(`clang_application_runtime_rpath`) stays only in outputs that need one of
+them: a C++ link gets it unless `-nostdlib`, `-nodefaultlibs`, `-nostdlib++`
+or `-static` drops the C++ library, a C link does not. After a successful
+link, the binding reads `DT_NEEDED` of the written ELF output and repeats the
+same link once with the other choice if the prediction was wrong. An ELF
+output it cannot inspect keeps the path. `-r`, `-###` and output to standard
+output are not inspected. The split link flags and `link=True` commands keep
+the search path; `runtime_rpath=False` omits it from
+`clang_application_link_flags`. Selected bindings are immutable and reused
+only for identical commands. The shared binding's POSIX response-file and
+option-terminator limits are documented in [native checks](native-checks.md).
 
 Set `include_auxiliary=True` to also bind executable `as` and `ld` paths.
 The assembler uses the selected Clang target. The linker uses the selected
 ELF linker with the application sysroot. Direct linker calls do not add
 C or C++ runtime libraries; the caller selects them. These two bindings pass
 tool arguments and response files unchanged, without compiler flags.
-Compiler binding API 2 preserves the existing version 1 mapping format,
+Compiler binding API 3 preserves the existing version 1 mapping format,
 so unchanged compiler-only bindings remain reusable.
 
 For a staging probe, an explicit `runtime_root` can select an already

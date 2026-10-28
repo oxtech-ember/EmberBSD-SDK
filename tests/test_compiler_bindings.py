@@ -115,6 +115,71 @@ class CompilerBindingTests(TemporaryCase):
             compiler_bindings.bind_compilers(self.destination, commands=self.commands,
                 flags=self.flags, python=sys.executable, link_flags={'cpp':['-stdlib=libc++']})
 
+    def runtime_linker(self):
+        """A driver that logs its argv and writes an ELF64 with DT_NEEDED from --needs=NAME."""
+        log = self.root / 'links.log'
+        linker = self.root / 'linking compiler'
+        linker.write_text('#!' + sys.executable + '\nimport json,struct,sys\n'
+            'args = sys.argv[1:]\n'
+            f'open({str(log)!r}, "a").write(json.dumps(args) + "\\n")\n'
+            'if "--fail" in args: sys.exit(7)\n'
+            'if "-c" in args or "-o" not in args: sys.exit(0)\n'
+            'names = [word[8:].encode() for word in args if word.startswith("--needs=")]\n'
+            'strings, offsets = b"\\0", []\n'
+            'for name in names: offsets.append(len(strings)); strings += name + b"\\0"\n'
+            'tags = [(5, 0x1000 + 400), (10, len(strings))] + [(1, at) for at in offsets] + [(0, 0)]\n'
+            'dynamic = b"".join(struct.pack("<qQ", tag, value) for tag, value in tags)\n'
+            'data = bytearray(512)\n'
+            'data[:7] = b"\\x7fELF\\x02\\x01\\x01"\n'
+            'struct.pack_into("<HHIQQ", data, 16, 3, 183, 1, 0, 64)\n'
+            'struct.pack_into("<HHH", data, 52, 64, 56, 2)\n'
+            'struct.pack_into("<IIQQQQQQ", data, 64, 1, 4, 0, 0x1000, 0, 512, 512, 4096)\n'
+            'struct.pack_into("<IIQQQQQQ", data, 120, 2, 4, 256, 0x1100, 0, len(dynamic), len(dynamic), 8)\n'
+            'data[256:256 + len(dynamic)] = dynamic\n'
+            'data[400:400 + len(strings)] = strings\n'
+            'open(args[args.index("-o") + 1], "wb").write(data)\n')
+        linker.chmod(0o755)
+        commands = {role:[str(linker), '--selected-' + role] for role in ('cc','cxx','cpp')}
+        tools = compiler_bindings.bind_compilers(self.root / 'runtime binding', commands=commands,
+            flags=self.flags, python=sys.executable, link_flags={'cxx':['-stdlib=libc++']},
+            runtime_rpath={'flags':['-Wl,-rpath,/runtime lib'], 'libraries':['libc++', 'libunwind']})
+        return tools, log
+
+    def test_runtime_search_path_only_in_outputs_that_need_a_runtime_library(self):
+        tools, log = self.runtime_linker()
+        cases = (('cc', ['input.o'], [False]),
+                 ('cc', ['input.o', '--needs=libunwind.so.1'], [False, True]),
+                 ('cc', ['input.o', '--needs=libunwind-extra.so.1', '--needs=libc.so.12'], [False]),
+                 ('cxx', ['input.o', '--needs=libc++.so.1'], [True]),
+                 ('cxx', ['input.o', '--needs=libc.so.12'], [True, False]),
+                 ('cxx', ['-nostdlib++', 'input.o'], [False]),
+                 ('cxx', ['-c', 'input.cc'], [False]),
+                 ('cc', ['-r', 'input.o', '--needs=libunwind.so.1'], [False]))
+        for role, arguments, runs in cases:
+            with self.subTest(role=role, arguments=arguments):
+                log.unlink(missing_ok=True)
+                output = self.root / 'linked output'
+                output.unlink(missing_ok=True)
+                result = subprocess.run([tools[role], *arguments, '-o', str(output)],
+                    cwd=self.root, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = [json.loads(line) for line in log.read_text().splitlines()]
+                self.assertEqual(['-Wl,-rpath,/runtime lib' in call for call in calls], runs)
+                # A repeated link runs the same caller argv.
+                self.assertEqual({tuple(call[:call.index('-o') + 2]) for call in calls}, {tuple(calls[0][:calls[0].index('-o') + 2])})
+
+    def test_runtime_search_path_link_failure_is_not_retried(self):
+        tools, log = self.runtime_linker()
+        result = subprocess.run([tools['cxx'], 'input.o', '--fail', '-o', 'output'],
+            cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual(len(log.read_text().splitlines()), 1)
+        for runtime_rpath in ({'flags':[], 'libraries':['libc++']}, {'flags':['-Wl,-rpath,/x'], 'libraries':['c++']},
+                              {'flags':['-Wl,-rpath,/x']}):
+            with self.subTest(runtime_rpath=runtime_rpath), self.assertRaisesRegex(SDKError, 'runtime search path'):
+                compiler_bindings.bind_compilers(self.root / 'refused', commands=self.commands,
+                    flags=self.flags, python=sys.executable, runtime_rpath=runtime_rpath)
+
     @unittest.skipUnless(os.environ.get('EMBER_TEST_CLANG'), 'requires explicitly selected Clang driver')
     def test_real_target_assembler_and_relocatable_linker(self):
         clang = os.environ['EMBER_TEST_CLANG']

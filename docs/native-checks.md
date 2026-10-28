@@ -79,3 +79,6 @@ The underlying `compiler_bindings.bind_compilers` also accepts optional
 These follow common LDFLAGS only during the corresponding link operation.
 Native checks need no extra map. [Application commands](application-toolchain.md)
 use it to select libc++ at C++ link without passing that option to compilation.
+Optional `runtime_rpath={"flags": [...], "libraries": [...]}` names a runtime
+search path that stays only in link outputs that need one of the named
+libraries; see application commands.

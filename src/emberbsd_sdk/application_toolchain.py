@@ -90,8 +90,31 @@ def clang_application_commands(compiler, sysroot, runtime_record, *, runtime_roo
     return commands
 
 
-def clang_application_link_flags(compiler, sysroot, runtime_record, *, runtime_root=None, language='c'):
-    """Return driver-only runtime flags for the selected link language."""
+_RUNTIME_LIBRARIES = (('libcxx', 'libc++'), ('libcxxabi', 'libc++abi'), ('libunwind', 'libunwind'))
+
+
+def _runtime_directories(record):
+    return tuple(dict.fromkeys(os.path.dirname(record['artifacts'][role]['shared'])
+                               for role, _ in _RUNTIME_LIBRARIES))
+
+
+def clang_application_runtime_rpath(runtime_record):
+    """Return the target search path of the runtime libraries and their names.
+
+    The path belongs only in outputs that need one of these libraries.
+    """
+    record = llvm_runtime.validate_identity(runtime_record, required_components=llvm_runtime.FULL_COMPONENTS)
+    return dict(flags=['-Wl,-rpath,/'+relative for relative in _runtime_directories(record)],
+                libraries=[name for _, name in _RUNTIME_LIBRARIES])
+
+
+def clang_application_link_flags(compiler, sysroot, runtime_record, *, runtime_root=None, language='c',
+                                 runtime_rpath=True):
+    """Return driver-only runtime flags for the selected link language.
+
+    runtime_rpath=False omits the target search path of the runtime
+    libraries; see clang_application_runtime_rpath.
+    """
     if language not in ('c', 'c++'):
         raise SDKError('application link language must be c or c++')
     record = llvm_runtime.validate_identity(runtime_record, required_components=llvm_runtime.FULL_COMPONENTS)
@@ -102,15 +125,16 @@ def clang_application_link_flags(compiler, sysroot, runtime_record, *, runtime_r
     runtime_root = root if runtime_root is None else paths.canonical_existing(runtime_root)
     paths.real_directory(root)
     paths.real_directory(runtime_root)
-    directories = tuple(dict.fromkeys(os.path.dirname(record['artifacts'][role]['shared'])
-                                      for role in ('libcxx','libcxxabi','libunwind')))
+    directories = _runtime_directories(record)
     flags = ['--ld-path='+compiler['binaries']['ld']['selected_path'],
              '--rtlib=compiler-rt','--unwindlib=libunwind']
     if language == 'c++':
         flags += ['-stdlib=libc++']
     for relative in directories:
-        flags += ['-L'+os.path.join(runtime_root,relative), '-Wl,-rpath,/'+relative,
-                  '-Wl,-rpath-link,'+os.path.join(runtime_root,relative)]
+        flags += ['-L'+os.path.join(runtime_root,relative)]
+        if runtime_rpath:
+            flags += ['-Wl,-rpath,/'+relative]
+        flags += ['-Wl,-rpath-link,'+os.path.join(runtime_root,relative)]
     flags += ['-Wl,-rpath-link,'+os.path.join(root,'usr/lib'),
               '-Wl,-rpath-link,'+os.path.join(root,'usr/pkg/lib')]
     return flags
@@ -122,6 +146,8 @@ def bind_clang_application_commands(destination, compiler, sysroot, runtime_reco
 
     python is the selected native-prefix interpreter. Existing compiler input
     argv are preserved, while measured runtime flags are attached only at link.
+    The runtime library search path stays only in outputs that need one of
+    the runtime libraries.
     """
     if type(include_auxiliary) is not bool:
         raise SDKError('auxiliary command selection must be boolean')
@@ -134,4 +160,6 @@ def bind_clang_application_commands(destination, compiler, sysroot, runtime_reco
         commands={role:commands[role] for role in roles}, python=python,
         flags={name:[] for name in ('cppflags','cflags','cxxflags','ldflags')},
         link_flags={role:clang_application_link_flags(compiler, sysroot, runtime_record,
-            runtime_root=runtime_root, language=language) for role,language in (('cc','c'), ('cxx','c++'))})
+            runtime_root=runtime_root, language=language, runtime_rpath=False)
+            for role,language in (('cc','c'), ('cxx','c++'))},
+        runtime_rpath=clang_application_runtime_rpath(runtime_record))
