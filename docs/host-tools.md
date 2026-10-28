@@ -392,3 +392,14 @@ libFuzzer targets and corpus replays with the explicitly recorded production
 compiler family through the shared process backend. Version 2 manifests record
 Clang or the explicit GCC alternative; version 1 retains GCC16 replay.
 See [diagnostic fuzz checks](fuzz-check.md) for manifests and evidence limits.
+
+## Normalize a Gitiles source archive
+
+`emberbsd_sdk.gitiles` provides `GITILES_API = 1`. `normalize(raw,
+expected_tree, *, root_name=None)` checks bounded Gitiles archive contents against
+an explicitly pinned Git tree and emits a deterministic uncompressed tar.
+Paths, duplicate and case-colliding names, links and special files are checked
+before output. With no root name it preserves the existing GN tar format; a
+selected safe root name produces an archive for `sourceprep.extract_archive`.
+The caller selects and obtains the archive and verifies the commit-to-tree
+mapping; this API does not fetch sources or establish provenance by itself.

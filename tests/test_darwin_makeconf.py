@@ -72,6 +72,13 @@ class DarwinMakeconfTests(TemporaryCase):
         self.assertFalse(any('receipt' in key or 'sha256' in key for key in result))
         self.assertEqual(self.render(), result)
 
+    def test_selected_sdk_source_is_written_for_bootstrap_consumers(self):
+        self.write('sdk/src/emberbsd_sdk/__init__.py', '# SDK code\n')
+        source = str(self.root / 'sdk')
+        self.render(sdk_source=source)
+        self.assertIn('EMBERBSD_SDK_SOURCE= ' + source + '\n',
+                      Path(self.options['output']).read_text())
+
     def test_default_family_selects_clang_without_gcc_policy_inputs(self):
         result = self.render()
         data = Path(self.options['output']).read_text()

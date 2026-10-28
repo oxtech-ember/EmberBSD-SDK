@@ -82,7 +82,7 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
                    utility_bin, makefiles, macos_sdk, deployment, tools, compiler_args,
                    tool_roots, jobs=None, ldflags=(), source_tools=(), tool_phase='full',
                    compiler_family='clang', cpu_budget=None, link_python=None,
-                   lock_root=None, heavy_link_context=None):
+                   lock_root=None, heavy_link_context=None, sdk_source=None):
     """Render explicit inputs. Do not run tools, compiler queries, or a build.
 
     Initial tools can use several declared roots before the final Ports prefix
@@ -174,6 +174,10 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
                      EMBERBSD_DARWIN_NATIVE_TOOLS=' '.join(sorted(utilities)),
                      EMBERBSD_DARWIN_SOURCE_TOOLS=' '.join(sorted(sources)),
                      LDFLAGS=shlex.join([_word(word) for word in ldflags]))
+    if sdk_source is not None:
+        source = _path(sdk_source, directory=True, existing=True)
+        regular_file(os.path.join(source, 'src/emberbsd_sdk/__init__.py'))
+        variables['EMBERBSD_SDK_SOURCE'] = source
     if all(link_inputs):
         from .bootstrap_recipe import recipe_cmake_linker_launcher, recipe_linker_launcher
         link_python = _safe_path(os.fspath(link_python))

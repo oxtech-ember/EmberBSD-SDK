@@ -62,7 +62,8 @@ def main(argv=None):
             ldflags=args.ldflag, source_tools=args.source_tool,
             jobs=args.jobs, tool_phase=args.tool_phase or 'full',
             compiler_family=args.compiler_family or 'clang', cpu_budget=args.cpu_budget,
-            link_python=args.link_python, lock_root=args.lock_root, heavy_link_context=args.heavy_link_context)
+            link_python=args.link_python, lock_root=args.lock_root, heavy_link_context=args.heavy_link_context,
+            sdk_source=str(source))
         print(json.dumps(result, indent=2))
         return 0
     except Exception as error:
