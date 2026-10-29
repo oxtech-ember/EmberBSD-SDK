@@ -35,13 +35,14 @@ def llvm_flags(selected, *, phase, base_cxx=False):
 
 class LLVMPhaseBuilder(SysrootBuilder):
     """Use the ordinary locked builder for the two incomplete OS inputs."""
-    def __init__(self, options, phase, *, receipts=None, select_only=False):
+    def __init__(self, options, phase, *, receipts=None, select_only=False, resume=False):
         if phase not in ('headers', 'base'):
             raise SDKError('unsupported LLVM OS bootstrap phase')
         super().__init__(options, receipts=receipts)
         self.llvm_phase = phase
         # Selects the stage key from the inputs; its destination is not used.
         self.select_only = select_only
+        self.resume = resume
 
     def empty_destination(self):
         if self.select_only:
@@ -49,6 +50,12 @@ class LLVMPhaseBuilder(SysrootBuilder):
         destination = self.paths['destination']
         if paths.entry(destination) is not None and os.listdir(destination):
             saved = jsonio.read_json(os.path.join(destination, self.RECEIPT))
+            if self.failed_attempt(saved):
+                # Preflight accepts it; the locked build moves it aside and restarts.
+                if self.locks:
+                    set_aside(os.path.dirname(destination), [destination])
+                    super().empty_destination()
+                return
             if (paths.entry(os.path.join(destination, self.MARKER)) is not None or
                     saved.get('format') != 'emberbsd-llvm-os-stage' or
                     saved.get('qualification') != 'built-and-inspected' or
@@ -57,6 +64,14 @@ class LLVMPhaseBuilder(SysrootBuilder):
             self.completed = saved
             return
         super().empty_destination()
+
+    def failed_attempt(self, saved):
+        # Only a stage built with these objects: holding their lock proves
+        # that no other build is still writing it.
+        return (self.resume and paths.entry(os.path.join(self.paths['destination'], self.MARKER)) is not None and
+                saved.get('format') == 'emberbsd-llvm-os-stage' and saved.get('phase') == self.llvm_phase and
+                saved.get('qualification') == 'incomplete' and
+                saved.get('paths', {}).get('objects') == self.paths['objects'])
 
     def preflight(self):
         result = super().preflight()
@@ -110,6 +125,18 @@ class LLVMPhaseBuilder(SysrootBuilder):
         return self._run_preflighted()
 
 
+def set_aside(root, outputs):
+    """Keep a failed attempt's outputs for inspection under ROOT/failed-N."""
+    number = 1
+    while paths.entry(os.path.join(root, f'failed-{number}')) is not None:
+        number += 1
+    failed = os.path.join(root, f'failed-{number}')
+    os.mkdir(failed)
+    for output in outputs:
+        if paths.entry(output) is not None:
+            os.rename(output, os.path.join(failed, os.path.basename(output)))
+
+
 class LLVMCoordinator:
     """Headers -> PIC unwind/builtins -> libc/CRT -> C++ runtimes -> final SDK."""
     def __init__(self, options, builder_type, *, receipts=None):
@@ -124,6 +151,8 @@ class LLVMCoordinator:
         self.stage_root = self.options.get('llvm-stages', os.path.join(self.options['sdk'], 'stages',
                                       'llvm-bootstrap-' + self.options['target']))
         self.runtime_root = self.work
+        # Only SDK-named stages restart; explicit stage directories are left as they are.
+        self.resume = self.keyed and builder_type.RESUMES_FAILED_STAGES
         self.object_root = self.options.get('llvm-objects', os.path.join(
             self.options['sdk'], 'obj', 'llvm-bootstrap', self.options['target']))
         self.tools = self.options.get('tools', os.path.join(self.object_root, 'tools'))
@@ -150,7 +179,8 @@ class LLVMCoordinator:
             key = self.stage_key(selector)
             self.stage_root = os.path.join(self.stage_root, key)
             self.runtime_root = os.path.join(self.work, key)
-        self.headers = LLVMPhaseBuilder(self.stage_options('headers'), 'headers', receipts=self.receipts)
+        self.headers = LLVMPhaseBuilder(self.stage_options('headers'), 'headers', receipts=self.receipts,
+                                        resume=self.resume)
         self.headers.preflight()
         self.headers.output_path(self.object_root, os.path.join(self.headers.paths['sdk'], 'obj'))
         self.headers.output_path(self.stage_root, os.path.join(self.headers.paths['sdk'], 'stages'))
@@ -211,6 +241,11 @@ class LLVMCoordinator:
     def runtime(self, phase, base):
         selected = self.headers
         stage = os.path.join(self.runtime_root, phase + '-stage')
+        # The producer writes runtime.json last and removes it on failure.
+        if (self.resume and paths.entry(stage) is not None and
+                paths.entry(os.path.join(stage, 'runtime.json')) is None):
+            set_aside(self.runtime_root, [os.path.join(self.runtime_root, phase + suffix)
+                                          for suffix in ('-stage', '-work', '.json', '.log')])
         if paths.entry(stage) is None:
             selected.mkdirs(self.runtime_root, os.path.join(selected.paths['sdk'], 'obj'))
             selected.execute_external(self.runtime_command(phase, base),
@@ -236,9 +271,11 @@ class LLVMCoordinator:
                 {'phase': 'full', 'command': self.runtime_command('full', os.path.join(self.stage_root, 'base'))},
                 {'phase': 'final', 'inputs': ['full'], 'destination': self.options.get('destination')}])
         with self.lock():
-            LLVMPhaseBuilder(self.stage_options('headers'), 'headers', receipts=self.receipts).run()
+            LLVMPhaseBuilder(self.stage_options('headers'), 'headers', receipts=self.receipts,
+                             resume=self.resume).run()
             self.runtime('bootstrap', os.path.join(self.stage_root, 'headers'))
-            LLVMPhaseBuilder(self.stage_options('base'), 'base', receipts=self.receipts).run()
+            LLVMPhaseBuilder(self.stage_options('base'), 'base', receipts=self.receipts,
+                             resume=self.resume).run()
             self.runtime('full', os.path.join(self.stage_root, 'base'))
             final_options = self.options | {'llvm-runtime-stage': os.path.join(self.runtime_root, 'full-stage'),
                                             'llvm-runtime-base': os.path.join(self.stage_root, 'base'),

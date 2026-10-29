@@ -306,6 +306,9 @@ def validate_profile(profile, sha, target):
 
 
 class OSReleaseBuilder(SysrootBuilder):
+    # A publishable release does not continue after failed stages.
+    RESUMES_FAILED_STAGES = False
+
     def __init__(self, options, *, receipts=None):
         target = options.get('target')
         self.FLAGS = flags_for(target, options.get('compiler-family', 'clang'), bool(options.get('x11-source')))

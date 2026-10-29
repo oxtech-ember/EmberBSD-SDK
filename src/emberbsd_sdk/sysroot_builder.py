@@ -125,6 +125,8 @@ class SysrootBuilder:
     CONTEXT = '.prebuild-sdk-context.json'
     QUARANTINE = '.prebuild-sdk-quarantine.json'
     RECEIPT = '.prebuild-sdk-build.json'
+    # A development run restarts SDK-named LLVM stages that a failed run left.
+    RESUMES_FAILED_STAGES = True
     MARKER = '.prebuild-sdk-build-incomplete'
     LOG = '.prebuild-sdk-build.log'
 

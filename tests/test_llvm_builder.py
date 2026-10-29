@@ -976,7 +976,7 @@ class LLVMBuilderTests(TemporaryCase):
                    'llvm-stages': str(sdk / 'stages/alternate')}
         class Header:
             output_path = SysrootBuilder.output_path
-            def __init__(self, selected, phase, receipts=None):
+            def __init__(self, selected, phase, receipts=None, **selection):
                 self.logical_sdk = str(sdk)
                 self.paths = {'sdk': str(sdk)}
             def preflight(self):
@@ -1087,7 +1087,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         events = []
         shared = []
         class Stage:
-            def __init__(self, selected, phase, receipts=None):
+            def __init__(self, selected, phase, receipts=None, **selection):
                 self.options, self.phase = selected, phase
                 shared.append(receipts)
             def run(self):
@@ -1205,8 +1205,8 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         options['runtime-work'] = str(Path(options['sdk']) / 'obj/llvm-runtime')
         built = []
         class Headers(type(headers)):
-            def __init__(self, selected, phase, receipts=None, select_only=False):
-                LLVMPhaseBuilder.__init__(self, selected, phase, receipts=receipts, select_only=select_only)
+            def __init__(self, selected, phase, **selection):
+                LLVMPhaseBuilder.__init__(self, selected, phase, **selection)
             def build_payload(self):
                 built.append(self.paths['destination'])
                 super().build_payload()
@@ -1240,6 +1240,77 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         # An explicitly selected stage directory keeps its exact path.
         explicit = LLVMCoordinator(options | {'llvm-stages': str(root / 'chosen')}, SysrootBuilder)
         self.assertEqual(explicit.stage_options('headers')['destination'], str(root / 'chosen/headers'))
+
+    def test_failed_keyed_stage_restarts_only_in_development_runs(self):
+        headers, _ = self.completed_headers()
+        options = {name: value for name, value in headers.options.items()
+                   if name not in ('destination', 'objects', 'tools', 'llvm-runtime-stage', 'llvm-bootstrap-stage')}
+        options['runtime-work'] = str(Path(options['sdk']) / 'obj/llvm-runtime')
+        attempts = []
+        class Headers(type(headers)):
+            def __init__(self, selected, phase, **selection):
+                LLVMPhaseBuilder.__init__(self, selected, phase, **selection)
+            def build_payload(self):
+                attempts.append(self.paths['destination'])
+                if len(attempts) == 1:
+                    raise SDKError('fixture build failure')
+                super().build_payload()
+        class Stop(Exception):
+            pass
+        def headers_stage(builder_type=SysrootBuilder, selected=options):
+            coordinator = LLVMCoordinator(selected, builder_type)
+            with patch('emberbsd_sdk.llvm_sysroot.LLVMPhaseBuilder', Headers), \
+                 patch.object(coordinator, 'runtime', side_effect=Stop):
+                coordinator.run()
+        with self.assertRaisesRegex(SDKError, 'fixture build failure'):
+            headers_stage()
+        stage = Path(attempts[0])
+        self.assertTrue((stage / LLVMPhaseBuilder.MARKER).exists())
+        # A release, an explicitly selected directory, or other objects, which
+        # cannot show that the failed build has stopped, leave it alone.
+        explicit = options | {'llvm-stages': str(stage.parent)}
+        others = options | {'llvm-objects': str(Path(options['sdk']) / 'obj/other-objects')}
+        for builder_type, selected in ((OSReleaseBuilder, options), (SysrootBuilder, explicit),
+                                       (SysrootBuilder, others)):
+            with self.subTest(builder=builder_type.__name__, selected=sorted(set(selected) - set(options))), \
+                 self.assertRaisesRegex(SDKError, 'incomplete or unrelated'):
+                headers_stage(builder_type, selected)
+        self.assertEqual(len(attempts), 1)
+        with self.assertRaises(Stop):
+            headers_stage()
+        self.assertEqual(attempts, [str(stage), str(stage)])
+        self.assertFalse((stage / LLVMPhaseBuilder.MARKER).exists())
+        failed = stage.parent / 'failed-1/headers'
+        self.assertEqual(jsonio.read_json(failed / LLVMPhaseBuilder.RECEIPT)['qualification'], 'incomplete')
+
+    def test_failed_keyed_runtime_stage_restarts_after_setting_it_aside(self):
+        work = self.root / 'sdk/obj/runtime/os-key'
+        (work / 'bootstrap-stage/usr').mkdir(parents=True)
+        (work / 'bootstrap-work').mkdir()
+        write(work / 'bootstrap.log', 'failed build\n')
+        record = {'recipe': {'ports_revision': 'a' * 40}}
+        built = []
+        def execute(command, receipt, log):
+            built.append(command)
+            write(work / 'bootstrap-stage/runtime.json', '{}')
+        for resume in (False, True):
+            coordinator = LLVMCoordinator({'sdk': str(self.root / 'sdk'), 'target': 'aarch64',
+                                           'runtime-work': str(self.root / 'sdk/obj/runtime')}, SysrootBuilder)
+            coordinator.runtime_root, coordinator.resume = str(work), resume
+            coordinator.headers = type('Header', (), {'paths': {'ports': '/ports', 'sdk': str(self.root / 'sdk')},
+                'environment': {}, 'execute_external': staticmethod(execute),
+                'mkdirs': staticmethod(lambda path, boundary: os.makedirs(path, exist_ok=True))})()
+            with patch.object(coordinator, 'runtime_command', return_value=['producer']), \
+                 patch('emberbsd_sdk.llvm_sysroot.process.capture', return_value=type('Result', (), {'stdout': b'{}'})()), \
+                 patch('emberbsd_sdk.llvm_sysroot.jsonio.loads_json', return_value=record), \
+                 patch('emberbsd_sdk.llvm_sysroot.llvm_runtime.validate_identity'), \
+                 patch('emberbsd_sdk.llvm_sysroot.llvm_runtime.validate_stage', return_value=record):
+                coordinator.runtime('bootstrap', '/base')
+            self.assertEqual(len(built), int(resume))
+        self.assertTrue((work / 'failed-1/bootstrap-stage/usr').is_dir())
+        self.assertTrue((work / 'failed-1/bootstrap-work').is_dir())
+        self.assertEqual((work / 'failed-1/bootstrap.log').read_text(), 'failed build\n')
+        self.assertTrue((work / 'bootstrap-stage/runtime.json').exists())
 
     def test_completed_headers_reject_changed_output_without_dispatch(self):
         builder, _ = self.completed_headers()

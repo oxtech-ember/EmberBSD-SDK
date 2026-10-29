@@ -112,6 +112,14 @@ commit with the same tree reuses them. Each stage is still checked against
 its receipt before reuse. Older stage subdirectories are kept; remove unused
 ones when no build uses them. An explicit `--llvm-stages` is used as given.
 
+A development run continues after a failed run from the failed stage. Completed
+stages are reused as above. A headers or base stage that the failed run left
+incomplete with the same objects, or a runtime stage without its
+`runtime.json`, is moved with its log and work tree to `failed-N` next to it
+for inspection, and that stage is built again. `build-os-release.py`, and any
+explicit `--llvm-stages` directory, keep refusing an incomplete stage: a
+publishable release never continues after a failed stage.
+
 The release builder also accepts `--x11-source`, the tree prepared by the Ports
 `scripts/source-inputs/xsrc` owner from the NetBSD 11.0 `xsrc.tgz` set. It is
 valid only for the Clang `aarch64-sysroot` profile. The SDK verifies the
