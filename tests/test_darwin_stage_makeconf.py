@@ -1,6 +1,9 @@
 from pathlib import Path
+import sys
 import tempfile
 import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from emberbsd_sdk import compiler_bindings
 from emberbsd_sdk.darwin_makeconf import write_native_stage_makeconf
