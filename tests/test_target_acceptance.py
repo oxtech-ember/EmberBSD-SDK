@@ -13,8 +13,28 @@ from types import SimpleNamespace
 from test_core import SDK_SOURCE, git_environment  # noqa: F401  # puts the SDK sources on sys.path
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.target_acceptance import (CHECKS, GUEST_CHECKS, HOST_CHECKS,
-    _clean_source_revision, _copy_runtime, _install_diagnostic_runcom,
+    _clean_source_revision, _copy_runtime, _copy_test_bundle, _install_diagnostic_runcom,
     _select_os_sources, _require_os_makedev, _compile_tests_command, _extract_base_archive, parse_guest_log, run)
+
+class TestBundleTests(unittest.TestCase):
+    def test_required_target_options_are_copied(self):
+        names = ('target.txt', 'compiler-family.txt', 'runtime-files.tsv',
+                 'atomic-tls', 'atomic-tls-lto', 'boundary', 'libboundary.so',
+                 'check-runtime.sh', 'target-options.sh', 'run-target.sh',
+                 'libc-aliases', 'base-loader-smoke', 'fork-cas',
+                 'fork-cas-static', 'libm-valid', 'setjmp-valid')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundle = root / 'bundle'
+            bundle.mkdir()
+            for name in names:
+                (bundle / name).write_text(name)
+            _copy_test_bundle(bundle, root / 'guest')
+            self.assertEqual((root / 'guest/tests/target-options.sh').read_text(), 'target-options.sh')
+            (bundle / 'target-options.sh').unlink()
+            with self.assertRaises(SDKError):
+                _copy_test_bundle(bundle, root / 'missing')
+
 
 class ExtractBaseTests(unittest.TestCase):
     def test_gnu_longlink_and_cleanup(self):

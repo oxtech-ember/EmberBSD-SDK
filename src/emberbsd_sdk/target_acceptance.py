@@ -193,7 +193,7 @@ def _copy_runtime(sysroot, test_bundle, root, compiler_family):
 def _copy_test_bundle(bundle, root):
     names = ('target.txt', 'compiler-family.txt', 'runtime-files.tsv', 'os-tests.txt',
              'atomic-tls', 'atomic-tls-lto', 'boundary', 'libboundary.so',
-             'check-runtime.sh', 'run-target.sh', 'libc-aliases',
+             'check-runtime.sh', 'target-options.sh', 'run-target.sh', 'libc-aliases',
              'base-loader-smoke', 'fork-cas', 'fork-cas-static', 'libm-valid', 'setjmp-valid')
     for name in names:
         source = bundle / name
