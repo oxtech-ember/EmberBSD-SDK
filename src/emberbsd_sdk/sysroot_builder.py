@@ -19,7 +19,7 @@ import sysconfig
 import tempfile
 import time
 from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, prepared_sources, process, provenance, workspace
-from .verification_receipts import RunReceipts
+from .verification_receipts import RunReceipts, SourceReceiptStore, fingerprint
 from .errors import SDKError, ProcessOwnershipError
 from .native_os_routing import gettext_target_host_flags, gnu_target_host_flags, native_host_flags, native_path
 from .targets import TARGETS, target_definition
@@ -701,6 +701,7 @@ class SysrootBuilder:
             lzip = native_toolset.load_host_prefix(self.native.bundle_root, required_roles={'lzip'}).tool('lzip')
         shared = None
         memo = {}
+        store = self.source_receipt_store()
         for name, package, argv in (
             ('libarchive', 'archivers/libarchive', ['scripts/libarchive-source.py', 'verify']),
             ('libevent', 'devel/libevent', ['scripts/source-inputs/libevent/source.py']),
@@ -736,15 +737,12 @@ class SysrootBuilder:
                 command += ['--sdk-source', self.paths['sdk-source'], '--git', self.git_command, 'verify-source', '--source', self.paths[name + '-source']]
             if name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') and patch:
                 command += ['--patch', patch]
+            supports_shared = False
+            if name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') and patch:
                 supports_shared = name in self.SHARED_EXPORT_OWNERS
                 if (name in self.OPTIONAL_SHARED_EXPORT_OWNERS and
                         os.path.isfile(os.path.join(self.paths['ports'], self.SHARED_EXPORT_SCRIPT))):
                     supports_shared = self.owner_supports_shared_export(command[2], memo)
-                if supports_shared:
-                    if shared is None:
-                        shared = self.shared_pkgsrc_export(patch) or ''
-                    if shared:
-                        command += ['--pkgsrc-export', shared]
             if name in ('libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'gettext', 'libxml2') and self.options.get(name + '-archive'):
                 archive = paths.canonical_existing(self.options[name + '-archive'])
                 paths.regular_file(archive)
@@ -752,16 +750,60 @@ class SysrootBuilder:
                 if name == 'rcs':
                     command += ['--lzip', lzip]
             inputs = [self.paths[name + '-source'], *self.receipt_tools(command)]
-            if shared:
-                inputs.append(shared)
+            if store is not None:
+                # The shared export is a throwaway view of the pinned Ports
+                # inputs named by the material; it is made only on a miss.
+                material = self.source_receipt_material(name, command, supports_shared)
+                current = fingerprint(inputs, memo)
+                record = store.load(material, current)
+                if record is not None:
+                    result[name] = self.prepared_source_record(name, package, record)
+                    continue
+            if supports_shared:
+                if shared is None:
+                    shared = self.shared_pkgsrc_export(patch) or ''
+                if shared:
+                    command += ['--pkgsrc-export', shared]
+                    inputs.append(shared)
             record = self.verification.verify(('common-source', name, tuple(command)), inputs,
                 lambda: jsonio.loads_json(process.capture(command, env=self.environment).stdout), memo)
-            if (not isinstance(record, dict) or record.get('format') != 'emberbsd-prepared-source' or
-                    type(record.get('version')) is not int or record['version'] != 1 or
-                    record.get('package') != package):
-                raise SDKError(f'invalid {name} prepared source receipt')
-            result[name] = record
+            result[name] = self.prepared_source_record(name, package, record)
+            if store is not None:
+                store.save(material, current, record)
         return result
+
+    @staticmethod
+    def prepared_source_record(name, package, record):
+        if (not isinstance(record, dict) or record.get('format') != 'emberbsd-prepared-source' or
+                type(record.get('version')) is not int or record['version'] != 1 or
+                record.get('package') != package):
+            raise SDKError(f'invalid {name} prepared source receipt')
+        return record
+
+    def source_receipt_store(self):
+        """The selected cross-run store of prepared-source records, or None."""
+        directory = self.options.get('source-receipts')
+        if directory is None:
+            return None
+        if not os.path.isabs(directory):
+            raise SDKError('--source-receipts must be an absolute directory')
+        for name in ('ports', 'sdk'):
+            if name not in getattr(self, 'sources', {}):
+                raise SDKError('source receipts need the checked Ports and SDK checkouts')
+        try:
+            return SourceReceiptStore(directory)
+        except (OSError, ValueError) as exc:
+            raise SDKError(f'invalid source receipt directory: {exc}') from exc
+
+    def source_receipt_material(self, name, command, shared):
+        """Everything a stored record depends on besides its input files.
+
+        The owner reads Ports and SDK modules and the pinned pkgsrc through
+        Git, so the clean-checkout records of both checkouts are part of it."""
+        environment = {key: value for key, value in self.environment.items() if key != 'TMPDIR'}
+        return dict(format='emberbsd-source-receipt-material', version=1, name=name,
+                    command=list(command), shared_export=bool(shared), git=self.git_command,
+                    environment=environment, ports=self.sources['ports'], sdk=self.sources['sdk'])
 
     def python_identity(self):
         python = self.paths['python']

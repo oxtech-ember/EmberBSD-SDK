@@ -143,6 +143,108 @@ class VerificationReceiptTests(TemporaryCase):
         self.assertFalse(hasattr(verification_receipts, 'load'))
 
 
+class SourceReceiptStoreTests(TemporaryCase):
+    """Prepared-source records kept between runs in a selected directory."""
+    content_checks = VerificationReceiptTests.content_checks
+
+    def setUp(self):
+        super().setUp()
+        self.write('ports/scripts/source-inputs/byacc/source.py', OWNER)
+        self.source = self.root / 'prepared/byacc'
+        self.write('prepared/byacc/main.c', 'int main(void) { return 0; }\n')
+        self.write('prepared/byacc/defs.h', '#define YES 1\n')
+        self.calls = self.root / 'calls.log'
+
+    def builder(self, receipts=None, ports='a' * 40):
+        builder = VerificationReceiptTests.builder(self, receipts)
+        builder.options['source-receipts'] = str(self.root / 'receipts')
+        builder.sources = {'ports': {'path': str(self.root / 'ports'), 'commit': ports, 'external_gitlinks': []},
+                           'sdk': {'path': str(self.root / 'sdk'), 'commit': 'b' * 40, 'external_gitlinks': []}}
+        return builder
+
+    def test_selected_store_reuses_an_unchanged_record_in_a_new_run(self):
+        record = self.builder().verify_common_sources()
+        self.assertEqual(self.builder().verify_common_sources(), record)
+        self.assertEqual(self.content_checks(), 1)
+        # Nothing is written next to the inputs; the record lies in the store.
+        self.assertEqual(sorted(os.listdir(self.source)), ['defs.h', 'main.c'])
+        self.assertEqual(len(os.listdir(self.root / 'receipts')), 1)
+
+    def test_changed_input_is_verified_again_in_a_new_run(self):
+        planned = self.builder().verify_common_sources()
+        path = self.source / 'defs.h'
+        before = path.stat()
+        path.write_text('#define YES 0\n')
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        changed = self.builder().verify_common_sources()
+        self.assertNotEqual(changed, planned)
+        self.assertEqual(self.content_checks(), 2)
+        # The replaced entry is reused by the next run.
+        self.assertEqual(self.builder().verify_common_sources(), changed)
+        self.assertEqual(self.content_checks(), 2)
+
+    def test_changed_checkout_or_command_is_verified_again(self):
+        self.builder().verify_common_sources()
+        self.builder(ports='c' * 40).verify_common_sources()
+        self.assertEqual(self.content_checks(), 2)
+        other = self.builder()
+        other.environment['EXTRA'] = '1'
+        other.verify_common_sources()
+        self.assertEqual(self.content_checks(), 3)
+        # TMPDIR names only throwaway scratch space.
+        scratch = self.builder()
+        scratch.environment['TMPDIR'] = str(self.root / 'tmp')
+        scratch.verify_common_sources()
+        self.assertEqual(self.content_checks(), 3)
+
+    def test_damaged_or_foreign_entry_is_verified_by_content(self):
+        self.builder().verify_common_sources()
+        store = self.root / 'receipts'
+        entry = store / os.listdir(store)[0]
+        entry.write_text('{"format": "emberbsd-source-receipt", "version": 1}')
+        self.builder().verify_common_sources()
+        self.assertEqual(self.content_checks(), 2)
+        entry.write_text('not json')
+        self.builder().verify_common_sources()
+        self.assertEqual(self.content_checks(), 3)
+
+    def test_store_needs_checked_checkouts_and_an_absolute_directory(self):
+        builder = self.builder()
+        del builder.sources['sdk']
+        with self.assertRaisesRegex(SDKError, 'checked Ports and SDK'):
+            builder.verify_common_sources()
+        builder = self.builder()
+        builder.options['source-receipts'] = 'receipts'
+        with self.assertRaisesRegex(SDKError, 'absolute'):
+            builder.verify_common_sources()
+        self.assertEqual(self.content_checks(), 0)
+
+    def test_hit_makes_no_shared_export(self):
+        tool = self.write('host/bin/gpatch', '#!/bin/sh\n', 0o755)
+        self.write('ports/' + SysrootBuilder.SHARED_EXPORT_SCRIPT, 'exporter')
+        exported = []
+        def export(patch):
+            exported.append(patch)
+            directory = self.root / f'export-{len(exported)}'
+            directory.mkdir()
+            return str(directory)
+        def run():
+            builder = self.builder()
+            builder.options['source-patch'] = str(tool)
+            builder.native = SimpleNamespace(bundle_root=str(self.root / 'host'))
+            with patch('emberbsd_sdk.sysroot_builder.native_toolset.load_host_prefix',
+                       return_value=SimpleNamespace(tool=lambda role: str(tool))), \
+                 patch.object(builder, 'shared_pkgsrc_export', side_effect=export):
+                return builder.verify_common_sources()
+        record = run()
+        self.assertEqual((len(exported), self.content_checks()), (1, 1))
+        self.assertEqual(run(), record)
+        self.assertEqual((len(exported), self.content_checks()), (1, 1))
+        os.utime(self.source / 'main.c')
+        self.assertEqual(run(), record)
+        self.assertEqual((len(exported), self.content_checks()), (2, 2))
+
+
 class GitSourceReceiptTests(TemporaryCase):
     """Clean-checkout checks of the OS, Ports and SDK roots within one run."""
 

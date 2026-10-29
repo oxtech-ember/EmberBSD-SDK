@@ -97,6 +97,14 @@ the Ports commit, the pinned pkgsrc commit and the patch tool; each owner
 also checks it against its current Ports inputs. Older Ports revisions keep
 one export per owner.
 
+`--source-receipts DIR` keeps each verified prepared-source record in `DIR`
+for later runs. An entry is reused only when the owner command, the
+environment (except `TMPDIR`), the checked Ports and SDK commits and the
+metadata fingerprint of every input still match; otherwise the owner verifies
+the source again and the entry is replaced. A reused record needs no pkgsrc
+export, so the shared export is made only when an owner must run. Without
+the option, records live only for the current process.
+
 The sysroot builder accepts `--llvm-objects` and `--llvm-stages` to select
 LLVM coordinator subdirectories inside the existing SDK's `obj` and `stages`
 directories when a different build context must be retained alongside an
