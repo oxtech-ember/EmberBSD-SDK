@@ -111,3 +111,6 @@ the separate package uses Berkeley DB 18.
 The optional `--ppp-source` selects the common Ports PPP source for the OS
 producer. `--ppp-archive` and `--source-patch` permit verification against
 changed recipe inputs.
+
+The optional `--top-source` selects the common Ports top source for the OS
+producer. `--top-archive` and `--source-patch` support changed-input comparison.

@@ -148,6 +148,24 @@ class LLVMBuilderTests(TemporaryCase):
             builder.require_nvi_source_support()
             run.assert_not_called()
 
+    def test_top_source_requires_real_os_producer(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'os': str(self.root / 'os'), 'top-source': '/prepared/top', 'tools': '/build/tools'}
+        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
+        builder.environment = {}
+        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/old/dist\n')):
+            with self.assertRaisesRegex(SDKError, 'does not support EMBER_TOP_SOURCE'):
+                builder.require_top_source_support()
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/prepared/top\n')) as run:
+            builder.require_top_source_support()
+        self.assertIn('/os/external/bsd/top/bin', run.call_args.args[0][5])
+        del builder.paths['top-source']
+        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
+            builder.require_top_source_support()
+            run.assert_not_called()
+
     def test_ppp_source_requires_real_os_producer(self):
         from types import SimpleNamespace
         builder = SysrootBuilder({})
@@ -187,6 +205,17 @@ class LLVMBuilderTests(TemporaryCase):
         with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
             self.assertEqual(builder.verify_common_sources(), {'nvi': record})
         self.assertIn('/ports/scripts/source-inputs/nvi/source.py', run.call_args.args[0])
+
+    def test_optional_top_source_verified_by_owner(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'top-source': '/prepared/top'}
+        builder.git_command = '/host/git'
+        builder.environment = {}
+        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'sysutils/top'}
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
+            self.assertEqual(builder.verify_common_sources(), {'top': record})
+        self.assertIn('/ports/scripts/source-inputs/top/source.py', run.call_args.args[0])
 
     def test_optional_ppp_source_verified_by_owner(self):
         from types import SimpleNamespace

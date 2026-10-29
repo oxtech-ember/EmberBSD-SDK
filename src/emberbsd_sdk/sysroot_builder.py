@@ -435,6 +435,7 @@ class SysrootBuilder:
                                                                   'HOST_PYTHON=',
                                                                   'EMBER_EKERMIT_SOURCE=',
                                                                   'EMBER_NVI_SOURCE=',
+                                                                  'EMBER_TOP_SOURCE=',
                                                                   'EMBER_PPP_SOURCE=',
                                                                   'HOST_GMAKE=',
                                                                   'EMBER_HOST_GNU_TRIPLE='))]
@@ -538,6 +539,7 @@ class SysrootBuilder:
             ('grep', 'textproc/grep', ['scripts/source-inputs/grep/source.py']),
             ('ekermit', 'comms/ekermit', ['scripts/source-inputs/ekermit/source.py']),
             ('nvi', 'editors/nvi', ['scripts/source-inputs/nvi/source.py']),
+            ('top', 'sysutils/top', ['scripts/source-inputs/top/source.py']),
             ('ppp', 'net/pppd', ['scripts/source-inputs/ppp/source.py']),
             ('tdb', 'databases/tdb', ['scripts/source-inputs/tdb/source.py']),
             ('x11', 'netbsd/xsrc', ['scripts/source-inputs/xsrc/source.py']),
@@ -552,9 +554,9 @@ class SysrootBuilder:
                 command += ['verify', self.paths[name + '-source'], '--sdk-source', self.paths['sdk-source'], '--git', self.git_command]
             else:
                 command += ['--sdk-source', self.paths['sdk-source'], '--git', self.git_command, 'verify-source', '--source', self.paths[name + '-source']]
-            if name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp') and patch:
+            if name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top') and patch:
                 command += ['--patch', patch]
-            if name in ('libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp') and self.options.get(name + '-archive'):
+            if name in ('libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top') and self.options.get(name + '-archive'):
                 archive = paths.canonical_existing(self.options[name + '-archive'])
                 paths.regular_file(archive)
                 command += ['--archive', archive]
@@ -777,6 +779,25 @@ class SysrootBuilder:
         if selected != self.paths['nvi-source']:
             raise SDKError('selected OS does not support EMBER_NVI_SOURCE')
 
+    def require_top_source_support(self):
+        if 'top-source' not in self.paths:
+            return
+        root = self.paths['os']
+        env = dict(self.environment)
+        env.pop('EMBER_NATIVE_TOOLS', None)
+        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
+                   '-C', os.path.join(root, 'external/bsd/top/bin'),
+                   'MAKECONF=/dev/null', '_SRC_TOP_=', 'NETBSDSRCDIR=' + root,
+                   'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
+                   'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
+                   'EMBER_TOP_SOURCE=' + self.paths['top-source'], '-V', '${TOPDIR}']
+        try:
+            selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
+        except (SDKError, UnicodeError) as exc:
+            raise SDKError('selected OS cannot resolve the top producer') from exc
+        if selected != self.paths['top-source']:
+            raise SDKError('selected OS does not support EMBER_TOP_SOURCE')
+
     def require_ppp_source_support(self):
         if 'ppp-source' not in self.paths:
             return
@@ -846,7 +867,7 @@ class SysrootBuilder:
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
-        input_names += [name for name in ('libarchive-source', 'libevent-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'x11-source') if self.options.get(name)]
+        input_names += [name for name in ('libarchive-source', 'libevent-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'x11-source') if self.options.get(name)]
         if clang and self.llvm_phase != 'headers' and self.options.get('llvm-runtime-original-source'):
             input_names.append('llvm-runtime-original-source')
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
@@ -909,11 +930,12 @@ class SysrootBuilder:
         self.require_tdb_source_support()
         self.require_ekermit_source_support()
         self.require_nvi_source_support()
+        self.require_top_source_support()
         self.require_ppp_source_support()
         self.sources['sdk'] = self.source(self.paths['sdk-source'], 'sdk')
         self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command)
         self.common_source_records = (self.verify_common_sources()
-                                      if any(name + '-source' in self.paths for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'x11'))
+                                      if any(name + '-source' in self.paths for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'x11'))
                                       else {})
         self.python = self.python_identity()
         self.git(self.paths['os'], 'ls-files', '--error-unmatch', 'build.sh', 'Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk')
@@ -959,7 +981,7 @@ class SysrootBuilder:
         self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}',
                        f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
         self.flags += [f'EMBER_{name.upper()}_SOURCE={self.paths[name + "-source"]}'
-                       for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp') if name + '-source' in self.paths]
+                       for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top') if name + '-source' in self.paths]
         if 'tdb-source' in self.paths:
             self.flags.append('HOST_PYTHON=' + self.native.tool('python'))
         if 'texinfo-source' in self.paths or 'rcs-source' in self.paths or 'diffutils-source' in self.paths or 'grep-source' in self.paths:
