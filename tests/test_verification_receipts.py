@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
 import os
+import shutil
+import subprocess
 import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from test_core import TemporaryCase
-from emberbsd_sdk import verification_receipts
+from test_core import TemporaryCase, git_environment
+from emberbsd_sdk import provenance, verification_receipts
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.llvm_sysroot import LLVMCoordinator
 from emberbsd_sdk.sysroot_builder import SysrootBuilder
@@ -139,3 +141,99 @@ class VerificationReceiptTests(TemporaryCase):
             receipts.verify('key', [str(self.source)], lambda: {'record': 1})
             self.assertEqual(receipts.verify('key', [str(self.source)], lambda: {'record': 2}), {'record': 1})
         self.assertFalse(hasattr(verification_receipts, 'load'))
+
+
+class GitSourceReceiptTests(TemporaryCase):
+    """Clean-checkout checks of the OS, Ports and SDK roots within one run."""
+
+    def setUp(self):
+        super().setUp()
+        self.git_tool = os.path.realpath(shutil.which('git'))
+        self.repository = self.root / 'os'
+        self.write('os/sys/kern/main.c', 'int main(void) { return 0; }\n')
+        self.write('os/Makefile', 'all:\n')
+        self.run_git('init', '-q')
+        self.run_git('add', '.')
+        self.commit('Fixture')
+
+    def run_git(self, *args):
+        subprocess.run([self.git_tool, '-C', str(self.repository), *args], check=True,
+                       capture_output=True, env=git_environment())
+
+    def commit(self, message, *extra):
+        self.run_git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                     'commit', '-q', *extra, '-m', message)
+
+    def builder(self, receipts=None):
+        builder = SysrootBuilder({}, receipts=receipts)
+        builder.git_command = self.git_tool
+        builder.environment = {'PATH': os.environ['PATH']}
+        return builder
+
+    def counted(self):
+        calls = []
+        real = provenance.git_source
+        def check(*args, **kwargs):
+            calls.append(args[0])
+            return real(*args, **kwargs)
+        return calls, patch.object(provenance, 'git_source', side_effect=check)
+
+    def test_unchanged_checkout_is_checked_with_git_once_per_run(self):
+        builder = self.builder()
+        calls, counted = self.counted()
+        with counted:
+            record = builder.source(str(self.repository), 'os')
+            self.assertEqual(builder.source(str(self.repository), 'os'), record)
+            later = self.builder(receipts=builder.verification)
+            self.assertEqual(later.source(str(self.repository), 'os'), record)
+            # A new run starts with Git again.
+            self.assertEqual(self.builder().source(str(self.repository), 'os'), record)
+        self.assertEqual(len(calls), 2)
+
+    def test_changed_file_or_commit_is_checked_with_git_again(self):
+        builder = self.builder()
+        record = builder.source(str(self.repository), 'os')
+        # A commit changes only the Git directory, not the working files.
+        self.commit('Empty', '--allow-empty')
+        moved = builder.source(str(self.repository), 'os')
+        self.assertNotEqual(moved['commit'], record['commit'])
+        self.write('os/sys/kern/main.c', 'int main(void) { return 1; }\n')
+        with self.assertRaisesRegex(SDKError, 'clean Git root'):
+            builder.source(str(self.repository), 'os')
+        self.run_git('checkout', '-q', '--', '.')
+        self.write('os/untracked.c', 'int x;\n')
+        with self.assertRaisesRegex(SDKError, 'clean Git root'):
+            builder.source(str(self.repository), 'os')
+
+    def test_git_state_outside_the_root_is_checked_with_git_every_time(self):
+        builder = self.builder()
+        root = str(self.repository)
+        self.assertEqual(builder.git_source_inputs(root), [os.path.realpath(root), self.git_tool])
+        # A submodule whose Git directory is inside the root's Git directory.
+        self.write('os/.gitmodules', '[submodule "sub"]\n\tpath = upstream/sub\n\turl = ../sub\n')
+        self.write('os/.git/modules/sub/HEAD', 'ref: refs/heads/main\n')
+        self.write('os/upstream/sub/.git', 'gitdir: ../../.git/modules/sub\n')
+        self.assertIsNotNone(builder.git_source_inputs(root))
+        # The same submodule with its Git directory elsewhere.
+        self.write('elsewhere/HEAD', 'ref: refs/heads/main\n')
+        self.write('os/upstream/sub/.git', f'gitdir: {self.root / "elsewhere"}\n')
+        self.assertIsNone(builder.git_source_inputs(root))
+        os.unlink(self.repository / 'upstream/sub/.git')
+        os.symlink(self.root / 'elsewhere', self.repository / 'upstream/sub/.git')
+        self.assertIsNone(builder.git_source_inputs(root))
+        os.unlink(self.repository / 'upstream/sub/.git')
+        self.write('os/upstream/sub/.git', 'gitdir: ../../.git/modules/sub\n')
+        self.assertIsNotNone(builder.git_source_inputs(root))
+        # A Git tool named only through PATH can change without a changed file.
+        builder.git_command = 'git'
+        self.assertIsNone(builder.git_source_inputs(root))
+        # A linked worktree keeps its Git directory outside the checkout.
+        linked = self.root / 'linked'
+        self.run_git('worktree', 'add', '-q', '--detach', str(linked))
+        builder.git_command = self.git_tool
+        self.assertIsNone(builder.git_source_inputs(str(linked)))
+        calls, counted = self.counted()
+        with counted:
+            for _ in range(2):
+                builder.source(str(linked), 'os')
+        self.assertEqual(len(calls), 2)

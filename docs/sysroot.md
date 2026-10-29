@@ -166,12 +166,20 @@ plan still stops the run. A fingerprint is not used when an input is missing
 or contains a symbolic link out of it; such inputs are checked by content every
 time.
 
+The OS, Ports and SDK checkouts must be clean Git roots. The first check in a
+run asks Git (status, index entries and commit). A later check of the same
+checkout compares the fingerprint of every file below its root, including the
+Git directory, and of the selected Git program. A checkout is asked with Git
+every time when its Git directory or that of a submodule lies outside its root
+(a linked worktree or an external submodule directory), or when Git is not
+selected by an absolute path, since a commit there would not change a file
+below the root.
+
 Receipts are never written to disk. A new run starts with an empty set and
 checks every input by content again, so a change between runs is found by
-content. These checks still read content or Git state every time: the OS, Ports
-and SDK checkouts must be clean Git roots, the compiler, Python and SDK
-implementation hashes, the native toolset selection, the libedit source and the
-output inspection. Release finalization and publication do not read these
+content. These checks still read content every time: the compiler, Python and
+SDK implementation hashes, the native toolset selection, the libedit source and
+the output inspection. Release finalization and publication do not read these
 receipts.
 
 ## Recorded producer sequence

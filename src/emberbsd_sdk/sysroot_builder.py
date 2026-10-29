@@ -234,7 +234,50 @@ class SysrootBuilder:
         return result.stdout.decode('utf-8', 'strict').strip()
 
     def source(self, root, kind=None):
-        return provenance.git_source(root, kind=kind, git=self.git_command, env=self.environment)
+        def check():
+            return provenance.git_source(root, kind=kind, git=self.git_command, env=self.environment)
+        inputs = self.git_source_inputs(root)
+        if inputs is None:
+            return check()
+        environment = tuple(sorted(process.git_environment(self.environment).items()))
+        return self.verification.verify(('git-source', root, kind, self.git_command, environment),
+                                        inputs, check)
+
+    def git_source_inputs(self, root):
+        """Files that decide a clean-checkout check, or None to check Git every time.
+
+        The checkout and its Git directory must lie below the root, and so
+        must the Git directory of every submodule. Otherwise a commit or
+        reset could change the result without changing a file below it.
+        """
+        if not os.path.isabs(self.git_command) or not os.path.isfile(self.git_command):
+            return None
+        try:
+            root = paths.canonical_existing(root)
+            gitdir = os.path.join(root, '.git')
+            if os.path.islink(gitdir) or not os.path.isdir(gitdir):
+                return None
+            modules = os.path.join(root, '.gitmodules')
+            if os.path.lexists(modules):
+                listed = self.git(root, 'config', '--file', modules, '-z', '--get-regexp', r'^submodule\..*\.path$')
+                for row in listed.split('\0'):
+                    if not row:
+                        continue
+                    path = os.path.join(root, row.split('\n', 1)[1])
+                    marker = os.path.join(path, '.git')
+                    if os.path.islink(marker):
+                        return None
+                    if os.path.isfile(marker):
+                        with open(marker, encoding='utf-8') as handle:
+                            line = handle.read().strip()
+                        if not line.startswith('gitdir: '):
+                            return None
+                        target = os.path.realpath(os.path.join(path, line[len('gitdir: '):]))
+                        if not paths.inside(target, gitdir):
+                            return None
+        except (OSError, UnicodeError, ValueError, SDKError):
+            return None
+        return [root, self.git_command]
 
     def output_path(self, value, boundary):
         path = paths.build_path(value)
