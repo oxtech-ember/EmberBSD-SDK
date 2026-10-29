@@ -4,6 +4,7 @@
 
 import hashlib
 import os
+import posixpath
 from pathlib import Path
 import re
 import shutil
@@ -19,6 +20,7 @@ SOURCE_PREPARATION_API = 2
 # extract_archive accepts skip_directories (compatible API 2 extension).
 ARCHIVE_SKIP_DIRECTORIES_API = 1
 ARCHIVE_FLAT_LAYOUT_API = 1
+ARCHIVE_INTERNAL_SYMLINKS_API = 1
 
 
 def archive_hashes(data):
@@ -30,11 +32,11 @@ def archive_hashes(data):
 
 def extract_archive(archive, destination, root_name, label, *, components=None,
                     max_members=MAX_ARCHIVE_MEMBERS, max_bytes=MAX_EXTRACTED_BYTES,
-                    skip_directories=(), layout='rooted'):
+                    skip_directories=(), layout='rooted', internal_symlinks=False):
     """Extract selected source components with explicit resource bounds.
 
-    Defaults preserve the original regular-file-only contract. Links and special
-    files remain unsupported, including in explicitly selected components.
+    By default links and special files are unsupported. With internal_symlinks,
+    relative symlinks must resolve to an existing member inside the source root.
     layout='flat' places a flat archive under root_name.
     skip_directories names exact path components below the root, such as VCS
     metadata directories, whose members are omitted before any other check.
@@ -46,6 +48,8 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
                 unicodedata.normalize('NFC', name) == name)
     if layout not in ('rooted', 'flat'):
         raise SDKError(f'invalid {label} archive layout')
+    if type(internal_symlinks) is not bool:
+        raise SDKError(f'invalid {label} symlink selection')
     if not safe_name(root_name) or '/' in root_name:
         raise SDKError(f'invalid {label} archive root')
     if (type(max_members) is not int or max_members < 1 or
@@ -65,7 +69,10 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
     destination = Path(destination)
     if not destination.is_dir() or destination.is_symlink():
         raise SDKError(f'{label} extraction destination must be a real directory')
+    if internal_symlinks and os.path.lexists(destination / root_name):
+        raise SDKError(f'{label} archive root must not already exist')
     seen, folded, matched = set(), {}, set()
+    links = []
     extracted_size = 0
 
     def make_parents(path):
@@ -108,6 +115,17 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
                 if folded.get(parent.casefold(), parent) != parent:
                     raise SDKError(f'duplicate {label} archive member')
                 folded[parent.casefold()] = parent
+            if member.issym() and internal_symlinks:
+                target = member.linkname
+                if (not isinstance(target, str) or not target or target.startswith('/') or
+                        '\\' in target or any(ord(c) < 32 or ord(c) == 127 for c in target) or
+                        unicodedata.normalize('NFC', target) != target):
+                    raise SDKError(f'unsafe {label} archive symlink')
+                resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+                if resolved != root_name and not resolved.startswith(root_name + '/'):
+                    raise SDKError(f'escaping {label} archive symlink')
+                links.append((destination.joinpath(*parts), target))
+                continue
             if not (member.isdir() or member.isreg()):
                 raise SDKError(f'{label} archive contains a link or special file')
             path = destination.joinpath(*parts)
@@ -130,6 +148,21 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
                     raise SDKError(f'invalid {label} archive timestamp') from exc
     if components is not None and matched != set(components):
         raise SDKError(f'{label} archive is missing selected source components')
+    if links:
+        make_parents(destination / root_name)
+        root = (destination / root_name).resolve(strict=True)
+    for path, target in links:
+        make_parents(path.parent)
+        if os.path.lexists(path):
+            raise SDKError(f'{label} archive symlink collides with a member')
+        path.symlink_to(target)
+    for path, _ in links:
+        try:
+            resolved = path.resolve(strict=True)
+            if not resolved.is_relative_to(root):
+                raise SDKError(f'escaping {label} archive symlink')
+        except (OSError, RuntimeError) as exc:
+            raise SDKError(f'invalid {label} archive symlink') from exc
 
 
 def apply_patch(patch_tool, patch_path, patch_bytes, cwd, label, *,

@@ -132,6 +132,52 @@ class SourceArchiveTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, 'link or special'):
             self.extract()
 
+    def test_internal_symlinks_are_deferred_and_preserved(self):
+        self.pack([('sub/alias', b'', '../file'), ('chain', b'', 'sub/alias'),
+                   ('file', b'content', None)])
+        self.extract(internal_symlinks=True)
+        root = self.output / 'source'
+        self.assertEqual(os.readlink(root / 'sub/alias'), '../file')
+        self.assertEqual((root / 'chain').read_bytes(), b'content')
+
+    def test_internal_symlinks_reject_escape_missing_loop_and_parent_collision(self):
+        for rows in ([('alias', b'', '../../outside')],
+                     [('alias', b'', '/etc/passwd')],
+                     [('alias', b'', 'missing')],
+                     [('a', b'', 'b'), ('b', b'', 'a')],
+                     [('dir', b'', 'file'), ('dir/child', b'x', None),
+                      ('file', b'x', None)]):
+            with self.subTest(rows=rows):
+                import shutil
+                shutil.rmtree(self.output)
+                self.output.mkdir()
+                self.pack(rows)
+                with self.assertRaises(SDKError):
+                    self.extract(internal_symlinks=True)
+
+    def test_selected_symlink_cannot_reach_unselected_member(self):
+        self.pack([('libcxx/alias', b'', '../llvm/real'),
+                   ('llvm/real', b'x', None)])
+        with self.assertRaises(SDKError):
+            self.extract(components=('libcxx',), internal_symlinks=True)
+
+    def test_internal_symlinks_reject_preexisting_root(self):
+        root = self.output / 'source'
+        root.mkdir()
+        (root / 'host-file').write_bytes(b'old')
+        self.pack([('alias', b'', 'host-file')])
+        with self.assertRaisesRegex(SDKError, 'root must not already exist'):
+            self.extract(internal_symlinks=True)
+
+    def test_internal_symlink_option_does_not_allow_hard_links(self):
+        with tarfile.open(self.archive, 'w') as packed:
+            member = tarfile.TarInfo('source/hard')
+            member.type = tarfile.LNKTYPE
+            member.linkname = 'source/file'
+            packed.addfile(member)
+        with self.assertRaisesRegex(SDKError, 'link or special'):
+            self.extract(internal_symlinks=True)
+
     def test_component_selection_retains_link_refusal(self):
         self.pack([('libcxx/alias', b'', 'real'), ('libcxx/real', b'x', None)])
         with self.assertRaisesRegex(SDKError, 'link or special'):

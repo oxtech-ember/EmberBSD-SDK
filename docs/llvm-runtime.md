@@ -265,6 +265,13 @@ are placed under the caller-selected root with the same path, type, size and
 case-collision checks. Callers check `sourceprep.ARCHIVE_FLAT_LAYOUT_API == 1`.
 The default remains `layout="rooted"`.
 
+Archives that require relative symlinks can opt in with
+`internal_symlinks=True` after checking `ARCHIVE_INTERNAL_SYMLINKS_API == 1`.
+The selected archive root must not exist before extraction. The extractor
+creates links after regular files and rejects absolute, escaping, dangling or
+cyclic targets. Hard links and special files remain unsupported;
+the default still rejects every link.
+
 `skip_directories` names exact path components below the archive root whose
 members are omitted before safety and link checks, while still counting toward
 the member bound. Callers check `sourceprep.ARCHIVE_SKIP_DIRECTORIES_API == 1`.
