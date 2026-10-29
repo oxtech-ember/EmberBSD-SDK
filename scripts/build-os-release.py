@@ -57,6 +57,8 @@ def main():
                         help='prepared LLVM source used by a reused runtime')
     parser.add_argument('--llvm-runtime-stage', action=UniqueOption,
                         help='reuse a completed common LLVM runtime; otherwise build its prerequisites')
+    parser.add_argument('--llvm-runtime-base', action=UniqueOption,
+                        help='immutable foundation used to build the selected LLVM runtime')
     parser.add_argument('--llvm-bootstrap-stage', action=UniqueOption,
                         help='verified bootstrap runtime consumed by the full runtime')
     parser.add_argument('--llvm-objects', action=UniqueOption,

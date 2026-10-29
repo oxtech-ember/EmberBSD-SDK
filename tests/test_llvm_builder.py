@@ -835,6 +835,8 @@ class LLVMBuilderTests(TemporaryCase):
                                '--llvm-stages', '/unused/sdk/stages/llvm-private')
                 self.assertEqual(selected['llvm-objects'], '/unused/sdk/obj/llvm-private')
                 self.assertEqual(selected['llvm-stages'], '/unused/sdk/stages/llvm-private')
+                selected = cli('--llvm-runtime-stage', '/runtime', '--llvm-runtime-base', '/foundation')
+                self.assertEqual(selected['llvm-runtime-base'], '/foundation')
 
     def test_bootstrap_phases_keep_base_aliases_disabled(self):
         options = {'sdk': '/sdk', 'runtime-work': '/sdk/obj/runtime',
