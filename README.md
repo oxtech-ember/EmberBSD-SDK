@@ -143,6 +143,17 @@ Run the contracts from this checkout:
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
+Before a push, run the tests affected by your changes against `origin/main`:
+
+```sh
+python3 scripts/select-tests.py --run
+```
+
+The selector follows imports between SDK modules, scripts and test helpers,
+and tests that name a changed file. It runs the whole suite when a change
+touches the shared core (a module that at least half of the tests use) or
+cannot be mapped. CI runs the whole suite on every push and pull request.
+
 The tests use temporary filesystem trees and build-command fixtures. Their
 results do not establish a real sysroot build or target execution.
 
