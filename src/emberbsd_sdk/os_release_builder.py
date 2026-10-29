@@ -5,13 +5,16 @@
 """Complete OS release orchestration on the shared SDK compiler/runtime contract."""
 
 import gzip
+import hashlib
+import subprocess
+import tempfile
 import os
 from pathlib import Path
 import re
 import shutil
 
 from .errors import SDKError
-from . import inventory, jsonio, libedit, llvm_runtime, llvm_runtime_install
+from . import inventory, jsonio, libedit, llvm_runtime, llvm_runtime_install, process, provenance
 from .target_toolchain import validate_clang_identity
 from .sysroot_builder import (SysrootBuilder, native_host_flags, gettext_target_host_flags, gnu_target_host_flags, check_native_command_identity,
                               validate_native_binding)
@@ -304,6 +307,117 @@ def validate_profile(profile, sha, target):
     check(receipt['outputs'] == profile['output_sha256'], 'Mixed output receipts')
 
 
+def make_release_profile(receipt, timestamp, jobs, shell, commands, source_sha256):
+    target = receipt['signature']['release_profile']
+    sha = receipt['sources']['os']['commit']
+    profile = dict(schema=receipt['version'], status='built',
+                   source_repository='https://github.com/oxtech-ember/EmberBSD',
+                   source_commit=sha, source_timestamp=timestamp,
+                   product_version=receipt['signature']['product_version'],
+                   source_sha256=source_sha256, architecture=target,
+                   machine=target_definition(target)['machine'], jobs=jobs, shell=shell,
+                   commands=commands, output_sha256=receipt['outputs'], sdk_receipt=receipt)
+    validate_profile(profile, sha, target)
+    return profile
+
+
+def publish_release_profile(output, profile):
+    """Publish only absent, or exactly matching, profile and success marker."""
+    output = Path(output)
+    destination = output / 'build-profile.json'
+    marker = output / 'build-success'
+    marker_content = profile['source_commit'] + '\n'
+    if os.path.lexists(marker):
+        check(os.path.lexists(destination), 'Success marker exists without release profile')
+        check(marker.is_file() and not marker.is_symlink() and marker.read_text() == marker_content,
+              'Existing release success marker differs')
+    if os.path.lexists(destination):
+        check(not destination.is_symlink() and jsonio.read_json(destination) == profile, 'Existing release profile differs')
+    else:
+        with tempfile.NamedTemporaryFile(dir=output, prefix='.profile-', delete=False) as tmp:
+            tmpname = tmp.name
+            os.fchmod(tmp.fileno(), 0o644)
+            tmp.write(jsonio.json_bytes(profile)); tmp.flush(); os.fsync(tmp.fileno())
+        try:
+            os.link(tmpname, destination)
+        finally:
+            os.unlink(tmpname)
+    if marker.exists():
+        check(marker.is_file() and not marker.is_symlink() and marker.read_text() == marker_content,
+              'Existing release success marker differs')
+    else:
+        with tempfile.NamedTemporaryFile(dir=output, prefix='.success-', delete=False) as tmp:
+            tmpname = tmp.name
+            os.fchmod(tmp.fileno(), 0o644)
+            tmp.write(marker_content.encode()); tmp.flush(); os.fsync(tmp.fileno())
+        try:
+            os.link(tmpname, marker)
+        finally:
+            os.unlink(tmpname)
+
+
+def finalize_release(destination):
+    """Finalize an unchanged, successfully inspected release without rebuilding."""
+    output = Path(destination).resolve(strict=True)
+    receipt_path = output / SysrootBuilder.RECEIPT
+    receipt = jsonio.read_json(receipt_path)
+    paths = receipt['paths']
+    check(str(output) == paths['destination'], 'Release destination differs from receipt')
+    git = paths.get('git', 'git')
+    lock_root = os.path.join(paths['sdk'], 'obj')
+    with process.ContextLocks([paths['objects'], paths['tools'], str(output)], lock_root):
+        check(jsonio.read_json(receipt_path) == receipt, 'Release receipt changed')
+        check(not (output / SysrootBuilder.MARKER).exists(), 'Release remains incomplete')
+        check(receipt.get('qualification') == 'built-and-inspected' and 'error' not in receipt,
+              'Release has not completed inspection')
+        check(all(row.get('status') == 'passed' for row in receipt['commands']),
+              'Release contains a failed command')
+        for name in ('os', 'ports'):
+            check(provenance.git_source(paths[name], kind=name, git=git) == receipt['sources'][name],
+                  name + ' source differs from receipt')
+        identity = libedit.validate_source(paths['libedit-source'], ports=paths['ports'], git=git)
+        check(identity == receipt['signature']['libedit'], 'libedit source differs from receipt')
+        target = receipt['signature']['release_profile']
+        installed = libedit.validate_installation(output / 'dest', identity, target_definition(target)['elf'])
+        check(installed == receipt['libedit_installation'], 'Installed libedit differs from receipt')
+        signature = receipt['signature']
+        check(signature.get('compiler_family') == 'clang', 'Finalization requires a selected LLVM runtime')
+        runtime = llvm_runtime.validate_stage(paths['llvm-runtime-stage'], target=target,
+            required_components=llvm_runtime.FULL_COMPONENTS, base=paths.get('llvm-runtime-base'))
+        check(runtime == signature['runtime']['manifest'], 'LLVM runtime differs from receipt')
+        if receipt['version'] == 5:
+            llvm_runtime.validate_install(output / 'dest', runtime, target=target)
+            llvm_runtime_install.validate_base_aliases(output / 'dest', runtime)
+        commands = receipt['plan'][1:-1]
+        command = commands[0]
+        shell = command[0]
+        job_values = [v[2:] for v in command if re.fullmatch(r'-j[0-9]+', v)]
+        stamps = [v.split('=', 1)[1] for v in signature['flags'] if v.startswith('MKREPRO_TIMESTAMP=')]
+        check(len(job_values) == 1 and len(stamps) == 1 and stamps[0].isdigit(),
+              'Missing saved release job count or timestamp')
+        jobs, timestamp = job_values[0], int(stamps[0])
+        source_sha256 = inventory.sha256_file(output / 'source.tar.gz')
+        proc = subprocess.Popen([git, '-C', paths['os'], 'archive', '--format=tar.gz',
+                                 receipt['sources']['os']['commit']], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, env=process.git_environment())
+        digest = hashlib.sha256()
+        while True:
+            chunk = proc.stdout.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        proc.stdout.close()
+        error = proc.stderr.read()
+        proc.stderr.close()
+        check(proc.wait() == 0 and digest.hexdigest() == source_sha256,
+              'OS source archive differs from saved commit: ' + error.decode('utf-8', 'replace'))
+        profile = make_release_profile(receipt, timestamp, jobs, shell, commands, source_sha256)
+        for name, expected in receipt['outputs'].items():
+            check(inventory.sha256_file(output / name) == expected, 'Release output changed: ' + name)
+        publish_release_profile(output, profile)
+        return profile
+
+
 class OSReleaseBuilder(SysrootBuilder):
     # A publishable release does not continue after failed stages.
     RESUMES_FAILED_STAGES = False
@@ -407,14 +521,7 @@ class OSReleaseBuilder(SysrootBuilder):
         if not hasattr(self, 'source_sha256'):
             return receipt
         output = Path(self.paths['destination'])
-        profile = dict(schema=receipt['version'], status='built', source_repository='https://github.com/oxtech-ember/EmberBSD',
-                       source_commit=self.sources['os']['commit'], source_timestamp=self.timestamp, product_version=self.product_version,
-                       source_sha256=self.source_sha256, architecture=self.options['target'], machine=self.target['machine'],
-                       jobs=self.options['jobs'], shell=self.shell, commands=self.release_commands,
-                       output_sha256=receipt['outputs'], sdk_receipt=receipt)
-        validate_profile(profile, self.sources['os']['commit'], self.options['target'])
-        jsonio.write_json(output / 'build-profile.json', profile)
-        # Expose success only after receipts and all output checks finish.
-        with open(output / 'build-success', 'x') as handle:
-            handle.write(self.sources['os']['commit'] + '\n')
+        profile = make_release_profile(receipt, self.timestamp, self.options['jobs'], self.shell,
+                                       self.release_commands, self.source_sha256)
+        publish_release_profile(output, profile)
         return receipt

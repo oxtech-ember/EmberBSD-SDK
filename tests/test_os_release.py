@@ -780,6 +780,118 @@ class BuilderReleaseTests(TemporaryCase):
         self.assertEqual(profile['sdk_receipt']['signature']['libedit'], prepared)
         validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
 
+    def test_finalize_inspected_release_and_repeat(self):
+        from emberbsd_sdk.os_release_builder import finalize_release
+        class ClangRelease(OSReleaseBuilder):
+            compiler = llvm_fixtures.ClangBuilder.compiler
+        builder, _ = llvm_fixtures.LLVMBuilderTests.builder(
+            self, release_fixture(self.root, 'aarch64'), ClangRelease)
+        builder.options['base-cxx'] = False
+        receipt = builder.run()
+        output = Path(builder.paths['destination'])
+        expected = jsonio.read_json(output / 'build-profile.json')
+        (output / 'build-profile.json').unlink()
+        (output / 'build-success').unlink()
+        receipt_path = output / '.prebuild-sdk-build.json'
+        original_receipt = receipt_path.read_bytes()
+        for mutation in ('incomplete', 'failed', 'output', 'marker', 'archive', 'runtime'):
+            with self.subTest(mutation=mutation):
+                if mutation in ('incomplete', 'failed'):
+                    bad = copy.deepcopy(receipt)
+                    if mutation == 'incomplete':
+                        bad['qualification'] = 'incomplete'
+                    else:
+                        bad['commands'][0]['status'] = 'failed'
+                    jsonio.write_json(receipt_path, bad, exclusive=False)
+                    changed = receipt_path
+                    prior = original_receipt
+                elif mutation == 'output':
+                    changed = output / next(iter(receipt['outputs']))
+                    prior = changed.read_bytes(); changed.write_bytes(prior + b'x')
+                elif mutation == 'marker':
+                    changed = output / 'dest/usr/share/emberbsd/ports/editline.distinfo'
+                    prior = changed.read_bytes(); changed.write_bytes(b'changed')
+                elif mutation == 'archive':
+                    changed = output / 'source.tar.gz'
+                    prior = changed.read_bytes(); changed.write_bytes(prior + b'x')
+                else:
+                    stage = Path(receipt['paths']['llvm-runtime-stage'])
+                    changed = next(stage / name for name in receipt['signature']['runtime']['manifest']['files'])
+                    prior = changed.read_bytes(); changed.write_bytes(prior + b'x')
+                try:
+                    with self.assertRaises((SDKError, OSError)):
+                        finalize_release(output)
+                    self.assertFalse((output / 'build-success').exists())
+                finally:
+                    changed.write_bytes(prior)
+        incomplete = output / '.prebuild-sdk-build-incomplete'
+        incomplete.write_text('interrupted')
+        with self.assertRaises(SDKError):
+            finalize_release(output)
+        incomplete.unlink()
+        premature = output / 'build-success'
+        premature.write_text(receipt['sources']['os']['commit'] + '\n')
+        with self.assertRaises(SDKError):
+            finalize_release(output)
+        self.assertFalse((output / 'build-profile.json').exists())
+        premature.unlink()
+        existing = output / 'build-profile.json'
+        existing.write_text('not a matching profile')
+        with self.assertRaises(SDKError):
+            finalize_release(output)
+        self.assertEqual(existing.read_text(), 'not a matching profile')
+        self.assertFalse((output / 'build-success').exists())
+        existing.unlink()
+        finalized = finalize_release(output)
+        self.assertEqual(finalized, expected)
+        self.assertEqual(jsonio.read_json(output / 'build-profile.json'), expected)
+        self.assertEqual(finalize_release(output), expected)
+        self.assertEqual((output / 'build-success').read_text(), receipt['sources']['os']['commit'] + '\n')
+        # A profile published before interruption is finished without replacement.
+        (output / 'build-success').unlink()
+        before = (output / 'build-profile.json').read_bytes()
+        self.assertEqual(finalize_release(output), expected)
+        self.assertEqual((output / 'build-profile.json').read_bytes(), before)
+        # A historical SDK commit remains the recorded build provenance.
+        (output / 'build-success').unlink()
+        (output / 'build-profile.json').unlink()
+        historical = copy.deepcopy(receipt)
+        historical['sources']['sdk']['commit'] = 'a' * 40
+        jsonio.write_json(receipt_path, historical, exclusive=False)
+        recovered = finalize_release(output)
+        self.assertEqual(recovered['sdk_receipt']['sources']['sdk']['commit'], 'a' * 40)
+
+    def test_finalize_installed_base_runtime(self):
+        from emberbsd_sdk.os_release_builder import finalize_release
+        class ClangRelease(OSReleaseBuilder):
+            compiler = llvm_fixtures.ClangBuilder.compiler
+        builder, _ = llvm_fixtures.LLVMBuilderTests.builder(
+            self, release_fixture(self.root, 'aarch64'), ClangRelease)
+        with patch('emberbsd_sdk.native_runtime_install.NativeRuntimeInstaller',
+                   FixtureNativeRuntimeInstaller):
+            receipt = builder.run()
+        output = Path(builder.paths['destination'])
+        expected = jsonio.read_json(output / 'build-profile.json')
+        self.assertEqual(receipt['version'], 5)
+        (output / 'build-profile.json').unlink()
+        (output / 'build-success').unlink()
+        runtime = receipt['signature']['runtime']['manifest']
+        changed = output / 'dest' / next(iter(runtime['files']))
+        prior = changed.read_bytes()
+        changed.write_bytes(prior + b'x')
+        with self.assertRaises(SDKError):
+            finalize_release(output)
+        changed.write_bytes(prior)
+        alias = output / 'dest/usr/lib/libc++.so'
+        target = os.readlink(alias)
+        alias.unlink()
+        alias.symlink_to('wrong')
+        with self.assertRaises((SDKError, OSError)):
+            finalize_release(output)
+        alias.unlink()
+        alias.symlink_to(target)
+        self.assertEqual(finalize_release(output), expected)
+
     def test_profile_binds_libedit_recipe_and_command(self):
         options = release_fixture(self.root, 'aarch64')
         receipt = OSReleaseBuilder(options).run()

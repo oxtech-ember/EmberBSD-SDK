@@ -181,3 +181,10 @@ TOOLDIR before building the gettext and static libxml2 consumers. This path
 uses the selected native tools and target runtime; it does not add GNU libintl
 to the native Citrus ABI. The OS base selects plain output without the newer
 color and CSS features.
+
+A successfully inspected release whose profile publication was interrupted can
+be finalized without rebuilding: run `scripts/build-os-release.py finalize
+--sdk-source /absolute/sdk-source --destination /absolute/release-stage` with
+the selected host Python. This verifies the saved producer results and inputs;
+it does not resume a failed or incomplete release. The current finalizer
+supports inspected Clang/LLVM releases.

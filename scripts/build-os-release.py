@@ -18,6 +18,29 @@ class UniqueOption(argparse.Action):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == 'finalize':
+        parser = argparse.ArgumentParser(description='Finalize an already inspected OS release without rebuilding.')
+        parser.add_argument('--destination', required=True)
+        parser.add_argument('--sdk-source', required=True)
+        arguments = parser.parse_args(sys.argv[2:])
+        try:
+            source = Path(arguments.sdk_source).resolve(strict=True)
+            sys.path.insert(0, str(source / 'src'))
+            from emberbsd_sdk import API_VERSION
+            from emberbsd_sdk.errors import SDKError
+            from emberbsd_sdk.os_release_builder import finalize_release
+        except (OSError, ImportError, AttributeError, ValueError) as exc:
+            print(f'OS release finalization: cannot load selected SDK source: {exc}', file=sys.stderr)
+            return 1
+        if type(API_VERSION) is not int or API_VERSION != 1:
+            print('OS release finalization: selected SDK API must be 1', file=sys.stderr)
+            return 1
+        try:
+            print(json.dumps(finalize_release(arguments.destination), ensure_ascii=False, indent=2))
+            return 0
+        except (SDKError, OSError, UnicodeError, ValueError, KeyError) as exc:
+            print(f'OS release finalization: {exc}', file=sys.stderr)
+            return 1
     parser = argparse.ArgumentParser(description='Build an EmberBSD OS release with a native Ports prefix.')
     for name in ('sdk', 'os-source', 'ports', 'compiler', 'jobs', 'sdk-source', 'libedit-source', 'libarchive-source', 'libevent-source', 'host-prefix', 'host-binutils'):
         parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix'}.get(name))
