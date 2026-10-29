@@ -4,6 +4,7 @@
 
 import argparse
 import gzip
+import lzma
 import os
 from pathlib import Path
 import re
@@ -26,6 +27,24 @@ MARKER = re.compile(r'EMBERBSD-CHECK ([A-Za-z0-9_-]+) ([a-z0-9_]+) (PASS|FAIL)\Z
 def _require(condition, message):
     if not condition:
         raise SDKError(message)
+
+
+def _extract_base_archive(archive, root, work, tar, env, log):
+    """Expand the verified xz stream before invoking the selected native tar."""
+    temporary = work / 'base.uncompressed.tar'
+    created = False
+    try:
+        try:
+            with temporary.open('xb') as output:
+                created = True
+                with lzma.open(archive, 'rb') as source:
+                    shutil.copyfileobj(source, output, length=1024 * 1024)
+        except (lzma.LZMAError, EOFError) as exc:
+            raise SDKError(f'cannot decompress base set: {exc}') from exc
+        process.run_logged([tar, '-xpf', str(temporary), '-C', str(root)], log, env=env)
+    finally:
+        if created:
+            temporary.unlink(missing_ok=True)
 
 
 def parse_guest_log(data, nonce, root_device, *, corpus="target-runtime-v1"):
@@ -292,8 +311,8 @@ def run(options):
     work.mkdir()
     root = work / 'tree'
     root.mkdir()
-    process.run_logged([native.tool('tar'), '-xpf', str(set_base), '-C', str(root)],
-                       output / 'extract-base.log', env=process.sanitized_environment({'PATH': native.path}))
+    _extract_base_archive(set_base, root, work, native.tool('tar'),
+                          process.sanitized_environment({'PATH': native.path}), output / 'extract-base.log')
     _copy_test_bundle(tests, root)
     _copy_runtime(sysroot, tests, root, options.compiler_family)
     _install_diagnostic_runcom(os_test_source, root)

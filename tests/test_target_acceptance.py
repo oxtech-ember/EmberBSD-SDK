@@ -2,6 +2,9 @@
 import unittest
 from unittest.mock import patch
 import hashlib
+import lzma
+import os
+import tarfile
 import subprocess
 from pathlib import Path
 import tempfile
@@ -11,7 +14,44 @@ from test_core import SDK_SOURCE, git_environment  # noqa: F401  # puts the SDK 
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.target_acceptance import (CHECKS, GUEST_CHECKS, HOST_CHECKS,
     _clean_source_revision, _copy_runtime, _install_diagnostic_runcom,
-    _select_os_sources, _require_os_makedev, _compile_tests_command, parse_guest_log, run)
+    _select_os_sources, _require_os_makedev, _compile_tests_command, _extract_base_archive, parse_guest_log, run)
+
+class ExtractBaseTests(unittest.TestCase):
+    def test_gnu_longlink_and_cleanup(self):
+        tar = os.environ.get('EMBER_TEST_NBTAR')
+        if not tar:
+            self.skipTest('selected nbtar not supplied')
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            root = work / 'root'
+            root.mkdir()
+            archive = work / 'base.tar.xz'
+            target = 'a' * 101
+            with tarfile.open(archive, 'w:xz', format=tarfile.GNU_FORMAT) as output:
+                entry = tarfile.TarInfo('link')
+                entry.type = tarfile.SYMTYPE
+                entry.linkname = target
+                output.addfile(entry)
+            original = archive.read_bytes()
+            temporary = work / 'base.uncompressed.tar'
+            temporary.write_bytes(b'existing')
+            with self.assertRaises(FileExistsError):
+                _extract_base_archive(archive, root, work, tar, dict(os.environ), work / 'existing.log')
+            self.assertEqual(temporary.read_bytes(), b'existing')
+            temporary.unlink()
+            _extract_base_archive(archive, root, work, tar, dict(os.environ), work / 'extract.log')
+            self.assertEqual(archive.read_bytes(), original)
+            self.assertEqual(os.readlink(root / 'link'), target)
+            self.assertFalse((work / 'base.uncompressed.tar').exists())
+            archive.write_bytes(b'not xz')
+            with self.assertRaises(SDKError):
+                _extract_base_archive(archive, root, work, tar, dict(os.environ), work / 'bad.log')
+            self.assertFalse((work / 'base.uncompressed.tar').exists())
+            archive.write_bytes(lzma.compress(b'not tar'))
+            with self.assertRaises(SDKError):
+                _extract_base_archive(archive, root, work, tar, dict(os.environ), work / 'bad-tar.log')
+            self.assertFalse((work / 'base.uncompressed.tar').exists())
+
 
 PORTS_GUEST_MARKERS = ('target_c11', 'target_cxx20', 'libc_aliases',
                        'base_loader_smoke', 'fork_cas')
