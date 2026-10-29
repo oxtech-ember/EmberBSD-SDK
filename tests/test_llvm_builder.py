@@ -861,6 +861,19 @@ class LLVMBuilderTests(TemporaryCase):
         self.assertEqual(headers['destination'], '/sdk/stages/alternate/headers')
         self.assertEqual(headers['tools'], '/sdk/obj/alternate/tools')
 
+    def test_coordinator_forwards_original_source_to_runtime_verify(self):
+        options = {'sdk': '/sdk', 'runtime-work': '/sdk/obj/runtime', 'target': 'aarch64',
+                   'llvm-runtime-original-source': '/old-source'}
+        coordinator = LLVMCoordinator(options, SysrootBuilder)
+        coordinator.headers = type('Header', (), {'paths': {'python': '/python', 'ports': '/ports',
+            'sdk-source': '/sdk-source', 'llvm-source': '/new-source'}, 'git_command': '/git'})()
+        with patch('emberbsd_sdk.llvm_sysroot.paths.canonical_existing', side_effect=lambda value: value):
+            for phase in ('bootstrap', 'full'):
+                command = coordinator.runtime_command(phase, '/base', verify=True)
+                self.assertEqual(command[command.index('--source') + 1], '/new-source')
+                self.assertEqual(command[command.index('--original-source') + 1], '/old-source')
+                self.assertEqual(command[command.index('--base') + 1], '/base')
+
     def test_coordinator_roots_stay_inside_shared_workspace(self):
         sdk = self.root / 'sdk'
         (sdk / 'obj').mkdir(parents=True)

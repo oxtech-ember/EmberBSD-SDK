@@ -160,8 +160,12 @@ class LLVMCoordinator:
         command = [selected.paths['python'], '-B', os.path.join(selected.paths['ports'], PRODUCER),
                    '--sdk-source', selected.paths['sdk-source']]
         if verify:
-            return command + ['verify', '--stage', stage, '--target', self.options['target'],
-                              '--phase', phase, '--git', selected.git_command, '--base', base]
+            command += ['verify', '--stage', stage, '--target', self.options['target'],
+                        '--phase', phase, '--git', selected.git_command, '--base', base]
+            if self.options.get('llvm-runtime-original-source'):
+                command += ['--source', selected.paths['llvm-source'], '--original-source',
+                            paths.canonical_existing(self.options['llvm-runtime-original-source'])]
+            return command
         command += ['build', '--source', selected.paths['llvm-source'],
                     '--target', self.options['target'], '--phase', phase,
                     '--sysroot', base, '--os-source', selected.paths['os'],
