@@ -573,7 +573,9 @@ class SysrootBuilder:
         return record
 
     SHARED_EXPORT_SCRIPT = 'scripts/pkgsrc-shared-export.py'
-    SHARED_EXPORT_OWNERS = ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tcpdump')
+    SHARED_EXPORT_OWNERS = ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils',
+                            'grep', 'ekermit', 'nvi', 'tcpdump', 'top', 'iscsi', 'ntp',
+                            'libopts', 'gettext', 'libxml2')
 
     def shared_pkgsrc_export(self, patch):
         """Return the one pkgsrc export of this run, or None for older Ports."""

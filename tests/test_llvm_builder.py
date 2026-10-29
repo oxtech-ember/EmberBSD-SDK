@@ -638,13 +638,19 @@ class LLVMBuilderTests(TemporaryCase):
         builder.paths = {'python': '/host/python', 'ports': str(ports), 'sdk-source': '/sdk',
                          'libarchive-source': '/prepared/libarchive', 'byacc-source': '/prepared/byacc',
                          'rcs-source': '/prepared/rcs', 'nvi-source': '/prepared/nvi',
-                         'tdb-source': '/prepared/tdb'}
+                         'tdb-source': '/prepared/tdb', 'top-source': '/prepared/top',
+                         'iscsi-source': '/prepared/iscsi', 'ntp-source': '/prepared/ntp',
+                         'libopts-source': '/prepared/libopts', 'gettext-source': '/prepared/gettext',
+                         'libxml2-source': '/prepared/libxml2'}
         builder.git_command = '/host/git'
         builder.environment = {}
         builder.native = SimpleNamespace(bundle_root='/host')
         commits = {'HEAD': 'a' * 40, 'HEAD:upstream/pkgsrc': '1' * 40}
         packages = {'libarchive-source.py': 'archivers/libarchive', 'byacc': 'devel/byacc', 'rcs': 'devel/rcs',
-                    'nvi': 'editors/nvi', 'tdb': 'databases/tdb'}
+                    'nvi': 'editors/nvi', 'tdb': 'databases/tdb', 'top': 'sysutils/top',
+                    'iscsi': 'devel/netbsd-iscsi-lib', 'ntp': 'net/ntp4',
+                    'autogen': 'devel/autogen', 'gettext': 'devel/gettext',
+                    'libxml2': 'textproc/libxml2'}
         exports, owners = [], []
         def capture(command, **kwargs):
             if command[2] == str(script):
@@ -665,7 +671,7 @@ class LLVMBuilderTests(TemporaryCase):
             self.assertEqual(len(exports), 1)
             self.assertEqual(exports[0][4:], ['--sdk-source', '/sdk', '--git', '/host/git', '--patch', str(tool.resolve())])
             shared = exports[0][3]
-            self.assertEqual(len(owners), 15)
+            self.assertEqual(len(owners), 33)
             for command in owners:
                 self.assertIn('--patch', command)
                 if Path(command[2]).parent.name == 'tdb':
@@ -692,6 +698,39 @@ class LLVMBuilderTests(TemporaryCase):
             self.assertEqual(len(exports), 4)
             self.assertTrue(all('--pkgsrc-export' not in command for command in owners))
         shutil.rmtree(Path(shared).parent)
+
+    def test_shared_export_is_lazy_without_patch_or_supported_owner(self):
+        from types import SimpleNamespace
+        from emberbsd_sdk import sysroot_builder
+        tool = self.root / 'host/bin/gpatch'
+        write(tool, '#!/bin/sh\n', 0o755)
+        builder = SysrootBuilder({})
+        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk',
+                         'gettext-source': '/prepared/gettext'}
+        builder.git_command = '/host/git'
+        builder.environment = {}
+        builder.native = SimpleNamespace(bundle_root='/host')
+        def capture(command, **kwargs):
+            self.assertNotIn('--pkgsrc-export', command)
+            return SimpleNamespace(stdout=json.dumps({'format': 'emberbsd-prepared-source',
+                'version': 1, 'package': 'devel/gettext'}))
+        with patch.object(builder, 'shared_pkgsrc_export') as export, \
+                patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=capture):
+            builder.verify_common_sources()
+            export.assert_not_called()
+        builder.options['source-patch'] = str(tool)
+        builder.paths.pop('gettext-source')
+        builder.paths['tdb-source'] = '/prepared/tdb'
+        def capture_tdb(command, **kwargs):
+            self.assertNotIn('--pkgsrc-export', command)
+            return SimpleNamespace(stdout=json.dumps({'format': 'emberbsd-prepared-source',
+                'version': 1, 'package': 'databases/tdb'}))
+        with patch.object(builder, 'shared_pkgsrc_export') as export, \
+                patch.object(sysroot_builder.native_toolset, 'load_host_prefix',
+                             return_value=SimpleNamespace(tool=lambda role: str(tool))), \
+                patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=capture_tdb):
+            builder.verify_common_sources()
+            export.assert_not_called()
 
     def test_source_comparison_uses_selected_prefix_patch_and_archive(self):
         from types import SimpleNamespace
