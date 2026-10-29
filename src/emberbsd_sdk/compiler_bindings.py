@@ -305,6 +305,11 @@ def compiler_argv(record, role, arguments, *, runtime_path=None):
         native_headers, native_libraries = _native_cxx_options(
             record['native_cxx_runtime'], command[1:] + prefix + arguments + linker,
             legacy_abi=version in (_NATIVE_FORMAT_VERSION, _NATIVE_PLATFORM_FORMAT_VERSION))
+        if not link and '-stdlib++-isystem' in native_headers:
+            # The selected header path makes this binder-owned driver flag
+            # redundant for compile-only operations. Keep user flags intact.
+            prefix = flags['cppflags'] + [flag for flag in flags['cxxflags']
+                                         if flag != '-stdlib=libc++']
         prefix = prefix + native_headers
         if link:
             linker = linker + native_libraries

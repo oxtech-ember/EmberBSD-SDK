@@ -312,6 +312,25 @@ class NativeCxxRuntimeBindingTests(TemporaryCase):
                                 capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
 
+    def test_selected_stdlib_is_removed_only_for_bound_compile(self):
+        record = json.loads((self.root/'commands'/'commands.json').read_text())
+        record['flags']['cxxflags'] = ['-Wall', '-stdlib=libc++', '-Wextra']
+        for action in ('-c', '-E', '-S', '-fsyntax-only'):
+            args = compiler_bindings.compiler_argv(record, 'cxx',
+                                                   [action, 'source.cc'])
+            self.assertNotIn('-stdlib=libc++', args)
+            self.assertLess(args.index('-Wall'), args.index('-Wextra'))
+        args = compiler_bindings.compiler_argv(record, 'cxx', ['source.cc'])
+        self.assertIn('-stdlib=libc++', args)
+        for arguments in (['-nostdinc++', '-c', 'source.cc'],
+                          ['-stdlib=libstdc++', '-c', 'source.cc'],
+                          ['-stdlib++-isystem', str(self.include), '-c', 'source.cc']):
+            args = compiler_bindings.compiler_argv(record, 'cxx', arguments)
+            self.assertIn('-stdlib=libc++', args)
+        args = compiler_bindings.compiler_argv(record, 'cxx',
+                          ['-stdlib=libc++', '-c', 'source.cc'])
+        self.assertEqual(args.count('-stdlib=libc++'), 1)
+
     def test_m64_with_explicit_x86_64_native_selection(self):
         record = json.loads((self.root/'commands'/'commands.json').read_text())
         record['native_cxx_runtime']['targets'] = ['x86_64-apple-darwin']
