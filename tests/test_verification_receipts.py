@@ -197,6 +197,42 @@ class SourceReceiptStoreTests(TemporaryCase):
         scratch.verify_common_sources()
         self.assertEqual(self.content_checks(), 3)
 
+    def routed(self, tools, digest, search=True):
+        builder = self.builder()
+        routing = str(self.root / tools / ('native-routing-' + digest * 64))
+        builder.paths['native-routing'] = routing
+        builder.environment['EMBER_NATIVE_TOOLS'] = routing
+        if search:
+            builder.environment['PATH'] = routing + os.pathsep + '/usr/bin:/bin'
+        return builder
+
+    def test_new_tools_directory_with_the_same_routing_contract_reuses_the_record(self):
+        record = self.routed('tools-1', 'a').verify_common_sources()
+        self.assertEqual(self.routed('tools-2', 'a').verify_common_sources(), record)
+        self.assertEqual(self.content_checks(), 1)
+        material = self.routed('tools-3', 'a').source_receipt_material('byacc', ['verify'], False)
+        self.assertEqual(material['name'], 'byacc')
+        self.assertEqual(material['environment']['EMBER_NATIVE_TOOLS'], 'native-routing-' + 'a' * 64)
+
+    def test_changed_routing_contract_or_unnamed_routing_is_verified_again(self):
+        self.routed('tools-1', 'a', search=False).verify_common_sources()
+        self.routed('tools-2', 'a', search=False).verify_common_sources()
+        self.routed('tools-1', 'b', search=False).verify_common_sources()
+        self.assertEqual(self.content_checks(), 2)
+        # A routing path without a contract digest keeps its full location.
+        for tools in ('tools-1', 'tools-2'):
+            builder = self.builder()
+            routing = str(self.root / tools / 'native-routing')
+            builder.paths['native-routing'] = routing
+            builder.environment['EMBER_NATIVE_TOOLS'] = routing
+            builder.verify_common_sources()
+        self.assertEqual(self.content_checks(), 4)
+        # Other tools on PATH stay part of the record.
+        builder = self.routed('tools-2', 'a')
+        builder.environment['PATH'] += os.pathsep + '/opt/extra'
+        builder.verify_common_sources()
+        self.assertEqual(self.content_checks(), 5)
+
     def test_damaged_or_foreign_entry_is_verified_by_content(self):
         self.builder().verify_common_sources()
         store = self.root / 'receipts'

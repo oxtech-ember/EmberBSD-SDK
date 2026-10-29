@@ -799,8 +799,21 @@ class SysrootBuilder:
         """Everything a stored record depends on besides its input files.
 
         The owner reads Ports and SDK modules and the pinned pkgsrc through
-        Git, so the clean-checkout records of both checkouts are part of it."""
+        Git, so the clean-checkout records of both checkouts are part of it.
+        The native routing tree is named by the digest of its OS contract and
+        is generated from the HOST_* tools already in the environment, so only
+        that name is kept: a new tools directory with the same contract does
+        not invalidate a record."""
         environment = {key: value for key, value in self.environment.items() if key != 'TMPDIR'}
+        routing = getattr(self, 'paths', {}).get('native-routing')
+        routing_name = os.path.basename(routing) if routing else ''
+        if re.fullmatch(r'native-routing-[0-9a-f]{64}', routing_name):
+            for key, value in environment.items():
+                if key == 'EMBER_NATIVE_TOOLS' and value == routing:
+                    environment[key] = routing_name
+                elif key == 'PATH':
+                    environment[key] = os.pathsep.join(routing_name if part == routing else part
+                                                       for part in value.split(os.pathsep))
         return dict(format='emberbsd-source-receipt-material', version=1, name=name,
                     command=list(command), shared_export=bool(shared), git=self.git_command,
                     environment=environment, ports=self.sources['ports'], sdk=self.sources['sdk'])
