@@ -33,6 +33,11 @@ _COMPILE_ONLY = {'-c', '-S', '-E', '-M', '-MM', '-fsyntax-only', '--analyze', '-
 # The C++ driver links its standard library unless one of these drops it.
 _NO_CXX_LIBRARY = {'-nostdlib', '-nodefaultlibs', '-nostdlib++', '-static'}
 _LIBRARY_NAME = re.compile(r'lib[A-Za-z0-9_+-]+')
+# A binding runs execute() from its own copy of these modules, never from
+# the SDK tree that generated it, so a later checkout cannot change it.
+_SNAPSHOT = 'sdk'
+_SNAPSHOT_MODULES = ('__init__.py', 'compiler_bindings.py', 'elf.py', 'errors.py',
+                     'jsonio.py', 'paths.py', 'publication.py')
 
 
 def _words(value):
@@ -384,7 +389,7 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
             raise SDKError('compiler runtime search path requires flags and library names')
         runtime_rpath = dict(flags=list(runtime_rpath['flags']), libraries=list(runtime_rpath['libraries']))
     aliases = {} if aliases is None else aliases
-    if (not isinstance(aliases, dict) or set(aliases) & (set(commands) | {'commands.json'}) or
+    if (not isinstance(aliases, dict) or set(aliases) & (set(commands) | {'commands.json', _SNAPSHOT}) or
             any(not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_+.-]+', name) or
                 name in ('.','..') or not isinstance(target, str) or not os.path.isabs(target)
                 for name, target in aliases.items())):
@@ -441,18 +446,34 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
         record['link_flags'] = link_flags
     if runtime_rpath is not None:
         record['runtime_rpath'] = runtime_rpath
-    module_root = str(Path(__file__).resolve().parents[1])
+    package = Path(__file__).resolve().parent
+    modules = {}
+    for name in _SNAPSHOT_MODULES:
+        paths.regular_file(str(package / name))
+        modules[name] = (package / name).read_bytes()
     content = {'commands.json':jsonio.json_bytes(record)}
     for role in sorted(commands):
         content[role] = (f'#!{python}\nimport sys\nsys.dont_write_bytecode=True\n'
-            f'sys.path.insert(0, {module_root!r})\n'
+            f'sys.path.insert(0, {os.path.join(destination, _SNAPSHOT)!r})\n'
             'from emberbsd_sdk.compiler_bindings import execute\n'
             f'execute({os.path.join(destination, "commands.json")!r}, {role!r}, sys.argv[1:])\n').encode()
     abi = record.get('native_cxx_runtime', {}).get('platform_cxxabi')
     if os.path.lexists(destination):
         paths.real_directory(destination)
-        if set(os.listdir(destination)) != set(content) | set(aliases) | ({'darwin-cxxabi'} if abi else set()):
+        if set(os.listdir(destination)) != (set(content) | set(aliases) | {_SNAPSHOT} |
+                                            ({'darwin-cxxabi'} if abi else set())):
             raise SDKError('compiler binding differs from selected commands')
+        snapshot = os.path.join(destination, _SNAPSHOT)
+        paths.real_directory(snapshot)
+        paths.real_directory(os.path.join(snapshot, 'emberbsd_sdk'))
+        if (os.listdir(snapshot) != ['emberbsd_sdk'] or
+                set(os.listdir(os.path.join(snapshot, 'emberbsd_sdk'))) != set(modules)):
+            raise SDKError('compiler binding was made by a different SDK')
+        for name, data in modules.items():
+            path = os.path.join(snapshot, 'emberbsd_sdk', name)
+            paths.regular_file(path)
+            if Path(path).read_bytes() != data:
+                raise SDKError('compiler binding was made by a different SDK')
         for name, data in content.items():
             path = os.path.join(destination, name)
             paths.regular_file(path)
@@ -478,6 +499,11 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
                 path = Path(stage, name)
                 path.write_bytes(data)
                 path.chmod(0o444 if name == 'commands.json' else 0o555)
+            package = Path(stage, _SNAPSHOT, 'emberbsd_sdk')
+            package.mkdir(parents=True)
+            for name, data in modules.items():
+                (package / name).write_bytes(data)
+                (package / name).chmod(0o444)
             if abi:
                 view = Path(stage, 'darwin-cxxabi')
                 view.mkdir()

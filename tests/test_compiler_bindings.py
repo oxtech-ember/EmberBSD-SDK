@@ -75,6 +75,36 @@ class CompilerBindingTests(TemporaryCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(args, self.commands[role][1:] + arguments)
 
+    def bind_from(self, tree):
+        script = ('import sys\nsys.path.insert(0, sys.argv[1])\n'
+                  'import json\nfrom emberbsd_sdk import compiler_bindings\n'
+                  'compiler_bindings.bind_compilers(sys.argv[2], commands=json.loads(sys.argv[3]),'
+                  ' flags=dict(cppflags=[], cflags=[], cxxflags=[], ldflags=[]), python=sys.executable)\n')
+        return subprocess.run([sys.executable, '-B', '-c', script, str(tree), str(self.destination),
+                               json.dumps(self.commands)], capture_output=True, text=True)
+
+    def test_binding_runs_its_own_sdk_modules_not_the_generating_tree(self):
+        tree = self.root / 'shared checkout'
+        source = Path(compiler_bindings.__file__).resolve().parent
+        (tree / 'emberbsd_sdk').mkdir(parents=True)
+        for name in os.listdir(source):
+            if name.endswith('.py'):
+                (tree / 'emberbsd_sdk' / name).write_bytes((source / name).read_bytes())
+        result = self.bind_from(tree)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # A later checkout of the shared tree must not change the bound compiler.
+        with open(tree / 'emberbsd_sdk' / 'compiler_bindings.py', 'a') as module:
+            module.write('\ndef execute(path, role, arguments):\n    raise SystemExit(99)\n')
+        result = subprocess.run([str(self.destination / 'cc'), '-c', 'x.c'], cwd=self.root,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), ['--selected-cc', '-c', 'x.c'])
+        self.assertNotIn(str(tree), (self.destination / 'cc').read_text())
+        # The same commands from a different SDK do not reuse the binding.
+        result = self.bind_from(tree)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('compiler binding was made by a different SDK', result.stderr)
+
     def test_existing_binding_must_match_and_is_not_overwritten(self):
         self.invoke('cc', ['-c', 'x.c'])
         self.flags['cflags'] = ['-Dchanged']
