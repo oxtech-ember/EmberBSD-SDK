@@ -100,7 +100,8 @@ class LLVMPhaseBuilder(SysrootBuilder):
                 except SDKError as exc:
                     raise SDKError('LLVM OS source tree changed; build a new stage with compatible objects') from exc
                 return self.completed
-        return super().run()
+        self.require_runtime_work()
+        return self._run_preflighted()
 
 
 class LLVMCoordinator:

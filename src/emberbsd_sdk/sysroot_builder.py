@@ -1463,6 +1463,9 @@ class SysrootBuilder:
         self.preflight()
         if self.options.get('plan'):
             return self.receipt
+        return self._run_preflighted()
+
+    def _run_preflighted(self):
         try:
             for name in ('SIGINT', 'SIGTERM', 'SIGHUP'):
                 number = getattr(signal, name)

@@ -988,6 +988,28 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.inspect_payload()
         self.assertFalse((Path(builder.paths['destination'])/'usr/include/unwind.h').exists())
 
+    def test_fresh_headers_preflight_once_per_run(self):
+        original = LLVMPhaseBuilder.preflight
+        with patch.object(LLVMPhaseBuilder, 'preflight', autospec=True,
+                          side_effect=original) as preflight:
+            headers, _ = self.completed_headers()
+            self.assertEqual(preflight.call_count, 1)
+            self.assertEqual(preflight.call_args.args[0], headers)
+            later = type(headers)(headers.options)
+            later.run()
+            self.assertEqual(preflight.call_count, 2)
+            self.assertEqual(preflight.call_args.args[0], later)
+
+    def test_fresh_base_preflight_once_per_run(self):
+        original = LLVMPhaseBuilder.preflight
+        with patch.object(LLVMPhaseBuilder, 'preflight', autospec=True,
+                          side_effect=original) as preflight:
+            base, _, _ = self.bootstrap_base()
+            result = base.run()
+            self.assertEqual(result['qualification'], 'built-and-inspected')
+            self.assertEqual(preflight.call_count, 1)
+            self.assertEqual(preflight.call_args.args[0], base)
+
     def completed_headers(self):
         class Headers(LLVMPhaseBuilder, ClangBuilder):
             def __init__(self, options):

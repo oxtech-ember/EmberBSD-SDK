@@ -356,6 +356,18 @@ class BuilderTests(TemporaryCase):
         (Path(self.options['host-binutils']) / 'host-bfd.mk').unlink()
         self.refusal_unchanged()
 
+    def test_ordinary_builder_plan_preflights_each_run(self):
+        original = ProductionBuilder.preflight
+        with patch.object(ProductionBuilder, 'preflight', autospec=True,
+                          side_effect=original) as preflight:
+            first = B(self.options | {'plan': True})
+            second = B(self.options | {'plan': True})
+            self.assertEqual(first.run()['qualification'], 'not-built')
+            self.assertEqual(second.run()['qualification'], 'not-built')
+            self.assertEqual(preflight.call_count, 2)
+            self.assertEqual([call.args[0] for call in preflight.call_args_list],
+                             [first, second])
+
     def test_read_only_plan_and_exact_native_commands(self):
         before = snapshot(self.root)
         record = self.run_builder(plan=True)
