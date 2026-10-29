@@ -40,6 +40,9 @@ class NativeStageMakeconfTests(unittest.TestCase):
         compiler_bindings.bind_compilers(binding, commands=command, flags=flags,
                                          python=str(compiler), native_cxx_runtime=runtime)
         self.record = binding/'commands.json'
+        self.runtime = runtime
+        self.flags = flags
+        self.python = compiler
         self.base = root/'base.mk'
         self.base.write_text('LOCALBASE= '+str(self.prefix)+'\n'
                              'PKG_DBDIR= '+str(self.staged/'pkgdb')+'\n'
@@ -51,6 +54,46 @@ class NativeStageMakeconfTests(unittest.TestCase):
             packages=str(root/'packages'), binding_record=str(self.record), python=str(compiler),
             buildlinks=['llvm', 'clang'])
 
+    def test_staged_compiler_and_escape(self):
+        root = Path(self.tmp.name).resolve()
+        staged_compiler = self.staged/'bin/clang'
+        staged_compiler.parent.mkdir(parents=True)
+        staged_compiler.write_text('fixture'); staged_compiler.chmod(0o755)
+        binding = root/'staged-binding'
+        commands = {role:[str(staged_compiler)] for role in ('cc', 'cxx', 'cpp')}
+        compiler_bindings.bind_compilers(binding, commands=commands, flags=self.flags,
+                                         python=str(self.python), native_cxx_runtime=self.runtime)
+        options = self.options | dict(binding_record=str(binding/'commands.json'))
+        selected_tool = self.staged/'bin/ld64.lld'
+        selected_tool.write_text('fixture'); selected_tool.chmod(0o755)
+        roles = ('ld', 'ar', 'ranlib', 'nm', 'strip', 'dsymutil', 'llvm_mc', 'libtool_darwin', 'lipo', 'otool', 'install_name_tool', 'llvm_readtapi')
+        options['tools'] = [role + '=' + str(selected_tool) for role in roles]
+        output = Path(write_native_stage_makeconf(**options))
+        self.assertIn('EMBERBSD_DARWIN_LD64_LLD= ' + str(selected_tool), output.read_text())
+        with self.assertRaisesRegex(SDKError, 'stage tool must be executable inside'):
+            write_native_stage_makeconf(**(options | dict(tools=['ld=' + str(self.python)])))
+        with self.assertRaisesRegex(SDKError, 'invalid or repeated staged tool role'):
+            write_native_stage_makeconf(**(options | dict(tools=options['tools'] * 2)))
+        with self.assertRaisesRegex(SDKError, 'staged compiler requires the complete'):
+            write_native_stage_makeconf(**(options | dict(tools=options['tools'][:-1])))
+        mixed_binding = root/'mixed-binding'
+        compiler_bindings.bind_compilers(mixed_binding,
+            commands={'cc':[str(staged_compiler)], 'cxx':[str(self.python)],
+                      'cpp':[str(staged_compiler)]}, flags=self.flags,
+            python=str(self.python), native_cxx_runtime=self.runtime)
+        with self.assertRaisesRegex(SDKError, 'stage binding cannot mix compiler roots'):
+            write_native_stage_makeconf(**(options | dict(binding_record=str(mixed_binding/'commands.json'))))
+        foreign = root/'foreign'; foreign.write_text('fixture'); foreign.chmod(0o755)
+        escaped = self.staged/'bin/escape'; escaped.symlink_to(foreign)
+        with self.assertRaisesRegex(SDKError, 'stage tool must be executable inside'):
+            write_native_stage_makeconf(**(options | dict(tools=['ld=' + str(escaped)])))
+        bad_binding = root/'bad-binding'
+        compiler_bindings.bind_compilers(bad_binding,
+            commands={role:[str(escaped)] for role in ('cc', 'cxx', 'cpp')},
+            flags=self.flags, python=str(self.python), native_cxx_runtime=self.runtime)
+        with self.assertRaisesRegex(SDKError, 'stage binding must use selected'):
+            write_native_stage_makeconf(**(options | dict(binding_record=str(bad_binding/'commands.json'))))
+
     def test_explicit_stage_and_refusals(self):
         output = Path(write_native_stage_makeconf(**self.options))
         text = output.read_text()
@@ -58,6 +101,7 @@ class NativeStageMakeconfTests(unittest.TestCase):
         self.assertIn('EMBERBSD_NATIVE_STAGE_ROOT= '+str(self.stage)+'\n', text)
         self.assertIn('EMBERBSD_NATIVE_STAGE_PREFIX= '+str(self.prefix)+'\n', text)
         self.assertIn('DEPENDS_TARGET= emberbsd-stage-missing-dependency\n', text)
+        self.assertIn('MACHO_USE_LOAD_COMMANDS= yes\n', text)
         self.assertIn('EMBERBSD_NATIVE_CXX_ABI_NAMESPACE= __ember1\n', text)
         self.assertIn('BUILDLINK_PREFIX.llvm= '+str(self.staged)+'\n', text)
         self.assertEqual(write_native_stage_makeconf(**self.options), str(output))

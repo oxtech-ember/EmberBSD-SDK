@@ -32,7 +32,7 @@ NATIVE_STAGE_MAKECONF_API = 1
 
 
 def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root,
-                                packages, binding_record, python, buildlinks):
+                                packages, binding_record, python, buildlinks, tools=()):
     """Render a native replacement-stage overlay using ordinary pkgsrc variables."""
     from . import compiler_bindings, paths
     base = _path(base, existing=True)
@@ -66,10 +66,14 @@ def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root
              runtime.get('library_dir') == os.path.join(staged, 'lib/libc++'),
              'stage requires its matching namespace-specific native C++ binding')
     compiler_bindings.compiler_argv(record, 'cxx', ['-fsyntax-only', '-x', 'c++', '/dev/null'])
+    compiler_roots = set()
     for role in ('cc', 'cxx', 'cpp'):
         command = record['commands'][role]['argv']
-        _require(bool(command) and _inside(os.path.realpath(command[0]), prefix),
-                 'stage binding must use selected host-prefix compilers')
+        _require(bool(command) and (_inside(os.path.realpath(command[0]), prefix) or
+                                    _inside(os.path.realpath(command[0]), staged)),
+                 'stage binding must use selected host-prefix or staged compilers')
+        compiler_roots.add('stage' if _inside(os.path.realpath(command[0]), staged) else 'prefix')
+    _require(len(compiler_roots) == 1, 'stage binding cannot mix compiler roots')
     commands = {role: specification['argv'] for role, specification in record['commands'].items()}
     compiler_bindings.bind_compilers(os.path.dirname(record_path), commands=commands,
         flags=record['flags'], python=python, aliases=record.get('aliases'),
@@ -87,12 +91,39 @@ def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root
              'PKG_DBDIR= ' + os.path.join(staged, 'pkgdb'),
              'EMBERBSD_NATIVE_STAGE_ROOT= ' + stage_root,
              'EMBERBSD_NATIVE_STAGE_PREFIX= ' + prefix,
+             'MACHO_USE_LOAD_COMMANDS= yes',
              'EMBERBSD_NATIVE_CXX_BINDING_RECORD= ' + record_path,
              'EMBERBSD_DARWIN_SEED_CC= ' + os.path.join(os.path.dirname(record_path), 'cc'),
              'EMBERBSD_DARWIN_SEED_CXX= ' + os.path.join(os.path.dirname(record_path), 'cxx'),
              'EMBERBSD_DARWIN_SEED_CPP= ' + os.path.join(os.path.dirname(record_path), 'cpp'),
              'EMBERBSD_NATIVE_CXX_ABI_NAMESPACE= ' + runtime['abi_identity']['namespace'],
              'DEPENDS_TARGET= emberbsd-stage-missing-dependency']
+    tool_vars = {'ld': ('EMBERBSD_DARWIN_LD64_LLD',),
+                 'ar': ('EMBERBSD_DARWIN_AR', 'EMBERBSD_DARWIN_TOOL.ar'),
+                 'ranlib': ('EMBERBSD_DARWIN_RANLIB', 'EMBERBSD_DARWIN_TOOL.ranlib'),
+                 'nm': ('EMBERBSD_DARWIN_NM', 'EMBERBSD_DARWIN_TOOL.nm'),
+                 'strip': ('EMBERBSD_DARWIN_STRIP', 'EMBERBSD_DARWIN_TOOL.strip'),
+                 'dsymutil': ('EMBERBSD_DARWIN_DSYMUTIL',),
+                 'llvm_mc': ('EMBERBSD_DARWIN_LLVM_MC',),
+                 'libtool_darwin': ('EMBERBSD_DARWIN_LIBTOOL',),
+                 'lipo': ('EMBERBSD_DARWIN_TOOL.lipo',),
+                 'otool': ('EMBERBSD_DARWIN_TOOL.otool',),
+                 'install_name_tool': ('EMBERBSD_DARWIN_INSTALL_NAME_TOOL',),
+                 'llvm_readtapi': ('EMBERBSD_DARWIN_TAPI',)}
+    selected = set()
+    for entry in tools:
+        _require('=' in entry, 'stage tool must be ROLE=PATH')
+        role, path = entry.split('=', 1)
+        _require(role in tool_vars and role not in selected, 'invalid or repeated staged tool role')
+        selected.add(role)
+        path = _safe_path(path)
+        _require(os.path.isabs(path) and os.path.normpath(path) == path, 'stage tool must be an absolute normalized path')
+        _require(_inside(os.path.realpath(path), staged) and os.path.isfile(path) and os.access(path, os.X_OK),
+                 'stage tool must be executable inside the selected staged prefix')
+        lines.extend(variable + '= ' + path for variable in tool_vars[role])
+    if compiler_roots == {'stage'}:
+        _require(selected == set(tool_vars), 'staged compiler requires the complete selected LLVM tool roles')
+        lines.append('EMBERBSD_DARWIN_SEED_AS= ' + os.path.join(os.path.dirname(record_path), 'cc') + ' -c -x assembler')
     lines.extend('BUILDLINK_PREFIX.' + name + '= ' + staged for name in buildlinks)
     data = ('\n'.join(lines) + '\n').encode('ascii')
     if os.path.lexists(output):

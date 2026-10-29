@@ -144,7 +144,14 @@ stage root and final prefix so the Ports buildlink layer can route registered
 native providers from that stage; `--buildlink` remains an explicit override. Select the binding's host Python
 with `--python`; the SDK verifies the existing adapters. The overlay selects
 the stage package database and binding after including the base; selected
-compiler executables must belong to the host prefix. Built-in OS providers and
+compiler executables must belong to the host prefix or the selected staged prefix.
+When selecting staged compilers, pass `--tool ROLE=PATH` for each matching
+staged LLVM-family tool: `ld`, `ar`, `ranlib`, `nm`, `strip`, `dsymutil`,
+`llvm_mc`, `libtool_darwin`, `lipo`, `otool`, `install_name_tool` and
+`llvm_readtapi`. The helper checks that each executable resolves within the
+stage and preserves meaningful symlink names. Select matching libraries in a
+bounded runtime view; do not mix staged LLVM with an older compiler. All three
+compiler roles must resolve in the same selected prefix. Built-in OS providers and
 host tools retain the base configuration. Missing dependencies fail instead of
 recursively installing
 into the active prefix; prepare them in the stage before retrying. The helper
