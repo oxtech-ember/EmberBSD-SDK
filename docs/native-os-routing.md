@@ -102,6 +102,16 @@ LLVM coordinator subdirectories inside the existing SDK's `obj` and `stages`
 directories when a different build context must be retained alongside an
 existing one. Existing contexts and stages are not overwritten.
 
+Without `--llvm-stages`, the headers and base stages are kept in a
+subdirectory of `stages/llvm-bootstrap-TARGET` named by a hash of the OS
+source tree (not the commit), the LLVM source record and the compiler record.
+The bootstrap and full runtime stages use the same name below `--runtime-work`.
+A changed OS tree therefore builds new stages, incrementally from the shared
+`obj/llvm-bootstrap` objects, instead of refusing the completed ones; a new
+commit with the same tree reuses them. Each stage is still checked against
+its receipt before reuse. Older stage subdirectories are kept; remove unused
+ones when no build uses them. An explicit `--llvm-stages` is used as given.
+
 The release builder also accepts `--x11-source`, the tree prepared by the Ports
 `scripts/source-inputs/xsrc` owner from the NetBSD 11.0 `xsrc.tgz` set. It is
 valid only for the Clang `aarch64-sysroot` profile. The SDK verifies the

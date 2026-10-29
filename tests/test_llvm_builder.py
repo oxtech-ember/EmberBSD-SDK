@@ -1127,6 +1127,49 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         with self.assertRaisesRegex(SDKError, 'OS source tree changed'):
             type(builder)(builder.options).run()
 
+    def test_os_change_selects_a_new_keyed_stage_and_same_tree_reuses_it(self):
+        headers, _ = self.completed_headers()
+        options = {name: value for name, value in headers.options.items()
+                   if name not in ('destination', 'objects', 'tools', 'llvm-runtime-stage', 'llvm-bootstrap-stage')}
+        options['runtime-work'] = str(Path(options['sdk']) / 'obj/llvm-runtime')
+        built = []
+        class Headers(type(headers)):
+            def __init__(self, selected, phase, receipts=None, select_only=False):
+                LLVMPhaseBuilder.__init__(self, selected, phase, receipts=receipts, select_only=select_only)
+            def build_payload(self):
+                built.append(self.paths['destination'])
+                super().build_payload()
+        class Stop(Exception):
+            pass
+        def headers_stage():
+            coordinator = LLVMCoordinator(options, SysrootBuilder)
+            with patch('emberbsd_sdk.llvm_sysroot.LLVMPhaseBuilder', Headers), \
+                 patch.object(coordinator, 'runtime', side_effect=Stop):
+                with self.assertRaises(Stop):
+                    coordinator.run()
+            return coordinator
+        first = headers_stage()
+        root = Path(options['sdk']) / 'stages/llvm-bootstrap-aarch64'
+        self.assertEqual(Path(first.stage_root).parent, root)
+        self.assertEqual(Path(first.runtime_root).parent, Path(options['runtime-work']))
+        self.assertEqual(built, [first.stage_root + '/headers'])
+        source = options['os']
+        write(Path(source) / 'include/new-header.h', '/* new OS input */\n')
+        commit(source)
+        # The changed tree builds a new stage, reusing the shared objects.
+        second = headers_stage()
+        self.assertNotEqual(second.stage_root, first.stage_root)
+        self.assertEqual(built[-1], second.stage_root + '/headers')
+        self.assertTrue((Path(first.stage_root) / 'headers' / LLVMPhaseBuilder.RECEIPT).exists())
+        git(source, '-c', 'user.name=SDK fixture', '-c', 'user.email=fixture@example.invalid',
+            'commit', '--allow-empty', '-qm', 'Same OS tree')
+        third = headers_stage()
+        self.assertEqual(third.stage_root, second.stage_root)
+        self.assertEqual(len(built), 2)
+        # An explicitly selected stage directory keeps its exact path.
+        explicit = LLVMCoordinator(options | {'llvm-stages': str(root / 'chosen')}, SysrootBuilder)
+        self.assertEqual(explicit.stage_options('headers')['destination'], str(root / 'chosen/headers'))
+
     def test_completed_headers_reject_changed_output_without_dispatch(self):
         builder, _ = self.completed_headers()
         write(Path(builder.paths['destination']) / 'usr/include/stdio.h', 'tampered')

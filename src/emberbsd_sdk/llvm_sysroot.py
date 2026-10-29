@@ -2,6 +2,8 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """First-base LLVM ordering, using the common OS and Ports producers."""
 
+import hashlib
+import json
 import os
 
 from . import inventory, jsonio, llvm_runtime, paths, process, workspace
@@ -33,13 +35,17 @@ def llvm_flags(selected, *, phase, base_cxx=False):
 
 class LLVMPhaseBuilder(SysrootBuilder):
     """Use the ordinary locked builder for the two incomplete OS inputs."""
-    def __init__(self, options, phase, *, receipts=None):
+    def __init__(self, options, phase, *, receipts=None, select_only=False):
         if phase not in ('headers', 'base'):
             raise SDKError('unsupported LLVM OS bootstrap phase')
         super().__init__(options, receipts=receipts)
         self.llvm_phase = phase
+        # Selects the stage key from the inputs; its destination is not used.
+        self.select_only = select_only
 
     def empty_destination(self):
+        if self.select_only:
+            return
         destination = self.paths['destination']
         if paths.entry(destination) is not None and os.listdir(destination):
             saved = jsonio.read_json(os.path.join(destination, self.RECEIPT))
@@ -112,8 +118,12 @@ class LLVMCoordinator:
         # All phases of this run share the receipts; a new run starts empty.
         self.receipts = RunReceipts() if receipts is None else receipts
         self.work = os.path.abspath(self.options['runtime-work'])
+        # Without an explicit --llvm-stages, stages are keyed by their content
+        # inputs, so an OS change selects a new stage instead of refusing the old one.
+        self.keyed = 'llvm-stages' not in self.options
         self.stage_root = self.options.get('llvm-stages', os.path.join(self.options['sdk'], 'stages',
                                       'llvm-bootstrap-' + self.options['target']))
+        self.runtime_root = self.work
         self.object_root = self.options.get('llvm-objects', os.path.join(
             self.options['sdk'], 'obj', 'llvm-bootstrap', self.options['target']))
         self.tools = self.options.get('tools', os.path.join(self.object_root, 'tools'))
@@ -126,18 +136,26 @@ class LLVMCoordinator:
         if phase != 'final':
             options['base-cxx'] = False
         if phase == 'base':
-            options['llvm-runtime-stage'] = os.path.join(self.work, 'bootstrap-stage')
+            options['llvm-runtime-stage'] = os.path.join(self.runtime_root, 'bootstrap-stage')
             options['llvm-runtime-base'] = os.path.join(self.stage_root, 'headers')
         return options
 
     def prepare(self):
         layout = workspace.inspect_layout(self.options['sdk'])
         workspace.require_target(layout, self.options['target'])
+        if self.keyed:
+            selector = LLVMPhaseBuilder(self.stage_options('headers'), 'headers',
+                                        receipts=self.receipts, select_only=True)
+            selector.preflight()
+            key = self.stage_key(selector)
+            self.stage_root = os.path.join(self.stage_root, key)
+            self.runtime_root = os.path.join(self.work, key)
         self.headers = LLVMPhaseBuilder(self.stage_options('headers'), 'headers', receipts=self.receipts)
         self.headers.preflight()
         self.headers.output_path(self.object_root, os.path.join(self.headers.paths['sdk'], 'obj'))
         self.headers.output_path(self.stage_root, os.path.join(self.headers.paths['sdk'], 'stages'))
         self.work = self.headers.output_path(self.work, os.path.join(self.headers.paths['sdk'], 'obj'))
+        self.runtime_root = self.headers.output_path(self.runtime_root, os.path.join(self.headers.paths['sdk'], 'obj'))
         for name, value in self.headers.paths.items():
             if name != 'sdk':
                 paths.reject_overlap(self.work, value)
@@ -151,12 +169,24 @@ class LLVMCoordinator:
         if paths.entry(final) is not None and os.listdir(final):
             raise SDKError('destination must be new or empty; active sysroot is never overwritten')
 
+    def stage_key(self, selected):
+        """Name a stage set by its OS tree, LLVM source and compiler.
+
+        The OS tree, not the commit, matches the completed-stage check; the
+        other inputs are still checked against each stage's receipt."""
+        source = selected.sources['os']
+        material = dict(format='emberbsd-llvm-stage-key', version=1, target=self.options['target'],
+                        os_tree=selected.git(source['path'], 'rev-parse', source['commit'] + '^{tree}'),
+                        llvm_source=selected.llvm_source_record, compiler=selected.compiler_record)
+        encoded = json.dumps(material, sort_keys=True, separators=(',', ':')).encode('utf-8')
+        return 'os-' + hashlib.sha256(encoded).hexdigest()[:20]
+
     def lock(self):
         return process.ContextLocks([self.work], os.path.join(self.headers.paths['sdk'], 'obj'))
 
     def runtime_command(self, phase, base, *, verify=False):
         selected = self.headers
-        stage = os.path.join(self.work, phase + '-stage')
+        stage = os.path.join(self.runtime_root, phase + '-stage')
         command = [selected.paths['python'], '-B', os.path.join(selected.paths['ports'], PRODUCER),
                    '--sdk-source', selected.paths['sdk-source']]
         if verify:
@@ -173,18 +203,18 @@ class LLVMCoordinator:
                     '--host-compiler-family', self.options.get('host-compiler-family', 'clang'),
                     '--target-prefix', selected.paths['compiler'], '--git', selected.git_command,
                     '--jobs', self.options['jobs'],
-                    '--work', os.path.join(self.work, phase + '-work'), '--stage', stage]
+                    '--work', os.path.join(self.runtime_root, phase + '-work'), '--stage', stage]
         if phase == 'full':
-            command += ['--bootstrap-stage', os.path.join(self.work, 'bootstrap-stage')]
+            command += ['--bootstrap-stage', os.path.join(self.runtime_root, 'bootstrap-stage')]
         return command
 
     def runtime(self, phase, base):
         selected = self.headers
-        stage = os.path.join(self.work, phase + '-stage')
+        stage = os.path.join(self.runtime_root, phase + '-stage')
         if paths.entry(stage) is None:
-            selected.mkdirs(self.work, os.path.join(selected.paths['sdk'], 'obj'))
+            selected.mkdirs(self.runtime_root, os.path.join(selected.paths['sdk'], 'obj'))
             selected.execute_external(self.runtime_command(phase, base),
-                os.path.join(self.work, phase + '.json'), os.path.join(self.work, phase + '.log'))
+                os.path.join(self.runtime_root, phase + '.json'), os.path.join(self.runtime_root, phase + '.log'))
         result = process.capture(self.runtime_command(phase, base, verify=True), env=selected.environment)
         record = jsonio.loads_json(result.stdout)
         llvm_runtime.validate_identity(record, target=self.options['target'])
@@ -210,8 +240,8 @@ class LLVMCoordinator:
             self.runtime('bootstrap', os.path.join(self.stage_root, 'headers'))
             LLVMPhaseBuilder(self.stage_options('base'), 'base', receipts=self.receipts).run()
             self.runtime('full', os.path.join(self.stage_root, 'base'))
-            final_options = self.options | {'llvm-runtime-stage': os.path.join(self.work, 'full-stage'),
+            final_options = self.options | {'llvm-runtime-stage': os.path.join(self.runtime_root, 'full-stage'),
                                             'llvm-runtime-base': os.path.join(self.stage_root, 'base'),
-                                            'llvm-bootstrap-stage': os.path.join(self.work, 'bootstrap-stage'),
+                                            'llvm-bootstrap-stage': os.path.join(self.runtime_root, 'bootstrap-stage'),
                                             'tools': self.tools}
             return self.builder_type(final_options, receipts=self.receipts).run()
