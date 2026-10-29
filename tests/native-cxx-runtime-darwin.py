@@ -16,6 +16,8 @@ for name in ('prefix', 'runtime-root', 'sdk', 'work'):
     p.add_argument('--' + name, type=Path, required=True)
 p.add_argument('--target', action='append', default=[])
 p.add_argument('--deployment', required=True)
+p.add_argument('--platform-abi', action='store_true')
+p.add_argument('--expected-abi-version', type=int)
 p.add_argument('--staged', action='store_true', help='load only this test executable from a staged runtime')
 p.add_argument('--cwrapper-config', type=Path)
 p.add_argument('--cwrapper-executable', type=Path)
@@ -36,6 +38,10 @@ commands = {'cc':[str(clang), *base], 'cxx':[str(cxx), *base], 'cpp':[str(clang)
 flags = dict(cppflags=[], cflags=[], cxxflags=[], ldflags=[])
 runtime = dict(include_dir=str(headers), library_dir=str(libs),
                sysroot=str(sdk), targets=a.target, deployment=a.deployment)
+if a.platform_abi:
+    runtime['platform_cxxabi'] = True
+elif a.expected_abi_version is not None:
+    p.error('--expected-abi-version requires --platform-abi')
 environment = process.sanitized_environment()
 environment['PATH'] = str(prefix/'bin') + ':' + str(prefix/'sbin')
 
@@ -61,6 +67,16 @@ with tempfile.TemporaryDirectory(prefix='native cxx binding ', dir=work) as temp
     if a.staged:
         env['DYLD_LIBRARY_PATH'] = str(libs)
     run([str(exe)], env=env)
+    if a.platform_abi:
+        abi_source = root_dir/'abi.cc'
+        abi_assertion = (f'static_assert(_LIBCPPABI_VERSION == {a.expected_abi_version});\n'
+                    if a.expected_abi_version is not None else '')
+        abi_source.write_text('#include <cxxabi.h>\n#include <cstdlib>\n#include <string>\n' + abi_assertion +
+            'int main(){int s=-1; char* p=abi::__cxa_demangle("_Z3foov",0,0,&s);'
+            'bool ok=p && s==0 && std::string(p)=="foo()";std::free(p);return !ok;}\n')
+        abi_exe = root_dir/'abi'
+        run([tools['cxx'], str(abi_source), '-o', str(abi_exe)])
+        run([str(abi_exe)], env=env)
     run([tools['cxx'], '-Wall', '-Werror', '-x', 'c', '-fsyntax-only', '/dev/null'])
     user_include = root_dir/'user'; user_include.mkdir()
     verbose = run([tools['cxx'], '-isystem', str(user_include), '-x', 'c++',

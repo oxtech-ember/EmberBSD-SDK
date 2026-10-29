@@ -221,8 +221,9 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
                  'native C++ runtime, binding directory and Python must be selected together')
         if native_cxx_runtime is not None:
             from . import compiler_bindings
-            _require(isinstance(native_cxx_runtime, dict) and set(native_cxx_runtime) ==
-                     {'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment'},
+            _require(isinstance(native_cxx_runtime, dict) and set(native_cxx_runtime) in
+                     ({'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment'},
+                      {'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment', 'platform_cxxabi'}),
                      'invalid native C++ runtime selection')
             _require(compiler_family == 'clang', 'native C++ runtime requires selected Clang')
             targets = native_cxx_runtime.get('targets')

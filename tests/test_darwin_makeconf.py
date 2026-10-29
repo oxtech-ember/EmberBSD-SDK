@@ -100,6 +100,23 @@ class DarwinMakeconfTests(TemporaryCase):
         self.assertEqual(record['commands']['cxx']['argv'][0], self.tools['cxx'])
         self.assertEqual(record['commands']['cxx']['argv'][-1], '--target=arm64-apple-macos')
 
+    def test_native_runtime_selects_platform_abi_view(self):
+        include = self.root/'headers'; include.mkdir()
+        lib = self.root/'library'; lib.mkdir()
+        for name in ('cxxabi.h', '__cxxabi_config.h'):
+            self.write('abi/usr/include/c++/v1/' + name, '// platform ABI\n')
+        python = str(self.write('initial/bin/python', Path(self.tools['cc']).read_bytes(), 0o755))
+        runtime = dict(include_dir=str(include), library_dir=str(lib),
+                       sysroot=self.options['macos_sdk'], targets=['arm64-apple-macos'],
+                       deployment='26.0', platform_cxxabi=True)
+        binding = self.root/'work/native-cxx'
+        self.render(deployment='26.0', native_cxx_runtime=runtime,
+                    native_cxx_bindings=str(binding), native_cxx_python=python)
+        record = json.loads((binding/'commands.json').read_text())
+        self.assertEqual(record['version'], 3)
+        self.assertEqual((binding/'darwin-cxxabi/cxxabi.h').resolve(),
+                         self.root/'abi/usr/include/c++/v1/cxxabi.h')
+
     def test_native_runtime_rejects_incomplete_or_incompatible_inputs(self):
         include = self.root/'headers'; include.mkdir()
         lib = self.root/'library'; lib.mkdir()
@@ -371,6 +388,22 @@ class DarwinMakeconfTests(TemporaryCase):
         self.assertEqual((code, stderr), (0, ''))
         self.assertIn('EMBERBSD_DARWIN_SEED_CXX= ' + binding + '/cxx\n',
                       Path(json.loads(stdout)['makeconf']).read_text())
+
+    def test_cli_selects_platform_abi(self):
+        include = self.root/'headers'; include.mkdir()
+        library = self.root/'library'; library.mkdir()
+        for name in ('cxxabi.h', '__cxxabi_config.h'):
+            self.write('abi/usr/include/c++/v1/' + name, '// ABI\n')
+        python = str(self.write('initial/bin/python', Path(self.tools['cc']).read_bytes(), 0o755))
+        binding = self.root/'work/native-cxx'
+        self.options['deployment'] = '26.0'
+        args = ('--native-cxx-include', str(include), '--native-cxx-library', str(library),
+                '--native-cxx-deployment', '26.0', '--native-cxx-bindings', str(binding),
+                '--native-cxx-python', python, '--native-cxx-target', 'arm64-apple-macos',
+                '--native-cxx-platform-abi')
+        code, stdout, stderr = self.cli(args)
+        self.assertEqual((code, stderr), (0, ''))
+        self.assertEqual(json.loads((binding/'commands.json').read_text())['version'], 3)
 
     def test_cli_rejects_partial_native_runtime(self):
         code, stdout, stderr = self.cli(('--native-cxx-include', '/partial'))

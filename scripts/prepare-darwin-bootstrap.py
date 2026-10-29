@@ -39,6 +39,7 @@ def main(argv=None):
     for name in ('include', 'library', 'deployment', 'bindings', 'python'):
         parser.add_argument('--native-cxx-' + name, action=UniqueOption)
     parser.add_argument('--native-cxx-target', action='append', default=[])
+    parser.add_argument('--native-cxx-platform-abi', action='store_true')
     parser.add_argument('--tool-phase', choices=('initial', 'full'), action=UniqueOption)
     parser.add_argument('--compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
                         help='Clang by default; select GCC explicitly for a platform exception')
@@ -63,11 +64,13 @@ def main(argv=None):
         native_fields = (args.native_cxx_include, args.native_cxx_library,
                          args.native_cxx_deployment, args.native_cxx_bindings,
                          args.native_cxx_python, args.native_cxx_target)
-        if any(native_fields) and not all(native_fields):
+        if (any(native_fields) or args.native_cxx_platform_abi) and not all(native_fields):
             raise SDKError('select all native C++ runtime inputs together')
         runtime = (dict(include_dir=args.native_cxx_include, library_dir=args.native_cxx_library,
                         sysroot=args.macos_sdk, targets=args.native_cxx_target,
                         deployment=args.native_cxx_deployment) if all(native_fields) else None)
+        if runtime is not None and args.native_cxx_platform_abi:
+            runtime['platform_cxxabi'] = True
         result = write_makeconf(**options, tools=tools, tool_roots=args.tool_root,
             compiler_args={role: getattr(args, role + '_arg') for role in ('cc', 'cxx', 'cpp')},
             ldflags=args.ldflag, source_tools=args.source_tool,

@@ -2,6 +2,7 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Bind exact compiler argument vectors for executable-only consumers."""
 
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -17,9 +18,12 @@ from .errors import SDKError
 
 COMPILER_BINDINGS_API = 3
 NATIVE_CXX_RUNTIME_BINDING_API = 1
+NATIVE_COMPILER_CONTEXT_API = 1
+NATIVE_CXX_PLATFORM_ABI_API = 1
 # Keep compiler-only mappings byte-compatible with existing bindings.
 _FORMAT_VERSION = 1
 _NATIVE_FORMAT_VERSION = 2
+_NATIVE_PLATFORM_FORMAT_VERSION = 3
 _DIRECT_ROLES = {'as', 'ld'}
 _ROLES = {'cc', 'cxx', 'cpp', 'csa'} | _DIRECT_ROLES
 _FLAGS = {'cppflags', 'cflags', 'cxxflags', 'ldflags'}
@@ -92,7 +96,7 @@ def _deployment_version(value):
     return tuple(int(part) for part in (value.split(".") + ["0", "0"])[:3])
 
 
-def _native_cxx_options(runtime, arguments):
+def _native_cxx_options(runtime, arguments, *, context=None):
     """Return selected native header/link defaults without overriding caller options."""
     words = _operation_words(arguments)
     if '--' in words:
@@ -159,19 +163,56 @@ def _native_cxx_options(runtime, arguments):
         match = re.search(r'-apple-macosx?([0-9]+(?:\.[0-9]+){0,2})$', explicit_target)
         if match and _deployment_version(match.group(1)) < minimum:
             raise SDKError('target is older than selected native C++ runtime')
+    if context is not None:
+        context.update(sysroot=explicit_sysroot, deployment=deployment)
     if stdlib not in (None, 'libc++'):
         return [], []
     if any(os.path.realpath(header) != runtime['include_dir'] for header in explicit_headers):
         raise SDKError('C++ standard headers differ from selected native runtime')
-    no_headers = bool(explicit_headers) or bool({'-nostdinc', '-nostdinc++', '-nostdlibinc'} & set(words))
+    no_stdinc = bool({'-nostdinc', '-nostdinc++', '-nostdlibinc'} & set(words))
+    no_headers = bool(explicit_headers) or no_stdinc
     headers = [] if no_headers else [
         '--start-no-unused-arguments', '-stdlib++-isystem', runtime['include_dir'],
         '--end-no-unused-arguments']
+    if isinstance(runtime.get('platform_cxxabi'), dict) and not no_stdinc:
+        headers += ['--start-no-unused-arguments', '-idirafter',
+                    runtime['platform_cxxabi']['view'], '--end-no-unused-arguments']
     if deployment is None:
         headers = ['-mmacosx-version-min=' + runtime['deployment']] + headers
     libraries = [] if _NO_CXX_LIBRARY.intersection(words) or '-r' in words else [
         '-L' + runtime['library_dir']]
     return headers, libraries
+
+
+def validate_native_compiler_context(record):
+    """Require one explicit Darwin SDK and deployment across native compiler roles."""
+    if record.get('format') != 'emberbsd-compiler-binding' or record.get('version') not in (2, 3):
+        raise SDKError('native compiler context requires an SDK native binding')
+    runtime = record.get('native_cxx_runtime')
+    if not isinstance(runtime, dict):
+        raise SDKError('missing native C++ runtime context')
+    flags = record['flags']
+    deployment = None
+    for role in ('cc', 'cxx', 'cpp'):
+        specification = record['commands'][role]
+        if not isinstance(specification, dict) or set(specification) != {'argv'}:
+            raise SDKError('invalid native compiler binding record')
+        command = _words(specification['argv'])
+        extra = flags['cppflags'] + (flags['cxxflags'] if role == 'cxx' else
+                                    flags['cflags'] if role == 'cc' else [])
+        contexts = [command[1:] + extra]
+        if role in ('cc', 'cxx'):
+            contexts.append(contexts[0] + flags['ldflags'] + record.get('link_flags', {}).get(role, []))
+        for arguments in contexts:
+            context = {}
+            _native_cxx_options(runtime, arguments, context=context)
+            if context['sysroot'] is None or context['deployment'] is None:
+                raise SDKError('native compiler requires explicit macOS SDK and deployment')
+            selected = _deployment_version(context['deployment'])
+            if deployment is not None and selected != deployment:
+                raise SDKError('native compiler deployment versions differ')
+            deployment = selected
+    return {'sysroot':runtime['sysroot'], 'deployment':deployment}
 
 
 def compiler_argv(record, role, arguments, *, runtime_path=None):
@@ -183,13 +224,21 @@ def compiler_argv(record, role, arguments, *, runtime_path=None):
     if record.get('format') != 'emberbsd-compiler-binding':
         raise SDKError('invalid compiler binding format')
     version = record.get('version')
-    if type(version) is not int or version not in (_FORMAT_VERSION, _NATIVE_FORMAT_VERSION):
+    if type(version) is not int or version not in (_FORMAT_VERSION, _NATIVE_FORMAT_VERSION, _NATIVE_PLATFORM_FORMAT_VERSION):
         raise SDKError('unsupported compiler binding version')
     specification = record['commands'][role]
-    if version == _NATIVE_FORMAT_VERSION:
+    if version in (_NATIVE_FORMAT_VERSION, _NATIVE_PLATFORM_FORMAT_VERSION):
         if (not isinstance(specification, dict) or set(specification) != {'argv'} or
                 'native_cxx_runtime' not in record):
             raise SDKError('invalid native compiler binding record')
+        runtime = record['native_cxx_runtime']
+        if not isinstance(runtime, dict) or (
+                version == _NATIVE_PLATFORM_FORMAT_VERSION) != ('platform_cxxabi' in runtime):
+            raise SDKError('invalid native C++ platform ABI binding')
+        if version == _NATIVE_PLATFORM_FORMAT_VERSION and (
+                not isinstance(runtime['platform_cxxabi'], dict) or
+                set(runtime['platform_cxxabi']) != {'view', 'headers'}):
+            raise SDKError('invalid native C++ platform ABI binding')
         specification = specification['argv']
     elif 'native_cxx_runtime' in record:
         raise SDKError('native C++ runtime requires compiler binding version 2')
@@ -299,7 +348,8 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
                   commands=commands, flags=flags, aliases=aliases)
     if native_cxx_runtime is not None:
         if (not isinstance(native_cxx_runtime, dict) or
-                set(native_cxx_runtime) != {'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment'}):
+                set(native_cxx_runtime) not in ({'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment'},
+                                                {'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment', 'platform_cxxabi'})):
             raise SDKError('native C++ runtime requires selected include, library, sysroot and targets')
         runtime = dict(native_cxx_runtime)
         for key in ('include_dir', 'library_dir'):
@@ -310,9 +360,26 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
             paths.real_directory(runtime['sysroot'])
         runtime['targets'] = _words(runtime['targets'])
         _deployment_version(runtime['deployment'])
+        if 'platform_cxxabi' in runtime:
+            requested = runtime['platform_cxxabi']
+            if runtime['sysroot'] is None or 'darwin-cxxabi' in aliases:
+                raise SDKError('platform C++ ABI headers require the selected macOS SDK')
+            headers = {}
+            for name in ('cxxabi.h', '__cxxabi_config.h'):
+                selected = paths.canonical_existing(os.path.join(
+                    runtime['sysroot'], 'usr/include/c++/v1', name))
+                paths.regular_file(selected)
+                if os.path.commonpath((selected, runtime['sysroot'])) != runtime['sysroot']:
+                    raise SDKError('platform C++ ABI header escapes the selected SDK')
+                headers[name] = {'path':selected, 'sha256':hashlib.sha256(Path(selected).read_bytes()).hexdigest()}
+            view = dict(view=os.path.join(destination, 'darwin-cxxabi'), headers=headers)
+            if requested is not True and requested != view:
+                raise SDKError('platform C++ ABI header selection changed')
+            runtime['platform_cxxabi'] = view
         # Version 1 readers do not inspect the version field. Their _words()
         # rejects each object below instead of silently omitting this runtime.
-        record['version'] = _NATIVE_FORMAT_VERSION
+        record['version'] = (_NATIVE_PLATFORM_FORMAT_VERSION if 'platform_cxxabi' in runtime
+                             else _NATIVE_FORMAT_VERSION)
         record['commands'] = {role:{'argv':words} for role,words in commands.items()}
         record['native_cxx_runtime'] = runtime
     if link_flags is not None:
@@ -326,15 +393,25 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
             f'sys.path.insert(0, {module_root!r})\n'
             'from emberbsd_sdk.compiler_bindings import execute\n'
             f'execute({os.path.join(destination, "commands.json")!r}, {role!r}, sys.argv[1:])\n').encode()
+    abi = record.get('native_cxx_runtime', {}).get('platform_cxxabi')
     if os.path.lexists(destination):
         paths.real_directory(destination)
-        if set(os.listdir(destination)) != set(content) | set(aliases):
+        if set(os.listdir(destination)) != set(content) | set(aliases) | ({'darwin-cxxabi'} if abi else set()):
             raise SDKError('compiler binding differs from selected commands')
         for name, data in content.items():
             path = os.path.join(destination, name)
             paths.regular_file(path)
             if Path(path).read_bytes() != data or (name != 'commands.json' and not os.access(path, os.X_OK)):
                 raise SDKError('compiler binding differs from selected commands')
+        if abi:
+            directory = os.path.join(destination, 'darwin-cxxabi')
+            paths.real_directory(directory)
+            if set(os.listdir(directory)) != set(abi['headers']):
+                raise SDKError('platform C++ ABI header view differs from selection')
+            for name, header in abi['headers'].items():
+                path = os.path.join(directory, name)
+                if not os.path.islink(path) or os.readlink(path) != header['path']:
+                    raise SDKError('platform C++ ABI header view differs from selection')
         for name, target in aliases.items():
             path = os.path.join(destination, name)
             if not os.path.islink(path) or os.readlink(path) != target:
@@ -346,6 +423,11 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
                 path = Path(stage, name)
                 path.write_bytes(data)
                 path.chmod(0o444 if name == 'commands.json' else 0o555)
+            if abi:
+                view = Path(stage, 'darwin-cxxabi')
+                view.mkdir()
+                for name, header in abi['headers'].items():
+                    os.symlink(header['path'], view / name)
             for name, target in aliases.items():
                 os.symlink(target, os.path.join(stage, name))
             publication.publish_directory_noreplace(stage, destination)

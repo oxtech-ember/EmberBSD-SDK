@@ -361,6 +361,74 @@ class NativeCxxRuntimeBindingTests(TemporaryCase):
         finally:
             os.chdir(old)
 
+    def test_selected_platform_abi_header_view_and_identity(self):
+        directory = self.sdk/'usr/include/c++/v1'; directory.mkdir(parents=True)
+        for name in ('cxxabi.h', '__cxxabi_config.h'):
+            (directory/name).write_text('// selected ' + name + '\n')
+        output = self.root/'platform-binding'
+        selection = dict(self.runtime, platform_cxxabi=True)
+        compiler_bindings.bind_compilers(output, commands=self.commands, flags=self.flags,
+                                        python=sys.executable, native_cxx_runtime=selection)
+        record = json.loads((output/'commands.json').read_text())
+        self.assertEqual(record['version'], 3)
+        view = output/'darwin-cxxabi'
+        self.assertEqual(set(path.name for path in view.iterdir()), {'cxxabi.h', '__cxxabi_config.h'})
+        self.assertEqual((view/'cxxabi.h').resolve(), directory/'cxxabi.h')
+        argv = compiler_bindings.compiler_argv(record, 'cxx', ['-c', 'source.cc'])
+        self.assertIn('-idirafter', argv)
+        self.assertEqual(argv[argv.index('-idirafter') + 1], str(view))
+        self.assertLess(argv.index(str(self.include)), argv.index(str(view)))
+        for role in ('cc', 'cpp'):
+            self.assertNotIn(str(view), compiler_bindings.compiler_argv(record, role, ['-c', 'source.c']))
+        self.assertNotIn(str(view), compiler_bindings.compiler_argv(record, 'cxx', ['-nostdinc++', '-c', 'source.cc']))
+        self.assertNotIn(str(view), compiler_bindings.compiler_argv(record, 'cxx', ['-stdlib=libstdc++', '-c', 'source.cc']))
+        compiler_bindings.bind_compilers(output, commands=self.commands, flags=self.flags,
+                                        python=sys.executable, native_cxx_runtime=selection)
+        link = view/'cxxabi.h'
+        original = os.readlink(link)
+        link.unlink()
+        link.symlink_to(directory/'__cxxabi_config.h')
+        with self.assertRaisesRegex(SDKError, 'view differs'):
+            compiler_bindings.bind_compilers(output, commands=self.commands, flags=self.flags,
+                                            python=sys.executable, native_cxx_runtime=selection)
+        link.unlink()
+        link.symlink_to(original)
+        (directory/'cxxabi.h').write_text('// changed SDK input\n')
+        with self.assertRaisesRegex(SDKError, 'differs'):
+            compiler_bindings.bind_compilers(output, commands=self.commands, flags=self.flags,
+                                            python=sys.executable, native_cxx_runtime=selection)
+        foreign = self.root/'foreign-cxxabi.h'
+        foreign.write_text('// foreign\n')
+        (directory/'cxxabi.h').unlink()
+        (directory/'cxxabi.h').symlink_to(foreign)
+        with self.assertRaisesRegex(SDKError, 'escapes'):
+            compiler_bindings.bind_compilers(self.root/'other-platform-binding', commands=self.commands,
+                flags=self.flags, python=sys.executable, native_cxx_runtime=selection)
+
+    def test_native_compiler_context_checks_all_three_roles(self):
+        record = json.loads((self.root/'commands'/'commands.json').read_text())
+        for role in ('cc', 'cxx', 'cpp'):
+            record['commands'][role]['argv'] += ['-isysroot', str(self.sdk), '-mmacos-version-min=26.0']
+        self.assertEqual(compiler_bindings.validate_native_compiler_context(record)['deployment'], (26, 0, 0))
+        for role in ('cc', 'cxx', 'cpp'):
+            original = list(record['commands'][role]['argv'])
+            for bad in (['--sysroot=/other'], ['-mmacos-version-min=25.0'],
+                        ['-mmacos-version-min=27.0']):
+                record['commands'][role]['argv'] = original + bad
+                with self.subTest(role=role, bad=bad), self.assertRaises(SDKError):
+                    compiler_bindings.validate_native_compiler_context(record)
+            record['commands'][role]['argv'] = original
+        for role in ('cc', 'cxx'):
+            for bad in ('--sysroot=/other', '-mmacos-version-min=27.0', '--target=x86_64-unknown-netbsd'):
+                record['link_flags'] = {role:[bad]}
+                with self.subTest(role=role, link=bad), self.assertRaises(SDKError):
+                    compiler_bindings.validate_native_compiler_context(record)
+        record.pop('link_flags')
+        record['commands']['cc']['argv'] = [str(self.compiler), '-I', '-isysroot', str(self.sdk),
+                                             '-mmacos-version-min=26.0']
+        with self.assertRaisesRegex(SDKError, 'explicit macOS SDK'):
+            compiler_bindings.validate_native_compiler_context(record)
+
     def test_new_records_fail_closed_under_version_one_command_shape(self):
         record = json.loads((self.root/'commands'/'commands.json').read_text())
         self.assertEqual(record['version'], 2)

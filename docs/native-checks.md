@@ -112,3 +112,15 @@ default, and later caller targets are still checked. The MAKECONF exposes its
 the same full argv. Only the C++ compiler is
 routed through the adapter; initial
 bootstrap and target compiler selections remain separate.
+
+For a Darwin runtime that re-exports the platform C++ ABI, select
+`platform_cxxabi=True` in `native_cxx_runtime` (or pass
+`--native-cxx-platform-abi` to the Darwin MAKECONF CLI). The SDK creates an
+owned include view with only `cxxabi.h` and `__cxxabi_config.h` symlinks from
+the selected macOS SDK. Its paths and content hashes are part of the binding
+record; it is searched after the selected libc++ headers. This uses native
+binding record format 3, which earlier SDK readers reject; format 1 and 2
+remain supported. `NATIVE_CXX_PLATFORM_ABI_API == 1` advertises the option.
+The public `validate_native_compiler_context(record)` API, advertised by
+`NATIVE_COMPILER_CONTEXT_API == 1`, checks that CC, CXX and CPP explicitly
+select the same macOS SDK and deployment without duplicating their flags.
