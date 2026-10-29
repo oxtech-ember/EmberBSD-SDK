@@ -155,3 +155,5 @@ Python without that view in its environment and invoke
 The launcher replaces `DYLD_LIBRARY_PATH` only in the executed command's
 environment; it does not modify the parent build or other tools. Select a view
 containing only the runtime libraries required by that executable.
+Use `scripts/run-darwin-with-runtime.py --print-inputs` to obtain the JSON
+list of launcher source files for build-system action dependencies.

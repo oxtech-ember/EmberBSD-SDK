@@ -38,6 +38,18 @@ class RuntimeLoaderTests(unittest.TestCase):
                              {k: v for k, v in before.items()
                               if k != 'DYLD_LIBRARY_PATH'})
 
+    def test_print_inputs_is_independent_and_exact(self):
+        script = Path(__file__).resolve().parents[1]/'scripts/run-darwin-with-runtime.py'
+        result = subprocess.run([sys.executable, '-B', str(script), '--print-inputs'],
+                                text=True, capture_output=True, check=True)
+        inputs = json.loads(result.stdout)
+        self.assertEqual(inputs, [str(script.resolve()), str(Path(runtime_loader.__file__).resolve())])
+        self.assertTrue(all(Path(path).is_file() and Path(path).is_absolute() for path in inputs))
+        with patch.object(runtime_loader.os, 'execvpe') as execute, \
+             redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            runtime_loader.main(['--print-inputs', '--runtime-view', '/tmp'])
+        execute.assert_not_called()
+
     def test_rejects_ambiguous_or_missing_inputs(self):
         for platform, arguments in [('darwin', ['--runtime-view', 'relative', '--', 'tool']),
                                     ('darwin', ['--runtime-view', '/missing', '--', 'tool']),
