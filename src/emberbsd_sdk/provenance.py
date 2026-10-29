@@ -22,6 +22,9 @@ def git_source(root, *, kind=None, git='git', env=None):
     if invoke('config', '--bool', '--default', 'false', '--get', 'core.sparseCheckout').strip() == b'true':
         raise SDKError(f'sparse checkout is not a complete source tree: {root}')
     external = []
+    # Directories already found real in this call. A directory is added only
+    # after all of its ancestors, so each one needs a single lstat.
+    real_directories = {root}
     for row in invoke('ls-files', '-v', '--stage', '-z').split(b'\0'):
         if not row:
             continue
@@ -50,9 +53,12 @@ def git_source(root, *, kind=None, git='git', env=None):
         current = root
         for part in name.split('/')[:-1]:
             current = os.path.join(current, part)
+            if current in real_directories:
+                continue
             ancestor = entry(current)
             if ancestor is None or not stat.S_ISDIR(ancestor.st_mode):
                 raise SDKError(f'tracked source ancestor is not a real directory: {root}: {name}')
+            real_directories.add(current)
     sha = invoke('rev-parse', '--verify', 'HEAD^{commit}').decode('ascii').strip()
     if re.fullmatch('[0-9a-f]{40}', sha) is None:
         raise SDKError(f'expected a full Git commit: {root}')
