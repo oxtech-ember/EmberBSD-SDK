@@ -80,6 +80,31 @@ class DarwinMakeconfTests(TemporaryCase):
         self.assertIn('EMBERBSD_SDK_SOURCE= ' + source + '\n',
                       Path(self.options['output']).read_text())
 
+    def test_namespace_specific_runtime_is_recorded_in_makeconf_binding(self):
+        import json
+        include = self.root/'headers'; include.mkdir()
+        (include/'__config_site').write_text('#define _LIBCPP_ABI_NAMESPACE __ember1\n')
+        lib = self.root/'library'; lib.mkdir()
+        (lib/'libc++_ember1.1.0.dylib').write_text('fixture')
+        (lib/'libc++_ember1.1.dylib').symlink_to('libc++_ember1.1.0.dylib')
+        (lib/'libc++.dylib').symlink_to('libc++_ember1.1.dylib')
+        abi = self.root/'abi/usr/include/c++/v1'; abi.mkdir(parents=True)
+        for name in ('cxxabi.h', '__cxxabi_config.h'):
+            (abi/name).write_text('fixture')
+        python = str(self.write('initial/bin/python', Path(self.tools['cc']).read_bytes(), 0o755))
+        runtime = dict(include_dir=str(include), library_dir=str(lib),
+            sysroot=self.options['macos_sdk'], targets=['arm64-apple-macos'], deployment='26.0',
+            platform_cxxabi=True, abi_identity=dict(namespace='__ember1',
+                                                   linker_target='libc++_ember1.1.dylib'))
+        binding = str(self.root/'work/native-cxx-ember')
+        self.render(deployment='26.0', native_cxx_runtime=runtime,
+                    native_cxx_bindings=binding, native_cxx_python=python)
+        record = json.loads((Path(binding)/'commands.json').read_text())
+        self.assertEqual(record['version'], 4)
+        self.assertEqual(record['native_cxx_runtime']['abi_identity'], runtime['abi_identity'])
+        self.assertIn('EMBERBSD_NATIVE_CXX_BINDING_RECORD= '+binding+'/commands.json\n',
+                      Path(self.options['output']).read_text())
+
     def test_explicit_native_runtime_routes_cxx_through_common_binding(self):
         import json
         include = self.root/'headers'; include.mkdir()

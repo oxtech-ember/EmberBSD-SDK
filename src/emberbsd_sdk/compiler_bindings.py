@@ -20,10 +20,12 @@ COMPILER_BINDINGS_API = 3
 NATIVE_CXX_RUNTIME_BINDING_API = 1
 NATIVE_COMPILER_CONTEXT_API = 1
 NATIVE_CXX_PLATFORM_ABI_API = 1
+NATIVE_CXX_ABI_IDENTITY_API = 1
 # Keep compiler-only mappings byte-compatible with existing bindings.
 _FORMAT_VERSION = 1
 _NATIVE_FORMAT_VERSION = 2
 _NATIVE_PLATFORM_FORMAT_VERSION = 3
+_NATIVE_ABI_FORMAT_VERSION = 4
 _DIRECT_ROLES = {'as', 'ld'}
 _ROLES = {'cc', 'cxx', 'cpp', 'csa'} | _DIRECT_ROLES
 _FLAGS = {'cppflags', 'cflags', 'cxxflags', 'ldflags'}
@@ -96,7 +98,39 @@ def _deployment_version(value):
     return tuple(int(part) for part in (value.split(".") + ["0", "0"])[:3])
 
 
-def _native_cxx_options(runtime, arguments, *, context=None):
+def _cxx_abi_namespace(content):
+    definitions = re.findall(
+        r'^[ \t]*#[ \t]*(define|undef)[ \t]+_LIBCPP_ABI_NAMESPACE(?:[ \t]+([^\r\n]*))?[ \t]*$',
+        content, re.MULTILINE)
+    if len(definitions) != 1 or definitions[0][0] != 'define':
+        raise SDKError('native C++ ABI namespace must have one definition')
+    return definitions[0][1].strip()
+
+
+def _validate_cxx_abi_identity(runtime):
+    identity = runtime.get('abi_identity')
+    if not isinstance(identity, dict) or set(identity) != {'namespace', 'linker_target'}:
+        raise SDKError('invalid native C++ ABI identity')
+    namespace = identity['namespace']
+    target = identity['linker_target']
+    if (not isinstance(namespace, str) or not re.fullmatch(r'__[A-Za-z0-9_]+', namespace) or
+            not isinstance(target, str) or not re.fullmatch(r'lib[A-Za-z0-9_+.-]+\.dylib', target)):
+        raise SDKError('invalid native C++ ABI namespace or linker target')
+    config = Path(runtime['include_dir']) / '__config_site'
+    try:
+        content = config.read_text(encoding='utf-8')
+        link = Path(runtime['library_dir']) / 'libc++.dylib'
+        selected = os.readlink(link)
+    except OSError as exc:
+        raise SDKError('selected native C++ ABI files are missing') from exc
+    resolved = os.path.realpath(link.parent / target)
+    if (_cxx_abi_namespace(content) != namespace or
+            selected != target or not (link.parent / target).is_file() or
+            os.path.commonpath((resolved, runtime['library_dir'])) != runtime['library_dir']):
+        raise SDKError('native C++ runtime ABI identity changed')
+
+
+def _native_cxx_options(runtime, arguments, *, context=None, legacy_abi=False):
     """Return selected native header/link defaults without overriding caller options."""
     words = _operation_words(arguments)
     if '--' in words:
@@ -167,6 +201,14 @@ def _native_cxx_options(runtime, arguments, *, context=None):
         context.update(sysroot=explicit_sysroot, deployment=deployment)
     if stdlib not in (None, 'libc++'):
         return [], []
+    if 'abi_identity' in runtime:
+        _validate_cxx_abi_identity(runtime)
+    elif legacy_abi:
+        # Legacy native records were created for the platform __1 ABI.
+        config = Path(runtime['include_dir']) / '__config_site'
+        if config.is_file():
+            if _cxx_abi_namespace(config.read_text(encoding='utf-8')) != '__1':
+                raise SDKError('legacy native C++ binding cannot select a changed ABI')
     if any(os.path.realpath(header) != runtime['include_dir'] for header in explicit_headers):
         raise SDKError('C++ standard headers differ from selected native runtime')
     no_stdinc = bool({'-nostdinc', '-nostdinc++', '-nostdlibinc'} & set(words))
@@ -186,7 +228,7 @@ def _native_cxx_options(runtime, arguments, *, context=None):
 
 def validate_native_compiler_context(record):
     """Require one explicit Darwin SDK and deployment across native compiler roles."""
-    if record.get('format') != 'emberbsd-compiler-binding' or record.get('version') not in (2, 3):
+    if record.get('format') != 'emberbsd-compiler-binding' or record.get('version') not in (2, 3, 4):
         raise SDKError('native compiler context requires an SDK native binding')
     runtime = record.get('native_cxx_runtime')
     if not isinstance(runtime, dict):
@@ -205,7 +247,8 @@ def validate_native_compiler_context(record):
             contexts.append(contexts[0] + flags['ldflags'] + record.get('link_flags', {}).get(role, []))
         for arguments in contexts:
             context = {}
-            _native_cxx_options(runtime, arguments, context=context)
+            _native_cxx_options(runtime, arguments, context=context,
+                                legacy_abi=record['version'] in (2, 3))
             if context['sysroot'] is None or context['deployment'] is None:
                 raise SDKError('native compiler requires explicit macOS SDK and deployment')
             selected = _deployment_version(context['deployment'])
@@ -224,18 +267,20 @@ def compiler_argv(record, role, arguments, *, runtime_path=None):
     if record.get('format') != 'emberbsd-compiler-binding':
         raise SDKError('invalid compiler binding format')
     version = record.get('version')
-    if type(version) is not int or version not in (_FORMAT_VERSION, _NATIVE_FORMAT_VERSION, _NATIVE_PLATFORM_FORMAT_VERSION):
+    if type(version) is not int or version not in (_FORMAT_VERSION, _NATIVE_FORMAT_VERSION, _NATIVE_PLATFORM_FORMAT_VERSION, _NATIVE_ABI_FORMAT_VERSION):
         raise SDKError('unsupported compiler binding version')
     specification = record['commands'][role]
-    if version in (_NATIVE_FORMAT_VERSION, _NATIVE_PLATFORM_FORMAT_VERSION):
+    if version in (_NATIVE_FORMAT_VERSION, _NATIVE_PLATFORM_FORMAT_VERSION, _NATIVE_ABI_FORMAT_VERSION):
         if (not isinstance(specification, dict) or set(specification) != {'argv'} or
                 'native_cxx_runtime' not in record):
             raise SDKError('invalid native compiler binding record')
         runtime = record['native_cxx_runtime']
         if not isinstance(runtime, dict) or (
-                version == _NATIVE_PLATFORM_FORMAT_VERSION) != ('platform_cxxabi' in runtime):
+                version in (_NATIVE_PLATFORM_FORMAT_VERSION, _NATIVE_ABI_FORMAT_VERSION)) != ('platform_cxxabi' in runtime):
             raise SDKError('invalid native C++ platform ABI binding')
-        if version == _NATIVE_PLATFORM_FORMAT_VERSION and (
+        if (version == _NATIVE_ABI_FORMAT_VERSION) != ('abi_identity' in runtime):
+            raise SDKError('invalid native C++ ABI identity binding')
+        if version in (_NATIVE_PLATFORM_FORMAT_VERSION, _NATIVE_ABI_FORMAT_VERSION) and (
                 not isinstance(runtime['platform_cxxabi'], dict) or
                 set(runtime['platform_cxxabi']) != {'view', 'headers'}):
             raise SDKError('invalid native C++ platform ABI binding')
@@ -258,7 +303,8 @@ def compiler_argv(record, role, arguments, *, runtime_path=None):
     linker = flags['ldflags'] + record.get('link_flags', {}).get(role, []) if link else []
     if role == 'cxx' and 'native_cxx_runtime' in record:
         native_headers, native_libraries = _native_cxx_options(
-            record['native_cxx_runtime'], command[1:] + prefix + arguments + linker)
+            record['native_cxx_runtime'], command[1:] + prefix + arguments + linker,
+            legacy_abi=version in (_NATIVE_FORMAT_VERSION, _NATIVE_PLATFORM_FORMAT_VERSION))
         prefix = prefix + native_headers
         if link:
             linker = linker + native_libraries
@@ -349,7 +395,8 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
     if native_cxx_runtime is not None:
         if (not isinstance(native_cxx_runtime, dict) or
                 set(native_cxx_runtime) not in ({'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment'},
-                                                {'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment', 'platform_cxxabi'})):
+                                                {'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment', 'platform_cxxabi'},
+                                                {'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment', 'platform_cxxabi', 'abi_identity'})):
             raise SDKError('native C++ runtime requires selected include, library, sysroot and targets')
         runtime = dict(native_cxx_runtime)
         for key in ('include_dir', 'library_dir'):
@@ -360,6 +407,8 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
             paths.real_directory(runtime['sysroot'])
         runtime['targets'] = _words(runtime['targets'])
         _deployment_version(runtime['deployment'])
+        if 'abi_identity' in runtime:
+            _validate_cxx_abi_identity(runtime)
         if 'platform_cxxabi' in runtime:
             requested = runtime['platform_cxxabi']
             if runtime['sysroot'] is None or 'darwin-cxxabi' in aliases:
@@ -378,7 +427,8 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
             runtime['platform_cxxabi'] = view
         # Version 1 readers do not inspect the version field. Their _words()
         # rejects each object below instead of silently omitting this runtime.
-        record['version'] = (_NATIVE_PLATFORM_FORMAT_VERSION if 'platform_cxxabi' in runtime
+        record['version'] = (_NATIVE_ABI_FORMAT_VERSION if 'abi_identity' in runtime else
+                             _NATIVE_PLATFORM_FORMAT_VERSION if 'platform_cxxabi' in runtime
                              else _NATIVE_FORMAT_VERSION)
         record['commands'] = {role:{'argv':words} for role,words in commands.items()}
         record['native_cxx_runtime'] = runtime

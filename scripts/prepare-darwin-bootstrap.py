@@ -40,6 +40,8 @@ def main(argv=None):
         parser.add_argument('--native-cxx-' + name, action=UniqueOption)
     parser.add_argument('--native-cxx-target', action='append', default=[])
     parser.add_argument('--native-cxx-platform-abi', action='store_true')
+    parser.add_argument('--native-cxx-abi-namespace', action=UniqueOption)
+    parser.add_argument('--native-cxx-linker-target', action=UniqueOption)
     parser.add_argument('--tool-phase', choices=('initial', 'full'), action=UniqueOption)
     parser.add_argument('--compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
                         help='Clang by default; select GCC explicitly for a platform exception')
@@ -64,13 +66,19 @@ def main(argv=None):
         native_fields = (args.native_cxx_include, args.native_cxx_library,
                          args.native_cxx_deployment, args.native_cxx_bindings,
                          args.native_cxx_python, args.native_cxx_target)
-        if (any(native_fields) or args.native_cxx_platform_abi) and not all(native_fields):
+        abi_fields = (args.native_cxx_abi_namespace, args.native_cxx_linker_target)
+        if (any(native_fields) or args.native_cxx_platform_abi or any(abi_fields)) and not all(native_fields):
             raise SDKError('select all native C++ runtime inputs together')
+        if any(abi_fields) and (not all(abi_fields) or not args.native_cxx_platform_abi):
+            raise SDKError('native C++ ABI identity requires namespace, linker target and platform ABI')
         runtime = (dict(include_dir=args.native_cxx_include, library_dir=args.native_cxx_library,
                         sysroot=args.macos_sdk, targets=args.native_cxx_target,
                         deployment=args.native_cxx_deployment) if all(native_fields) else None)
         if runtime is not None and args.native_cxx_platform_abi:
             runtime['platform_cxxabi'] = True
+        if runtime is not None and all(abi_fields):
+            runtime['abi_identity'] = dict(namespace=args.native_cxx_abi_namespace,
+                                           linker_target=args.native_cxx_linker_target)
         result = write_makeconf(**options, tools=tools, tool_roots=args.tool_root,
             compiler_args={role: getattr(args, role + '_arg') for role in ('cc', 'cxx', 'cpp')},
             ldflags=args.ldflag, source_tools=args.source_tool,

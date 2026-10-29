@@ -223,7 +223,8 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
             from . import compiler_bindings
             _require(isinstance(native_cxx_runtime, dict) and set(native_cxx_runtime) in
                      ({'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment'},
-                      {'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment', 'platform_cxxabi'}),
+                      {'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment', 'platform_cxxabi'},
+                      {'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment', 'platform_cxxabi', 'abi_identity'}),
                      'invalid native C++ runtime selection')
             _require(compiler_family == 'clang', 'native C++ runtime requires selected Clang')
             targets = native_cxx_runtime.get('targets')

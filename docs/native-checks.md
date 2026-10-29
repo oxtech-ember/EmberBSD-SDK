@@ -124,3 +124,14 @@ remain supported. `NATIVE_CXX_PLATFORM_ABI_API == 1` advertises the option.
 The public `validate_native_compiler_context(record)` API, advertised by
 `NATIVE_COMPILER_CONTEXT_API == 1`, checks that CC, CXX and CPP explicitly
 select the same macOS SDK and deployment without duplicating their flags.
+
+For a namespace-specific native runtime, also select `abi_identity` with its
+`namespace` and the immediate `linker_target` of `libc++.dylib`. The SDK checks
+these against the selected `__config_site` and the library symlink chain; the
+producer validates the dylib's actual install name. This uses binding format 4,
+which older readers reject. `NATIVE_CXX_ABI_IDENTITY_API == 1` advertises it.
+The Darwin MAKECONF CLI accepts the same values as `--native-cxx-abi-namespace`
+and `--native-cxx-linker-target` together with `--native-cxx-platform-abi`.
+Choose a new binding directory when the ABI changes so compile commands and
+their build-system caches are invalidated. Existing format 2 and 3 bindings reject a
+selected config that explicitly names a namespace other than `__1`.

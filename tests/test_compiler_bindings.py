@@ -361,6 +361,56 @@ class NativeCxxRuntimeBindingTests(TemporaryCase):
         finally:
             os.chdir(old)
 
+    def test_native_abi_identity_and_legacy_mismatch(self):
+        directory = self.sdk/'usr/include/c++/v1'; directory.mkdir(parents=True)
+        for name in ('cxxabi.h', '__cxxabi_config.h'):
+            (directory/name).write_text('// selected ' + name + '\n')
+        config = self.include/'__config_site'
+        config.write_text('#define _LIBCPP_ABI_NAMESPACE __1\n')
+        old = self.root/'legacy-platform-binding'
+        compiler_bindings.bind_compilers(old, commands=self.commands, flags=self.flags,
+            python=sys.executable, native_cxx_runtime=dict(self.runtime, platform_cxxabi=True))
+        legacy = json.loads((old/'commands.json').read_text())
+        self.assertEqual(legacy['version'], 3)
+        config.write_text('#define _LIBCPP_ABI_NAMESPACE __ember1\n')
+        final = self.lib/'libc++_ember1.1.0.dylib'; final.write_text('library')
+        soname = self.lib/'libc++_ember1.1.dylib'; soname.symlink_to(final.name)
+        linker = self.lib/'libc++.dylib'; linker.symlink_to(soname.name)
+        selection = dict(self.runtime, platform_cxxabi=True,
+            abi_identity=dict(namespace='__ember1', linker_target=soname.name))
+        output = self.root/'ember-binding'
+        compiler_bindings.bind_compilers(output, commands=self.commands, flags=self.flags,
+                                        python=sys.executable, native_cxx_runtime=selection)
+        record = json.loads((output/'commands.json').read_text())
+        self.assertEqual(record['version'], 4)
+        self.assertIn('-L'+str(self.lib), compiler_bindings.compiler_argv(record, 'cxx', ['x.cc']))
+        with self.assertRaisesRegex(SDKError, 'legacy.*changed ABI'):
+            compiler_bindings.compiler_argv(legacy, 'cxx', ['-c', 'x.cc'])
+        legacy_v2 = json.loads((self.root/'commands'/'commands.json').read_text())
+        with self.assertRaisesRegex(SDKError, 'legacy.*changed ABI'):
+            compiler_bindings.compiler_argv(legacy_v2, 'cxx', ['-c', 'x.cc'])
+        self.assertIn('-stdlib=libstdc++', compiler_bindings.compiler_argv(
+            legacy_v2, 'cxx', ['-stdlib=libstdc++', '-c', 'x.cc']))
+        for content in ('#define _LIBCPP_ABI_NAMESPACE __ember1\n#undef _LIBCPP_ABI_NAMESPACE\n',
+                        '#define _LIBCPP_ABI_NAMESPACE __ember1\n#define _LIBCPP_ABI_NAMESPACE __1\n'):
+            config.write_text(content)
+            with self.assertRaisesRegex(SDKError, 'one definition'):
+                compiler_bindings.compiler_argv(record, 'cxx', ['-c', 'x.cc'])
+            with self.assertRaisesRegex(SDKError, 'one definition'):
+                compiler_bindings.compiler_argv(legacy, 'cxx', ['-c', 'x.cc'])
+        config.write_text('#define _LIBCPP_ABI_NAMESPACE __1\n')
+        with self.assertRaisesRegex(SDKError, 'identity changed'):
+            compiler_bindings.compiler_argv(record, 'cxx', ['-c', 'x.cc'])
+        config.write_text('#define _LIBCPP_ABI_NAMESPACE __ember1\n')
+        linker.unlink(); linker.symlink_to('libc++.1.dylib')
+        with self.assertRaisesRegex(SDKError, 'identity changed'):
+            compiler_bindings.compiler_argv(record, 'cxx', ['x.cc'])
+        linker.unlink(); linker.symlink_to(soname.name)
+        soname.unlink(); soname.symlink_to(self.root/'foreign.dylib')
+        (self.root/'foreign.dylib').write_text('foreign')
+        with self.assertRaisesRegex(SDKError, 'identity changed'):
+            compiler_bindings.compiler_argv(record, 'cxx', ['x.cc'])
+
     def test_selected_platform_abi_header_view_and_identity(self):
         directory = self.sdk/'usr/include/c++/v1'; directory.mkdir(parents=True)
         for name in ('cxxabi.h', '__cxxabi_config.h'):
