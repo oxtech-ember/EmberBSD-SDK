@@ -666,6 +666,24 @@ class SysrootBuilder:
         _SHARED_PKGSRC_EXPORTS[key] = directory
         return directory
 
+    OPTIONAL_SHARED_EXPORT_OWNERS = ('tdb', 'ppp', 'libpcap', 'tcp-wrappers')
+
+    def owner_supports_shared_export(self, script, memo):
+        """Ask the selected owner CLI; older owners retain their existing route."""
+        command = [self.paths['python'], '-B', script, '--sdk-source', self.paths['sdk-source'],
+                   '--git', self.git_command, 'verify-source', '--help']
+        def probe():
+            output = process.capture(command, env=self.environment).stdout
+            try:
+                help_text = output.decode('utf-8') if isinstance(output, bytes) else output
+            except UnicodeDecodeError as exc:
+                raise SDKError('invalid source owner help output') from exc
+            if not isinstance(help_text, str) or not re.search(r'(?m)^usage:\s+.*verify-source', help_text):
+                raise SDKError('invalid source owner help output')
+            return re.search(r'(?<![\w-])--pkgsrc-export(?![\w-])', help_text) is not None
+        return self.verification.verify(('source-owner-help', tuple(command)),
+                                        self.receipt_tools(command), probe, memo)
+
     def verify_common_sources(self):
         result = {}
         patch = self.options.get('source-patch')
@@ -716,7 +734,11 @@ class SysrootBuilder:
                 command += ['--sdk-source', self.paths['sdk-source'], '--git', self.git_command, 'verify-source', '--source', self.paths[name + '-source']]
             if name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') and patch:
                 command += ['--patch', patch]
-                if name in self.SHARED_EXPORT_OWNERS:
+                supports_shared = name in self.SHARED_EXPORT_OWNERS
+                if (name in self.OPTIONAL_SHARED_EXPORT_OWNERS and
+                        os.path.isfile(os.path.join(self.paths['ports'], self.SHARED_EXPORT_SCRIPT))):
+                    supports_shared = self.owner_supports_shared_export(command[2], memo)
+                if supports_shared:
                     if shared is None:
                         shared = self.shared_pkgsrc_export(patch) or ''
                     if shared:

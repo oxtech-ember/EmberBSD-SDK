@@ -656,6 +656,8 @@ class LLVMBuilderTests(TemporaryCase):
             if command[2] == str(script):
                 exports.append(command)
                 return SimpleNamespace(stdout=b'{}')
+            if command[-1] == '--help':
+                return SimpleNamespace(stdout=b'usage: source.py verify-source [--source SOURCE]\n')
             owners.append(command)
             name = Path(command[2]).name if command[2].endswith('libarchive-source.py') else Path(command[2]).parent.name
             return SimpleNamespace(stdout=json.dumps({'format': 'emberbsd-prepared-source', 'version': 1,
@@ -698,6 +700,75 @@ class LLVMBuilderTests(TemporaryCase):
             self.assertEqual(len(exports), 4)
             self.assertTrue(all('--pkgsrc-export' not in command for command in owners))
         shutil.rmtree(Path(shared).parent)
+
+    def test_optional_owner_export_capabilities_and_cache(self):
+        from types import SimpleNamespace
+        from emberbsd_sdk import sysroot_builder
+        ports = self.root / 'ports-capabilities'
+        write(ports / SysrootBuilder.SHARED_EXPORT_SCRIPT, 'exporter')
+        tool = self.root / 'host-capabilities/bin/gpatch'
+        write(tool, '#!/bin/sh\n', 0o755)
+        packages = {'tdb': 'databases/tdb', 'ppp': 'net/pppd',
+                    'libpcap': 'net/libpcap', 'tcp_wrappers': 'security/tcp_wrappers'}
+        names = {'tdb': 'tdb', 'ppp': 'ppp', 'libpcap': 'libpcap', 'tcp_wrappers': 'tcp-wrappers'}
+        builder = SysrootBuilder({'source-patch': str(tool)})
+        builder.paths = {'python': '/host/python', 'ports': str(ports), 'sdk-source': '/sdk'}
+        for dirname, name in names.items():
+            write(ports / 'scripts/source-inputs' / dirname / 'source.py', dirname)
+            builder.paths[name + '-source'] = '/prepared/' + name
+        builder.git_command, builder.environment = '/host/git', {}
+        builder.native = SimpleNamespace(bundle_root='/host')
+        probes, verified = [], []
+        supported = {'tdb', 'libpcap'}
+        def capture(command, **kwargs):
+            name = Path(command[2]).parent.name
+            if command[-1] == '--help':
+                probes.append(name)
+                extra = ' [--pkgsrc-export PATH]' if name in supported else ''
+                return SimpleNamespace(stdout=('usage: source.py verify-source' + extra + '\n').encode())
+            verified.append(command)
+            return SimpleNamespace(stdout=json.dumps({'format': 'emberbsd-prepared-source',
+                'version': 1, 'package': packages[name]}))
+        with patch.object(sysroot_builder.native_toolset, 'load_host_prefix',
+                          return_value=SimpleNamespace(tool=lambda role: str(tool))), \
+             patch.object(builder, 'shared_pkgsrc_export', return_value='/shared') as export, \
+             patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=capture):
+            builder.verify_common_sources()
+            builder.verify_common_sources()
+            self.assertEqual(sorted(probes), sorted(packages))
+            self.assertEqual(export.call_count, 2)
+            for command in verified:
+                name = Path(command[2]).parent.name
+                self.assertEqual('--pkgsrc-export' in command, name in supported)
+            # Every owner must support both the new and legacy CLI.
+            for enabled in (set(packages), set()):
+                supported.clear(); supported.update(enabled)
+                for dirname in names:
+                    write(ports / 'scripts/source-inputs' / dirname / 'source.py', dirname + str(len(enabled)))
+                probes.clear(); verified.clear()
+                builder.verify_common_sources()
+                self.assertEqual(sorted(probes), sorted(packages))
+                for command in verified:
+                    name = Path(command[2]).parent.name
+                    self.assertEqual('--pkgsrc-export' in command, name in enabled)
+            builder.options.pop('source-patch')
+            probes.clear(); export.reset_mock()
+            builder.verify_common_sources()
+            self.assertEqual(probes, [])
+            export.assert_not_called()
+
+    def test_optional_owner_invalid_help_fails(self):
+        from types import SimpleNamespace
+        from emberbsd_sdk.errors import SDKError
+        builder = SysrootBuilder({})
+        builder.paths = {'python': '/host/python', 'sdk-source': '/sdk'}
+        builder.git_command, builder.environment = '/host/git', {}
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'not help')):
+            with self.assertRaisesRegex(SDKError, 'invalid source owner help'):
+                builder.owner_supports_shared_export('/owner.py', {})
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=SDKError('owner failed')):
+            with self.assertRaisesRegex(SDKError, 'owner failed'):
+                builder.owner_supports_shared_export('/owner.py', {})
 
     def test_shared_export_is_lazy_without_patch_or_supported_owner(self):
         from types import SimpleNamespace
