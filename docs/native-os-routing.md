@@ -107,3 +107,7 @@ The optional `--nvi-source` selects the common Ports nvi source for the
 native OS producer. `--nvi-archive` and `--source-patch` support verification
 when the effective Ports inputs change. Native nvi uses the base DB1 API;
 the separate package uses Berkeley DB 18.
+
+The optional `--ppp-source` selects the common Ports PPP source for the OS
+producer. `--ppp-archive` and `--source-patch` permit verification against
+changed recipe inputs.

@@ -148,6 +148,24 @@ class LLVMBuilderTests(TemporaryCase):
             builder.require_nvi_source_support()
             run.assert_not_called()
 
+    def test_ppp_source_requires_real_os_producer(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'os': str(self.root / 'os'), 'ppp-source': '/prepared/ppp', 'tools': '/build/tools'}
+        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
+        builder.environment = {}
+        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/old/dist\n')):
+            with self.assertRaisesRegex(SDKError, 'does not support EMBER_PPP_SOURCE'):
+                builder.require_ppp_source_support()
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/prepared/ppp\n')) as run:
+            builder.require_ppp_source_support()
+        self.assertIn('/os/external/bsd/ppp/usr.sbin/pppd', run.call_args.args[0][5])
+        del builder.paths['ppp-source']
+        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
+            builder.require_ppp_source_support()
+            run.assert_not_called()
+
     def test_optional_ekermit_source_verified_by_owner(self):
         from types import SimpleNamespace
         builder = SysrootBuilder({})
@@ -169,6 +187,17 @@ class LLVMBuilderTests(TemporaryCase):
         with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
             self.assertEqual(builder.verify_common_sources(), {'nvi': record})
         self.assertIn('/ports/scripts/source-inputs/nvi/source.py', run.call_args.args[0])
+
+    def test_optional_ppp_source_verified_by_owner(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'ppp-source': '/prepared/ppp'}
+        builder.git_command = '/host/git'
+        builder.environment = {}
+        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'net/pppd'}
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
+            self.assertEqual(builder.verify_common_sources(), {'ppp': record})
+        self.assertIn('/ports/scripts/source-inputs/ppp/source.py', run.call_args.args[0])
 
     def test_rcs_source_requires_real_os_producer(self):
         from types import SimpleNamespace
