@@ -14,7 +14,8 @@ from test_core import SDK_SOURCE, git_environment  # noqa: F401  # puts the SDK 
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.target_acceptance import (CHECKS, GUEST_CHECKS, HOST_CHECKS,
     _clean_source_revision, _copy_runtime, _copy_test_bundle, _install_diagnostic_runcom,
-    _select_os_sources, _require_os_makedev, _compile_tests_command, _extract_base_archive, parse_guest_log, run)
+    _select_os_sources, _require_os_makedev, _compile_tests_command, _extract_base_archive,
+    _efi_boot_inputs, _qemu_efi_command, parse_guest_log, run)
 
 class TestBundleTests(unittest.TestCase):
     def test_required_target_options_are_copied(self):
@@ -34,6 +35,34 @@ class TestBundleTests(unittest.TestCase):
             (bundle / 'target-options.sh').unlink()
             with self.assertRaises(SDKError):
                 _copy_test_bundle(bundle, root / 'missing')
+
+
+class EFIBootTests(unittest.TestCase):
+    def test_selected_firmware_loader_and_qemu_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix, tree = root / 'prefix', root / 'tree'
+            firmware = prefix / 'share/qemu/edk2-aarch64-code.fd'
+            loader = tree / 'usr/mdec/bootaa64.efi'
+            firmware.parent.mkdir(parents=True)
+            loader.parent.mkdir(parents=True)
+            firmware.write_bytes(b'firmware')
+            loader.write_bytes(b'loader')
+            selected, selected_loader = _efi_boot_inputs(prefix, tree)
+            self.assertEqual((selected, selected_loader), (firmware.resolve(), loader))
+            argv = _qemu_efi_command('/qemu', firmware, '/root.ffs', '/boot.img', '/serial')
+            self.assertLess(argv.index('file=/root.ffs,if=none,format=raw,id=root,readonly=on'),
+                            argv.index('file=/boot.img,if=none,format=raw,id=boot,readonly=on'))
+            self.assertIn('virtio-rng-pci,rng=rng', argv)
+            self.assertIn('rng-random,id=rng,filename=/dev/urandom', argv)
+            self.assertNotIn('-kernel', argv)
+            self.assertEqual(argv[argv.index('-bios') + 1], str(firmware))
+            firmware.unlink()
+            outside = root / 'outside'
+            outside.write_bytes(b'foreign')
+            firmware.symlink_to(outside)
+            with self.assertRaises(SDKError):
+                _efi_boot_inputs(prefix, tree)
 
 
 class ExtractBaseTests(unittest.TestCase):

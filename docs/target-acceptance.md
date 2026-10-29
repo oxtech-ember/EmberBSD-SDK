@@ -12,7 +12,12 @@ revision, an OS test/helper source snapshot, the shared Ports source, the
 selected sysroot and target compiler, and one native prefix. It extracts the
 build's base set, adds the test programs, selected runtime libraries, and the
 diagnostic `/etc/rc`, builds the root with that build's `nbmakefs`, `nbmtree`
-and `DESTDIR/dev/MAKEDEV`, then boots the build's `netbsd-EMBER64.gz`. The root
+and `DESTDIR/dev/MAKEDEV`. It boots the build's `netbsd-EMBER64.gz` through
+the base set's `bootaa64.efi` and the selected prefix's QEMU EDK2 firmware.
+A same-build `nbmakefs` creates a separate FAT boot volume; the FFS root disk
+is attached first. A virtio RNG uses the host OS random device. The firmware
+is read-only, and the result records hashes of the firmware, loader, boot
+configuration, and boot volume. The root
 device is mandatory; the runner does not assume a QEMU unit number. It verifies
 the mounted root is read-only and uses tmpfs for test scratch files.
 

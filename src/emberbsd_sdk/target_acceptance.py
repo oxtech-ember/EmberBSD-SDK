@@ -47,6 +47,29 @@ def _extract_base_archive(archive, root, work, tar, env, log):
             temporary.unlink(missing_ok=True)
 
 
+def _efi_boot_inputs(host_prefix, root):
+    prefix = Path(host_prefix).resolve(strict=True)
+    firmware = (prefix / 'share/qemu/edk2-aarch64-code.fd').resolve(strict=True)
+    _require(firmware.is_file() and firmware.is_relative_to(prefix),
+             'QEMU EFI firmware must be a file within the selected native prefix')
+    loader = root / 'usr/mdec/bootaa64.efi'
+    _require(loader.is_file() and not loader.is_symlink(),
+             'base set is missing its EFI boot loader')
+    return firmware, loader
+
+
+def _qemu_efi_command(qemu, firmware, root_image, boot_image, serial):
+    return [str(qemu), '-machine', 'virt,accel=tcg', '-cpu', 'cortex-a72', '-m', '1024',
+            '-smp', '2', '-display', 'none', '-monitor', 'none', '-no-reboot',
+            '-serial', 'file:' + str(serial), '-bios', str(firmware),
+            '-drive', 'file=' + str(root_image) + ',if=none,format=raw,id=root,readonly=on',
+            '-device', 'virtio-blk-pci,drive=root',
+            '-drive', 'file=' + str(boot_image) + ',if=none,format=raw,id=boot,readonly=on',
+            '-device', 'virtio-blk-pci,drive=boot',
+            '-object', 'rng-random,id=rng,filename=/dev/urandom',
+            '-device', 'virtio-rng-pci,rng=rng', '-net', 'none']
+
+
 def parse_guest_log(data, nonce, root_device, *, corpus="target-runtime-v1"):
     """Validate the complete nonce-bound guest protocol; reject noise as evidence."""
     _require(corpus in ('target-runtime-v1', 'target-runtime-v2'), 'unknown target runtime corpus')
@@ -333,14 +356,21 @@ def run(options):
     kernel = work / 'netbsd-EMBER64'
     with gzip.open(kernel_gz, 'rb') as source, kernel.open('xb') as target:
         shutil.copyfileobj(source, target)
+    firmware, loader = _efi_boot_inputs(host_prefix, root)
+    esp = work / 'esp'
+    (esp / 'EFI/BOOT').mkdir(parents=True)
+    shutil.copy2(loader, esp / 'EFI/BOOT/BOOTAA64.EFI')
+    shutil.copy2(kernel, esp / 'netbsd')
+    boot_config = esp / 'boot.cfg'
+    boot_config.write_text('menu=EmberBSD:boot fs0:\\netbsd root=' + options.root_device +
+                           ' console=plcom0\ndefault=1\ntimeout=1\n')
+    boot_image = work / 'boot.efi.img'
+    process.run_logged([str(tools / 'bin/nbmakefs'), '-t', 'msdos', '-s', '64m',
+                        '-o', 'F=16', str(boot_image), str(esp)],
+                       output / 'make-efi.log', env=image_env)
     serial = output / 'target-acceptance.log'
     qemu_log = output / 'qemu.log'
-    argv = [qemu, '-machine', 'virt,accel=tcg', '-cpu', 'cortex-a72', '-m', '1024',
-        '-smp', '2', '-display', 'none', '-monitor', 'none', '-no-reboot',
-        '-serial', 'file:' + str(serial), '-kernel', str(kernel),
-        '-append', 'root=' + options.root_device + ' console=plcom0',
-        '-drive', 'file=' + str(image) + ',if=none,format=raw,id=root,readonly=on',
-        '-device', 'virtio-blk-pci,drive=root', '-net', 'none']
+    argv = _qemu_efi_command(qemu, firmware, image, boot_image, serial)
     process.run_logged(argv, qemu_log, env=process.sanitized_environment({'PATH': native.path}),
                        timeout_seconds=options.timeout)
     checks = parse_guest_log(serial.read_bytes(), nonce, options.root_device, corpus='target-runtime-v2')
@@ -356,6 +386,8 @@ def run(options):
         os_build_profile_sha256=sha256_file(profile_path),
         base_set_sha256=sha256_file(set_base), kernel_sha256=sha256_file(kernel_gz),
         root_ffs_sha256=sha256_file(image), qemu_sha256=sha256_file(qemu),
+        efi_firmware_sha256=sha256_file(firmware), efi_loader_sha256=sha256_file(loader),
+        efi_boot_config_sha256=sha256_file(boot_config), efi_image_sha256=sha256_file(boot_image),
         qemu_banner=qemu_banner, guest_log_sha256=sha256_file(serial),
         sysroot_identity_sha256=sha256_file(sysroot_identity_path),
         runtime_overlay=dict(method=('verify-existing-base-runtime' if options.compiler_family == 'clang'
