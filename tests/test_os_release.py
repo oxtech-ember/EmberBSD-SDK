@@ -766,6 +766,20 @@ class BuilderReleaseTests(TemporaryCase):
                 self.assertFalse((output / 'build-success').exists())
                 self.assertFalse((output / 'build-profile.json').exists())
 
+    def test_release_accepts_unchanged_libedit_after_unrelated_ports_commit(self):
+        options = release_fixture(self.root, 'aarch64')
+        source = Path(options['libedit-source'])
+        prepared = jsonio.read_json(source / 'libedit-source.json')
+        ports = Path(options['ports'])
+        write(ports / 'unrelated-package.txt', 'unrelated change\n')
+        commit(ports)
+        receipt = OSReleaseBuilder(options).run()
+        profile = jsonio.read_json(Path(options['destination']) / 'build-profile.json')
+        historical = prepared['recipe']['ports_commit']
+        self.assertNotEqual(historical, receipt['sources']['ports']['commit'])
+        self.assertEqual(profile['sdk_receipt']['signature']['libedit'], prepared)
+        validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
+
     def test_profile_binds_libedit_recipe_and_command(self):
         options = release_fixture(self.root, 'aarch64')
         receipt = OSReleaseBuilder(options).run()
@@ -777,7 +791,7 @@ class BuilderReleaseTests(TemporaryCase):
                 if mutation == 'missing':
                     del signature['libedit']
                 elif mutation == 'ports':
-                    signature['libedit']['recipe']['ports_commit'] = 'f' * 40
+                    signature['libedit']['recipe']['ports_commit'] = 'invalid'
                 elif mutation == 'tree':
                     signature['libedit']['tree_sha256'] = 'bad'
                 elif mutation == 'installation':

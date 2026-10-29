@@ -213,7 +213,6 @@ def validate_profile(profile, sha, target):
     signature = receipt['signature']
     check(signature['product_version'] == version, 'Mixed source product version')
     libedit.validate_identity(signature['libedit'])
-    check(signature['libedit']['recipe']['ports_commit'] == receipt['sources']['ports']['commit'], 'Mixed libedit Ports source')
     installed = receipt['libedit_installation']
     check(isinstance(installed, dict) and set(installed) == {'distinfo_sha256', 'library', 'library_sha256', 'machine', 'soname'} and
           installed['distinfo_sha256'] == signature['libedit']['recipe']['distinfo_sha256'] and
