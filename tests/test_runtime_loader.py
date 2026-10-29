@@ -62,6 +62,23 @@ class RuntimeLoaderTests(unittest.TestCase):
                 runtime_loader.main(arguments)
 
     @unittest.skipUnless(sys.platform == 'darwin', 'Darwin loader environment')
+    def test_bound_command_preserves_arguments_and_environment(self):
+        with tempfile.TemporaryDirectory(prefix='runtime binding ') as temp:
+            root = Path(temp).resolve(); view = root/'view with spaces'; view.mkdir()
+            adapter = root/'bound linker'
+            runtime_loader.bind_command(str(adapter), python=sys.executable,
+                                        view=str(view), command=sys.executable)
+            env = dict(os.environ, DYLD_LIBRARY_PATH='parent-value')
+            code = ('import json,os,sys; print(json.dumps([os.environ["DYLD_LIBRARY_PATH"],'
+                    'sys.argv[1:],sys.stdin.read()])); sys.stderr.write("child-error"); sys.exit(37)')
+            result = subprocess.run([str(adapter), '-c', code, 'arg with space', ''],
+                                    input='input', text=True, capture_output=True, env=env)
+            self.assertEqual(result.returncode, 37, result.stderr)
+            self.assertEqual(result.stderr, 'child-error')
+            self.assertEqual(json.loads(result.stdout), [str(view), ['arg with space', ''], 'input'])
+            self.assertEqual(env['DYLD_LIBRARY_PATH'], 'parent-value')
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'Darwin loader environment')
     def test_exec_preserves_stdio_exit_and_signal(self):
         script = Path(__file__).resolve().parents[1]/'scripts/run-darwin-with-runtime.py'
         with tempfile.TemporaryDirectory(prefix='runtime view ') as view:

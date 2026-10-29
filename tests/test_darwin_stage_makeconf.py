@@ -108,6 +108,39 @@ class NativeStageMakeconfTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'stage binding must use selected'):
             write_native_stage_makeconf(**(options | dict(binding_record=str(bad_binding/'commands.json'))))
 
+    def test_linker_runtime_binding(self):
+        root = self.base.parent
+        ld = self.staged/'bin/ld64.lld'; ld.parent.mkdir(parents=True)
+        ld.write_text('fixture'); ld.chmod(0o755)
+        view = root/'view'; view.mkdir()
+        options = self.options | dict(tools=['ld='+str(ld)], runtime_view=str(view),
+                                      linker_runtime_view=str(view))
+        config = Path(write_native_stage_makeconf(**options))
+        adapter = Path(str(config)+'.ld')
+        text = config.read_text()
+        self.assertIn('EMBERBSD_DARWIN_LD64_LLD= '+str(adapter)+'\n', text)
+        self.assertIn('LDFLAGS+= --ld-path='+str(adapter)+'\n', text)
+        self.assertIn('EMBERBSD_NATIVE_RUNTIME_VIEW= '+str(view)+'\n', text)
+        script = adapter.read_text()
+        for value in (str(ld), str(view), str(self.python), 'run-darwin-with-runtime.py'):
+            self.assertIn(value, script)
+        self.assertEqual(write_native_stage_makeconf(**options), str(config))
+        with self.assertRaisesRegex(SDKError, 'requires a selected staged linker'):
+            write_native_stage_makeconf(**(options | dict(output=str(root/'missing.mk'), tools=[])))
+        with self.assertRaises(SDKError):
+            write_native_stage_makeconf(**(options | dict(output=str(root/'view-missing.mk'), linker_runtime_view=str(root/'missing-view'))))
+        from emberbsd_sdk import runtime_loader
+        with self.assertRaisesRegex(SDKError, 'Python cannot contain whitespace'):
+            runtime_loader.bind_command(str(root/'bad-python'), python=str(root/'bad python'),
+                                        view=str(view), command=str(ld))
+        alias = root/'alias'; alias.symlink_to(adapter)
+        with self.assertRaises(SDKError):
+            runtime_loader.bind_command(str(alias), python=str(self.python),
+                                        view=str(view), command=str(ld))
+        adapter.chmod(0o755); adapter.write_text('changed')
+        with self.assertRaisesRegex(SDKError, 'runtime command binding differs'):
+            write_native_stage_makeconf(**options)
+
     def test_explicit_stage_and_refusals(self):
         output = Path(write_native_stage_makeconf(**self.options))
         text = output.read_text()

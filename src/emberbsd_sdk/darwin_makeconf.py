@@ -32,7 +32,8 @@ NATIVE_STAGE_MAKECONF_API = 1
 
 
 def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root,
-                                packages, binding_record, python, buildlinks, tools=(), runtime_view=None):
+                                packages, binding_record, python, buildlinks, tools=(),
+                                runtime_view=None, linker_runtime_view=None):
     """Render a native replacement-stage overlay using ordinary pkgsrc variables."""
     from . import compiler_bindings, paths
     base = _path(base, existing=True)
@@ -126,6 +127,15 @@ def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root
         _require(_inside(os.path.realpath(path), staged) and os.path.isfile(path) and os.access(path, os.X_OK),
                  'stage tool must be executable inside the selected staged prefix')
         lines.extend(variable + '= ' + path for variable in tool_vars[role])
+    adapter = None
+    if linker_runtime_view is not None:
+        from . import runtime_loader
+        _require('ld' in selected, 'linker runtime view requires a selected staged linker')
+        view = _path(linker_runtime_view, directory=True, existing=True)
+        selected_ld = next(entry.split('=', 1)[1] for entry in tools if entry.startswith('ld='))
+        adapter = output + '.ld'
+        lines.extend(('EMBERBSD_DARWIN_LD64_LLD= ' + adapter,
+                      'LDFLAGS+= --ld-path=' + adapter))
     if compiler_roots == {'stage'}:
         _require(required_llvm_tools.issubset(selected), 'staged compiler requires the complete selected LLVM tool roles')
         lines.append('EMBERBSD_DARWIN_SEED_AS= ' + os.path.join(os.path.dirname(record_path), 'cc') + ' -c -x assembler')
@@ -138,7 +148,9 @@ def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root
     if os.path.lexists(output):
         regular_file(output)
         _require(Path(output).read_bytes() == data, 'existing stage configuration differs')
-    else:
+    if adapter is not None:
+        runtime_loader.bind_command(adapter, python=python, view=view, command=selected_ld)
+    if not os.path.lexists(output):
         temporary = None
         try:
             with tempfile.NamedTemporaryFile(prefix='.native-stage-', dir=os.path.dirname(output),

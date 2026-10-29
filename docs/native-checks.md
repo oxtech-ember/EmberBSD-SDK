@@ -154,10 +154,17 @@ bounded runtime view; do not mix staged LLVM with an older compiler. All three
 compiler roles must resolve in the same selected prefix. The overlay selects
 cwrappers and the default native `rpcgen` path from the stage;
 `--tool rpcgen=PATH` selects a different executable within that stage. Built-in OS providers and other host tools retain the base
-configuration. Missing dependencies fail instead of
+configuration. To link with a staged Darwin linker using Clang when it needs
+staged runtime libraries, select it with `--tool ld=PATH` and supply `--linker-runtime-view`.
+The SDK emits a single linker command bound to that view and adds its path to
+link flags; compiler binding and compile inputs remain unchanged. The adapter
+invokes the SDK runtime launcher with the selected Python, view, and linker.
+`tests/darwin_stage_linker.py` checks object reuse and executable, shared and
+module links using explicitly selected tools and the shared link lock.
+Missing dependencies fail instead of
 recursively installing
 into the active prefix; prepare them in the stage before retrying. The helper
-does not install packages or select a runtime loader environment. For a Darwin
+does not install packages; runtime views are explicit and scoped. For a Darwin
 host executable that needs an explicit runtime view, run the selected host
 Python without that view in its environment and invoke
 `scripts/run-darwin-with-runtime.py --runtime-view <directory> -- <command> [args...]`.
