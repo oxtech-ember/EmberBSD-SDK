@@ -248,6 +248,7 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
                 flags=dict(cppflags=[], cflags=[], cxxflags=[], ldflags=[]),
                 python=python, native_cxx_runtime=native_cxx_runtime)
             variables['EMBERBSD_DARWIN_SEED_CXX'] = shlex.join([adapters['cxx']])
+            variables['EMBERBSD_NATIVE_CXX_BINDING_RECORD'] = os.path.join(binding, 'commands.json')
         data = render_variables(variables, profile, nested_ldflags=True,
                                 comment='Explicit initial Darwin tools. Package policy belongs to Ports.')
         with tempfile.NamedTemporaryFile(prefix='.darwin-makeconf-', dir=os.path.dirname(output),

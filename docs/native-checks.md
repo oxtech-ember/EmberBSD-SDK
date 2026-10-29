@@ -107,6 +107,8 @@ caller-owned binding directory and selected native Python. Its CLI exposes
 `--native-cxx-target`, `--native-cxx-deployment`, `--native-cxx-bindings`,
 and `--native-cxx-python`; supply them together. The selected macOS SDK is the
 runtime sysroot. The first explicitly selected native target is bound as the C++
-default, and later caller targets are still checked. Only the C++ compiler is
+default, and later caller targets are still checked. The MAKECONF exposes its
+`commands.json` as `EMBERBSD_NATIVE_CXX_BINDING_RECORD` for consumers that need
+the same full argv. Only the C++ compiler is
 routed through the adapter; initial
 bootstrap and target compiler selections remain separate.

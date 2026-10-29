@@ -63,6 +63,7 @@ class DarwinMakeconfTests(TemporaryCase):
         self.assertIn('.include "' + self.options['pkgsrc'] + '/EMBERBSD-DARWIN-BOOTSTRAP-MK.CONF"', data)
         self.assertIn('LOCALBASE= ' + self.options['prefix'], data)
         self.assertIn('BATCH= yes\n', data)
+        self.assertNotIn('EMBERBSD_NATIVE_CXX_BINDING_RECORD=', data)
         self.assertIn('EMBERBSD_DARWIN_SOURCE_TOOLS= gunzip gzcat gzip', data)
         self.assertEqual(result['initial_command'], [self.tools['make'], '-m', self.options['makefiles'],
             'SHELL=' + self.tools['sh'], 'MAKECONF=' + self.options['output'],
@@ -92,6 +93,7 @@ class DarwinMakeconfTests(TemporaryCase):
                     native_cxx_bindings=binding, native_cxx_python=python)
         data = Path(self.options['output']).read_text()
         self.assertIn('EMBERBSD_DARWIN_SEED_CXX= ' + binding + '/cxx\n', data)
+        self.assertIn('EMBERBSD_NATIVE_CXX_BINDING_RECORD= ' + binding + '/commands.json\n', data)
         self.assertIn('EMBERBSD_DARWIN_SEED_CC= ' + self.tools['cc'], data)
         record = json.loads(Path(binding, 'commands.json').read_text())
         self.assertEqual(record['native_cxx_runtime'], runtime)

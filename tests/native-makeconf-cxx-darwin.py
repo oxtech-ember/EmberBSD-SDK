@@ -70,6 +70,11 @@ with tempfile.TemporaryDirectory(dir=a.work.resolve(strict=True), prefix='native
         env=result['environment'], capture_output=True, text=True)
     assert query.returncode == 0, query.stderr
     assert query.stdout.strip() == adapter, query.stdout
+    record_query = subprocess.run([roles['make'], '-m', str(base / 'initial-mk'), '-C',
+        str(a.pkgsrc / 'math/fast_float'), 'MAKECONF=' + result['makeconf'],
+        'EMBERBSD_DARWIN_BOOTSTRAP=yes', '-v', 'EMBERBSD_NATIVE_CXX_BINDING_RECORD'],
+        env=result['environment'], capture_output=True, text=True, check=True)
+    assert record_query.stdout.strip() == str(work / 'bindings/commands.json')
     config = work / 'config'
     config.mkdir()
     wrapper_dir = work / 'bin'
