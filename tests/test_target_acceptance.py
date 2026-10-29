@@ -218,6 +218,26 @@ class SourceRoleTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'not a complete clean Git root'):
             _select_os_sources(core_revision, core, tests)
 
+    def test_ports_source_accepts_only_the_existing_pkgsrc_gitlink(self):
+        ports, revision = self.make_source('ports-with-gitlink')
+        (ports / 'upstream/pkgsrc').mkdir(parents=True)
+        subprocess.run(['git', '-C', str(ports), 'update-index', '--add', '--cacheinfo',
+                        f'160000,{revision},upstream/pkgsrc'], check=True, env=git_environment())
+        subprocess.run(['git', '-C', str(ports), 'commit', '-qm', 'Ports pin'],
+                       check=True, env=git_environment())
+        expected = subprocess.check_output(['git', '-C', str(ports), 'rev-parse', 'HEAD'],
+                                           env=git_environment(), text=True).strip()
+        self.assertEqual(_clean_source_revision(ports, 'Ports producer', kind='ports'), expected)
+        with self.assertRaises(SDKError):
+            _clean_source_revision(ports, 'SDK controller')
+        (ports / 'unexpected').mkdir()
+        subprocess.run(['git', '-C', str(ports), 'update-index', '--add', '--cacheinfo',
+                        f'160000,{revision},unexpected'], check=True, env=git_environment())
+        subprocess.run(['git', '-C', str(ports), 'commit', '-qm', 'Unexpected pin'],
+                       check=True, env=git_environment())
+        with self.assertRaises(SDKError):
+            _clean_source_revision(ports, 'Ports producer', kind='ports')
+
     def test_rejects_dirty_sdk_or_ports_producer(self):
         for role in ('SDK controller', 'Ports producer'):
             with self.subTest(role=role):

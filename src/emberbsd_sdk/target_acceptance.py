@@ -86,10 +86,10 @@ def _git_revision(path):
     return revision
 
 
-def _clean_source_revision(path, role):
+def _clean_source_revision(path, role, *, kind=None):
     """Return a complete, clean committed source snapshot for one input role."""
     try:
-        identity = provenance.git_source(str(path))
+        identity = provenance.git_source(str(path), kind=kind)
     except SDKError as exc:
         raise SDKError(role + ' source snapshot is not a complete clean Git root: ' + str(path)) from exc
     return identity['commit']
@@ -245,7 +245,7 @@ def run(options):
     tests = output / 'tests'
     compile_script = ports_source / 'profiles/development-toolchain/cross/compile-tests.py'
     _require(compile_script.is_file(), 'shared Ports compile-tests.py is missing')
-    ports_revision = _clean_source_revision(ports_source, 'Ports producer')
+    ports_revision = _clean_source_revision(ports_source, 'Ports producer', kind='ports')
     sdk_revision = _clean_source_revision(sdk_source, 'SDK controller')
     compile_argv = [native.tool('python'), '-B', str(compile_script),
         '--compiler-family', options.compiler_family,
