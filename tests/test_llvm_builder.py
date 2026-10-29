@@ -217,6 +217,24 @@ class LLVMBuilderTests(TemporaryCase):
         self.assertIn('/ports/scripts/source-inputs/autogen/source.py', commands[1])
         self.assertIn('verify-source', commands[1])
 
+    def test_libpcap_source_requires_real_os_producer(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'os': str(self.root / 'os'), 'libpcap-source': '/prepared/libpcap', 'tools': '/build/tools'}
+        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
+        builder.environment = {}
+        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/old/dist\n')):
+            with self.assertRaisesRegex(SDKError, 'does not support EMBER_LIBPCAP_SOURCE'):
+                builder.require_libpcap_source_support()
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/prepared/libpcap\n')) as run:
+            builder.require_libpcap_source_support()
+        self.assertIn('/os/external/bsd/libpcap/lib', run.call_args.args[0][5])
+        del builder.paths['libpcap-source']
+        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
+            builder.require_libpcap_source_support()
+            run.assert_not_called()
+
     def test_ppp_source_requires_real_os_producer(self):
         from types import SimpleNamespace
         builder = SysrootBuilder({})
@@ -278,6 +296,17 @@ class LLVMBuilderTests(TemporaryCase):
         with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
             self.assertEqual(builder.verify_common_sources(), {'iscsi': record})
         self.assertIn('/ports/scripts/source-inputs/iscsi/source.py', run.call_args.args[0])
+
+    def test_optional_libpcap_source_verified_by_owner(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'libpcap-source': '/prepared/libpcap'}
+        builder.git_command = '/host/git'
+        builder.environment = {}
+        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'net/libpcap'}
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
+            self.assertEqual(builder.verify_common_sources(), {'libpcap': record})
+        self.assertIn('/ports/scripts/source-inputs/libpcap/source.py', run.call_args.args[0])
 
     def test_optional_ppp_source_verified_by_owner(self):
         from types import SimpleNamespace
@@ -1338,6 +1367,21 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.paths['iscsi-source'] = '/prepared/iscsi'
         builder.signature['common_sources']['iscsi'] = {'tree_sha256': 'a' * 64}
         builder.signature['flags'].append('EMBER_ISCSI_SOURCE=/prepared/iscsi')
+        self.assertTrue(builder.compatible_context(records[tools], tools))
+        self.assertFalse(builder.compatible_context(records[objects], objects))
+        builder.llvm_phase = 'base'
+        self.assertFalse(builder.compatible_context(records[objects], objects))
+
+    def test_libpcap_selection_changes_headers_but_not_native_tools(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        tools, objects = builder.paths['tools'], builder.paths['objects']
+        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+        builder.paths['libpcap-source'] = '/prepared/libpcap'
+        builder.signature['common_sources']['libpcap'] = {'tree_sha256': 'a' * 64}
+        builder.signature['flags'].append('EMBER_LIBPCAP_SOURCE=/prepared/libpcap')
         self.assertTrue(builder.compatible_context(records[tools], tools))
         self.assertFalse(builder.compatible_context(records[objects], objects))
         builder.llvm_phase = 'base'
