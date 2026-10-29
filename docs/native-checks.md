@@ -148,4 +148,10 @@ compiler executables must belong to the host prefix. Built-in OS providers and
 host tools retain the base configuration. Missing dependencies fail instead of
 recursively installing
 into the active prefix; prepare them in the stage before retrying. The helper
-does not install packages or select a runtime loader environment.
+does not install packages or select a runtime loader environment. For a Darwin
+host executable that needs an explicit runtime view, run the selected host
+Python without that view in its environment and invoke
+`scripts/run-darwin-with-runtime.py --runtime-view <directory> -- <command> [args...]`.
+The launcher replaces `DYLD_LIBRARY_PATH` only in the executed command's
+environment; it does not modify the parent build or other tools. Select a view
+containing only the runtime libraries required by that executable.
