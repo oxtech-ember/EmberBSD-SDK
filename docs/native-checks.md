@@ -151,8 +151,10 @@ staged LLVM-family tool: `ld`, `ar`, `ranlib`, `nm`, `strip`, `dsymutil`,
 `llvm_readtapi`. The helper checks that each executable resolves within the
 stage and preserves meaningful symlink names. Select matching libraries in a
 bounded runtime view; do not mix staged LLVM with an older compiler. All three
-compiler roles must resolve in the same selected prefix. Built-in OS providers and
-host tools retain the base configuration. Missing dependencies fail instead of
+compiler roles must resolve in the same selected prefix. The overlay selects
+cwrappers and the default native `rpcgen` path from the stage;
+`--tool rpcgen=PATH` selects a different executable within that stage. Built-in OS providers and other host tools retain the base
+configuration. Missing dependencies fail instead of
 recursively installing
 into the active prefix; prepare them in the stage before retrying. The helper
 does not install packages or select a runtime loader environment. For a Darwin

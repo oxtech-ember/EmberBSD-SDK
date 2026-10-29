@@ -70,6 +70,10 @@ class NativeStageMakeconfTests(unittest.TestCase):
         options['tools'] = [role + '=' + str(selected_tool) for role in roles]
         output = Path(write_native_stage_makeconf(**options))
         self.assertIn('EMBERBSD_DARWIN_LD64_LLD= ' + str(selected_tool), output.read_text())
+        with_rpcgen = options | dict(output=str(root/'staged-rpcgen.mk'),
+                                     tools=options['tools'] + ['rpcgen=' + str(selected_tool)])
+        self.assertIn('TOOLS_PATH.rpcgen= ' + str(selected_tool),
+                      Path(write_native_stage_makeconf(**with_rpcgen)).read_text())
         with self.assertRaisesRegex(SDKError, 'stage tool must be executable inside'):
             write_native_stage_makeconf(**(options | dict(tools=['ld=' + str(self.python)])))
         with self.assertRaisesRegex(SDKError, 'invalid or repeated staged tool role'):
@@ -102,9 +106,22 @@ class NativeStageMakeconfTests(unittest.TestCase):
         self.assertIn('EMBERBSD_NATIVE_STAGE_PREFIX= '+str(self.prefix)+'\n', text)
         self.assertIn('DEPENDS_TARGET= emberbsd-stage-missing-dependency\n', text)
         self.assertIn('MACHO_USE_LOAD_COMMANDS= yes\n', text)
+        self.assertIn('CWRAPPERS_SRC_DIR= '+str(self.staged/'libexec/cwrappers')+'\n', text)
+        self.assertIn('TOOLS_PATH.rpcgen= '+str(self.staged/'bin/rpcgen')+'\n', text)
+        self.assertIn('EMBERBSD_NATIVE_STAGE_PYTHON= '+str(self.python)+'\n', text)
         self.assertIn('EMBERBSD_NATIVE_CXX_ABI_NAMESPACE= __ember1\n', text)
         self.assertIn('BUILDLINK_PREFIX.llvm= '+str(self.staged)+'\n', text)
         self.assertEqual(write_native_stage_makeconf(**self.options), str(output))
+        rpcgen = self.staged/'bin/rpcgen'
+        rpcgen.parent.mkdir(parents=True, exist_ok=True)
+        rpcgen.write_text('fixture'); rpcgen.chmod(0o755)
+        selected = dict(self.options, output=str(self.base.parent/'rpcgen.mk'),
+                        tools=['rpcgen='+str(rpcgen)])
+        self.assertIn('TOOLS_PATH.rpcgen= '+str(rpcgen)+'\n',
+                      Path(write_native_stage_makeconf(**selected)).read_text())
+        rpcgen.unlink(); rpcgen.symlink_to(self.python)
+        with self.assertRaisesRegex(SDKError, 'stage tool must be executable inside'):
+            write_native_stage_makeconf(**(selected | dict(output=str(self.base.parent/'escape.mk'))))
         for change in (dict(buildlinks=['llvm', 'llvm']), dict(stage_root=str(self.prefix)),
                        dict(object_root=str(self.staged/'obj')),
                        dict(packages=self.options['object_root'])):

@@ -97,7 +97,10 @@ def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root
              'EMBERBSD_DARWIN_SEED_CXX= ' + os.path.join(os.path.dirname(record_path), 'cxx'),
              'EMBERBSD_DARWIN_SEED_CPP= ' + os.path.join(os.path.dirname(record_path), 'cpp'),
              'EMBERBSD_NATIVE_CXX_ABI_NAMESPACE= ' + runtime['abi_identity']['namespace'],
-             'DEPENDS_TARGET= emberbsd-stage-missing-dependency']
+             'DEPENDS_TARGET= emberbsd-stage-missing-dependency',
+             'CWRAPPERS_SRC_DIR= ' + os.path.join(staged, 'libexec/cwrappers'),
+             'EMBERBSD_NATIVE_STAGE_PYTHON= ' + python,
+             'TOOLS_PATH.rpcgen= ' + os.path.join(staged, 'bin/rpcgen')]
     tool_vars = {'ld': ('EMBERBSD_DARWIN_LD64_LLD',),
                  'ar': ('EMBERBSD_DARWIN_AR', 'EMBERBSD_DARWIN_TOOL.ar'),
                  'ranlib': ('EMBERBSD_DARWIN_RANLIB', 'EMBERBSD_DARWIN_TOOL.ranlib'),
@@ -110,6 +113,8 @@ def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root
                  'otool': ('EMBERBSD_DARWIN_TOOL.otool',),
                  'install_name_tool': ('EMBERBSD_DARWIN_INSTALL_NAME_TOOL',),
                  'llvm_readtapi': ('EMBERBSD_DARWIN_TAPI',)}
+    required_llvm_tools = set(tool_vars)
+    tool_vars['rpcgen'] = ('TOOLS_PATH.rpcgen',)
     selected = set()
     for entry in tools:
         _require('=' in entry, 'stage tool must be ROLE=PATH')
@@ -122,7 +127,7 @@ def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root
                  'stage tool must be executable inside the selected staged prefix')
         lines.extend(variable + '= ' + path for variable in tool_vars[role])
     if compiler_roots == {'stage'}:
-        _require(selected == set(tool_vars), 'staged compiler requires the complete selected LLVM tool roles')
+        _require(required_llvm_tools.issubset(selected), 'staged compiler requires the complete selected LLVM tool roles')
         lines.append('EMBERBSD_DARWIN_SEED_AS= ' + os.path.join(os.path.dirname(record_path), 'cc') + ' -c -x assembler')
     lines.extend('BUILDLINK_PREFIX.' + name + '= ' + staged for name in buildlinks)
     data = ('\n'.join(lines) + '\n').encode('ascii')
