@@ -188,9 +188,11 @@ class LLVMCoordinator:
         result = process.capture(self.runtime_command(phase, base, verify=True), env=selected.environment)
         record = jsonio.loads_json(result.stdout)
         llvm_runtime.validate_identity(record, target=self.options['target'])
+        recipe_check = ({} if self.options.get('llvm-runtime-original-source') else
+                        dict(ports=selected.paths['ports'], ports_revision=record['recipe']['ports_revision']))
         expected = llvm_runtime.validate_stage(stage, target=self.options['target'],
             required_components=('builtins', 'libunwind-static') if phase == 'bootstrap' else llvm_runtime.FULL_COMPONENTS,
-            ports=selected.paths['ports'], ports_revision=record['recipe']['ports_revision'], base=base)
+            base=base, **recipe_check)
         if record != expected:
             raise SDKError('LLVM runtime producer and shared validator disagree')
 

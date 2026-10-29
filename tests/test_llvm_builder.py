@@ -874,6 +874,26 @@ class LLVMBuilderTests(TemporaryCase):
                 self.assertEqual(command[command.index('--original-source') + 1], '/old-source')
                 self.assertEqual(command[command.index('--base') + 1], '/base')
 
+    def test_coordinator_original_source_uses_owner_compatibility(self):
+        options = {'sdk': '/sdk', 'runtime-work': '/sdk/obj/runtime', 'target': 'aarch64',
+                   'llvm-runtime-original-source': '/old-source'}
+        coordinator = LLVMCoordinator(options, SysrootBuilder)
+        coordinator.headers = type('Header', (), {'paths': {'ports': '/ports'}, 'environment': {}})()
+        record = {'recipe': {'ports_revision': 'a' * 40}}
+        captured = []
+        def validate(stage, **kwargs):
+            captured.append(kwargs)
+            return record
+        with patch.object(coordinator, 'runtime_command', return_value=['verify']), \
+             patch('emberbsd_sdk.llvm_sysroot.paths.entry', return_value=True), \
+             patch('emberbsd_sdk.llvm_sysroot.process.capture', return_value=type('Result', (), {'stdout': b'{}'})()), \
+             patch('emberbsd_sdk.llvm_sysroot.jsonio.loads_json', return_value=record), \
+             patch('emberbsd_sdk.llvm_sysroot.llvm_runtime.validate_identity'), \
+             patch('emberbsd_sdk.llvm_sysroot.llvm_runtime.validate_stage', side_effect=validate):
+            coordinator.runtime('full', '/base')
+        self.assertEqual(captured[0]['base'], '/base')
+        self.assertNotIn('ports', captured[0])
+
     def test_coordinator_roots_stay_inside_shared_workspace(self):
         sdk = self.root / 'sdk'
         (sdk / 'obj').mkdir(parents=True)
