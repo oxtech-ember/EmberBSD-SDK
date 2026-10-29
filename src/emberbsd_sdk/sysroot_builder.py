@@ -18,7 +18,7 @@ import sysconfig
 import time
 from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, process, provenance, workspace
 from .errors import SDKError, ProcessOwnershipError
-from .native_os_routing import gnu_target_host_flags, native_host_flags, native_path
+from .native_os_routing import gettext_target_host_flags, gnu_target_host_flags, native_host_flags, native_path
 from .targets import TARGETS, target_definition
 
 NATIVE_INPUTS = ('native-toolset', 'native-toolset-sha256',
@@ -158,6 +158,8 @@ class SysrootBuilder:
         self.native_contract = contract
         if self.options.get('texinfo-source') or self.options.get('rcs-source') or self.options.get('diffutils-source') or self.options.get('grep-source'):
             roles = roles | {'gmake'}
+        if self.options.get('gettext-source'):
+            roles |= {'gmake', 'pkg-config', 'od', 'msgfmt', 'msgmerge', 'xgettext', 'msginit', 'msgconv', 'msgfilter', 'sed'}
         return native_toolset.load_host_prefix(self.options['host-prefix'], required_roles=roles | {'python'},
             compiler_family=self.options.get('host-compiler-family', 'clang'))
 
@@ -442,6 +444,14 @@ class SysrootBuilder:
                                                                   'EMBER_TOP_SOURCE=',
                                                                   'EMBER_NTP_SOURCE=',
                                                                   'EMBER_LIBOPTS_SOURCE=',
+                                                                  'EMBER_GETTEXT_SOURCE=',
+                                                                  'EMBER_LIBXML2_SOURCE=',
+                                                                  'GNU_TARGET_LIBTOOL=',
+                                                                  'EMBER_TARGET_TOOL_DIR=',
+                                                                  'HOST_PKG_CONFIG=', 'HOST_OD=',
+                                                                  'HOST_MSGFMT=', 'HOST_MSGMERGE=',
+                                                                  'HOST_XGETTEXT=', 'HOST_MSGINIT=',
+                                                                  'HOST_MSGCONV=', 'HOST_MSGFILTER=', 'HOST_SED=',
                                                                   'EMBER_PPP_SOURCE=',
                                                                   'HOST_GMAKE=',
                                                                   'EMBER_HOST_GNU_TRIPLE='))]
@@ -451,7 +461,7 @@ class SysrootBuilder:
                 return False
             added = selected['tools'].keys() - previous['tools'].keys()
             # Optional target-only GNU make cannot affect host tools or headers.
-            irrelevant = ({'gmake'} if path == self.paths['tools'] or
+            irrelevant = ({'gmake', 'pkg-config', 'od', 'msgfmt', 'msgmerge', 'xgettext', 'msginit', 'msgconv', 'msgfilter'} if path == self.paths['tools'] or
                           (self.compiler_family() == 'clang' and self.llvm_phase == 'headers')
                           else set())
             added_contract = added - irrelevant
@@ -550,6 +560,8 @@ class SysrootBuilder:
             ('ntp', 'net/ntp4', ['scripts/source-inputs/ntp/source.py']),
             ('libopts', 'devel/autogen', ['scripts/source-inputs/autogen/source.py']),
             ('libpcap', 'net/libpcap', ['scripts/source-inputs/libpcap/source.py']),
+            ('gettext', 'devel/gettext', ['scripts/source-inputs/gettext/source.py']),
+            ('libxml2', 'textproc/libxml2', ['scripts/source-inputs/libxml2/source.py']),
             ('ppp', 'net/pppd', ['scripts/source-inputs/ppp/source.py']),
             ('tdb', 'databases/tdb', ['scripts/source-inputs/tdb/source.py']),
             ('x11', 'netbsd/xsrc', ['scripts/source-inputs/xsrc/source.py']),
@@ -564,9 +576,9 @@ class SysrootBuilder:
                 command += ['verify', self.paths[name + '-source'], '--sdk-source', self.paths['sdk-source'], '--git', self.git_command]
             else:
                 command += ['--sdk-source', self.paths['sdk-source'], '--git', self.git_command, 'verify-source', '--source', self.paths[name + '-source']]
-            if name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'ntp', 'libopts') and patch:
+            if name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'ntp', 'libopts', 'gettext', 'libxml2') and patch:
                 command += ['--patch', patch]
-            if name in ('libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'ntp') and self.options.get(name + '-archive'):
+            if name in ('libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'ntp', 'gettext', 'libxml2') and self.options.get(name + '-archive'):
                 archive = paths.canonical_existing(self.options[name + '-archive'])
                 paths.regular_file(archive)
                 command += ['--archive', archive]
@@ -751,6 +763,36 @@ class SysrootBuilder:
         if selected != self.paths['grep-source']:
             raise SDKError('selected OS does not support EMBER_GREP_SOURCE')
 
+    def require_gettext_source_support(self):
+        if 'gettext-source' not in self.paths:
+            return
+        root = self.paths['os']
+        env = dict(self.environment)
+        env.pop('EMBER_NATIVE_TOOLS', None)
+        common = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
+                  'MAKECONF=/dev/null', '_SRC_TOP_=', 'NETBSDSRCDIR=' + root,
+                  'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
+                  'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
+                  'EMBER_GETTEXT_SOURCE=' + self.paths['gettext-source'],
+                  'EMBER_LIBXML2_SOURCE=' + self.paths['libxml2-source'],
+                  'HOST_GMAKE=' + self.native.tool('gmake'), 'HOST_SH=' + self.native.tool('sh'),
+                  'HOST_OD=' + self.native.tool('od'),
+                  'HOST_PKG_CONFIG=' + self.native.tool('pkg-config'),
+                  'EMBER_HOST_GNU_TRIPLE=' + self.native.compiler['triplet']]
+        try:
+            xml = process.capture([*common, '-C', os.path.join(root, 'external/bsd/libxml2/gnu'),
+                                   '-V', '${GNU_SOURCE}'], env=env).stdout.decode('utf-8').strip()
+            output = process.capture([*common, '-C', os.path.join(root, 'external/gpl2/gettext/gnu'),
+                                      '-V', '${GNU_SOURCE}', '-V', '${GNU_CONFIGURE_ENV}',
+                                      '-V', '${GNU_CONFIGURE_DEPENDENCY}'], env=env).stdout.decode('utf-8').splitlines()
+        except (SDKError, UnicodeError) as exc:
+            raise SDKError('selected OS cannot resolve the common gettext and libxml2 producers') from exc
+        if (xml != self.paths['libxml2-source'] or len(output) != 3 or
+                output[0] != self.paths['gettext-source'] or
+                'EMBER_GETTEXT_PLAIN_STYLE=yes' not in output[1] or
+                not output[2].endswith('/gnu-build/.libs/libxml2.a')):
+            raise SDKError('selected OS does not support the common gettext and libxml2 producers')
+
     def require_ekermit_source_support(self):
         if 'ekermit-source' not in self.paths:
             return
@@ -912,6 +954,8 @@ class SysrootBuilder:
         self.llvm_phase = getattr(self, 'llvm_phase', 'final')
         if not self.options.get('llvm-source'):
             raise SDKError('--llvm-source is required: prepare the common Ports LLVM source')
+        if bool(self.options.get('gettext-source')) != bool(self.options.get('libxml2-source')):
+            raise SDKError('gettext and libxml2 sources must be selected together')
         for name in ('libarchive-source', 'libevent-source'):
             if self.llvm_phase != 'headers' and not self.options.get(name):
                 raise SDKError(f'--{name} is required: prepare the common Ports source')
@@ -940,7 +984,7 @@ class SysrootBuilder:
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
-        input_names += [name for name in ('libarchive-source', 'libevent-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'ntp-source', 'libopts-source', 'x11-source') if self.options.get(name)]
+        input_names += [name for name in ('libarchive-source', 'libevent-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'x11-source') if self.options.get(name)]
         if clang and self.llvm_phase != 'headers' and self.options.get('llvm-runtime-original-source'):
             input_names.append('llvm-runtime-original-source')
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
@@ -952,6 +996,8 @@ class SysrootBuilder:
         for name in input_names:
             self.paths[name] = paths.build_path(paths.canonical_existing(self.options[name]))
         self.paths['python'] = self.native.tool('python')
+        if self.options.get('gettext-source'):
+            self.paths['git'] = self.git_command
         self.paths['host-prefix'] = self.native.bundle_root
         self.paths.update({option: self.native.tool(role) for option, role in NATIVE_ALIASES})
         for name in input_names:
@@ -1008,10 +1054,11 @@ class SysrootBuilder:
         self.require_ntp_source_support()
         self.require_libpcap_source_support()
         self.require_ppp_source_support()
+        self.require_gettext_source_support()
         self.sources['sdk'] = self.source(self.paths['sdk-source'], 'sdk')
         self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command)
         self.common_source_records = (self.verify_common_sources()
-                                      if any(name + '-source' in self.paths for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'ntp', 'libopts', 'x11'))
+                                      if any(name + '-source' in self.paths for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'ntp', 'libopts', 'gettext', 'libxml2', 'x11'))
                                       else {})
         self.python = self.python_identity()
         self.git(self.paths['os'], 'ls-files', '--error-unmatch', 'build.sh', 'Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk')
@@ -1057,11 +1104,13 @@ class SysrootBuilder:
         self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}',
                        f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
         self.flags += [f'EMBER_{name.upper()}_SOURCE={self.paths[name + "-source"]}'
-                       for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'ntp', 'libopts') if name + '-source' in self.paths]
+                       for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in self.paths]
         if 'tdb-source' in self.paths:
             self.flags.append('HOST_PYTHON=' + self.native.tool('python'))
-        if 'texinfo-source' in self.paths or 'rcs-source' in self.paths or 'diffutils-source' in self.paths or 'grep-source' in self.paths:
+        if any(name + '-source' in self.paths for name in ('texinfo', 'rcs', 'diffutils', 'grep', 'gettext')):
             self.flags += gnu_target_host_flags(self.native_selection)
+        if 'gettext-source' in self.paths:
+            self.flags += gettext_target_host_flags(self.native_selection)
         self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, native_toolset=self.native_selection, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
         self.signature['native_inputs'] = self.native_inputs
         self.signature['compiler_family'] = self.compiler_family()

@@ -253,6 +253,26 @@ class LLVMBuilderTests(TemporaryCase):
             builder.require_ppp_source_support()
             run.assert_not_called()
 
+    def test_gettext_requires_both_actual_os_producers(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'os': str(self.root / 'os'), 'gettext-source': '/prepared/gettext',
+                         'libxml2-source': '/prepared/xml', 'tools': '/build/tools'}
+        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
+        builder.environment = {}
+        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name,
+                                         compiler={'triplet': 'host-triplet'})
+        def result(data):
+            return SimpleNamespace(stdout=data)
+        xml = result(b'/prepared/xml\n')
+        good = result(b'/prepared/gettext\nEMBER_GETTEXT_PLAIN_STYLE=yes\n/obj/gnu-build/.libs/libxml2.a\n')
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=[xml, good]):
+            builder.require_gettext_source_support()
+        bad = result(b'/prepared/gettext\n\n/obj/gnu-build/.libs/libxml2.a\n')
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=[xml, bad]):
+            with self.assertRaisesRegex(SDKError, 'does not support'):
+                builder.require_gettext_source_support()
+
     def test_optional_ekermit_source_verified_by_owner(self):
         from types import SimpleNamespace
         builder = SysrootBuilder({})
@@ -1384,6 +1404,30 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.signature['flags'].append('EMBER_LIBPCAP_SOURCE=/prepared/libpcap')
         self.assertTrue(builder.compatible_context(records[tools], tools))
         self.assertFalse(builder.compatible_context(records[objects], objects))
+        builder.llvm_phase = 'base'
+        self.assertFalse(builder.compatible_context(records[objects], objects))
+
+    def test_gettext_selection_reuses_headers_and_native_tools(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        tools, objects = builder.paths['tools'], builder.paths['objects']
+        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+        for name in ('gettext', 'libxml2'):
+            builder.paths[name + '-source'] = '/prepared/' + name
+            builder.signature['common_sources'][name] = {'tree_sha256': 'a' * 64}
+            builder.signature['flags'].append('EMBER_' + name.upper() + '_SOURCE=/prepared/' + name)
+        for role in ('gmake', 'pkg-config', 'od', 'msgfmt', 'msgmerge', 'xgettext', 'msginit', 'msgconv', 'msgfilter'):
+            builder.signature['native_toolset']['tools'][role] = '/host/' + role
+        builder.signature['flags'].extend(('HOST_OD=/host/od', 'HOST_MSGFMT=/host/msgfmt',
+                                           'HOST_PKG_CONFIG=/host/pkg-config',
+                                           'GNU_TARGET_LIBTOOL=/tools/bin/target-libtool',
+                                           'EMBER_TARGET_TOOL_DIR=/tools/target-tools'))
+        from emberbsd_sdk.native_os_routing import native_path
+        builder.signature['environment']['PATH'] = native_path(builder.signature['native_toolset'])
+        self.assertTrue(builder.compatible_context(records[tools], tools))
+        self.assertTrue(builder.compatible_context(records[objects], objects))
         builder.llvm_phase = 'base'
         self.assertFalse(builder.compatible_context(records[objects], objects))
 

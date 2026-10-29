@@ -41,6 +41,15 @@ def gnu_target_host_flags(selection):
             'EMBER_HOST_GNU_TRIPLE=' + selection['compiler']['triplet']]
 
 
+def gettext_target_host_flags(selection):
+    """Select native gettext generators and pkg-config for the GNU consumer."""
+    tools = selection['tools']
+    return ['HOST_' + name + '=' + tools[role] for name, role in (
+        ('PKG_CONFIG', 'pkg-config'), ('OD', 'od'), ('MSGFMT', 'msgfmt'),
+        ('MSGMERGE', 'msgmerge'), ('XGETTEXT', 'xgettext'), ('MSGINIT', 'msginit'),
+        ('MSGCONV', 'msgconv'), ('MSGFILTER', 'msgfilter'), ('SED', 'sed'))]
+
+
 def native_path(selection):
     directories = [os.path.dirname(path) for _, path in sorted(selection['tools'].items())]
     if selection['format'] == 'emberbsd-host-prefix':

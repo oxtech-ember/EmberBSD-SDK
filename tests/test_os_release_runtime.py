@@ -154,6 +154,63 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             for command in commands:
                 self.assertIn(flag, command)
 
+    def test_gettext_libtool_uses_final_foundation_and_tool_paths(self):
+        from emberbsd_sdk.os_release_builder import gettext_libtool_command
+        paths = {name: '/sdk/' + name for name in (
+            'python', 'ports', 'sdk-source', 'host-prefix', 'compiler', 'tools',
+            'destination', 'objects', 'llvm-runtime-stage')}
+        command = gettext_libtool_command(paths, '/usr/bin/git', 'aarch64', '2', 'clang', 'clang')
+        self.assertEqual(command[0], '/sdk/python')
+        self.assertIn('/sdk/ports/profiles/common-build-tools/cross/prepare-libtool.py', command)
+        self.assertEqual(command[command.index('--sysroot') + 1], '/sdk/destination/dest')
+        self.assertEqual(command[command.index('--output') + 1], '/sdk/tools/gettext-libtool')
+        self.assertEqual(command[command.index('--lock-directory') + 1], '/sdk')
+        self.assertEqual(command[command.index('--runtime-stage') + 1], '/sdk/llvm-runtime-stage')
+
+    def test_gettext_release_builds_foundation_before_distribution(self):
+        paths = {name: '/sdk/' + name for name in (
+            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
+            'libedit-source', 'gettext-source', 'libxml2-source', 'objects', 'tools', 'destination', 'os',
+            'python', 'ports', 'sdk-source', 'host-prefix', 'git', 'llvm-runtime-stage')}
+        roles = ('cc', 'cxx', 'gmake', 'pkg-config', 'od', 'msgfmt', 'msgmerge',
+                 'xgettext', 'msginit', 'msgconv', 'msgfilter', 'sed')
+        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'tools': {role: '/host/' + role for role in roles},
+                     'compiler': {'family': 'clang', 'triplet': 'host-triplet'},
+                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
+        _, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
+                            '/host/sh', compiler_family='clang', base_cxx=True,
+                            install_base_cxx=True, native_selection=selection)
+        self.assertEqual(commands[0][-2:], ['tools', 'kernel=EMBER64'])
+        self.assertEqual(commands[1][-1], 'libs')
+        self.assertIn('profiles/common-build-tools/cross/prepare-libtool.py', commands[2][2])
+        self.assertEqual(commands[3][-1], 'distribution')
+
+    def test_gettext_and_xml_reach_release_and_set_checks(self):
+        paths = {name: '/sdk/' + name for name in (
+            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
+            'libedit-source', 'gettext-source', 'libxml2-source', 'objects', 'tools', 'destination', 'os',
+            'python', 'ports', 'sdk-source', 'host-prefix', 'git', 'llvm-runtime-stage')}
+        roles = ('cc', 'cxx', 'gmake', 'pkg-config', 'od', 'msgfmt', 'msgmerge',
+                 'xgettext', 'msginit', 'msgconv', 'msgfilter', 'sed')
+        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'tools': {role: '/host/' + role for role in roles},
+                     'compiler': {'family': 'clang', 'triplet': 'host-triplet'},
+                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
+        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
+                            '/host/sh', compiler_family='clang', base_cxx=True,
+                            install_base_cxx=True, native_selection=selection)
+        for flag in ('EMBER_GETTEXT_SOURCE=/sdk/gettext-source',
+                     'EMBER_LIBXML2_SOURCE=/sdk/libxml2-source',
+                     'HOST_OD=/host/od', 'HOST_PKG_CONFIG=/host/pkg-config',
+                     'HOST_MSGINIT=/host/msginit',
+                     'GNU_TARGET_LIBTOOL=/sdk/tools/bin/target-libtool',
+                     'EMBER_TARGET_TOOL_DIR=/sdk/tools/gettext-libtool/current/target-tools'):
+            self.assertIn(flag, flags)
+            for command in commands:
+                if command[0] != paths['python']:
+                    self.assertIn(flag, command)
+
     def test_optional_grep_source_reaches_release_and_set_checks(self):
         paths = {name: '/sdk/' + name for name in (
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',

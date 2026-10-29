@@ -466,6 +466,43 @@ class BuilderReleaseTests(TemporaryCase):
             producer_commands('aarch64', {}, {}, 'a' * 40, 1, '2', '/bin/sh',
                 compiler_family='gcc', base_cxx=True)
 
+    def test_current_profile_accepts_gettext_foundation_and_provider_sequence(self):
+        from emberbsd_sdk.native_os_routing import native_path
+        options = release_fixture(self.root, 'aarch64')
+        receipt = OSReleaseBuilder(options).run()
+        profile = jsonio.read_json(Path(options['destination']) / 'build-profile.json')
+        saved = profile['sdk_receipt']
+        signature, paths = saved['signature'], saved['paths']
+        paths.update({'gettext-source': '/prepared/gettext', 'libxml2-source': '/prepared/xml',
+                      'git': '/usr/bin/git'})
+        for name, package in (('gettext', 'devel/gettext'), ('libxml2', 'textproc/libxml2')):
+            signature['common_sources'][name] = {'format': 'emberbsd-prepared-source', 'version': 1,
+                'package': package, 'tree_sha256': 'a' * 64, 'identity': {'fixture': True}}
+        native = signature['native_toolset']
+        for role in ('gmake', 'pkg-config', 'od', 'msgfmt', 'msgmerge', 'xgettext', 'msginit', 'msgconv', 'msgfilter', 'sed'):
+            native['tools'][role] = native['bundle_root'] + '/bin/' + role
+        signature['environment']['PATH'] = native_path(native)
+        signature['flags'], profile['commands'] = producer_commands('aarch64', paths, signature['host_tools'],
+            receipt['sources']['os']['commit'], profile['source_timestamp'], profile['jobs'], profile['shell'],
+            native, signature['compiler_family'])
+        saved['commands'] = [dict(argv=argv, status='passed', exit_status=0) for argv in profile['commands']]
+        self.assertGreater(len(profile['commands']), 2)
+        kit.profile_check(profile, receipt['sources']['os']['commit'], profile['product_version'])
+
+    def test_profile_rejects_gettext_path_without_source_record(self):
+        options = release_fixture(self.root, 'aarch64')
+        receipt = OSReleaseBuilder(options).run()
+        profile = jsonio.read_json(Path(options['destination']) / 'build-profile.json')
+        profile['sdk_receipt']['paths']['gettext-source'] = '/prepared/gettext'
+        with self.assertRaisesRegex(SDKError, 'Mixed gettext and libxml2 source selection'):
+            validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
+        profile['sdk_receipt']['paths']['libxml2-source'] = '/prepared/libxml2'
+        with self.assertRaisesRegex(SDKError, 'Mixed gettext and libxml2 source selection'):
+            validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
+        profile['sdk_receipt']['signature'].pop('common_sources', None)
+        with self.assertRaisesRegex(SDKError, 'Mixed gettext and libxml2 source selection'):
+            validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
+
     def test_clang_release_base_cxx_selection_is_reconstructed_from_flags(self):
         class ClangRelease(OSReleaseBuilder):
             compiler = llvm_fixtures.ClangBuilder.compiler

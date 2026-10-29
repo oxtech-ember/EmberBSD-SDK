@@ -13,7 +13,7 @@ import shutil
 from .errors import SDKError
 from . import inventory, jsonio, libedit, llvm_runtime, llvm_runtime_install
 from .target_toolchain import validate_clang_identity
-from .sysroot_builder import (SysrootBuilder, native_host_flags, gnu_target_host_flags, check_native_command_identity,
+from .sysroot_builder import (SysrootBuilder, native_host_flags, gettext_target_host_flags, gnu_target_host_flags, check_native_command_identity,
                               validate_native_binding)
 from .targets import target_definition
 from .os_release import check, full_hash, tag, images, product_version, source_version, KERNEL, SYSROOT_SETS
@@ -63,6 +63,23 @@ def flags_for(target, compiler_family=None, x11=False):
     return common + [f'{k}={v}' for k, v in replacements.items()]
 
 
+def gettext_libtool_command(paths, git, target, jobs, compiler_family, host_family):
+    """Build the common cross-libtool in the selected OS tool context."""
+    command = [paths['python'], '-B', os.path.join(paths['ports'],
+               'profiles/common-build-tools/cross/prepare-libtool.py'),
+               '--sdk-source', paths['sdk-source'], '--host-prefix', paths['host-prefix'],
+               '--compiler', paths['compiler'], '--os-tools', paths['tools'],
+               '--sysroot', os.path.join(paths['destination'], 'dest'),
+               '--output', os.path.join(paths['tools'], 'gettext-libtool'),
+               '--work-parent', paths['objects'], '--lock-directory', os.path.dirname(paths['host-prefix']),
+               '--git', git, '--target', target,
+               '--jobs', jobs, '--compiler-family', compiler_family,
+               '--host-compiler-family', host_family]
+    if compiler_family == 'clang' and 'llvm-runtime-stage' in paths:
+        command += ['--runtime-stage', paths['llvm-runtime-stage']]
+    return command
+
+
 def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_selection=None,
                       compiler_family=None, base_cxx=False, install_base_cxx=None):
     if type(base_cxx) is not bool:
@@ -90,13 +107,17 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
         f'EMBER_LIBEDIT_SOURCE={paths["libedit-source"]}',
         f'MKREPRO_TIMESTAMP={timestamp}', f'EMBER_BUILD_ID={sha}', f'BUILDINFO=EmberBSD:{sha}',
         f'KERNOBJDIR={paths["objects"]}/kernels'] + (native_host_flags(native_selection) if native_selection is not None else [])
-    for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'ntp', 'libopts'):
+    for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'ntp', 'libopts', 'gettext', 'libxml2'):
         if name + '-source' in paths:
             flags.append(f'EMBER_{name.upper()}_SOURCE={paths[name + "-source"]}')
     if 'tdb-source' in paths and native_selection is not None:
         flags.append('HOST_PYTHON=' + native_selection['tools']['python'])
-    if any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source')) and native_selection is not None:
+    if any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'gettext-source')) and native_selection is not None:
         flags += gnu_target_host_flags(native_selection)
+    if 'gettext-source' in paths and native_selection is not None:
+        flags += gettext_target_host_flags(native_selection)
+        flags += ['GNU_TARGET_LIBTOOL=' + paths['tools'] + '/bin/target-libtool',
+                  'EMBER_TARGET_TOOL_DIR=' + paths['tools'] + '/gettext-libtool/current/target-tools']
     # Current preflight requires BFD; historical command records predate it.
     if 'host-binutils' in paths:
         flags.append(f'EMBER_HOST_BFD_CONFIG={paths["host-binutils"]}/host-bfd.mk')
@@ -145,12 +166,27 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
             commands = [base + ['tools', 'distribution'], check_sets,
                         [make, '-C', paths['os'] + '/etc', overlay, 'release'],
                         *commands[1:]]
+    # gettext's target libtool is configured against a complete foundation.
+    # Keep kernel/tool production ahead of the ordinary libraries stage.
+    if 'gettext-source' in paths:
+        if target == 'aarch64':
+            commands.insert(1, base + ['libs'])
+        else:
+            commands[0] = base + [commands[0][-1]]
+            commands[0:0] = [base + ['tools'], base + ['libs']]
+        provider = gettext_libtool_command(paths, paths['git'], target, jobs, compiler_family,
+                                          native_selection['compiler']['family'])
+        commands.insert(2, provider)
     source_flags = [f'EMBER_{name.upper()}_SOURCE={paths[name + "-source"]}'
-                    for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'ntp', 'libopts') if name + '-source' in paths]
+                    for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in paths]
     if 'tdb-source' in paths and native_selection is not None:
         source_flags.append('HOST_PYTHON=' + native_selection['tools']['python'])
-    if any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source')) and native_selection is not None:
+    if any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'gettext-source')) and native_selection is not None:
         source_flags += gnu_target_host_flags(native_selection)
+    if 'gettext-source' in paths and native_selection is not None:
+        source_flags += gettext_target_host_flags(native_selection)
+        source_flags += ['GNU_TARGET_LIBTOOL=' + paths['tools'] + '/bin/target-libtool',
+                         'EMBER_TARGET_TOOL_DIR=' + paths['tools'] + '/gettext-libtool/current/target-tools']
     for command in commands:
         if command[0].startswith(paths['tools'] + '/bin/nbmake-'):
             command[-1:-1] = source_flags
@@ -210,15 +246,20 @@ def validate_profile(profile, sha, target):
         for key in ('GCC_RUNTIME_INPUTS_SHA256', 'GCC_RUNTIME_STAGE_SHA256', 'GCC_RUNTIME_LINKS_SHA256'):
             check(full_hash(metadata[key]), 'Missing runtime receipt hash')
     paths = receipt['paths']
+    if ('gettext-source' in paths or 'libxml2-source' in paths) and 'common_sources' not in signature:
+        raise SDKError('Mixed gettext and libxml2 source selection')
     if 'common_sources' in signature:
         common_sources = signature['common_sources']
         check(isinstance(common_sources, dict) and {'libarchive', 'libevent'} <= set(common_sources) <=
-              {'libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'ntp', 'libopts', 'x11'}, 'Invalid common source selection')
+              {'libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'ntp', 'libopts', 'gettext', 'libxml2', 'x11'}, 'Invalid common source selection')
         check(('x11' in common_sources) == ('x11-source' in paths), 'Mixed X11 source selection')
         check(('ntp' in common_sources) == ('libopts' in common_sources) ==
               ('ntp-source' in paths) == ('libopts-source' in paths),
               'Mixed NTP and libopts source selection')
-        for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'), ('diffutils', 'devel/diffutils'), ('grep', 'textproc/grep'), ('ekermit', 'comms/ekermit'), ('nvi', 'editors/nvi'), ('tdb', 'databases/tdb'), ('ppp', 'net/pppd'), ('top', 'sysutils/top'), ('iscsi', 'devel/netbsd-iscsi-lib'), ('libpcap', 'net/libpcap'), ('ntp', 'net/ntp4'), ('libopts', 'devel/autogen'),
+        check(('gettext' in common_sources) == ('libxml2' in common_sources) ==
+              ('gettext-source' in paths) == ('libxml2-source' in paths),
+              'Mixed gettext and libxml2 source selection')
+        for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'), ('diffutils', 'devel/diffutils'), ('grep', 'textproc/grep'), ('ekermit', 'comms/ekermit'), ('nvi', 'editors/nvi'), ('tdb', 'databases/tdb'), ('ppp', 'net/pppd'), ('top', 'sysutils/top'), ('iscsi', 'devel/netbsd-iscsi-lib'), ('libpcap', 'net/libpcap'), ('ntp', 'net/ntp4'), ('libopts', 'devel/autogen'), ('gettext', 'devel/gettext'), ('libxml2', 'textproc/libxml2'),
                               ('x11', X11_PACKAGE)):
             if name not in common_sources:
                 continue

@@ -126,3 +126,13 @@ by the common AutoGen owner. `--source-patch` selects the host patch tool;
 `--ntp-archive` supports comparison when NTP inputs change. AutoGen source
 verification does not require its host package to remain installed after the
 tearoff has been prepared.
+
+Select `--gettext-source` and `--libxml2-source` together for the native
+gettext tools. Their Ports owners verify the prepared inputs; the corresponding
+`--gettext-archive`, `--libxml2-archive` and `--source-patch` options support
+comparison after recipe inputs change. The release builds the ordinary target
+foundation first, then prepares the shared Ports cross-libtool in its OS
+TOOLDIR before building the gettext and static libxml2 consumers. This path
+uses the selected native tools and target runtime; it does not add GNU libintl
+to the native Citrus ABI. The OS base selects plain output without the newer
+color and CSS features.
