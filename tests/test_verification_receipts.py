@@ -2,10 +2,12 @@
 # Copyright (c) 2026 EmberBSD contributors.
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from test_core import TemporaryCase
 from emberbsd_sdk import verification_receipts
+from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.llvm_sysroot import LLVMCoordinator
 from emberbsd_sdk.sysroot_builder import SysrootBuilder
 from emberbsd_sdk.verification_receipts import RunReceipts, fingerprint
@@ -43,6 +45,18 @@ class VerificationReceiptTests(TemporaryCase):
 
     def content_checks(self):
         return len(self.calls.read_text().splitlines()) if self.calls.exists() else 0
+
+    def test_missing_host_tool_fails_before_any_owner_verifier(self):
+        builder = self.builder()
+        self.write('archives/rcs.tar.lz', 'archive')
+        builder.options = {'rcs-archive': str(self.root / 'archives/rcs.tar.lz')}
+        builder.paths['rcs-source'] = str(self.source)
+        (self.root / 'host-prefix/bin').mkdir(parents=True)
+        builder.native = SimpleNamespace(bundle_root=str(self.root / 'host-prefix'))
+        with self.assertRaisesRegex(SDKError, 'missing native tool in host prefix: lzip'):
+            builder.verify_common_sources()
+        # byacc precedes rcs, but no content verifier may run first.
+        self.assertEqual(self.content_checks(), 0)
 
     def test_unchanged_inputs_are_verified_by_content_once_per_run(self):
         builder = self.builder()

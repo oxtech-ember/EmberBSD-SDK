@@ -608,6 +608,11 @@ class SysrootBuilder:
             selector = native_toolset.load_host_prefix(self.native.bundle_root, required_roles={'gpatch'})
             if patch != self.executable(selector.tool('gpatch')):
                 raise SDKError('source patch differs from the selected native gpatch')
+        lzip = None
+        if 'rcs-source' in self.paths and self.options.get('rcs-archive'):
+            # Select every host tool before the first owner verifier runs, so
+            # a missing tool fails the run before minutes of source checks.
+            lzip = native_toolset.load_host_prefix(self.native.bundle_root, required_roles={'lzip'}).tool('lzip')
         shared = None
         memo = {}
         for name, package, argv in (
@@ -655,7 +660,6 @@ class SysrootBuilder:
                 paths.regular_file(archive)
                 command += ['--archive', archive]
                 if name == 'rcs':
-                    lzip = native_toolset.load_host_prefix(self.native.bundle_root, required_roles={'lzip'}).tool('lzip')
                     command += ['--lzip', lzip]
             inputs = [self.paths[name + '-source'], *self.receipt_tools(command)]
             if shared:
