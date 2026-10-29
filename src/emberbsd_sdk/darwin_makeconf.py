@@ -32,7 +32,7 @@ NATIVE_STAGE_MAKECONF_API = 1
 
 
 def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root,
-                                packages, binding_record, python, buildlinks, tools=()):
+                                packages, binding_record, python, buildlinks, tools=(), runtime_view=None):
     """Render a native replacement-stage overlay using ordinary pkgsrc variables."""
     from . import compiler_bindings, paths
     base = _path(base, existing=True)
@@ -129,6 +129,10 @@ def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root
     if compiler_roots == {'stage'}:
         _require(required_llvm_tools.issubset(selected), 'staged compiler requires the complete selected LLVM tool roles')
         lines.append('EMBERBSD_DARWIN_SEED_AS= ' + os.path.join(os.path.dirname(record_path), 'cc') + ' -c -x assembler')
+    if runtime_view is not None:
+        runtime_view = _path(runtime_view, directory=True, existing=True)
+        _require(':' not in runtime_view, 'stage runtime view must not contain a colon')
+        lines.append('EMBERBSD_NATIVE_RUNTIME_VIEW= ' + runtime_view)
     lines.extend('BUILDLINK_PREFIX.' + name + '= ' + staged for name in buildlinks)
     data = ('\n'.join(lines) + '\n').encode('ascii')
     if os.path.lexists(output):

@@ -68,12 +68,22 @@ class NativeStageMakeconfTests(unittest.TestCase):
         selected_tool.write_text('fixture'); selected_tool.chmod(0o755)
         roles = ('ld', 'ar', 'ranlib', 'nm', 'strip', 'dsymutil', 'llvm_mc', 'libtool_darwin', 'lipo', 'otool', 'install_name_tool', 'llvm_readtapi')
         options['tools'] = [role + '=' + str(selected_tool) for role in roles]
+        view = root/'view'; view.mkdir()
+        options['runtime_view'] = str(view)
         output = Path(write_native_stage_makeconf(**options))
         self.assertIn('EMBERBSD_DARWIN_LD64_LLD= ' + str(selected_tool), output.read_text())
         with_rpcgen = options | dict(output=str(root/'staged-rpcgen.mk'),
                                      tools=options['tools'] + ['rpcgen=' + str(selected_tool)])
         self.assertIn('TOOLS_PATH.rpcgen= ' + str(selected_tool),
                       Path(write_native_stage_makeconf(**with_rpcgen)).read_text())
+        self.assertIn('EMBERBSD_NATIVE_RUNTIME_VIEW= ' + str(view), output.read_text())
+        with self.assertRaisesRegex(SDKError, 'No such file or directory'):
+            write_native_stage_makeconf(**(options | dict(runtime_view=str(root/'missing'))))
+        with self.assertRaisesRegex(SDKError, 'expected directory'):
+            write_native_stage_makeconf(**(options | dict(runtime_view=str(self.base))))
+        unsafe = root/'bad:colon'; unsafe.mkdir()
+        with self.assertRaisesRegex(SDKError, 'without make metacharacters'):
+            write_native_stage_makeconf(**(options | dict(runtime_view=str(unsafe))))
         with self.assertRaisesRegex(SDKError, 'stage tool must be executable inside'):
             write_native_stage_makeconf(**(options | dict(tools=['ld=' + str(self.python)])))
         with self.assertRaisesRegex(SDKError, 'invalid or repeated staged tool role'):

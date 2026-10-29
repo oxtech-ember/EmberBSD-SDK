@@ -14,6 +14,7 @@ def main():
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--buildlink', action='append', default=[])
     parser.add_argument('--tool', action='append', default=[], metavar='ROLE=PATH')
+    parser.add_argument('--runtime-view')
     args = parser.parse_args()
     source = Path(args.sdk_source).resolve(strict=True)
     sys.path.insert(0, str(source / 'src'))
@@ -21,7 +22,7 @@ def main():
     print(write_native_stage_makeconf(base=args.base, output=args.output,
         stage_root=args.stage_root, prefix=args.prefix, object_root=args.object_root,
         packages=args.packages, binding_record=args.binding_record, python=args.python,
-        buildlinks=args.buildlink, tools=args.tool))
+        buildlinks=args.buildlink, tools=args.tool, runtime_view=args.runtime_view))
 
 
 if __name__ == '__main__':
