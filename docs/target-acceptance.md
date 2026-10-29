@@ -45,9 +45,10 @@ limited to the native prefix; target compilation uses a separate environment.
 Both source snapshots should be published inputs.
 
 The guest serial log uses a per-run nonce. Acceptance requires one read-only
-root event, all nine named check events, one completion event, and a clean
-QEMU exit. Timeout, partial output, duplicate or unknown events, and process
-failure do not produce an acceptance receipt. A successful run writes
+root event, all seven guest check events, one completion event, and a clean
+QEMU exit. The two cross-compilation checks are recorded separately on the host.
+Timeout, partial output, duplicate or unknown events, and process failure do
+not produce an acceptance receipt. A successful run writes
 `target-acceptance.json` and the raw `target-acceptance.log`. It also writes the
 release input `qualification.json` only when the selected consumer family and
 version match the OS build's compiler. A different-family run remains useful
