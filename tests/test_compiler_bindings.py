@@ -338,6 +338,29 @@ class NativeCxxRuntimeBindingTests(TemporaryCase):
         self.assertNotIn(str(self.include), argv)
         self.assertNotIn('-L'+str(self.lib), argv)
 
+    def test_macho_loader_paths_and_response_files(self):
+        for args in (['-dynamiclib', '-install_name', '@rpath/libprobe.dylib', 'source.cc'],
+                     ['-dynamiclib', '-Xlinker', '-install_name', '-Xlinker',
+                      '@loader_path/libprobe.dylib', 'source.cc']):
+            with self.subTest(args=args):
+                self.assertIn('-L'+str(self.lib), self.invoke('cxx', args))
+        rsp = self.root/'install-name.rsp'
+        rsp.write_text('@rpath/libprobe.dylib')
+        self.invoke('cxx', ['-dynamiclib', '-install_name', '@'+str(rsp), 'source.cc'])
+        bad = subprocess.run([self.tools['cxx'], '@rpath/libprobe.dylib'], cwd=self.root,
+                             capture_output=True, text=True)
+        self.assertNotEqual(bad.returncode, 0)
+        # Like Clang, an existing @name is still expanded in an option value.
+        folder = self.root/'rpath'; folder.mkdir()
+        (folder/'libprobe.dylib').write_text('expanded-name')
+        old = os.getcwd()
+        try:
+            os.chdir(self.root)
+            self.assertEqual(compiler_bindings._operation_words(
+                ['-install_name', '@rpath/libprobe.dylib']), ['-install_name', 'expanded-name'])
+        finally:
+            os.chdir(old)
+
     def test_new_records_fail_closed_under_version_one_command_shape(self):
         record = json.loads((self.root/'commands'/'commands.json').read_text())
         self.assertEqual(record['version'], 2)

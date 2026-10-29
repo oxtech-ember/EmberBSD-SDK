@@ -37,20 +37,35 @@ def _words(value):
 
 
 def _operation_words(arguments, seen=()):
-    """Inspect POSIX response files for operation switches; preserve caller argv."""
+    """Inspect Clang response files, including options crossing their boundaries."""
     result = []
-    for word in arguments:
-        if word.startswith('@'):
+
+    def visit(words, active):
+        for word in words:
+            if not word.startswith('@'):
+                result.append(word)
+                continue
+            # Clang expands an existing response file even in an option value.
+            # A missing Mach-O loader path remains literal when used as a
+            # linker option value; it is not a missing response file.
+            loader_name = word.startswith(('@rpath/', '@loader_path/', '@executable_path/'))
+            linker_options = ('-install_name', '-rpath')
+            direct = result and result[-1] in linker_options
+            forwarded = (len(result) >= 3 and result[-3] == '-Xlinker' and
+                         result[-2] in linker_options and result[-1] == '-Xlinker')
+            if loader_name and (direct or forwarded) and not os.path.exists(word[1:]):
+                result.append(word)
+                continue
             path = paths.canonical_existing(word[1:])
-            if path in seen or len(seen) >= 32:
+            if path in active or len(active) >= 32:
                 raise SDKError('compiler response-file cycle or nesting limit')
             with open(path, encoding='utf-8') as stream:
                 content = stream.read(1024 * 1024 + 1)
             if len(content) > 1024 * 1024:
                 raise SDKError('compiler response file exceeds inspection limit')
-            result.extend(_operation_words(shlex.split(content), (*seen, path)))
-        else:
-            result.append(word)
+            visit(shlex.split(content), (*active, path))
+
+    visit(arguments, seen)
     return result
 
 
@@ -122,7 +137,8 @@ def _native_cxx_options(runtime, arguments):
             explicit_sysroot = word[len('-isysroot'):].removeprefix('=')
         elif word in ('-I', '-isystem', '-iquote', '-idirafter', '-o', '-include',
                       '-imacros', '-L', '-l', '-Xlinker', '-MF', '-MT',
-                      '-MQ', '-resource-dir', '--gcc-toolchain', '-B', '-x'):
+                      '-MQ', '-resource-dir', '--gcc-toolchain', '-B', '-x',
+                      '-install_name', '-rpath'):
             next(iterator, None)
     if explicit_target is not None and explicit_target not in runtime['targets']:
         raise SDKError('target differs from selected native C++ runtime')
