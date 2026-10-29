@@ -93,7 +93,12 @@ It builds and installs `devel/bmake` through the shared recipe and its dependenc
 The utility mapping contains only explicit selected utility links.
 It excludes raw compiler and make names whose plain links would lose command arguments.
 
-After that closure installs bmake, its makefiles, and mksh, use the resulting tools:
+After that closure installs bmake, its makefiles, and mksh, use the resulting tools.
+If the native package closure needs gettext, first run the Ports
+[plain-to-full gettext sequence](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/darwin-bootstrap.md#first-tools)
+with those selected tools and the same prefix. The sequence avoids the
+gettext/GLib dependency cycle and retains an already installed full package.
+Then build the remaining closure:
 
 ```sh
 /absolute/host-pkg-llvm/bin/bmake \
