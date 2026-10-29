@@ -104,6 +104,8 @@ class DarwinMakeconfTests(TemporaryCase):
         self.assertEqual(record['native_cxx_runtime']['abi_identity'], runtime['abi_identity'])
         self.assertIn('EMBERBSD_NATIVE_CXX_BINDING_RECORD= '+binding+'/commands.json\n',
                       Path(self.options['output']).read_text())
+        self.assertIn('EMBERBSD_NATIVE_CXX_ABI_NAMESPACE= __ember1\n',
+                      Path(self.options['output']).read_text())
 
     def test_explicit_native_runtime_routes_cxx_through_common_binding(self):
         import json

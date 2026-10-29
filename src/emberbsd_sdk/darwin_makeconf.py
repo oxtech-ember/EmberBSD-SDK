@@ -2,6 +2,7 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Write ordinary first-prefix Darwin configuration for the common Ports policy."""
 
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -27,6 +28,86 @@ CMAKE = {'LIBTOOL': 'libtool_darwin', 'INSTALL_NAME_TOOL': 'install_name_tool', 
 BOUND = frozenset((*COMPILERS, 'as', 'ld', 'make', 'gmake', 'sh'))
 REQUIRED = frozenset((*BOUND, *LLVM.values(), 'pkg_info', 'pkg_admin', 'pkg_add', 'pkg_create'))
 ROLE = re.compile(r'[a-z][a-z0-9_.+-]*\Z')
+NATIVE_STAGE_MAKECONF_API = 1
+
+
+def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root,
+                                packages, binding_record, python, buildlinks):
+    """Render a native replacement-stage overlay using ordinary pkgsrc variables."""
+    from . import compiler_bindings, paths
+    base = _path(base, existing=True)
+    regular_file(base)
+    output = _path(output)
+    prefix = _path(prefix, directory=True, existing=True)
+    stage_root = _path(stage_root, directory=True, existing=True)
+    object_root = _path(object_root)
+    packages = _path(packages)
+    record_path = _path(binding_record, existing=True)
+    regular_file(record_path)
+    python = _path(python, existing=True)
+    _require(_inside(python, prefix), 'stage binding Python must belong to the host prefix')
+    paths.reject_overlap(stage_root, prefix)
+    for path in (output, object_root, packages):
+        paths.reject_overlap(path, prefix)
+        paths.reject_overlap(path, stage_root)
+    paths.reject_overlap(object_root, packages)
+    paths.reject_overlap(output, object_root)
+    paths.reject_overlap(output, packages)
+    _require(output != base and os.path.basename(record_path) == 'commands.json',
+             'stage configuration requires a distinct output and binding record')
+    staged = os.path.join(stage_root, prefix.lstrip('/'))
+    _require(os.path.isdir(os.path.join(staged, 'pkgdb')), 'staged package database missing')
+    with open(record_path, encoding='utf-8') as stream:
+        record = json.load(stream)
+    _require(isinstance(record, dict), 'invalid native C++ binding record')
+    runtime = record.get('native_cxx_runtime')
+    _require(isinstance(runtime, dict) and record.get('version') == 4 and
+             runtime.get('include_dir') == os.path.join(staged, 'include/libc++/v1') and
+             runtime.get('library_dir') == os.path.join(staged, 'lib/libc++'),
+             'stage requires its matching namespace-specific native C++ binding')
+    compiler_bindings.compiler_argv(record, 'cxx', ['-fsyntax-only', '-x', 'c++', '/dev/null'])
+    for role in ('cc', 'cxx', 'cpp'):
+        command = record['commands'][role]['argv']
+        _require(bool(command) and _inside(os.path.realpath(command[0]), prefix),
+                 'stage binding must use selected host-prefix compilers')
+    commands = {role: specification['argv'] for role, specification in record['commands'].items()}
+    compiler_bindings.bind_compilers(os.path.dirname(record_path), commands=commands,
+        flags=record['flags'], python=python, aliases=record.get('aliases'),
+        link_flags=record.get('link_flags'), runtime_rpath=record.get('runtime_rpath'),
+        native_cxx_runtime=runtime)
+    _require(isinstance(buildlinks, (list, tuple)) and
+             all(isinstance(name, str) and ROLE.fullmatch(name) for name in buildlinks) and
+             len(set(buildlinks)) == len(buildlinks),
+             'invalid staged buildlink names')
+    lines = ['# SPDX-License-Identifier: BSD-2-Clause',
+             '# Explicit native replacement stage; missing dependencies must be prepared.',
+             '.include "' + base + '"',
+             'LOCALBASE= ' + prefix,
+             'WRKOBJDIR= ' + object_root, 'PACKAGES= ' + packages,
+             'PKG_DBDIR= ' + os.path.join(staged, 'pkgdb'),
+             'EMBERBSD_NATIVE_CXX_BINDING_RECORD= ' + record_path,
+             'EMBERBSD_DARWIN_SEED_CC= ' + os.path.join(os.path.dirname(record_path), 'cc'),
+             'EMBERBSD_DARWIN_SEED_CXX= ' + os.path.join(os.path.dirname(record_path), 'cxx'),
+             'EMBERBSD_DARWIN_SEED_CPP= ' + os.path.join(os.path.dirname(record_path), 'cpp'),
+             'EMBERBSD_NATIVE_CXX_ABI_NAMESPACE= ' + runtime['abi_identity']['namespace'],
+             'DEPENDS_TARGET= emberbsd-stage-missing-dependency']
+    lines.extend('BUILDLINK_PREFIX.' + name + '= ' + staged for name in buildlinks)
+    data = ('\n'.join(lines) + '\n').encode('ascii')
+    if os.path.lexists(output):
+        regular_file(output)
+        _require(Path(output).read_bytes() == data, 'existing stage configuration differs')
+    else:
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(prefix='.native-stage-', dir=os.path.dirname(output),
+                                             delete=False) as stream:
+                temporary = stream.name
+                stream.write(data)
+            os.link(temporary, output)
+        finally:
+            if temporary and os.path.lexists(temporary):
+                os.unlink(temporary)
+    return output
 
 
 def render_variables(variables, profile, *, nested_ldflags=False, metadata_make=None,
@@ -251,6 +332,8 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
                 python=python, native_cxx_runtime=native_cxx_runtime)
             variables['EMBERBSD_DARWIN_SEED_CXX'] = shlex.join([adapters['cxx']])
             variables['EMBERBSD_NATIVE_CXX_BINDING_RECORD'] = os.path.join(binding, 'commands.json')
+            if 'abi_identity' in native_cxx_runtime:
+                variables['EMBERBSD_NATIVE_CXX_ABI_NAMESPACE'] = native_cxx_runtime['abi_identity']['namespace']
         data = render_variables(variables, profile, nested_ldflags=True,
                                 comment='Explicit initial Darwin tools. Package policy belongs to Ports.')
         with tempfile.NamedTemporaryFile(prefix='.darwin-makeconf-', dir=os.path.dirname(output),
