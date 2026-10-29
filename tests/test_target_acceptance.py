@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-2-Clause
 import unittest
+from unittest.mock import patch
 import hashlib
 import subprocess
 from pathlib import Path
@@ -10,7 +11,7 @@ from test_core import SDK_SOURCE, git_environment  # noqa: F401  # puts the SDK 
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.target_acceptance import (CHECKS, GUEST_CHECKS, HOST_CHECKS,
     _clean_source_revision, _copy_runtime, _install_diagnostic_runcom,
-    _select_os_sources, _require_os_makedev, parse_guest_log, run)
+    _select_os_sources, _require_os_makedev, _compile_tests_command, parse_guest_log, run)
 
 PORTS_GUEST_MARKERS = ('target_c11', 'target_cxx20', 'libc_aliases',
                        'base_loader_smoke', 'fork_cas')
@@ -21,6 +22,31 @@ def valid_log(nonce='fixture-123'):
                        for name in PORTS_GUEST_MARKERS)
     return (f'boot noise\nEMBERBSD-ACCEPTANCE {nonce} ROOT /dev/ld0a ffs ro,local\n'
             f'{checks}\nEMBERBSD-ACCEPTANCE {nonce} COMPLETE\n').encode()
+
+
+class CompileGitSelectionTests(unittest.TestCase):
+    def test_absolute_git_is_passed_without_expanding_tool_path(self):
+        native = SimpleNamespace(tool=lambda role: '/native/bin/python')
+        options = SimpleNamespace(compiler_family='clang')
+        with tempfile.TemporaryDirectory() as temporary:
+            git = Path(temporary).resolve() / 'git'
+            git.write_text('#!/bin/sh\nexit 0\n')
+            git.chmod(0o755)
+            with patch('emberbsd_sdk.target_acceptance.shutil.which', return_value=str(git)):
+                argv = _compile_tests_command(native, options, Path('/ports/compile-tests.py'),
+                    Path('/os'), Path('/compiler'), Path('/sysroot'), Path('/tests'),
+                    Path('/sdk'), Path('/native'))
+            self.assertEqual(argv[argv.index('--git') + 1], str(git))
+            self.assertIn('--host-prefix', argv)
+
+    def test_missing_git_is_reported(self):
+        native = SimpleNamespace(tool=lambda role: '/native/bin/python')
+        options = SimpleNamespace(compiler_family='clang')
+        with patch('emberbsd_sdk.target_acceptance.shutil.which', return_value=None):
+            with self.assertRaisesRegex(SDKError, 'Git'):
+                _compile_tests_command(native, options, Path('/ports/compile-tests.py'),
+                    Path('/os'), Path('/compiler'), Path('/sysroot'), Path('/tests'),
+                    Path('/sdk'), Path('/native'))
 
 
 class MakeDevLocationTests(unittest.TestCase):

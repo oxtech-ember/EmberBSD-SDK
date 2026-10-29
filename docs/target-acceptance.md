@@ -44,6 +44,11 @@ selected native environment, with SDK-generated utility aliases and a PATH
 limited to the native prefix; target compilation uses a separate environment.
 Both source snapshots should be published inputs.
 
+The selected Ports `compile-tests.py` must support `--git`: the runner passes
+the absolute host Git executable to record the OS test-source revision, while
+the compiler environment remains limited to the selected native prefix. Older
+Ports snapshots without this option cannot be used with this runner.
+
 The guest serial log uses a per-run nonce. Acceptance requires one read-only
 root event, all seven guest check events, one completion event, and a clean
 QEMU exit. The two cross-compilation checks are recorded separately on the host.

@@ -193,6 +193,21 @@ def _require_os_makedev(destination):
     return path
 
 
+def _compile_tests_command(native, options, script, os_source, target_prefix,
+                           sysroot, tests, sdk_source, host_prefix):
+    git = shutil.which('git')
+    _require(git is not None, 'Git is required to record the OS test source')
+    git = str(Path(git).resolve(strict=True))
+    _require(os.path.isfile(git) and os.access(git, os.X_OK), 'Selected Git is not executable')
+    command = [native.tool('python'), '-B', str(script), '--compiler-family',
+               options.compiler_family, '--git', git, '--os-source', str(os_source),
+               '--target', 'aarch64', str(target_prefix), str(sysroot), str(tests),
+               '--sdk-source', str(sdk_source)]
+    if options.compiler_family == 'clang':
+        command[5:5] = ['--host-prefix', str(host_prefix)]
+    return command
+
+
 def run(options):
     sdk_source = Path(options.sdk_source).resolve(strict=True)
     running_sdk_source = Path(__file__).resolve().parents[2]
@@ -247,13 +262,8 @@ def run(options):
     _require(compile_script.is_file(), 'shared Ports compile-tests.py is missing')
     ports_revision = _clean_source_revision(ports_source, 'Ports producer', kind='ports')
     sdk_revision = _clean_source_revision(sdk_source, 'SDK controller')
-    compile_argv = [native.tool('python'), '-B', str(compile_script),
-        '--compiler-family', options.compiler_family,
-        '--os-source', str(os_test_source),
-        '--target', 'aarch64', str(target_prefix), str(sysroot), str(tests),
-        '--sdk-source', str(sdk_source)]
-    if options.compiler_family == 'clang':
-        compile_argv[5:5] = ['--host-prefix', str(host_prefix)]
+    compile_argv = _compile_tests_command(native, options, compile_script, os_test_source,
+                                          target_prefix, sysroot, tests, sdk_source, host_prefix)
     process.run_logged(compile_argv, output / 'compile.log',
                        env=process.sanitized_environment({'PATH': native.path}))
     compile_checks = jsonio.read_json(tests / 'compile-checks.json')
