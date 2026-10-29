@@ -55,6 +55,8 @@ class NativeStageMakeconfTests(unittest.TestCase):
         output = Path(write_native_stage_makeconf(**self.options))
         text = output.read_text()
         self.assertIn('PKG_DBDIR= '+str(self.staged/'pkgdb')+'\n', text)
+        self.assertIn('EMBERBSD_NATIVE_STAGE_ROOT= '+str(self.stage)+'\n', text)
+        self.assertIn('EMBERBSD_NATIVE_STAGE_PREFIX= '+str(self.prefix)+'\n', text)
         self.assertIn('DEPENDS_TARGET= emberbsd-stage-missing-dependency\n', text)
         self.assertIn('EMBERBSD_NATIVE_CXX_ABI_NAMESPACE= __ember1\n', text)
         self.assertIn('BUILDLINK_PREFIX.llvm= '+str(self.staged)+'\n', text)

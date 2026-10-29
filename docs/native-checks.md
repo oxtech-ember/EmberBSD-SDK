@@ -139,11 +139,13 @@ selected config that explicitly names a namespace other than `__1`.
 For a native replacement stage, `prepare-darwin-stage.py` writes a separate
 pkgsrc MAKECONF from an existing Darwin base configuration and an explicit v4
 binding for that stage. Pass `--stage-root`, the final `--prefix`, distinct
-`--object-root` and `--packages` directories, and repeat `--buildlink` for
-providers that must resolve from the stage. Select the binding's host Python
-with `--python`; the SDK verifies the existing adapters. The overlay selects the stage
-package database and binding after including the base; selected compiler
-executables must belong to the host prefix. Other providers and host tools retain
-the base configuration. Missing dependencies fail instead of recursively installing
+`--object-root` and `--packages` directories. The overlay publishes the selected
+stage root and final prefix so the Ports buildlink layer can route registered
+native providers from that stage; `--buildlink` remains an explicit override. Select the binding's host Python
+with `--python`; the SDK verifies the existing adapters. The overlay selects
+the stage package database and binding after including the base; selected
+compiler executables must belong to the host prefix. Built-in OS providers and
+host tools retain the base configuration. Missing dependencies fail instead of
+recursively installing
 into the active prefix; prepare them in the stage before retrying. The helper
 does not install packages or select a runtime loader environment.

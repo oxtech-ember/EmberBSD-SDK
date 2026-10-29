@@ -85,6 +85,8 @@ def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root
              'LOCALBASE= ' + prefix,
              'WRKOBJDIR= ' + object_root, 'PACKAGES= ' + packages,
              'PKG_DBDIR= ' + os.path.join(staged, 'pkgdb'),
+             'EMBERBSD_NATIVE_STAGE_ROOT= ' + stage_root,
+             'EMBERBSD_NATIVE_STAGE_PREFIX= ' + prefix,
              'EMBERBSD_NATIVE_CXX_BINDING_RECORD= ' + record_path,
              'EMBERBSD_DARWIN_SEED_CC= ' + os.path.join(os.path.dirname(record_path), 'cc'),
              'EMBERBSD_DARWIN_SEED_CXX= ' + os.path.join(os.path.dirname(record_path), 'cxx'),
