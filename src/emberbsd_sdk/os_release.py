@@ -30,6 +30,7 @@ KERNEL = 'netbsd-EMBER64.gz'
 EVIDENCE = 'target-acceptance.log'
 SYSROOT_REQUIRED = SYSROOT_SETS + [KERNEL, 'build-profile.json', 'source-export.sha256', 'release-notes.md']
 SYSROOT_CHECKS = 'libc_aliases cross_c11 cross_cxx20 target_c11 target_cxx20 base_loader_smoke fork_cas'.split()
+SYSROOT_V2_CHECKS = SYSROOT_CHECKS + ['libm_valid', 'setjmp_valid']
 # Historical schema 1 is an immutable receipt format, not a current build profile.
 LEGACY_FLAGS = ('USETOOLS=yes HAVE_GCC=12 TOOLCHAIN_MISSING=no MKGCC=yes MKGCCCMDS=no MKCXX=yes '
     'MKLIBSTDCXX=yes MKLINKLIB=yes MKSTATICLIB=yes MKPIC=yes MKPICLIB=yes MKDYNAMICROOT=yes '
@@ -223,7 +224,17 @@ def require_qualification(manifest, profile):
         checks = VM_CHECKS
     else:
         bindings = {'base_sha256': SYSROOT_SETS[0], 'comp_sha256': SYSROOT_SETS[1], 'kernel_gzip_sha256': KERNEL}
-        checks = SYSROOT_CHECKS
+        corpus = q.get('corpus', 'target-runtime-v1')
+        check(corpus in ('target-runtime-v1', 'target-runtime-v2'), 'Unknown target runtime corpus')
+        checks = SYSROOT_V2_CHECKS if corpus == 'target-runtime-v2' else SYSROOT_CHECKS
+        if corpus == 'target-runtime-v1':
+            check(not any(name in q.get('checks', {}) for name in ('libm_valid', 'setjmp_valid')),
+                  'Legacy target corpus cannot claim extended checks')
+        if corpus == 'target-runtime-v2':
+            check(full_hash(q.get('os_test_source_commit'), 40) and
+                  full_hash(q.get('ports_source_commit'), 40) and
+                  full_hash(q.get('test_source_inventory_sha256'), 64),
+                  'Extended target corpus lacks source provenance')
         if manifest['build_profile'].get('schema') in (4, 5):
             version = manifest['build_profile']['sdk_receipt']['signature']['compiler']['version']
             check(q.get('consumer_compiler_family') == 'clang' and
@@ -332,9 +343,10 @@ def prepare_sysroot(build, directory, qualification):
     evidence = None
     if qualification:
         raw = read_json(qualification)
-        fields = ('source_commit base_sha256 comp_sha256 kernel_gzip_sha256 consumer_compiler consumer_compiler_family execution checks runtime_libraries evidence_sha256').split()
+        fields = ('corpus os_test_source_commit ports_source_commit test_source_inventory_sha256 source_commit base_sha256 comp_sha256 kernel_gzip_sha256 consumer_compiler consumer_compiler_family execution checks runtime_libraries evidence_sha256').split()
         q = {k: raw[k] for k in fields if k in raw}
-        q['checks'] = {k: raw['checks'][k] for k in SYSROOT_CHECKS if k in raw['checks']}
+        names = SYSROOT_V2_CHECKS if raw.get('corpus') == 'target-runtime-v2' else SYSROOT_CHECKS
+        q['checks'] = {k: raw['checks'][k] for k in names if k in raw['checks']}
         qualification_dir = Path(qualification).resolve().parent
         sidecar_evidence = qualification_dir / EVIDENCE
         evidence = sidecar_evidence if sidecar_evidence.is_file() else build / EVIDENCE

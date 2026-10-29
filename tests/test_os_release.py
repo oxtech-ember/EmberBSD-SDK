@@ -238,6 +238,46 @@ class HistoricalKitTests(TemporaryCase):
                 with self.assertRaises(SDKError):
                     kit.verify(path, 'aarch64-sysroot')
 
+    def test_extended_corpus_requires_its_additional_checks(self):
+        q = qualify(self.build, self.manifest, 'aarch64-sysroot')
+        m = kit.prepare(self.build, self.root / 'corpus-v2', 'aarch64-sysroot', q)
+        kit.require_qualification(m, 'aarch64-sysroot')
+        legacy_claim = copy.deepcopy(m)
+        legacy_claim['qualification']['checks']['libm_valid'] = True
+        with self.assertRaisesRegex(SDKError, 'Legacy target corpus'):
+            kit.require_qualification(legacy_claim, 'aarch64-sysroot')
+        m['qualification']['corpus'] = 'target-runtime-v2'
+        with self.assertRaises(SDKError):
+            kit.require_qualification(m, 'aarch64-sysroot')
+        m['qualification']['checks'].update(libm_valid=True, setjmp_valid=True)
+        with self.assertRaisesRegex(SDKError, 'source provenance'):
+            kit.require_qualification(m, 'aarch64-sysroot')
+        m['qualification'].update(os_test_source_commit='a' * 40,
+                                  ports_source_commit='b' * 40,
+                                  test_source_inventory_sha256='c' * 64)
+        kit.require_qualification(m, 'aarch64-sysroot')
+        raw = jsonio.read_json(q)
+        raw['corpus'] = 'target-runtime-v2'
+        raw.update(os_test_source_commit='a' * 40, ports_source_commit='b' * 40,
+                   test_source_inventory_sha256='c' * 64)
+        raw['checks'].update(libm_valid=True, setjmp_valid=True)
+        jsonio.write_json(q, raw, exclusive=False)
+        roundtrip = kit.prepare(self.build, self.root / 'corpus-v2-roundtrip',
+                                'aarch64-sysroot', q)
+        kit.require_qualification(roundtrip, 'aarch64-sysroot')
+        self.assertEqual(roundtrip['qualification']['corpus'], 'target-runtime-v2')
+        self.assertTrue(roundtrip['qualification']['checks']['libm_valid'])
+        self.assertTrue(roundtrip['qualification']['checks']['setjmp_valid'])
+        raw.pop('corpus')
+        jsonio.write_json(q, raw, exclusive=False)
+        legacy = kit.prepare(self.build, self.root / 'corpus-v1-roundtrip',
+                             'aarch64-sysroot', q)
+        self.assertNotIn('libm_valid', legacy['qualification']['checks'])
+        self.assertNotIn('setjmp_valid', legacy['qualification']['checks'])
+        legacy['qualification']['corpus'] = 'unknown'
+        with self.assertRaises(SDKError):
+            kit.require_qualification(legacy, 'aarch64-sysroot')
+
     def test_optional_qualification_binding(self):
         q = qualify(self.build, self.manifest, 'aarch64-sysroot')
         qualified = self.root / 'qualified'

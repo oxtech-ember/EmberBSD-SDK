@@ -27,7 +27,11 @@ Record the execution platform as
 `EmberBSD aarch64 full-system QEMU TCG`.
 Its `checks` object must contain true results for `libc_aliases`, `cross_c11`,
 `cross_cxx20`, `target_c11`, `target_cxx20`, `base_loader_smoke` and `fork_cas`.
-Record true only from actual successful execution.
+Record true only from actual successful execution. Current
+`target-runtime-v2` qualifications also require `libm_valid` and
+`setjmp_valid` and bind the OS test and Ports source commits and test-source
+inventory hash. Earlier qualifications without a corpus marker are v1; they
+remain readable but do not establish these two checks.
 
 Run the shared SDK [target acceptance runner](target-acceptance.md). It writes
 `qualification.json` and the raw `target-acceptance.log` together in its new

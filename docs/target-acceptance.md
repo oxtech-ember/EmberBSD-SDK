@@ -45,14 +45,19 @@ limited to the native prefix; target compilation uses a separate environment.
 Both source snapshots should be published inputs.
 
 The guest serial log uses a per-run nonce. Acceptance requires one read-only
-root event, all seven named check events, one completion event, and a clean
+root event, all nine named check events, one completion event, and a clean
 QEMU exit. Timeout, partial output, duplicate or unknown events, and process
 failure do not produce an acceptance receipt. A successful run writes
 `target-acceptance.json` and the raw `target-acceptance.log`. It also writes the
 release input `qualification.json` only when the selected consumer family and
 version match the OS build's compiler. A different-family run remains useful
 as a separately recorded target result, but cannot qualify that build. The
-result does not publish a release.
+result does not publish a release. The current `target-runtime-v2` corpus
+adds ordinary finite libm calls and a valid setjmp/longjmp check. Its
+qualification records the OS test source commit separately from the OS build,
+the Ports source commit, and the compiled source inventory hash. Older
+qualifications without a corpus marker retain their original v1 coverage and
+do not establish these two checks.
 
 ## Ports protocol regression
 

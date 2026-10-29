@@ -19,6 +19,7 @@ HOST_CHECKS = ('cross_c11', 'cross_cxx20')
 GUEST_CHECKS = ('libc_aliases', 'target_c11', 'target_cxx20',
                 'base_loader_smoke', 'fork_cas')
 CHECKS = HOST_CHECKS + GUEST_CHECKS
+V2_GUEST_CHECKS = GUEST_CHECKS + ('libm_valid', 'setjmp_valid')
 MARKER = re.compile(r'EMBERBSD-CHECK ([A-Za-z0-9_-]+) ([a-z0-9_]+) (PASS|FAIL)\Z')
 
 
@@ -27,8 +28,10 @@ def _require(condition, message):
         raise SDKError(message)
 
 
-def parse_guest_log(data, nonce, root_device):
+def parse_guest_log(data, nonce, root_device, *, corpus="target-runtime-v1"):
     """Validate the complete nonce-bound guest protocol; reject noise as evidence."""
+    _require(corpus in ('target-runtime-v1', 'target-runtime-v2'), 'unknown target runtime corpus')
+    required_checks = V2_GUEST_CHECKS if corpus == 'target-runtime-v2' else GUEST_CHECKS
     try:
         lines = data.decode('utf-8', 'strict').splitlines()
     except UnicodeError as exc:
@@ -65,14 +68,14 @@ def parse_guest_log(data, nonce, root_device):
         _require(match is not None, 'malformed guest check marker')
         marker_nonce, name, status = match.groups()
         _require(marker_nonce == nonce, 'guest check marker belongs to another run')
-        _require(name in GUEST_CHECKS, 'unknown guest check marker: ' + name)
+        _require(name in required_checks, 'unknown guest check marker: ' + name)
         _require(name not in seen, 'duplicate guest check marker: ' + name)
         _require(status == 'PASS', 'guest check failed: ' + name)
         _require(root_index < index < completion_index,
                  'guest check marker is outside the validated run')
         seen[name] = True
-    _require(set(seen) == set(GUEST_CHECKS), 'guest did not report every required runtime check')
-    return {name: True for name in GUEST_CHECKS}
+    _require(set(seen) == set(required_checks), 'guest did not report every required runtime check')
+    return {name: True for name in required_checks}
 
 
 def _git_revision(path):
@@ -101,6 +104,8 @@ def _select_os_sources(os_build_commit, os_source, os_test_source):
     required = (os_test_source / 'ember/tests/target-acceptance/libc-aliases.c',
                 os_test_source / 'ember/tests/target-acceptance/base-loader-smoke.c',
                 os_test_source / 'ember/tests/target-acceptance/fork-cas.c',
+                os_test_source / 'ember/tests/target-acceptance/libm-valid.c',
+                os_test_source / 'ember/tests/target-acceptance/setjmp-valid.c',
                 os_test_source / 'ember/image/target-acceptance-rc',
                 os_test_source / 'ember/image/target-acceptance-root.sh')
     for source in required:
@@ -170,7 +175,7 @@ def _copy_test_bundle(bundle, root):
     names = ('target.txt', 'compiler-family.txt', 'runtime-files.tsv', 'os-tests.txt',
              'atomic-tls', 'atomic-tls-lto', 'boundary', 'libboundary.so',
              'check-runtime.sh', 'run-target.sh', 'libc-aliases',
-             'base-loader-smoke', 'fork-cas', 'fork-cas-static')
+             'base-loader-smoke', 'fork-cas', 'fork-cas-static', 'libm-valid', 'setjmp-valid')
     for name in names:
         source = bundle / name
         if name == 'os-tests.txt' and not source.exists():
@@ -309,12 +314,12 @@ def run(options):
         '-device', 'virtio-blk-pci,drive=root', '-net', 'none']
     process.run_logged(argv, qemu_log, env=process.sanitized_environment({'PATH': native.path}),
                        timeout_seconds=options.timeout)
-    checks = parse_guest_log(serial.read_bytes(), nonce, options.root_device)
+    checks = parse_guest_log(serial.read_bytes(), nonce, options.root_device, corpus='target-runtime-v2')
     runtime_rows = []
     for line in (tests / 'runtime-files.tsv').read_text().splitlines():
         role, guest_path, digest = line.split('\t')
         runtime_rows.append(dict(role=role, path=guest_path, sha256=digest))
-    result_data = dict(format='emberbsd-target-acceptance', version=1,
+    result_data = dict(format='emberbsd-target-acceptance', version=2, corpus='target-runtime-v2',
         execution='EmberBSD aarch64 full-system QEMU TCG', status='passed',
         checks={**compile_checks, **checks}, compiler_family=options.compiler_family,
         sources=dict(os_build=os_build_revision, os_tests=os_test_revision,
@@ -333,7 +338,8 @@ def run(options):
         runtime_manifest_sha256=sha256_file(tests / 'runtime-files.tsv'),
         test_programs_sha256={name: sha256_file(tests / name) for name in
             ('atomic-tls', 'atomic-tls-lto', 'boundary', 'libboundary.so',
-             'libc-aliases', 'base-loader-smoke', 'fork-cas', 'fork-cas-static')},
+             'libc-aliases', 'base-loader-smoke', 'fork-cas', 'fork-cas-static',
+             'libm-valid', 'setjmp-valid')},
         root_helper_sha256=sha256_file(image_helper),
         guest_runner_sha256=sha256_file(os_test_source / 'ember/image/target-acceptance-rc'),
         sdk_runner_sha256=sha256_file(Path(__file__).resolve().parents[2] /
@@ -344,7 +350,9 @@ def run(options):
         for row in (tests / 'runtime-files.tsv').read_text().splitlines():
             role, guest_path, digest = row.split('\t')
             runtime_libraries[role] = dict(path=guest_path, sha256=digest)
-        qualification = dict(source_commit=profile['source_commit'],
+        qualification = dict(corpus='target-runtime-v2', source_commit=profile['source_commit'],
+            os_test_source_commit=os_test_revision, ports_source_commit=ports_revision,
+            test_source_inventory_sha256=sha256_file(tests / 'source-sha256.tsv'),
             base_sha256=sha256_file(set_base), comp_sha256=sha256_file(set_comp),
             kernel_gzip_sha256=sha256_file(kernel_gz),
             consumer_compiler=(tests / 'compiler.txt').read_text().strip(),

@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 from emberbsd_sdk.errors import SDKError
-from emberbsd_sdk.target_acceptance import GUEST_CHECKS, parse_guest_log
+from emberbsd_sdk.target_acceptance import V2_GUEST_CHECKS, parse_guest_log
 
 
 def _write(path, text, executable=False):
@@ -47,7 +47,7 @@ class PublishedPortsProtocolTests(unittest.TestCase):
                            ('os-tests.txt', 'yes\n')):
             _write(self.output / name, data)
         for name in ('atomic-tls', 'atomic-tls-lto', 'libc-aliases',
-                     'base-loader-smoke', 'fork-cas', 'fork-cas-static'):
+                     'base-loader-smoke', 'fork-cas', 'fork-cas-static', 'libm-valid', 'setjmp-valid'):
             _write(self.output / name, '#!/bin/sh\nexit 0\n', executable=True)
         _write(self.output / 'boundary',
                '#!/bin/sh\nprintf "LOADED /usr/pkg/llvm/lib/libc++.so.1.0\\n"\n',
@@ -80,15 +80,15 @@ class PublishedPortsProtocolTests(unittest.TestCase):
 
     def test_published_ports_runner_output_is_accepted_by_sdk_parser(self):
         output = self.run_ports_guest_runner()
-        checks = parse_guest_log(self.serial_from_ports(output), 'ports-protocol-42', 'ld0a')
-        self.assertEqual(set(checks), set(GUEST_CHECKS))
+        checks = parse_guest_log(self.serial_from_ports(output), 'ports-protocol-42', 'ld0a', corpus='target-runtime-v2')
+        self.assertEqual(set(checks), set(V2_GUEST_CHECKS))
 
     def test_sdk_parser_rejects_host_compile_marker_from_guest_output(self):
         output = self.run_ports_guest_runner()
         bad_serial = self.serial_from_ports(
             output + 'EMBERBSD-CHECK ports-protocol-42 cross_c11 PASS\n')
         with self.assertRaisesRegex(SDKError, 'unknown guest check marker'):
-            parse_guest_log(bad_serial, 'ports-protocol-42', 'ld0a')
+            parse_guest_log(bad_serial, 'ports-protocol-42', 'ld0a', corpus='target-runtime-v2')
 
 
 def main(argv=None):

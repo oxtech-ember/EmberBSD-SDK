@@ -38,6 +38,21 @@ class MakeDevLocationTests(unittest.TestCase):
 
 
 class TargetAcceptanceProtocolTests(unittest.TestCase):
+    def test_v2_requires_math_and_setjmp_markers(self):
+        old = valid_log()
+        with self.assertRaises(SDKError):
+            parse_guest_log(old, 'fixture-123', 'ld0a', corpus='target-runtime-v2')
+        extended = old.replace(b'EMBERBSD-ACCEPTANCE fixture-123 COMPLETE',
+            b'EMBERBSD-CHECK fixture-123 libm_valid PASS\n'
+            b'EMBERBSD-CHECK fixture-123 setjmp_valid PASS\n'
+            b'EMBERBSD-ACCEPTANCE fixture-123 COMPLETE')
+        result = parse_guest_log(extended, 'fixture-123', 'ld0a', corpus='target-runtime-v2')
+        self.assertTrue(result['libm_valid'] and result['setjmp_valid'])
+        for name in ('libm_valid', 'setjmp_valid'):
+            missing = extended.replace(f'EMBERBSD-CHECK fixture-123 {name} PASS\n'.encode(), b'')
+            with self.assertRaises(SDKError):
+                parse_guest_log(missing, 'fixture-123', 'ld0a', corpus='target-runtime-v2')
+
     def test_accepts_complete_nonce_bound_readonly_guest_run(self):
         self.assertEqual(set(GUEST_CHECKS), set(PORTS_GUEST_MARKERS))
         result = parse_guest_log(valid_log(), 'fixture-123', 'ld0a')
@@ -161,6 +176,8 @@ class SourceRoleTests(unittest.TestCase):
                     'ember/tests/target-acceptance/libc-aliases.c',
                     'ember/tests/target-acceptance/base-loader-smoke.c',
                     'ember/tests/target-acceptance/fork-cas.c',
+                    'ember/tests/target-acceptance/libm-valid.c',
+                    'ember/tests/target-acceptance/setjmp-valid.c',
                     'ember/image/target-acceptance-rc',
                     'ember/image/target-acceptance-root.sh'):
                 path = source / relative
