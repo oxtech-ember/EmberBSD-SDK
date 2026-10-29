@@ -230,9 +230,11 @@ they do not establish C++ ABI or target execution acceptance.
 ## Shared source extraction
 
 `sourceprep.apply_patch` can keep BSD patch backups outside prepared sources
-through `backup_directory`. It creates backup parents for stripped header
-paths as well as unstripped paths; the caller retains its chosen patch
-arguments. Set `EMBERBSD_TEST_PATCH` to an absolute selected patch executable
+through `backup_directory`. It passes `-b -B DIR/`, since `-B` alone only
+names backups and GNU patch makes none without `-b`, and creates backup
+parents for stripped header paths as well as unstripped paths; the caller
+retains its other patch arguments. The checks pass with both NetBSD
+`nbpatch` and GNU `gpatch`. Set `EMBERBSD_TEST_PATCH` to an absolute selected patch executable
 and run `python3 -B -m unittest discover -s tests -p test_sourceprep_patch.py`
 to check actual changed/new file bytes, source cleanliness, and strip levels
 0, 1 and 2. BSD patch can report success after a failed backup while leaving

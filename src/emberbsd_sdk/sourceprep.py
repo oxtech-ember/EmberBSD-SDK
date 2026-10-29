@@ -187,6 +187,8 @@ def apply_patch(patch_tool, patch_path, patch_bytes, cwd, label, *,
     if backup_directory is not None:
         # NetBSD nbpatch needs -B for new-file patches; --posix can prevent
         # those files from being created. Keep backups outside the source root.
+        # -B only names backups: GNU patch makes none without -b, so pass -b
+        # for every tool to keep the original bytes in backup_directory.
         backup_directory = Path(backup_directory)
         backup_directory.mkdir()
         for header in headers:
@@ -198,7 +200,7 @@ def apply_patch(patch_tool, patch_path, patch_bytes, cwd, label, *,
             for index in range(len(parts)):
                 parent = backup_directory.joinpath(*parts[index:])
                 parent.mkdir(parents=True, exist_ok=True)
-        args.extend(('-B', str(backup_directory) + os.sep))
+        args.extend(('-b', '-B', str(backup_directory) + os.sep))
     args.extend(('-i', str(patch_path)))
     process.capture(args, cwd=str(cwd),
                     env=process.sanitized_environment())
