@@ -589,6 +589,50 @@ class BuilderTests(TemporaryCase):
         self.assertEqual(os.readlink(current / 'hostname'), str(tool))
         self.assertEqual((current / 'contract').read_bytes(), contract.read_bytes())
 
+    def drop_promised_blob(self, spec):
+        """Make the OS checkout a partial clone that lacks one blob."""
+        os_source = Path(self.options['os'])
+        oid = git(os_source, 'rev-parse', spec)
+        promisor = self.root / 'os-promisor.git'
+        git(self.root, 'clone', '-q', '--bare', '--no-local', str(os_source), str(promisor))
+        for key, value in (('core.repositoryformatversion', '1'), ('remote.origin.url', promisor.as_uri()),
+                           ('remote.origin.promisor', 'true'), ('extensions.partialClone', 'origin')):
+            git(os_source, 'config', key, value)
+        (os_source / '.git/objects' / oid[:2] / oid[2:]).unlink()
+        with self.assertRaises(subprocess.CalledProcessError):
+            git(os_source, 'cat-file', '-e', oid)
+        return oid
+
+    def test_partial_os_checkout_reuses_objects_without_fetching_the_old_contract(self):
+        with patch.object(B, 'prepare_native_routing', ProductionBuilder.prepare_native_routing):
+            first = self.run_builder()
+            contract = Path(self.options['os']) / 'tools/native-tools/contract'
+            write(contract, contract.read_text() + 'hostname hostname -\n')
+            write(Path(self.options['host-prefix']) / 'libexec/gettext/hostname', '#!/bin/sh\nexit 0\n', 0o755)
+            commit(self.options['os'])
+            # The old contract exists only in the promisor remote. The SDK
+            # disables lazy fetching and reads the routing tree of the objects.
+            missing = self.drop_promised_blob('HEAD~1:tools/native-tools/contract')
+            result = self.run_builder(destination=self.options['sdk'] + '/stages/next')
+        self.assertEqual(result['qualification'], 'built-and-inspected')
+        self.assertEqual(result['paths']['objects'], first['paths']['objects'])
+        with self.assertRaises(subprocess.CalledProcessError):
+            git(self.options['os'], 'cat-file', '-e', missing)
+
+    def test_former_routing_name_without_local_contract_fails_clearly(self):
+        builder = B(self.options)
+        builder.run()
+        path = builder.paths['objects']
+        record = jsonio.read_json(Path(path) / builder.CONTEXT)
+        contract = Path(self.options['os']) / 'tools/native-tools/contract'
+        write(contract, contract.read_text() + 'hostname hostname -\n')
+        commit(self.options['os'])
+        self.drop_promised_blob('HEAD~1:tools/native-tools/contract')
+        legacy = copy.deepcopy(record)
+        legacy['signature']['environment']['EMBER_NATIVE_TOOLS'] = str(Path(builder.paths['tools']) / 'native-routing')
+        with self.assertRaisesRegex(SDKError, 'lacks the native-tool contract of the reused objects'):
+            builder.compatible_context(legacy, path)
+
     def test_context_keeps_compiler_abi_and_existing_tool_identity(self):
         builder = B(self.options)
         result = builder.run()

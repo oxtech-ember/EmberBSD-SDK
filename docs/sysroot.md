@@ -142,6 +142,10 @@ the same executable and keep the build environment restricted to the native pref
 The builder loads the OS contract roles and publishes `EMBER_NATIVE_TOOLS` in a
 contract-keyed directory under the locked tools tree. New contracts leave earlier
 mappings unchanged; the former fixed `native-routing` name remains reusable.
+Reuse compares the old contract kept in that directory with the selected one.
+Only the former fixed name reads it from the recorded OS commit, using local Git
+objects: a partial OS checkout that lacks it stops with an error instead of
+fetching it.
 It checks the selection again before dispatch and completion.
 A changed selection after output preparation leaves the object contexts quarantined.
 New build records bind selected paths and commands. Historical records remain readable.

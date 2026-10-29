@@ -540,15 +540,9 @@ class SysrootBuilder:
             if added_contract or routing_changed:
                 # Compare the actual OS-owned rows from both source revisions.
                 # Existing commands/bindings cannot change during object reuse.
-                source = record['sources']['os']
-                contract = 'tools/native-tools/contract'
-                # Objects from an OS revision without the contract have no
-                # recorded rows to compare, so they cannot be reused.
-                if self.git(self.sources['os']['path'], 'ls-tree', '--name-only',
-                            source['commit'], '--', contract) != contract:
+                data = self.recorded_native_contract(record, old)
+                if data is None:
                     return False
-                data = self.git(self.sources['os']['path'], 'show', source['commit'] +
-                                ':' + contract) + '\n'
                 old_rows = data.splitlines()
                 new_rows = Path(self.native_contract).read_text(encoding='ascii').splitlines()
                 if (old_rows[:1] != new_rows[:1] or
@@ -579,6 +573,34 @@ class SysrootBuilder:
             return old == new
         except (KeyError, TypeError, AttributeError, ValueError):
             return False
+
+    def recorded_native_contract(self, record, signature):
+        """Return the native-tool contract the reused objects were built with.
+
+        The routing tree of the old objects keeps the contract named by its
+        digest. Only a former fixed routing name needs the OS commit, read
+        from local objects: a partial OS checkout must not fetch it.
+        """
+        routing = signature['environment']['EMBER_NATIVE_TOOLS']
+        prefix = os.path.join(signature['tools'], 'native-routing-')
+        digest = routing[len(prefix):] if routing.startswith(prefix) else ''
+        recorded = os.path.join(routing, 'contract')
+        if re.fullmatch(r'[0-9a-f]{64}', digest) and paths.entry(recorded) is not None:
+            data, _, _ = native_os_routing.read_native_os_contract(recorded, sha256=digest)
+            return data.decode('ascii')
+        source = record['sources']['os']
+        contract = 'tools/native-tools/contract'
+        try:
+            # Objects from an OS revision without the contract have no
+            # recorded rows to compare, so they cannot be reused.
+            if self.git(self.sources['os']['path'], 'ls-tree', '--name-only',
+                        source['commit'], '--', contract) != contract:
+                return None
+            return self.git(self.sources['os']['path'], 'show', source['commit'] + ':' + contract) + '\n'
+        except SDKError as exc:
+            raise SDKError('the OS checkout lacks the native-tool contract of the reused objects at '
+                           f'{source["commit"]}; fetch that commit into the checkout or select new '
+                           'objects') from exc
 
     def context_signature(self, path):
         if self.compiler_family() != 'clang' or path != self.paths['tools']:
