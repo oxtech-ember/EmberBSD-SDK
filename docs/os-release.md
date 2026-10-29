@@ -34,7 +34,7 @@ layout; explicit GCC builds keep base C++ disabled. Native compilation uses
 the independently selected host prefix. Prepare `--llvm-source` with the common Ports source
 producer. Without `--llvm-runtime-stage`, the [LLVM coordinator](llvm-runtime.md)
 builds headers, the initial runtime, C base and full C++ runtime before the
-release. An explicitly supplied full stage is checked against these same inputs. When selecting a full stage directly, also pass `--llvm-bootstrap-stage` for the exact bootstrap stage recorded by that full runtime. The OS embeds its checked static libunwind archive into libc; the full runtime remains the application runtime.
+release. An explicitly supplied full stage is checked against these same inputs. When selecting a full stage directly, also pass `--llvm-bootstrap-stage` for the exact bootstrap stage recorded by that full runtime. For a separate recorded foundation, select `--llvm-runtime-base` as described in [the runtime guide](llvm-runtime.md). The OS embeds its checked static libunwind archive into libc; the full runtime remains the application runtime.
 
 Select `aarch64-sysroot` for complete base/comp sets and an EMBER64 test kernel.
 Select `amd64` for the reduced UEFI ISO, USB image and installation sets.

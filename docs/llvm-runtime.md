@@ -27,6 +27,10 @@ selected inputs. If source preparation selectors or the runtime CLI changed whil
 the prepared payload and build remain equivalent, pass
 `--llvm-runtime-original-source` with the prepared source used by that runtime.
 The Ports owner compares both trees, patches and build behavior before reuse.
+For direct reuse, `--llvm-runtime-base` selects the unchanged foundation used
+to build that runtime. Its recorded headers and libraries are checked against
+this path; it does not replace the final target sysroot or release DESTDIR.
+The coordinator supplies its own foundation when it builds the stages.
 Select a runtime whose
 ABI is compatible with the chosen OS, including libc, C++ ABI, TLS and unwinder;
 matching an OS commit alone does not establish compatibility. The manifest

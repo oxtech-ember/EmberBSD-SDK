@@ -37,7 +37,7 @@ Provide:
   from this work tree through `EMBER_HOST_BFD_CONFIG`. Keep it unchanged
   while the tools are built or reused.
 - A new runtime work path below the SDK object directory, or an explicitly
-  selected completed full `--llvm-runtime-stage`. When selecting a full stage directly, also pass `--llvm-bootstrap-stage` for the exact bootstrap stage recorded by that full runtime. The OS embeds its checked static libunwind archive into libc; the full runtime remains the application runtime.
+  selected completed full `--llvm-runtime-stage`. When selecting a full stage directly, also pass `--llvm-bootstrap-stage` for the exact bootstrap stage recorded by that full runtime. For a separate recorded foundation, select `--llvm-runtime-base` as described in [the runtime guide](llvm-runtime.md). The OS embeds its checked static libunwind archive into libc; the full runtime remains the application runtime.
 
 The prepared common LLVM source is also required with GCC: libc and kernel
 builtins use that source independently of the application runtime choice.
