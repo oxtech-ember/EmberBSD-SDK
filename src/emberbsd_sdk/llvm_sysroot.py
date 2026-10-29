@@ -205,6 +205,7 @@ class LLVMCoordinator:
             LLVMPhaseBuilder(self.stage_options('base'), 'base', receipts=self.receipts).run()
             self.runtime('full', os.path.join(self.stage_root, 'base'))
             final_options = self.options | {'llvm-runtime-stage': os.path.join(self.work, 'full-stage'),
+                                            'llvm-runtime-base': os.path.join(self.stage_root, 'base'),
                                             'llvm-bootstrap-stage': os.path.join(self.work, 'bootstrap-stage'),
                                             'tools': self.tools}
             return self.builder_type(final_options, receipts=self.receipts).run()

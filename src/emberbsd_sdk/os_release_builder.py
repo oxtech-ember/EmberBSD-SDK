@@ -77,6 +77,8 @@ def gettext_libtool_command(paths, git, target, jobs, compiler_family, host_fami
                '--host-compiler-family', host_family]
     if compiler_family == 'clang' and 'llvm-runtime-stage' in paths:
         command += ['--runtime-stage', paths['llvm-runtime-stage']]
+        if 'llvm-runtime-base' in paths:
+            command += ['--runtime-base', paths['llvm-runtime-base']]
     return command
 
 

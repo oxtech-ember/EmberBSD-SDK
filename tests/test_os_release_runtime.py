@@ -188,7 +188,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
         from emberbsd_sdk.os_release_builder import gettext_libtool_command
         paths = {name: '/sdk/' + name for name in (
             'python', 'ports', 'sdk-source', 'host-prefix', 'compiler', 'tools',
-            'destination', 'objects', 'llvm-runtime-stage')}
+            'destination', 'objects', 'llvm-runtime-stage', 'llvm-runtime-base')}
         command = gettext_libtool_command(paths, '/usr/bin/git', 'aarch64', '2', 'clang', 'clang')
         self.assertEqual(command[0], '/sdk/python')
         self.assertIn('/sdk/ports/profiles/common-build-tools/cross/prepare-libtool.py', command)
@@ -196,6 +196,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
         self.assertEqual(command[command.index('--output') + 1], '/sdk/tools/gettext-libtool')
         self.assertEqual(command[command.index('--lock-directory') + 1], '/sdk')
         self.assertEqual(command[command.index('--runtime-stage') + 1], '/sdk/llvm-runtime-stage')
+        self.assertEqual(command[command.index('--runtime-base') + 1], '/sdk/llvm-runtime-base')
 
     def test_gettext_release_builds_foundation_before_distribution(self):
         paths = {name: '/sdk/' + name for name in (

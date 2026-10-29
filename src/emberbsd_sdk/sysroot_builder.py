@@ -361,7 +361,7 @@ class SysrootBuilder:
             required = (llvm_runtime.FULL_COMPONENTS if self.llvm_phase == 'final'
                         else ('builtins', 'libunwind-static'))
             stage = self.paths['llvm-runtime-stage']
-            if base is None and self.llvm_phase == 'base':
+            if base is None:
                 base = self.paths.get('llvm-runtime-base')
             command = list(self.runtime_command)
 
@@ -383,12 +383,11 @@ class SysrootBuilder:
                     record['source'] != {key: self.llvm_source_record['source'][key]
                                          for key in ('archive', 'sha512')}):
                 raise SDKError('LLVM runtime compiler or common source differs from selection')
-            if self.llvm_phase == 'base' and record['base']['os_revision'] != self.sources['os']['commit']:
+            if (self.llvm_phase == 'base' or (self.llvm_phase == 'final' and base is not None)) and record['base']['os_revision'] != self.sources['os']['commit']:
                 if base is None:
                     raise SDKError('LLVM runtime base OS differs from selection')
-                # Bootstrap archives depend on measured headers, not the entire
-                # later OS tree. The base phase checks its new headers again
-                # before accepting any libc/CRT output.
+                # A measured foundation permits a descendant OS source while
+                # preserving the runtime's original recorded revision.
                 self.git(self.sources['os']['path'], 'merge-base', '--is-ancestor',
                          record['base']['os_revision'], self.sources['os']['commit'])
             rows = inventory.snapshot_tree(self.paths['runtime-prefix'], machine=self.target['elf'])
@@ -1154,7 +1153,7 @@ class SysrootBuilder:
                         if clang else ['runtime-work', 'gcc-archive', 'pkgsrc'])
         if clang and self.llvm_phase == 'final':
             input_names.append('llvm-bootstrap-stage')
-        if clang and self.llvm_phase == 'base' and self.options.get('llvm-runtime-base'):
+        if clang and self.llvm_phase != 'headers' and self.options.get('llvm-runtime-base'):
             input_names.append('llvm-runtime-base')
         for name in input_names:
             self.paths[name] = paths.build_path(paths.canonical_existing(self.options[name]))

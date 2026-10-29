@@ -994,7 +994,8 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
             def run(self):
                 events.append('final')
                 self_stage = self.options['llvm-runtime-stage']
-                return {'runtime': self_stage, 'bootstrap': self.options['llvm-bootstrap-stage']}
+                return {'runtime': self_stage, 'bootstrap': self.options['llvm-bootstrap-stage'],
+                        'runtime_base': self.options['llvm-runtime-base']}
         coordinator.builder_type = Final
         with patch.object(coordinator, 'prepare', return_value=None), \
              patch.object(coordinator, 'lock'), \
@@ -1007,6 +1008,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertTrue(all(receipts is coordinator.receipts for receipts in shared))
         self.assertEqual(result['runtime'], options['runtime-work'] + '/full-stage')
         self.assertEqual(result['bootstrap'], options['runtime-work'] + '/bootstrap-stage')
+        self.assertEqual(result['runtime_base'], options['sdk'] + '/stages/llvm-bootstrap-aarch64/base')
 
     def test_headers_use_the_limited_os_operation_without_runtime_headers(self):
         class Headers(LLVMPhaseBuilder, ClangBuilder):
@@ -1259,6 +1261,37 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         with self.assertRaises(SDKError):
             builder.preflight()
         self.assertFalse(Path(builder.options['destination']).exists())
+
+    def test_final_runtime_checks_explicit_foundation(self):
+        builder, runtime = self.builder()
+        base = self.root / 'final-runtime-foundation'
+        write(base / 'usr/include/stdint.h', 'selected foundation')
+        runtime.record['base']['files'] = {
+            'usr/include/stdint.h': inventory.sha256_file(base / 'usr/include/stdint.h')}
+        runtime.save()
+        builder.options['llvm-runtime-base'] = str(base)
+        builder.preflight()
+        self.assertEqual(builder.paths['llvm-runtime-base'], str(base))
+        self.assertEqual(builder.signature['runtime']['manifest']['base']['files'],
+                         runtime.record['base']['files'])
+        write(base / 'usr/include/stdint.h', 'changed foundation')
+        with self.assertRaisesRegex(SDKError, 'base inputs changed'):
+            builder.verify_runtime()
+
+    def test_final_foundation_accepts_ancestor_without_relabeling(self):
+        builder, runtime = self.builder()
+        base = self.root / 'ancestor-runtime-foundation'
+        write(base / 'usr/include/stdint.h', 'foundation')
+        runtime.record['base']['files'] = {
+            'usr/include/stdint.h': inventory.sha256_file(base / 'usr/include/stdint.h')}
+        runtime.save()
+        builder.options['llvm-runtime-base'] = str(base)
+        old = runtime.record['base']['os_revision']
+        write(Path(builder.options['os']) / 'changed-rule', 'new source')
+        commit(builder.options['os'])
+        receipt = builder.run()
+        self.assertNotEqual(receipt['sources']['os']['commit'], old)
+        self.assertEqual(receipt['signature']['runtime']['manifest']['base']['os_revision'], old)
 
     def test_selected_final_runtime_retains_its_original_os_revision(self):
         builder, runtime = self.builder()
