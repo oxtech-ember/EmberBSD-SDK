@@ -469,6 +469,7 @@ class SysrootBuilder:
                                                                   'HOST_XGETTEXT=', 'HOST_MSGINIT=',
                                                                   'HOST_MSGCONV=', 'HOST_MSGFILTER=', 'HOST_SED=',
                                                                   'EMBER_PPP_SOURCE=',
+                                                                  'EMBER_TCPDUMP_SOURCE=',
                                                                   'HOST_GMAKE=',
                                                                   'EMBER_HOST_GNU_TRIPLE='))]
             previous, selected = old['native_toolset'], new['native_toolset']
@@ -554,7 +555,7 @@ class SysrootBuilder:
         return record
 
     SHARED_EXPORT_SCRIPT = 'scripts/pkgsrc-shared-export.py'
-    SHARED_EXPORT_OWNERS = ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi')
+    SHARED_EXPORT_OWNERS = ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tcpdump')
 
     def shared_pkgsrc_export(self, patch):
         """Return the one pkgsrc export of this run, or None for older Ports."""
@@ -605,6 +606,7 @@ class SysrootBuilder:
             ('ntp', 'net/ntp4', ['scripts/source-inputs/ntp/source.py']),
             ('libopts', 'devel/autogen', ['scripts/source-inputs/autogen/source.py']),
             ('libpcap', 'net/libpcap', ['scripts/source-inputs/libpcap/source.py']),
+            ('tcpdump', 'net/tcpdump', ['scripts/source-inputs/tcpdump/source.py']),
             ('tcp-wrappers', 'security/tcp_wrappers', ['scripts/source-inputs/tcp_wrappers/source.py']),
             ('gettext', 'devel/gettext', ['scripts/source-inputs/gettext/source.py']),
             ('libxml2', 'textproc/libxml2', ['scripts/source-inputs/libxml2/source.py']),
@@ -622,14 +624,14 @@ class SysrootBuilder:
                 command += ['verify', self.paths[name + '-source'], '--sdk-source', self.paths['sdk-source'], '--git', self.git_command]
             else:
                 command += ['--sdk-source', self.paths['sdk-source'], '--git', self.git_command, 'verify-source', '--source', self.paths[name + '-source']]
-            if name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') and patch:
+            if name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') and patch:
                 command += ['--patch', patch]
                 if name in self.SHARED_EXPORT_OWNERS:
                     if shared is None:
                         shared = self.shared_pkgsrc_export(patch) or ''
                     if shared:
                         command += ['--pkgsrc-export', shared]
-            if name in ('libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcp-wrappers', 'ntp', 'gettext', 'libxml2') and self.options.get(name + '-archive'):
+            if name in ('libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'gettext', 'libxml2') and self.options.get(name + '-archive'):
                 archive = paths.canonical_existing(self.options[name + '-archive'])
                 paths.regular_file(archive)
                 command += ['--archive', archive]
@@ -963,6 +965,25 @@ class SysrootBuilder:
         if selected != self.paths['libpcap-source']:
             raise SDKError('selected OS does not support EMBER_LIBPCAP_SOURCE')
 
+    def require_tcpdump_source_support(self):
+        if 'tcpdump-source' not in self.paths:
+            return
+        root = self.paths['os']
+        env = dict(self.environment)
+        env.pop('EMBER_NATIVE_TOOLS', None)
+        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
+                   '-C', os.path.join(root, 'external/bsd/tcpdump/bin'),
+                   'MAKECONF=/dev/null', '_SRC_TOP_=', 'NETBSDSRCDIR=' + root,
+                   'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
+                   'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
+                   'EMBER_TCPDUMP_SOURCE=' + self.paths['tcpdump-source'], '-V', '${SRCDIR}']
+        try:
+            selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
+        except (SDKError, UnicodeError) as exc:
+            raise SDKError('selected OS cannot resolve the tcpdump producer') from exc
+        if selected != self.paths['tcpdump-source']:
+            raise SDKError('selected OS does not support EMBER_TCPDUMP_SOURCE')
+
     def require_tcp_wrappers_source_support(self):
         if 'tcp-wrappers-source' not in self.paths:
             return
@@ -1054,7 +1075,7 @@ class SysrootBuilder:
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
-        input_names += [name for name in ('libarchive-source', 'libevent-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'x11-source') if self.options.get(name)]
+        input_names += [name for name in ('libarchive-source', 'libevent-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'x11-source') if self.options.get(name)]
         if clang and self.llvm_phase != 'headers' and self.options.get('llvm-runtime-original-source'):
             input_names.append('llvm-runtime-original-source')
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
@@ -1123,13 +1144,14 @@ class SysrootBuilder:
         self.require_iscsi_source_support()
         self.require_ntp_source_support()
         self.require_libpcap_source_support()
+        self.require_tcpdump_source_support()
         self.require_tcp_wrappers_source_support()
         self.require_ppp_source_support()
         self.require_gettext_source_support()
         self.sources['sdk'] = self.source(self.paths['sdk-source'], 'sdk')
         self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command)
         self.common_source_records = (self.verify_common_sources()
-                                      if any(name + '-source' in self.paths for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'x11'))
+                                      if any(name + '-source' in self.paths for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'x11'))
                                       else {})
         self.python = self.python_identity()
         self.git(self.paths['os'], 'ls-files', '--error-unmatch', 'build.sh', 'Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk')
@@ -1175,7 +1197,7 @@ class SysrootBuilder:
         self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}',
                        f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
         self.flags += [f'EMBER_{name.upper().replace("-", "_")}_SOURCE={self.paths[name + "-source"]}'
-                       for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in self.paths]
+                       for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in self.paths]
         if 'tdb-source' in self.paths:
             self.flags.append('HOST_PYTHON=' + self.native.tool('python'))
         if any(name + '-source' in self.paths for name in ('texinfo', 'rcs', 'diffutils', 'grep', 'gettext')):

@@ -235,6 +235,24 @@ class LLVMBuilderTests(TemporaryCase):
             builder.require_libpcap_source_support()
             run.assert_not_called()
 
+    def test_tcpdump_source_requires_real_os_producer(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'os': str(self.root / 'os'), 'tcpdump-source': '/prepared/tcpdump', 'tools': '/build/tools'}
+        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
+        builder.environment = {}
+        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/old/dist\n')):
+            with self.assertRaisesRegex(SDKError, 'does not support EMBER_TCPDUMP_SOURCE'):
+                builder.require_tcpdump_source_support()
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/prepared/tcpdump\n')) as run:
+            builder.require_tcpdump_source_support()
+        self.assertIn('/os/external/bsd/tcpdump/bin', run.call_args.args[0][5])
+        del builder.paths['tcpdump-source']
+        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
+            builder.require_tcpdump_source_support()
+            run.assert_not_called()
+
     def test_tcp_wrappers_source_requires_real_os_producer(self):
         from types import SimpleNamespace
         builder = SysrootBuilder({})
@@ -345,6 +363,17 @@ class LLVMBuilderTests(TemporaryCase):
         with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
             self.assertEqual(builder.verify_common_sources(), {'libpcap': record})
         self.assertIn('/ports/scripts/source-inputs/libpcap/source.py', run.call_args.args[0])
+
+    def test_optional_tcpdump_source_verified_by_owner(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'tcpdump-source': '/prepared/tcpdump'}
+        builder.git_command = '/host/git'
+        builder.environment = {}
+        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'net/tcpdump'}
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
+            self.assertEqual(builder.verify_common_sources(), {'tcpdump': record})
+        self.assertIn('/ports/scripts/source-inputs/tcpdump/source.py', run.call_args.args[0])
 
     def test_optional_tcp_wrappers_source_verified_by_owner(self):
         from types import SimpleNamespace
@@ -1470,6 +1499,21 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.signature['flags'].extend(('EMBER_TDB_SOURCE=/prepared/tdb', 'HOST_PYTHON=/host/python'))
         self.assertTrue(builder.compatible_context(records[tools], tools))
         self.assertFalse(builder.compatible_context(records[objects], objects))
+        builder.llvm_phase = 'base'
+        self.assertFalse(builder.compatible_context(records[objects], objects))
+
+    def test_tcpdump_selection_reuses_headers_and_native_tools(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        tools, objects = builder.paths['tools'], builder.paths['objects']
+        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+        builder.paths['tcpdump-source'] = '/prepared/tcpdump'
+        builder.signature['common_sources']['tcpdump'] = {'tree_sha256': 'a' * 64}
+        builder.signature['flags'].append('EMBER_TCPDUMP_SOURCE=/prepared/tcpdump')
+        for path in (tools, objects):
+            self.assertTrue(builder.compatible_context(records[path], path))
         builder.llvm_phase = 'base'
         self.assertFalse(builder.compatible_context(records[objects], objects))
 

@@ -91,7 +91,7 @@ the machine used for runtime tests.
 With `--source-patch` and a Ports revision that provides
 `scripts/pkgsrc-shared-export.py`, the SDK exports pkgsrc once per process
 for the libarchive, libevent, byacc, texinfo, RCS, diffutils, grep,
-E-Kermit and nvi owners (preflight, the checks before and after the build, and
+E-Kermit, nvi and tcpdump owners (preflight, the checks before and after the build, and
 every LLVM phase) and passes it as `--pkgsrc-export`. The export is keyed by
 the Ports commit, the pinned pkgsrc commit and the patch tool; each owner
 also checks it against its current Ports inputs. Older Ports revisions keep
@@ -133,6 +133,11 @@ native headers, library and release producers. `--libpcap-archive` and
 `--source-patch` support verification when the effective inputs change. The
 stable native library uses SONAME 12; consumers of SONAME 10 or 11 must be
 relinked.
+
+The optional `--tcpdump-source` selects the shared Ports tcpdump source for
+the native OS producer. `--tcpdump-archive` and `--source-patch` support
+verification when effective inputs change. The native program retains its
+OS installation policy and links against the selected native libpcap.
 
 Select `--ntp-source` and `--libopts-source` together for the native NTP
 producer. The former is prepared by the common Ports NTP owner and the latter
