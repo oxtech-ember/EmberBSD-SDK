@@ -28,6 +28,8 @@ def main():
     parser.add_argument('--ekermit-source', action=UniqueOption, help='prepared common Ports E-Kermit source')
     parser.add_argument('--iscsi-source', action=UniqueOption, help='prepared common Ports NetBSD iSCSI source')
     parser.add_argument('--top-source', action=UniqueOption, help='prepared common Ports top source')
+    parser.add_argument('--ntp-source', action=UniqueOption, help='prepared common Ports NTP source')
+    parser.add_argument('--libopts-source', action=UniqueOption, help='prepared common AutoGen libopts source')
     parser.add_argument('--ppp-source', action=UniqueOption, help='prepared common Ports PPP source')
     parser.add_argument('--tdb-source', action=UniqueOption, help='prepared common Ports TDB source')
     parser.add_argument('--diffutils-source', action=UniqueOption, help='prepared common Ports diffutils source')
@@ -35,7 +37,7 @@ def main():
     parser.add_argument('--rcs-source', action=UniqueOption, help='prepared common Ports RCS source')
     parser.add_argument('--byacc-source', action=UniqueOption, help='prepared common Ports byacc source')
     parser.add_argument('--source-patch', action=UniqueOption, help='selected patch executable inside the native prefix')
-    for name in ('libevent-archive', 'byacc-archive', 'texinfo-archive', 'rcs-archive', 'diffutils-archive', 'grep-archive', 'ekermit-archive', 'nvi-archive', 'tdb-archive', 'ppp-archive', 'top-archive', 'iscsi-archive'):
+    for name in ('libevent-archive', 'byacc-archive', 'texinfo-archive', 'rcs-archive', 'diffutils-archive', 'grep-archive', 'ekermit-archive', 'nvi-archive', 'tdb-archive', 'ppp-archive', 'top-archive', 'iscsi-archive', 'ntp-archive'):
         parser.add_argument('--' + name, action=UniqueOption, help='archive for comparing changed source inputs')
     parser.add_argument('--x11-source', action=UniqueOption,
                         help='prepared Ports xsrc source; builds the X11 sets (Clang aarch64-sysroot only)')

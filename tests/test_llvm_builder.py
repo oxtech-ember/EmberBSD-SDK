@@ -184,6 +184,39 @@ class LLVMBuilderTests(TemporaryCase):
             builder.require_iscsi_source_support()
             run.assert_not_called()
 
+    def test_ntp_requires_both_sources_and_actual_os_selection(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'os': str(self.root / 'os'), 'ntp-source': '/prepared/ntp', 'tools': '/build/tools'}
+        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
+        builder.environment = {}
+        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
+        with self.assertRaisesRegex(SDKError, 'both common'):
+            builder.require_ntp_source_support()
+        builder.paths['libopts-source'] = '/prepared/libopts'
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/old/dist\n/old/libopts\n')):
+            with self.assertRaisesRegex(SDKError, 'does not support common'):
+                builder.require_ntp_source_support()
+        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/prepared/ntp\n/prepared/libopts\n')):
+            builder.require_ntp_source_support()
+
+    def test_ntp_and_libopts_sources_verified_by_owners(self):
+        from types import SimpleNamespace
+        builder = SysrootBuilder({})
+        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk',
+                         'ntp-source': '/prepared/ntp', 'libopts-source': '/prepared/libopts'}
+        builder.git_command = '/host/git'
+        builder.environment = {}
+        records = [{'format': 'emberbsd-prepared-source', 'version': 1, 'package': name}
+                   for name in ('net/ntp4', 'devel/autogen')]
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   side_effect=[SimpleNamespace(stdout=json.dumps(record)) for record in records]) as run:
+            self.assertEqual(builder.verify_common_sources(), dict(zip(('ntp', 'libopts'), records)))
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertIn('/ports/scripts/source-inputs/ntp/source.py', commands[0])
+        self.assertIn('/ports/scripts/source-inputs/autogen/source.py', commands[1])
+        self.assertIn('verify-source', commands[1])
+
     def test_ppp_source_requires_real_os_producer(self):
         from types import SimpleNamespace
         builder = SysrootBuilder({})

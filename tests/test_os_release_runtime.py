@@ -71,10 +71,10 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
         for command in commands:
             self.assertIn('EMBER_TOP_SOURCE=/sdk/top-source', command)
 
-    def test_optional_iscsi_source_reaches_release_and_set_checks(self):
+    def test_ntp_sources_reach_release_and_set_checks(self):
         paths = {name: '/sdk/' + name for name in (
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
-            'libedit-source', 'iscsi-source', 'objects', 'tools', 'destination', 'os')}
+            'libedit-source', 'iscsi-source', 'ntp-source', 'libopts-source', 'objects', 'tools', 'destination', 'os')}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
                      'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
                      'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
@@ -85,6 +85,10 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
         self.assertIn('EMBER_ISCSI_SOURCE=/sdk/iscsi-source', flags)
         for command in commands:
             self.assertIn('EMBER_ISCSI_SOURCE=/sdk/iscsi-source', command)
+        for flag in ('EMBER_NTP_SOURCE=/sdk/ntp-source', 'EMBER_LIBOPTS_SOURCE=/sdk/libopts-source'):
+            self.assertIn(flag, flags)
+            for command in commands:
+                self.assertIn(flag, command)
 
     def test_optional_ppp_source_reaches_release_and_set_checks(self):
         paths = {name: '/sdk/' + name for name in (

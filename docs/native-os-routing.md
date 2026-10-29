@@ -114,3 +114,10 @@ changed recipe inputs.
 
 The optional `--top-source` selects the common Ports top source for the OS
 producer. `--top-archive` and `--source-patch` support changed-input comparison.
+
+Select `--ntp-source` and `--libopts-source` together for the native NTP
+producer. The former is prepared by the common Ports NTP owner and the latter
+by the common AutoGen owner. `--source-patch` selects the host patch tool;
+`--ntp-archive` supports comparison when NTP inputs change. AutoGen source
+verification does not require its host package to remain installed after the
+tearoff has been prepared.
