@@ -19,6 +19,7 @@ import sysconfig
 import tempfile
 import time
 from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, process, provenance, workspace
+from .verification_receipts import RunReceipts
 from .errors import SDKError, ProcessOwnershipError
 from .native_os_routing import gettext_target_host_flags, gnu_target_host_flags, native_host_flags, native_path
 from .targets import TARGETS, target_definition
@@ -127,8 +128,10 @@ class SysrootBuilder:
     MARKER = '.prebuild-sdk-build-incomplete'
     LOG = '.prebuild-sdk-build.log'
 
-    def __init__(self, options):
+    def __init__(self, options, *, receipts=None):
         self.options = options.copy()
+        # One run shares one set of in-memory verification receipts.
+        self.verification = RunReceipts() if receipts is None else receipts
         if 'base-cxx' not in self.options:
             self.options['base-cxx'] = self.options.get('compiler-family', 'clang') == 'clang'
         self.commands = []
@@ -317,14 +320,22 @@ class SysrootBuilder:
             stage = self.paths['llvm-runtime-stage']
             if base is None and self.llvm_phase == 'base':
                 base = self.paths.get('llvm-runtime-base')
-            reported = jsonio.loads_json(process.capture(self.runtime_command, env=self.environment).stdout)
-            llvm_runtime.validate_identity(reported, target=self.options['target'], required_components=required)
-            recipe_check = ({} if 'llvm-runtime-original-source' in self.paths else
-                dict(ports=self.paths['ports'], ports_revision=reported['recipe']['ports_revision']))
-            record = llvm_runtime.validate_stage(stage, target=self.options['target'],
-                required_components=required, base=base, **recipe_check)
-            if reported != record:
-                raise SDKError('LLVM runtime producer and shared validator disagree')
+            command = list(self.runtime_command)
+
+            def check():
+                reported = jsonio.loads_json(process.capture(command, env=self.environment).stdout)
+                llvm_runtime.validate_identity(reported, target=self.options['target'], required_components=required)
+                recipe_check = ({} if 'llvm-runtime-original-source' in self.paths else
+                    dict(ports=self.paths['ports'], ports_revision=reported['recipe']['ports_revision']))
+                record = llvm_runtime.validate_stage(stage, target=self.options['target'],
+                    required_components=required, base=base, **recipe_check)
+                if reported != record:
+                    raise SDKError('LLVM runtime producer and shared validator disagree')
+                return record
+            inputs = [stage, *([base] if base else []), *self.receipt_tools(command)]
+            inputs += [self.paths[name] for name in ('llvm-source', 'llvm-runtime-original-source')
+                       if name in self.paths and self.paths[name] in command]
+            record = self.verification.verify(('llvm-runtime', tuple(command), tuple(required), base), inputs, check)
             if (record['llvm_version'] != self.compiler_record['version'] or
                     record['source'] != {key: self.llvm_source_record['source'][key]
                                          for key in ('archive', 'sha512')}):
@@ -545,9 +556,16 @@ class SysrootBuilder:
                                        'record': self.signature['common_sources']['x11']}
         return signature
 
+    @staticmethod
+    def receipt_tools(command):
+        """Executables, scripts, archives and other files named by a verifier command."""
+        return [value for value in command if os.path.isabs(value) and os.path.isfile(value)]
+
     def verify_llvm_source(self):
-        result = process.capture(self.llvm_source_command, env=self.environment)
-        record = jsonio.loads_json(result.stdout)
+        command = self.llvm_source_command
+        record = self.verification.verify(('llvm-source', tuple(command)),
+            [self.paths['llvm-source'], *self.receipt_tools(command)],
+            lambda: jsonio.loads_json(process.capture(command, env=self.environment).stdout))
         if (not isinstance(record, dict) or record.get('format') != 'emberbsd-llvm-source' or
                 record.get('version') != 1 or
                 (self.compiler_family() == 'clang' and record.get('llvm_version') != self.compiler_record['version'])):
@@ -591,6 +609,7 @@ class SysrootBuilder:
             if patch != self.executable(selector.tool('gpatch')):
                 raise SDKError('source patch differs from the selected native gpatch')
         shared = None
+        memo = {}
         for name, package, argv in (
             ('libarchive', 'archivers/libarchive', ['scripts/libarchive-source.py', 'verify']),
             ('libevent', 'devel/libevent', ['scripts/source-inputs/libevent/source.py']),
@@ -638,7 +657,11 @@ class SysrootBuilder:
                 if name == 'rcs':
                     lzip = native_toolset.load_host_prefix(self.native.bundle_root, required_roles={'lzip'}).tool('lzip')
                     command += ['--lzip', lzip]
-            record = jsonio.loads_json(process.capture(command, env=self.environment).stdout)
+            inputs = [self.paths[name + '-source'], *self.receipt_tools(command)]
+            if shared:
+                inputs.append(shared)
+            record = self.verification.verify(('common-source', name, tuple(command)), inputs,
+                lambda: jsonio.loads_json(process.capture(command, env=self.environment).stdout), memo)
             if (not isinstance(record, dict) or record.get('format') != 'emberbsd-prepared-source' or
                     type(record.get('version')) is not int or record['version'] != 1 or
                     record.get('package') != package):
@@ -1432,7 +1455,7 @@ class SysrootBuilder:
         if (self.compiler_family() == 'clang' and not hasattr(self, 'llvm_phase') and
                 not self.options.get('llvm-runtime-stage')):
             from .llvm_sysroot import LLVMCoordinator
-            return LLVMCoordinator(self.options, type(self)).run()
+            return LLVMCoordinator(self.options, type(self), receipts=self.verification).run()
         self.preflight()
         if self.options.get('plan'):
             return self.receipt

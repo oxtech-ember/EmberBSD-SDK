@@ -146,6 +146,34 @@ It checks the selection again before dispatch and completion.
 A changed selection after output preparation leaves the object contexts quarantined.
 New build records bind selected paths and commands. Historical records remain readable.
 
+### Repeated input checks within one run
+
+A run is one `build-sysroot.py` or `build-os-release.py` invocation, including
+all of its LLVM phases. Each Ports owner verifier checks its input by content
+the first time the run needs it: every common prepared source, the common LLVM
+source and each LLVM runtime stage. The same input is checked again before and
+after every phase build. Those repeated checks compare an in-memory metadata
+fingerprint instead of reading the content again.
+
+The fingerprint covers every file, directory and symbolic link below the
+prepared source or stage, the archive, the shared pkgsrc export, and the files
+named by the verifier command (Python, the owner script, patch, lzip and Git).
+For each entry it records the device, inode, mode, size, modification time and
+change time. Any difference runs the full content verifier again, and the
+builder compares its record with the plan as before. A write, a replacement or
+a reset of file times changes the change time, so a changed input after the
+plan still stops the run. A fingerprint is not used when an input is missing
+or contains a symbolic link out of it; such inputs are checked by content every
+time.
+
+Receipts are never written to disk. A new run starts with an empty set and
+checks every input by content again, so a change between runs is found by
+content. These checks still read content or Git state every time: the OS, Ports
+and SDK checkouts must be clean Git roots, the compiler, Python and SDK
+implementation hashes, the native toolset selection, the libedit source and the
+output inspection. Release finalization and publication do not read these
+receipts.
+
 ## Recorded producer sequence
 
 The [OS command mapping](native-os-routing.md) supplies native make, shell, compilers, and utilities.

@@ -304,10 +304,10 @@ def validate_profile(profile, sha, target):
 
 
 class OSReleaseBuilder(SysrootBuilder):
-    def __init__(self, options):
+    def __init__(self, options, *, receipts=None):
         target = options.get('target')
         self.FLAGS = flags_for(target, options.get('compiler-family', 'clang'), bool(options.get('x11-source')))
-        super().__init__(options)
+        super().__init__(options, receipts=receipts)
 
     def configure_signature(self):
         if type(self.options.get('base-cxx', False)) is not bool:

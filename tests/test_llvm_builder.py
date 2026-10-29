@@ -831,7 +831,7 @@ class LLVMBuilderTests(TemporaryCase):
                    'llvm-stages': str(sdk / 'stages/alternate')}
         class Header:
             output_path = SysrootBuilder.output_path
-            def __init__(self, selected, phase):
+            def __init__(self, selected, phase, receipts=None):
                 self.logical_sdk = str(sdk)
                 self.paths = {'sdk': str(sdk)}
             def preflight(self):
@@ -940,15 +940,18 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
                    'llvm-source': '/source', 'sdk-source': '/sdk-source', 'os': '/os', 'ports': '/ports'}
         coordinator = LLVMCoordinator(options, SysrootBuilder)
         events = []
+        shared = []
         class Stage:
-            def __init__(self, selected, phase):
+            def __init__(self, selected, phase, receipts=None):
                 self.options, self.phase = selected, phase
+                shared.append(receipts)
             def run(self):
                 events.append(self.phase)
                 return {'phase': self.phase}
         class Final:
-            def __init__(self, selected):
+            def __init__(self, selected, receipts=None):
                 self.options = selected
+                shared.append(receipts)
             def run(self):
                 events.append('final')
                 self_stage = self.options['llvm-runtime-stage']
@@ -960,6 +963,9 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
              patch.object(coordinator, 'runtime', side_effect=lambda phase, base: events.append(phase)):
             result = coordinator.run()
         self.assertEqual(events, ['headers', 'bootstrap', 'base', 'full', 'final'])
+        # Every phase of the run shares one set of verification receipts.
+        self.assertEqual(len(shared), 3)
+        self.assertTrue(all(receipts is coordinator.receipts for receipts in shared))
         self.assertEqual(result['runtime'], options['runtime-work'] + '/full-stage')
         self.assertEqual(result['bootstrap'], options['runtime-work'] + '/bootstrap-stage')
 

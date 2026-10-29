@@ -7,6 +7,7 @@ import os
 from . import inventory, jsonio, llvm_runtime, paths, process, workspace
 from .errors import SDKError
 from .sysroot_builder import SysrootBuilder
+from .verification_receipts import RunReceipts
 from .llvm_runtime import runtime_paths
 
 PRODUCER = 'pkgsrc/lang/compiler-rt/files/runtime.py'
@@ -32,10 +33,10 @@ def llvm_flags(selected, *, phase, base_cxx=False):
 
 class LLVMPhaseBuilder(SysrootBuilder):
     """Use the ordinary locked builder for the two incomplete OS inputs."""
-    def __init__(self, options, phase):
+    def __init__(self, options, phase, *, receipts=None):
         if phase not in ('headers', 'base'):
             raise SDKError('unsupported LLVM OS bootstrap phase')
-        super().__init__(options)
+        super().__init__(options, receipts=receipts)
         self.llvm_phase = phase
 
     def empty_destination(self):
@@ -104,9 +105,11 @@ class LLVMPhaseBuilder(SysrootBuilder):
 
 class LLVMCoordinator:
     """Headers -> PIC unwind/builtins -> libc/CRT -> C++ runtimes -> final SDK."""
-    def __init__(self, options, builder_type):
+    def __init__(self, options, builder_type, *, receipts=None):
         self.options = options.copy()
         self.builder_type = builder_type
+        # All phases of this run share the receipts; a new run starts empty.
+        self.receipts = RunReceipts() if receipts is None else receipts
         self.work = os.path.abspath(self.options['runtime-work'])
         self.stage_root = self.options.get('llvm-stages', os.path.join(self.options['sdk'], 'stages',
                                       'llvm-bootstrap-' + self.options['target']))
@@ -129,7 +132,7 @@ class LLVMCoordinator:
     def prepare(self):
         layout = workspace.inspect_layout(self.options['sdk'])
         workspace.require_target(layout, self.options['target'])
-        self.headers = LLVMPhaseBuilder(self.stage_options('headers'), 'headers')
+        self.headers = LLVMPhaseBuilder(self.stage_options('headers'), 'headers', receipts=self.receipts)
         self.headers.preflight()
         self.headers.output_path(self.object_root, os.path.join(self.headers.paths['sdk'], 'obj'))
         self.headers.output_path(self.stage_root, os.path.join(self.headers.paths['sdk'], 'stages'))
@@ -196,11 +199,11 @@ class LLVMCoordinator:
                 {'phase': 'full', 'command': self.runtime_command('full', os.path.join(self.stage_root, 'base'))},
                 {'phase': 'final', 'inputs': ['full'], 'destination': self.options.get('destination')}])
         with self.lock():
-            LLVMPhaseBuilder(self.stage_options('headers'), 'headers').run()
+            LLVMPhaseBuilder(self.stage_options('headers'), 'headers', receipts=self.receipts).run()
             self.runtime('bootstrap', os.path.join(self.stage_root, 'headers'))
-            LLVMPhaseBuilder(self.stage_options('base'), 'base').run()
+            LLVMPhaseBuilder(self.stage_options('base'), 'base', receipts=self.receipts).run()
             self.runtime('full', os.path.join(self.stage_root, 'base'))
             final_options = self.options | {'llvm-runtime-stage': os.path.join(self.work, 'full-stage'),
                                             'llvm-bootstrap-stage': os.path.join(self.work, 'bootstrap-stage'),
                                             'tools': self.tools}
-            return self.builder_type(final_options).run()
+            return self.builder_type(final_options, receipts=self.receipts).run()
