@@ -880,7 +880,6 @@ class SysrootBuilder:
         clang = self.compiler_family() == 'clang'
         if self.options.get('base-cxx', False) and not clang:
             raise SDKError('base C++ aliases require the selected Clang runtime')
-        self.require_runtime_work()
         self.target = target_definition(self.options.get('target'))
         jobs = self.options.get('jobs')
         if not isinstance(jobs, str) or re.fullmatch('[1-9][0-9]*', jobs) is None:
@@ -903,6 +902,8 @@ class SysrootBuilder:
                 raise SDKError('--llvm-bootstrap-stage is required with a full LLVM runtime')
         elif not self.options.get('gcc-archive') or not self.options.get('pkgsrc'):
             raise SDKError('--gcc-archive and --pkgsrc are required for the explicit GCC runtime')
+        # After the target and selected-input checks, before any host query.
+        self.require_runtime_work()
         if not self.options.get('host-binutils'):
             raise SDKError('--host-binutils is required for the OS host BFD tools')
         self.select_native_toolset()

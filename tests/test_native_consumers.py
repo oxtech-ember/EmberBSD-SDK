@@ -73,7 +73,11 @@ class NativeConsumerTests(TemporaryCase):
             with self.subTest(cls=cls), patch.object(builder, 'preflight', side_effect=SDKError('reached preflight')):
                 with self.assertRaisesRegex(SDKError, '^reached preflight$'):
                     builder.run()
+            # Building the LLVM runtime needs its work tree; the gate is conditional on it.
             builder = cls(self.options() | {'target': 'aarch64'})
+            with self.subTest(cls=cls), self.assertRaisesRegex(SDKError, '--runtime-work is required'):
+                builder.run()
+            builder = cls(self.options() | {'target': 'aarch64', 'runtime-work': '/selected-work'})
             with self.subTest(cls=cls), patch('emberbsd_sdk.llvm_sysroot.LLVMCoordinator',
                     side_effect=SDKError('reached bootstrap coordinator')):
                 with self.assertRaisesRegex(SDKError, '^reached bootstrap coordinator$'):
