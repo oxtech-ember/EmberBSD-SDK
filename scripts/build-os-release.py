@@ -26,6 +26,7 @@ def main():
     parser.add_argument('--texinfo-source', action=UniqueOption, help='prepared common Ports Texinfo C-only source')
     parser.add_argument('--nvi-source', action=UniqueOption, help='prepared common Ports nvi source')
     parser.add_argument('--ekermit-source', action=UniqueOption, help='prepared common Ports E-Kermit source')
+    parser.add_argument('--tcp-wrappers-source', action=UniqueOption, help='prepared common Ports TCP wrappers source')
     parser.add_argument('--libpcap-source', action=UniqueOption, help='prepared common Ports libpcap source')
     parser.add_argument('--iscsi-source', action=UniqueOption, help='prepared common Ports NetBSD iSCSI source')
     parser.add_argument('--top-source', action=UniqueOption, help='prepared common Ports top source')
@@ -40,7 +41,7 @@ def main():
     parser.add_argument('--rcs-source', action=UniqueOption, help='prepared common Ports RCS source')
     parser.add_argument('--byacc-source', action=UniqueOption, help='prepared common Ports byacc source')
     parser.add_argument('--source-patch', action=UniqueOption, help='selected patch executable inside the native prefix')
-    for name in ('libevent-archive', 'byacc-archive', 'texinfo-archive', 'rcs-archive', 'diffutils-archive', 'grep-archive', 'ekermit-archive', 'nvi-archive', 'tdb-archive', 'ppp-archive', 'top-archive', 'iscsi-archive', 'libpcap-archive', 'ntp-archive', 'gettext-archive', 'libxml2-archive'):
+    for name in ('libevent-archive', 'byacc-archive', 'texinfo-archive', 'rcs-archive', 'diffutils-archive', 'grep-archive', 'ekermit-archive', 'nvi-archive', 'tdb-archive', 'ppp-archive', 'top-archive', 'iscsi-archive', 'libpcap-archive', 'tcp-wrappers-archive', 'ntp-archive', 'gettext-archive', 'libxml2-archive'):
         parser.add_argument('--' + name, action=UniqueOption, help='archive for comparing changed source inputs')
     parser.add_argument('--x11-source', action=UniqueOption,
                         help='prepared Ports xsrc source; builds the X11 sets (Clang aarch64-sysroot only)')

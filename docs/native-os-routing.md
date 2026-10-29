@@ -124,6 +124,10 @@ changed recipe inputs.
 The optional `--top-source` selects the common Ports top source for the OS
 producer. `--top-archive` and `--source-patch` support changed-input comparison.
 
+The optional `--tcp-wrappers-source` selects the common Ports TCP wrappers
+source for native headers, library and consumers. `--tcp-wrappers-archive`
+and `--source-patch` support verification after owner inputs change.
+
 The optional `--libpcap-source` selects the common Ports stable libpcap source for
 native headers, library and release producers. `--libpcap-archive` and
 `--source-patch` support verification when the effective inputs change. The
