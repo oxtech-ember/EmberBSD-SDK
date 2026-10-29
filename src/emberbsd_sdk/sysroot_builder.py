@@ -18,7 +18,7 @@ import stat
 import sysconfig
 import tempfile
 import time
-from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, process, provenance, workspace
+from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, prepared_sources, process, provenance, workspace
 from .verification_receipts import RunReceipts
 from .errors import SDKError, ProcessOwnershipError
 from .native_os_routing import gettext_target_host_flags, gnu_target_host_flags, native_host_flags, native_path
@@ -1139,6 +1139,39 @@ class SysrootBuilder:
         if selected != self.paths['ppp-source']:
             raise SDKError('selected OS does not support EMBER_PPP_SOURCE')
 
+    @classmethod
+    def prepared_source_profile(cls, options):
+        """Return the make flags and traversals of this builder's OS build.
+
+        build.sh "tools libs": includes from the top, then lib build_install."""
+        return list(cls.FLAGS), prepared_sources.LIBS_TRAVERSALS
+
+    def prepared_source_traversals(self):
+        return self.prepared_source_profile(self.options)[1]
+
+    def require_prepared_sources(self, flags, traversals):
+        """Refuse a build whose OS tree reaches a prepared source that is not selected.
+
+        Need is taken from the directories the build enters under FLAGS and
+        the makefiles they read, not from the tree's list of consumers."""
+        if not traversals:
+            return {}
+        root = self.paths['os']
+        env = dict(self.environment)
+        env.pop('EMBER_NATIVE_TOOLS', None)
+        common = ['MAKECONF=/dev/null', '_SRC_TOP_=', 'NETBSDSRCDIR=' + root,
+                  'NETBSDOBJDIR=' + self.paths['objects'],
+                  'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
+                  'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
+                  'MKREPRO_TIMESTAMP=' + str(self.source_timestamp())]
+        query = prepared_sources.bmake_query(self.native.tool('make'), root, common + list(flags), env=env)
+        needed = prepared_sources.required_sources(root, query, traversals,
+                                                   jobs=max(1, min(8, int(self.options['jobs']))))
+        missing = prepared_sources.missing_sources(needed, self.paths)
+        if missing:
+            raise SDKError('selected OS build needs prepared sources that are not selected: ' + ', '.join(missing))
+        return needed
+
     def require_runtime_work(self):
         if (not self.options.get('runtime-work') and
                 (self.compiler_family() == 'gcc' or
@@ -1329,6 +1362,8 @@ class SysrootBuilder:
         if clang:
             self.signature['llvm_phase'] = self.llvm_phase
         self.configure_signature()
+        # After the final flags are known and before any output is claimed.
+        self.prepared_source_needs = self.require_prepared_sources(self.flags, self.prepared_source_traversals())
         self.contexts = {name: self.inspect_context(self.paths[name]) for name in ('objects', 'tools')}
         self.build_command = [self.shell, os.path.join(self.paths['os'], 'build.sh'), '-U', '-u', '-j' + jobs, '-m', self.target['machine'], '-a', self.target['arch'], '-O', self.paths['objects'], '-T', self.paths['tools'], '-D', self.paths['destination']]
         # Commit metadata stays out of the signature: the same OS tree at a new

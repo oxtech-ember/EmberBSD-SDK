@@ -314,6 +314,13 @@ class OSReleaseBuilder(SysrootBuilder):
         self.FLAGS = flags_for(target, options.get('compiler-family', 'clang'), bool(options.get('x11-source')))
         super().__init__(options, receipts=receipts)
 
+    @classmethod
+    def prepared_source_profile(cls, options):
+        # build.sh release: includes, libraries and the whole tree.
+        from .prepared_sources import RELEASE_TRAVERSALS
+        return (flags_for(options.get('target'), options.get('compiler-family', 'clang'), bool(options.get('x11-source'))),
+                RELEASE_TRAVERSALS)
+
     def configure_signature(self):
         if type(self.options.get('base-cxx', False)) is not bool:
             raise SDKError('base C++ selection must be boolean')

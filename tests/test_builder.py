@@ -225,8 +225,11 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
     prepare_source(ports, root / 'libedit.tar.gz', root / 'libedit-source')
     write(root / 'gcc.tar.xz', 'Fixture archive; no extraction')
     native = root / 'host-gcc16'; native.mkdir()
-    for name in ('cc', 'cxx', 'cpp', 'as', 'ld', 'cmp', 'make', 'readlink'):
+    for name in ('cc', 'cxx', 'cpp', 'as', 'ld', 'cmp', 'readlink'):
         write(native / name, '#!/bin/sh\nexit 0\n', 0o755)
+    # The prepared-source preflight asks make for ${SUBDIR} and the makefiles
+    # it read; this tree has no subdirectories and no source guards.
+    write(native / 'make', '#!/bin/sh\ncase " $* " in *" -V "*) printf "\\n\\n" ;; esac\nexit 0\n', 0o755)
     (native / 'python').symlink_to(os.path.realpath(sys.executable))
     (native / 'sh').symlink_to(os.path.realpath(shutil.which('sh')))
     return {key: str(value) for key, value in ({'compiler-family': 'gcc', 'sdk': sdk, 'os': os_source, 'ports': ports, 'compiler': compiler, 'runtime-work': work, 'gcc-archive': root / 'gcc.tar.xz', 'pkgsrc': root / 'pkgsrc', 'target': target, 'jobs': '2', 'python': sys.executable, 'sdk-source': root / 'sdk-source', 'libedit-source': root / 'libedit-source', 'libarchive-source': root / 'libarchive-source', 'libevent-source': root / 'libevent-source', 'llvm-source': llvm_source, 'host-prefix': native, 'host-binutils': root / 'host-binutils'} | {'host-cc': native / 'cc', 'host-cxx': native / 'cxx'}).items()}

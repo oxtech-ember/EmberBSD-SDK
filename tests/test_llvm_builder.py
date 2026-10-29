@@ -979,8 +979,11 @@ class LLVMBuilderTests(TemporaryCase):
             def __init__(self, selected, phase, receipts=None, **selection):
                 self.logical_sdk = str(sdk)
                 self.paths = {'sdk': str(sdk)}
+                self.flags = []
             def preflight(self):
                 pass
+            def require_prepared_sources(self, flags, traversals):
+                return {}
         def prepare(selected):
             with patch('emberbsd_sdk.llvm_sysroot.workspace.inspect_layout', return_value={}), \
                     patch('emberbsd_sdk.llvm_sysroot.workspace.require_target'), \

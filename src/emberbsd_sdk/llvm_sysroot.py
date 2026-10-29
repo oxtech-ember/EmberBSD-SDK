@@ -73,6 +73,10 @@ class LLVMPhaseBuilder(SysrootBuilder):
                 saved.get('qualification') == 'incomplete' and
                 saved.get('paths', {}).get('objects') == self.paths['objects'])
 
+    def prepared_source_traversals(self):
+        # bootstrap-headers enters only header directories; base is "tools libs".
+        return () if self.llvm_phase == 'headers' else super().prepared_source_traversals()
+
     def preflight(self):
         result = super().preflight()
         result.update(format='emberbsd-llvm-os-stage', phase=self.llvm_phase,
@@ -182,6 +186,7 @@ class LLVMCoordinator:
         self.headers = LLVMPhaseBuilder(self.stage_options('headers'), 'headers', receipts=self.receipts,
                                         resume=self.resume)
         self.headers.preflight()
+        self.require_prepared_sources()
         self.headers.output_path(self.object_root, os.path.join(self.headers.paths['sdk'], 'obj'))
         self.headers.output_path(self.stage_root, os.path.join(self.headers.paths['sdk'], 'stages'))
         self.work = self.headers.output_path(self.work, os.path.join(self.headers.paths['sdk'], 'obj'))
@@ -198,6 +203,21 @@ class LLVMCoordinator:
         paths.reject_overlap(final, self.stage_root)
         if paths.entry(final) is not None and os.listdir(final):
             raise SDKError('destination must be new or empty; active sysroot is never overwritten')
+
+    def require_prepared_sources(self):
+        """Refuse, before the first phase, sources a later phase will need.
+
+        The base phase builds "tools libs" with the headers phase's flags;
+        the final builder uses its own profile with the final LLVM knobs."""
+        headers = self.headers
+        headers.require_prepared_sources(headers.flags, SysrootBuilder.prepared_source_profile(self.options)[1])
+        flags, traversals = self.builder_type.prepared_source_profile(self.options)
+        final_cxx = ['MKCXX=yes', 'MKLIBCXX=' + ('yes' if self.options.get('base-cxx', False) else 'no')]
+        replaced = {flag.split('=', 1)[0] for flag in [*SysrootBuilder.FLAGS, *flags, *final_cxx]}
+        selected = [flag for flag in headers.flags if flag.split('=', 1)[0] not in replaced]
+        final_keys = {flag.split('=', 1)[0] for flag in final_cxx}
+        flags = [flag for flag in flags if flag.split('=', 1)[0] not in final_keys]
+        headers.require_prepared_sources(flags + final_cxx + selected, traversals)
 
     def stage_key(self, selected):
         """Name a stage set by its OS tree, LLVM source and compiler.
