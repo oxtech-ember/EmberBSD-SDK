@@ -707,6 +707,78 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertEqual(result['bootstrap'], options['runtime-work'] + '/bootstrap-stage')
         self.assertEqual(result['runtime_base'], options['sdk'] + '/stages/llvm-bootstrap-aarch64/base')
 
+    def test_c_foundation_stops_after_bootstrap_c(self):
+        options = {'sdk': str(self.root / 'sdk'), 'runtime-work': str(self.root / 'sdk/obj/runtime'),
+                   'target': 'riscv32', 'jobs': '2', 'c-foundation': True}
+        coordinator = LLVMCoordinator(options, SysrootBuilder)
+        events = []
+        class Stage:
+            def __init__(self, selected, phase, **kwargs):
+                self.phase = phase
+            def run(self):
+                events.append(self.phase)
+                return {'phase': self.phase}
+        with patch.object(coordinator, 'prepare'), patch.object(coordinator, 'lock'), \
+             patch.object(coordinator, 'record_inputs'), \
+             patch('emberbsd_sdk.llvm_sysroot.LLVMPhaseBuilder', Stage), \
+             patch.object(coordinator, 'runtime', side_effect=lambda phase, base: events.append(phase)):
+            result = coordinator.run()
+        self.assertEqual(events, ['headers', 'bootstrap', 'base'])
+        self.assertEqual(result['scope'], 'c-foundation')
+        self.assertEqual(result['target_execution'], 'not-run')
+
+    def test_c_foundation_base_uses_native_static_operation(self):
+        builder, _, _ = self.bootstrap_base()
+        builder.options['c-foundation'] = True
+        receipt = builder.preflight()
+        self.assertEqual(len(receipt['plan']), 1)
+        command = receipt['plan'][0]
+        self.assertEqual(command[-2:], ['tools', 'bootstrap-c'])
+        for flag in ('MKPIC=no', 'MKPICINSTALL=no', 'MKPIE=no', 'LDSTATIC=-static'):
+            self.assertIn(flag, command)
+
+    def test_c_foundation_inspects_static_libc_and_crt_without_loader(self):
+        from test_core import archive, header
+        builder = LLVMPhaseBuilder({'c-foundation': True}, 'base')
+        builder.paths = {'destination': str(self.root / 'foundation')}
+        builder.target = {'elf': 183}
+        builder.runtime_record = {'fixture': True}
+        root = Path(builder.paths['destination'])
+        for name in ('stdio.h', 'sys/types.h', 'sys/param.h', 'stdint.h', 'limits.h', 'math.h', 'pthread.h'):
+            write(root / 'usr/include' / name, 'header')
+        for name in ('crt0.o', 'crti.o', 'crtbegin.o', 'crtend.o', 'crtn.o'):
+            write(root / 'usr/lib' / name, header(183, 1))
+        write(root / 'usr/lib/libc.a', archive(header(183, 1)))
+        with patch.object(builder, 'verify_runtime', return_value=builder.runtime_record):
+            builder.inspect_payload()
+            (root / 'usr/lib/libc.a').unlink()
+            with self.assertRaises(SDKError):
+                builder.inspect_payload()
+
+    def test_riscv_foundation_rejects_rv64_crt(self):
+        from test_core import archive, header
+        builder = LLVMPhaseBuilder({'c-foundation': True, 'target': 'riscv32'}, 'base')
+        builder.paths = {'destination': str(self.root / 'foundation')}
+        builder.target = {'elf': 243}
+        builder.runtime_record = {'fixture': True}
+        root = Path(builder.paths['destination'])
+        for name in ('crt0.o', 'crti.o', 'crtbegin.o', 'crtend.o', 'crtn.o'):
+            write(root / 'usr/lib' / name, header(243, 1))
+        with patch.object(builder, 'verify_runtime', return_value=builder.runtime_record):
+            with self.assertRaisesRegex(SDKError, 'RV32'):
+                builder.inspect_payload()
+
+    def test_c_foundation_plan_omits_full_runtime_and_final_sysroot(self):
+        options = {'sdk': '/sdk', 'runtime-work': '/sdk/obj/runtime', 'target': 'riscv32',
+                   'c-foundation': True}
+        coordinator = LLVMCoordinator(options, SysrootBuilder)
+        coordinator.headers = type('Headers', (), {'receipt': {'phase': 'headers'}})()
+        with patch.object(coordinator, 'prepare'), patch.object(coordinator, 'runtime_command', return_value=['runtime']):
+            options['plan'] = True
+            coordinator.options['plan'] = True
+            plan = coordinator.run()
+        self.assertEqual([p['phase'] for p in plan['phases']], ['headers', 'bootstrap', 'base'])
+
     def test_headers_use_the_limited_os_operation_without_runtime_headers(self):
         class Headers(LLVMPhaseBuilder, ClangBuilder):
             pass

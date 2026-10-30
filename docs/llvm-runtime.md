@@ -289,3 +289,15 @@ members are omitted before safety and link checks, while still counting toward
 the member bound. Callers check `sourceprep.ARCHIVE_SKIP_DIRECTORIES_API == 1`.
 The NetBSD `xsrc.tgz` release set uses it for `CVS` metadata, which the set
 records as hard links.
+
+## Intermediate static C foundation
+
+`build-sysroot.py --c-foundation` stops after headers, the common builtins and
+PIC static libunwind stage, and the OS `bootstrap-c` operation. It supplies
+an intermediate C foundation, not an application SDK, distribution, image, or
+target execution result. A matching OS revision must provide `bootstrap-c`.
+The operation uses static, non-PIE OS configuration and keeps its objects and
+stages distinct from the complete SDK. `riscv32` currently selects only this
+intermediate route; its ABI is little-endian RV32 soft-float `ilp32`. Inspect
+`--plan`, the actual compiler commands, and the produced artifacts before use.
+The target's startup, filesystem and physical execution remain separate work.

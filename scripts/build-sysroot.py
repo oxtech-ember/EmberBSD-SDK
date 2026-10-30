@@ -50,6 +50,7 @@ def main():
         parser.add_argument('--' + name, action=UniqueOption)
     for name in ('host-cc', 'host-cxx', 'python'):
         parser.add_argument('--' + name, action=UniqueOption, help='optional checked alias inside --host-prefix')
+    parser.add_argument('--c-foundation', action='store_true', help='build an intermediate static C foundation, not a complete SDK')
     parser.add_argument('--plan', action='store_true', help='inspect inputs and emit commands without creating outputs')
     arguments = parser.parse_args()
     try:

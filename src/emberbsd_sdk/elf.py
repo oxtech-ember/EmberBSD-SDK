@@ -33,7 +33,7 @@ _PACKED_RELOCATION_TAGS = {
 }
 
 
-def parse_elf_header(data, *, label='<bytes>', machine=None, required_type=None):
+def parse_elf_header(data, *, label='<bytes>', machine=None, required_type=None, riscv32_soft_float=False):
     if not data.startswith(b'\x7fELF'):
         return None
 
@@ -57,15 +57,19 @@ def parse_elf_header(data, *, label='<bytes>', machine=None, required_type=None)
         raise SDKError(f'expected {description} target header: {label}')
     if required_type is not None and kind != required_type:
         raise SDKError(f'wrong ELF type: {label}')
+    if riscv32_soft_float and (actual != 243 or elf_class != 1 or
+            struct.unpack_from('<I', data, 36)[0] & 0x6):
+        raise SDKError(f'expected RV32 soft-float target header: {label}')
     return dict({'class': 32 if elf_class == 1 else 64}, endian='little', machine=actual, type=kind)
 
 
-def read_elf_header(path, machine=None, required_type=None):
+def read_elf_header(path, machine=None, required_type=None, *, riscv32_soft_float=False):
     handle, before = open_regular(path)
     with handle:
         data = handle.read(64)
     verify_stable(path, before)
-    return parse_elf_header(data, label=str(path), machine=machine, required_type=required_type)
+    return parse_elf_header(data, label=str(path), machine=machine, required_type=required_type,
+                            riscv32_soft_float=riscv32_soft_float)
 
 
 def _elf64_layout(handle, size, path, machine):
@@ -271,7 +275,7 @@ def read_elf_relocations(path, *, machine=None):
     return result
 
 
-def read_archive(path, machine):
+def read_archive(path, machine, *, riscv32_soft_float=False):
     count = 0
     handle, before = open_regular(path)
     with handle:
@@ -313,7 +317,9 @@ def read_archive(path, machine):
                     name = names[index:end]
                 data = handle.read(min(finish - handle.tell(), 64))
                 label = f'{path}:{name!r}'
-                if parse_elf_header(data, label=label, machine=machine, required_type=1) is None:
+                parsed = parse_elf_header(data, label=label, machine=machine, required_type=1,
+                                          riscv32_soft_float=riscv32_soft_float)
+                if parsed is None:
                     raise SDKError(f'non-ELF archive member: {label}')
                 count += 1
             handle.seek(finish)

@@ -124,7 +124,8 @@ class SysrootBuilder:
         # One run shares one set of in-memory verification receipts.
         self.verification = RunReceipts() if receipts is None else receipts
         if 'base-cxx' not in self.options:
-            self.options['base-cxx'] = self.options.get('compiler-family', 'clang') == 'clang'
+            self.options['base-cxx'] = (self.options.get('compiler-family', 'clang') == 'clang'
+                                        and not self.options.get('c-foundation'))
         self.commands = []
         self.git_command = None
         self.handles = []
@@ -1121,7 +1122,7 @@ class SysrootBuilder:
         if bool(self.options.get('gettext-source')) != bool(self.options.get('libxml2-source')):
             raise SDKError('gettext and libxml2 sources must be selected together')
         for name in ('libarchive-source', 'libevent-source'):
-            if self.llvm_phase != 'headers' and not self.options.get(name):
+            if self.llvm_phase != 'headers' and not self.options.get('c-foundation') and not self.options.get(name):
                 raise SDKError(f'--{name} is required: prepare the common Ports source')
         if bool(self.options.get('libarchive-source')) != bool(self.options.get('libevent-source')):
             raise SDKError('select both common sources together')
@@ -1283,6 +1284,10 @@ class SysrootBuilder:
             self.flags += gnu_target_host_flags(self.native_selection)
         if 'gettext-source' in self.paths:
             self.flags += gettext_target_host_flags(self.native_selection)
+        if self.options.get('c-foundation'):
+            self.flags += ['MKPIC=no', 'MKPICINSTALL=no', 'MKPIE=no', 'LDSTATIC=-static']
+            if self.options.get('target') == 'riscv32':
+                self.flags += ['MKSOFTFLOAT=yes']
         self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, native_toolset=self.native_selection, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())
         self.signature['native_inputs'] = self.native_inputs
         self.signature['compiler_family'] = self.compiler_family()
@@ -1510,6 +1515,10 @@ class SysrootBuilder:
 
     def run(self):
         self.require_runtime_work()
+        if self.options.get('c-foundation') and (self.compiler_family() != 'clang' or self.options.get('llvm-runtime-stage')):
+            raise SDKError('C foundation requires the first-base Clang coordinator')
+        if self.options.get('target') == 'riscv32' and not self.options.get('c-foundation'):
+            raise SDKError('riscv32 currently supports only the intermediate C foundation')
         if (self.compiler_family() == 'clang' and not hasattr(self, 'llvm_phase') and
                 not self.options.get('llvm-runtime-stage')):
             from .llvm_sysroot import LLVMCoordinator

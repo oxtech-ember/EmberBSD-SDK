@@ -76,6 +76,26 @@ class LLVMRuntimeFixture(TemporaryCase):
 
 
 class LLVMRuntimeTests(LLVMRuntimeFixture):
+    def test_riscv32_bootstrap_rejects_wrong_class_and_float_abi(self):
+        self.record.update(target='riscv32', triplet='riscv32--netbsd',
+                           machine_arch='riscv32', elf_machine=243)
+        def rv32(flags):
+            data = bytearray(52)
+            data[:7] = b'\x7fELF\x01\x01\x01'
+            struct.pack_into('<HHI', data, 16, 1, 243, 1)
+            struct.pack_into('<I', data, 36, flags)
+            struct.pack_into('<H', data, 40, 52)
+            return bytes(data)
+        path = self.stage / self.builtins
+        path.write_bytes(archive(rv32(1)))
+        self.save()
+        llvm_runtime.validate_stage(self.stage, target='riscv32')
+        for member in (rv32(5), rv32(3), header(243, 1)):
+            path.write_bytes(archive(member))
+            self.save()
+            with self.assertRaises(SDKError):
+                llvm_runtime.validate_stage(self.stage, target='riscv32')
+
     def test_full_runtime_pins_bootstrap_stage_and_rejects_tampering(self):
         self.static_unwind()
         bootstrap = copy.deepcopy(self.record)

@@ -8,6 +8,7 @@ import os
 
 from . import inventory, jsonio, llvm_runtime, llvm_stage_inputs, paths, process, workspace
 from .errors import SDKError
+from .elf import read_archive, read_elf_header
 from .sysroot_builder import SysrootBuilder
 from .verification_receipts import RunReceipts
 from .llvm_runtime import runtime_paths
@@ -78,7 +79,7 @@ class LLVMPhaseBuilder(SysrootBuilder):
 
     def prepared_source_traversals(self):
         # bootstrap-headers enters only header directories; base is "tools libs".
-        return () if self.llvm_phase == 'headers' else super().prepared_source_traversals()
+        return () if self.llvm_phase == 'headers' or self.options.get('c-foundation') else super().prepared_source_traversals()
 
     def preflight(self):
         result = super().preflight()
@@ -87,6 +88,9 @@ class LLVMPhaseBuilder(SysrootBuilder):
         result.pop('copy', None)
         if self.llvm_phase == 'headers':
             self.build_command = self.build_command[:-2] + ['tools', 'bootstrap-headers']
+            self.phase_commands = [self.build_command]
+        elif self.options.get('c-foundation'):
+            self.build_command = self.build_command[:-2] + ['tools', 'bootstrap-c']
             self.phase_commands = [self.build_command]
         else:
             self.phase_commands = [self.build_command, self.loader_command, self.install_command]
@@ -101,7 +105,17 @@ class LLVMPhaseBuilder(SysrootBuilder):
         if self.llvm_phase == 'base':
             if self.verify_runtime(base=self.paths['destination']) != self.runtime_record:
                 raise SDKError('bootstrap LLVM runtime changed during OS base build')
-            return super().inspect_payload()
+            if not self.options.get('c-foundation'):
+                return super().inspect_payload()
+            root = self.paths['destination']
+            for name in ('crt0.o', 'crti.o', 'crtbegin.o', 'crtend.o', 'crtn.o'):
+                path = inventory.required_file(root, 'usr/lib/' + name)
+                read_elf_header(path, self.target['elf'], 1,
+                                riscv32_soft_float=self.options.get('target') == 'riscv32')
+            archive = inventory.required_file(root, 'usr/lib/libc.a')
+            if not read_archive(archive, self.target['elf'],
+                    riscv32_soft_float=self.options.get('target') == 'riscv32')['elf_members']:
+                raise SDKError('empty C foundation libc archive')
         for name in ('stdio.h', 'sys/types.h', 'sys/param.h', 'stdint.h', 'limits.h', 'math.h', 'pthread.h'):
             inventory.required_file(self.paths['destination'], 'usr/include/' + name)
         return inventory.snapshot_tree(self.paths['destination'],
@@ -168,8 +182,9 @@ class LLVMCoordinator:
         # Without an explicit --llvm-stages, stages are keyed by their content
         # inputs, so an OS change selects a new stage instead of refusing the old one.
         self.keyed = 'llvm-stages' not in self.options
+        stem = 'llvm-c-foundation-' if self.options.get('c-foundation') else 'llvm-bootstrap-'
         self.stage_root = self.options.get('llvm-stages', os.path.join(self.options['sdk'], 'stages',
-                                      'llvm-bootstrap-' + self.options['target']))
+                                      stem + self.options['target']))
         self.runtime_root = self.work
         self.stage_inputs = None
         # Set by prepare(): whether this run found the tools directory new.
@@ -177,7 +192,7 @@ class LLVMCoordinator:
         # Only SDK-named stages restart; explicit stage directories are left as they are.
         self.resume = self.keyed and builder_type.RESUMES_FAILED_STAGES
         self.object_root = self.options.get('llvm-objects', os.path.join(
-            self.options['sdk'], 'obj', 'llvm-bootstrap', self.options['target']))
+            self.options['sdk'], 'obj', 'llvm-c-foundation' if self.options.get('c-foundation') else 'llvm-bootstrap', self.options['target']))
         self.tools = self.options.get('tools', os.path.join(self.object_root, 'tools'))
 
     def stage_options(self, phase):
@@ -240,6 +255,9 @@ class LLVMCoordinator:
         The base phase builds "tools libs" with the headers phase's flags;
         the final builder uses its own profile with the final LLVM knobs."""
         headers = self.headers
+        if self.options.get('c-foundation'):
+            headers.require_prepared_sources(headers.flags, ())
+            return
         headers.require_prepared_sources(headers.flags, SysrootBuilder.prepared_source_profile(self.options)[1])
         flags, traversals = self.builder_type.prepared_source_profile(self.options)
         final_cxx = ['MKCXX=yes', 'MKLIBCXX=' + ('yes' if self.options.get('base-cxx', False) else 'no')]
@@ -348,12 +366,15 @@ class LLVMCoordinator:
     def run(self):
         self.prepare()
         if self.options.get('plan'):
-            return dict(format='emberbsd-llvm-build-plan', version=1, phases=[
+            phases = [
                 self.headers.receipt,
                 {'phase': 'bootstrap', 'command': self.runtime_command('bootstrap', os.path.join(self.stage_root, 'headers'))},
-                {'phase': 'base', 'inputs': ['headers', 'bootstrap']},
-                {'phase': 'full', 'command': self.runtime_command('full', os.path.join(self.stage_root, 'base'))},
-                {'phase': 'final', 'inputs': ['full'], 'destination': self.options.get('destination')}])
+                {'phase': 'base', 'inputs': ['headers', 'bootstrap']}]
+            if self.options.get('c-foundation'):
+                return dict(format='emberbsd-llvm-build-plan', version=1, phases=phases)
+            phases += [{'phase': 'full', 'command': self.runtime_command('full', os.path.join(self.stage_root, 'base'))},
+                {'phase': 'final', 'inputs': ['full'], 'destination': self.options.get('destination')}]
+            return dict(format='emberbsd-llvm-build-plan', version=1, phases=phases)
         with self.lock():
             headers = LLVMPhaseBuilder(self.stage_options('headers'), 'headers', receipts=self.receipts,
                                        resume=self.resume, stage_inputs=self.stage_inputs).run()
@@ -361,6 +382,11 @@ class LLVMCoordinator:
             base = LLVMPhaseBuilder(self.stage_options('base'), 'base', receipts=self.receipts,
                                     resume=self.resume, stage_inputs=self.stage_inputs).run()
             self.record_inputs(dict(headers=headers, base=base))
+            if self.options.get('c-foundation'):
+                return dict(format='emberbsd-llvm-c-foundation', version=1,
+                            scope='c-foundation', target=self.options['target'],
+                            target_execution='not-run', headers=headers, base=base,
+                            bootstrap_runtime=os.path.join(self.runtime_root, 'bootstrap-stage'))
             self.runtime('full', os.path.join(self.stage_root, 'base'))
             final_options = self.options | {'llvm-runtime-stage': os.path.join(self.runtime_root, 'full-stage'),
                                             'llvm-runtime-base': os.path.join(self.stage_root, 'base'),

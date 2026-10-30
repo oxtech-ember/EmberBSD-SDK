@@ -271,7 +271,8 @@ def _validate_artifacts(root, record):
                     _require(dynamic[field] is None or set(dynamic[field].split(':')) <= allowed,
                              'LLVM runtime has a foreign library search path')
     for name in archives:
-        _require(read_archive(inventory.required_file(root, name), record['elf_machine'])['elf_members'] > 0,
+        _require(read_archive(inventory.required_file(root, name), record['elf_machine'],
+                              riscv32_soft_float=record['target'] == 'riscv32')['elf_members'] > 0,
                  'empty LLVM runtime archive: ' + name)
     if 'cxx_headers' in artifacts:
         inventory.required_file(root, artifacts['cxx_headers'] + '/vector')
