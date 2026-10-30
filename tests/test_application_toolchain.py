@@ -101,6 +101,40 @@ class ApplicationToolchainTests(TemporaryCase):
         self.assertEqual(compiler_bindings.compiler_argv(record, 'ld', arguments),
             self.compiler['commands']['ld'] + ['--sysroot=' + str(self.sysroot)] + arguments)
 
+    def test_sysroot_alias_keeps_bindings_independent_of_the_stage_directory(self):
+        tools = self.root / 'os-tools'
+        tools.mkdir()
+        alias = tools / 'sysroot'
+
+        def bind(name, sysroot, **alias_option):
+            destination = self.root / name
+            application_toolchain.bind_clang_application_commands(destination, self.compiler,
+                sysroot, self.runtime, python=sys.executable, include_auxiliary=True, **alias_option)
+            return (destination / 'commands.json').read_text()
+
+        alias.symlink_to(self.sysroot)
+        first_direct = bind('direct-first', self.sysroot)
+        first = bind('alias-first', self.sysroot, sysroot_alias=alias)
+        self.assertNotIn(str(self.sysroot), first)
+        record = jsonio.read_json(self.root / 'alias-first/commands.json')
+        self.assertIn('--sysroot=' + str(alias), record['commands']['ld'])
+        self.assertIn('-Wl,-rpath-link,' + str(alias / 'usr/lib'), record['link_flags']['cc'])
+        renamed = self.root / 'renamed-stage'
+        self.sysroot.rename(renamed)
+        alias.unlink()
+        alias.symlink_to(renamed)
+        # The stage name was the only difference: real paths change the
+        # binding, the alias keeps it.
+        self.assertNotEqual(bind('direct-renamed', renamed), first_direct)
+        self.assertEqual(bind('alias-renamed', renamed, sysroot_alias=alias), first)
+        other = self.root / 'other-stage'
+        other.mkdir()
+        alias.unlink()
+        alias.symlink_to(other)
+        with self.assertRaisesRegex(SDKError, 'alias does not resolve to the selected sysroot'):
+            bind('alias-wrong', renamed, sysroot_alias=alias)
+        self.assertFalse((self.root / 'alias-wrong').exists())
+
     def test_runtime_must_match_selected_compiler_and_target(self):
         different = copy.deepcopy(self.compiler); different['version']='22.1.0'
         with self.assertRaisesRegex(SDKError, 'compiler.*runtime'):

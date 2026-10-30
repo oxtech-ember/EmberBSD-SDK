@@ -8,6 +8,8 @@ from . import compiler_bindings, jsonio, llvm_runtime, llvm_runtime_install, pat
 from .errors import SDKError
 
 APPLICATION_TOOLCHAIN_API = 2
+# Additive in API 2: the sysroot_alias keyword of the command functions.
+SYSROOT_ALIAS = 1
 IMPORT_RECORD = '.prebuild-sdk-import.json'
 
 
@@ -53,21 +55,43 @@ def load_clang_runtime(sysroot, *, target):
     return selected
 
 
-def clang_application_commands(compiler, sysroot, runtime_record, *, runtime_root=None, link=False):
+def _selected_roots(sysroot, runtime_root, sysroot_alias):
+    """Validate the real sysroot and runtime root; return their command spellings.
+
+    A sysroot_alias is an absolute path, normally a symbolic link owned by
+    the caller, that must resolve to the selected sysroot now. Commands then
+    name the alias instead of the stage directory, so outputs that embed
+    them do not depend on the stage directory name. A runtime root inside
+    the sysroot is spelled through the alias too.
+    """
+    root = paths.canonical_existing(sysroot)
+    runtime_root = root if runtime_root is None else paths.canonical_existing(runtime_root)
+    paths.real_directory(root)
+    paths.real_directory(runtime_root)
+    if sysroot_alias is None:
+        return root, runtime_root
+    alias = os.path.normpath(paths._raw_absolute(sysroot_alias))
+    if not os.path.isabs(sysroot_alias) or paths.canonical_existing(alias) != root:
+        raise SDKError('sysroot alias does not resolve to the selected sysroot')
+    if os.path.commonpath((root, runtime_root)) == root:
+        runtime_root = os.path.normpath(os.path.join(alias, os.path.relpath(runtime_root, root)))
+    return alias, runtime_root
+
+
+def clang_application_commands(compiler, sysroot, runtime_record, *, runtime_root=None, link=False,
+                               sysroot_alias=None):
     """Return separate compile/link argv; callers validate selected live inputs.
 
     Compiler-only queries and freestanding builds use target_toolchain instead.
     A separate runtime_root supports already validated staging probes without
-    requiring a completed application build receipt.
+    requiring a completed application build receipt. See _selected_roots for
+    sysroot_alias.
     """
     record = llvm_runtime.validate_identity(runtime_record, required_components=llvm_runtime.FULL_COMPONENTS)
     target_toolchain.validate_clang_identity(compiler, record['triplet'])
     if compiler['version'] != record['llvm_version']:
         raise SDKError('selected compiler and LLVM runtime versions differ')
-    root = paths.canonical_existing(sysroot)
-    runtime_root = root if runtime_root is None else paths.canonical_existing(runtime_root)
-    paths.real_directory(root)
-    paths.real_directory(runtime_root)
+    root, runtime_root = _selected_roots(sysroot, runtime_root, sysroot_alias)
     selected = llvm_runtime.runtime_paths(runtime_root, record)
     commands = {role:list(command) for role,command in compiler['commands'].items()}
     # Host clang resource headers supply freestanding C builtins when the target
@@ -85,8 +109,8 @@ def clang_application_commands(compiler, sysroot, runtime_record, *, runtime_roo
     commands['cxx'] += resource_includes
     if link:
         for role, language in (('cc','c'), ('cxx','c++')):
-            commands[role] += clang_application_link_flags(compiler, root, record,
-                runtime_root=runtime_root, language=language)
+            commands[role] += clang_application_link_flags(compiler, sysroot, record,
+                runtime_root=runtime_root, language=language, sysroot_alias=sysroot_alias)
     return commands
 
 
@@ -109,7 +133,7 @@ def clang_application_runtime_rpath(runtime_record):
 
 
 def clang_application_link_flags(compiler, sysroot, runtime_record, *, runtime_root=None, language='c',
-                                 runtime_rpath=True):
+                                 runtime_rpath=True, sysroot_alias=None):
     """Return driver-only runtime flags for the selected link language.
 
     runtime_rpath=False omits the target search path of the runtime
@@ -121,10 +145,7 @@ def clang_application_link_flags(compiler, sysroot, runtime_record, *, runtime_r
     target_toolchain.validate_clang_identity(compiler, record['triplet'])
     if compiler['version'] != record['llvm_version']:
         raise SDKError('selected compiler and LLVM runtime versions differ')
-    root = paths.canonical_existing(sysroot)
-    runtime_root = root if runtime_root is None else paths.canonical_existing(runtime_root)
-    paths.real_directory(root)
-    paths.real_directory(runtime_root)
+    root, runtime_root = _selected_roots(sysroot, runtime_root, sysroot_alias)
     directories = _runtime_directories(record)
     flags = ['--ld-path='+compiler['binaries']['ld']['selected_path'],
              '--rtlib=compiler-rt','--unwindlib=libunwind']
@@ -141,7 +162,7 @@ def clang_application_link_flags(compiler, sysroot, runtime_record, *, runtime_r
 
 
 def bind_clang_application_commands(destination, compiler, sysroot, runtime_record, *, python,
-                                    runtime_root=None, include_auxiliary=False):
+                                    runtime_root=None, include_auxiliary=False, sysroot_alias=None):
     """Bind CC/CXX/CPP for builders that have no separate C++ link interface.
 
     python is the selected native-prefix interpreter. Existing compiler input
@@ -151,15 +172,17 @@ def bind_clang_application_commands(destination, compiler, sysroot, runtime_reco
     """
     if type(include_auxiliary) is not bool:
         raise SDKError('auxiliary command selection must be boolean')
-    commands = clang_application_commands(compiler, sysroot, runtime_record, runtime_root=runtime_root)
+    commands = clang_application_commands(compiler, sysroot, runtime_record, runtime_root=runtime_root,
+                                          sysroot_alias=sysroot_alias)
     roles = ['cc', 'cxx', 'cpp']
     if include_auxiliary:
         roles += ['as', 'ld']
-        commands['ld'] += ['--sysroot=' + paths.canonical_existing(sysroot)]
+        commands['ld'] += ['--sysroot=' + _selected_roots(sysroot, runtime_root, sysroot_alias)[0]]
     return compiler_bindings.bind_compilers(destination,
         commands={role:commands[role] for role in roles}, python=python,
         flags={name:[] for name in ('cppflags','cflags','cxxflags','ldflags')},
         link_flags={role:clang_application_link_flags(compiler, sysroot, runtime_record,
-            runtime_root=runtime_root, language=language, runtime_rpath=False)
+            runtime_root=runtime_root, language=language, runtime_rpath=False,
+            sysroot_alias=sysroot_alias)
             for role,language in (('cc','c'), ('cxx','c++'))},
         runtime_rpath=clang_application_runtime_rpath(runtime_record))

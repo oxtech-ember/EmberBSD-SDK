@@ -55,6 +55,13 @@ the search path; `runtime_rpath=False` omits it from
 only for identical commands. The shared binding's POSIX response-file and
 option-terminator limits are documented in [native checks](native-checks.md).
 
+Pass `sysroot_alias=` (an absolute path, normally a link the caller owns and
+repoints) to name the sysroot through it in every generated command,
+including a runtime root inside the sysroot. The functions still validate the
+real sysroot, and refuse an alias that does not resolve to it, but the bound
+commands then do not depend on the stage directory name. `SYSROOT_ALIAS`
+marks an SDK with this keyword.
+
 Set `include_auxiliary=True` to also bind executable `as` and `ld` paths.
 The assembler uses the selected Clang target. The linker uses the selected
 ELF linker with the application sysroot. Direct linker calls do not add
