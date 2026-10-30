@@ -79,9 +79,9 @@ class LLVMPhaseBuilder(SysrootBuilder):
 
     def prepared_source_traversals(self):
         # bootstrap-headers enters only header directories; base is "tools libs".
-        if self.options.get('c-foundation'):
+        if self.llvm_phase == 'headers' or self.options.get('c-foundation'):
             return prepared_sources.TOOLS_TRAVERSALS
-        return () if self.llvm_phase == 'headers' else super().prepared_source_traversals()
+        return super().prepared_source_traversals()
 
     def preflight(self):
         result = super().preflight()

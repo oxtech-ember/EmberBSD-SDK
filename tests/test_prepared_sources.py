@@ -211,9 +211,23 @@ class PreparedSourceTests(TemporaryCase):
         self.assertEqual(needed.get('EMBER_BYACC_SOURCE'), 'tools/host')
         self.assertIn('--byacc-source', prepared_sources.missing_sources(needed, {})[0])
 
+    def test_ordinary_headers_preflight_includes_host_tool_sources(self):
+        from emberbsd_sdk.llvm_sysroot import LLVMPhaseBuilder
+        (self.os / 'tools/host/Makefile').write_text(BYACC)
+        builder = LLVMPhaseBuilder.__new__(LLVMPhaseBuilder)
+        builder.options, builder.llvm_phase = {}, 'headers'
+        needed = self.walk([], builder.prepared_source_traversals())
+        self.assertEqual(needed.get('EMBER_BYACC_SOURCE'), 'tools/host')
+        self.assertIn('--byacc-source', prepared_sources.missing_sources(needed, {})[0])
+
     def test_host_tool_source_query_routes_selected_yacc(self):
         (self.os / 'tools/host/Makefile').write_text(BYACC)
         builder = self.builder(('byacc',))
+        import hashlib
+        contract = self.os / 'contract'
+        contract.write_text('EmberBSD-native-tools 1\ncmp cmp -\nreadlink readlink -\nmake make MAKE\nsh sh HOST_SH\nyacc yacc HOST_YACC\ncp cp HOST_MV_CP\nrm rm HOST_MV_RM\n')
+        builder.native_contract = str(contract)
+        builder.native_contract_sha256 = hashlib.sha256(contract.read_bytes()).hexdigest()
         with patch('emberbsd_sdk.prepared_sources.process.capture', side_effect=self.fake_make) as run:
             builder.require_prepared_sources(self.source_flags(('byacc',)),
                                              (('tools', prepared_sources.BUILD_TARGETS),))
@@ -221,10 +235,10 @@ class PreparedSourceTests(TemporaryCase):
             for flag in ('HOST_YACC=/host/yacc', 'HOST_MV_CP=/host/cp', 'HOST_MV_RM=/host/rm'):
                 self.assertIn(flag, call.args[0])
 
-    def test_headers_phase_walks_nothing(self):
+    def test_headers_phase_walks_host_tools_only(self):
         from emberbsd_sdk.llvm_sysroot import LLVMPhaseBuilder
         builder = LLVMPhaseBuilder.__new__(LLVMPhaseBuilder)
         builder.options, builder.llvm_phase = {}, 'headers'
-        self.assertEqual(builder.prepared_source_traversals(), ())
+        self.assertEqual(builder.prepared_source_traversals(), prepared_sources.TOOLS_TRAVERSALS)
         builder.llvm_phase = 'base'
-        self.assertEqual(builder.prepared_source_traversals(), prepared_sources.LIBS_TRAVERSALS)
+        self.assertEqual(builder.prepared_source_traversals(), prepared_sources.TOOLS_TRAVERSALS + prepared_sources.LIBS_TRAVERSALS)

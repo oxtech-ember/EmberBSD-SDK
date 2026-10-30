@@ -19,7 +19,7 @@ import time
 from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, prepared_sources, process, provenance, sourceprep, workspace
 from .verification_receipts import RunReceipts
 from .errors import CommandError, SDKError, ProcessOwnershipError
-from .native_os_routing import gettext_target_host_flags, gnu_target_host_flags, native_host_flags, native_path
+from .native_os_routing import gettext_target_host_flags, gnu_target_host_flags, native_host_flags, native_path, read_native_os_contract
 from .targets import TARGETS, target_definition
 
 NATIVE_INPUTS = ('native-toolset', 'native-toolset-sha256',
@@ -1071,7 +1071,7 @@ class SysrootBuilder:
         return list(cls.FLAGS), prepared_sources.LIBS_TRAVERSALS
 
     def prepared_source_traversals(self):
-        return self.prepared_source_profile(self.options)[1]
+        return prepared_sources.TOOLS_TRAVERSALS + self.prepared_source_profile(self.options)[1]
 
     def require_prepared_sources(self, flags, traversals):
         """Refuse a build whose OS tree reaches a prepared source that is not selected.
@@ -1089,8 +1089,9 @@ class SysrootBuilder:
                   'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
                   'MKREPRO_TIMESTAMP=' + str(self.source_timestamp())]
         if any(start == 'tools' for start, _ in traversals):
-            common += [name + '=' + self.native.tool(role) for name, role in
-                       (('HOST_YACC', 'yacc'), ('HOST_MV_CP', 'cp'), ('HOST_MV_RM', 'rm'))]
+            _, rows, _ = read_native_os_contract(self.native_contract, sha256=self.native_contract_sha256)
+            common += [binding + '=' + self.native.tool(role) for _, role, binding in rows
+                       if binding in ('HOST_YACC', 'HOST_MV_CP', 'HOST_MV_RM')]
         query = prepared_sources.bmake_query(self.native.tool('make'), root, common + list(flags), env=env)
         needed = prepared_sources.required_sources(root, query, traversals,
                                                    jobs=max(1, min(8, int(self.options['jobs']))))
