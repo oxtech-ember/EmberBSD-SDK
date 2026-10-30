@@ -18,7 +18,7 @@ import sysconfig
 import time
 from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, prepared_sources, process, provenance, sourceprep, workspace
 from .verification_receipts import RunReceipts
-from .errors import SDKError, ProcessOwnershipError
+from .errors import CommandError, SDKError, ProcessOwnershipError
 from .native_os_routing import gettext_target_host_flags, gnu_target_host_flags, native_host_flags, native_path
 from .targets import TARGETS, target_definition
 
@@ -642,6 +642,42 @@ class SysrootBuilder:
                 result[name] = self.prepared_source_record(name, package, record)
         return result
 
+    # The Ports check that each prepared source names the effective recipe of
+    # the selected Ports checkout.  It reads Git object ids and the small
+    # recipe files only, never a prepared tree or a pkgsrc export.
+    CURRENT_SOURCES = 'scripts/prepared-source-current.py'
+
+    def require_current_common_sources(self):
+        """Refuse a prepared source made from another Ports recipe.
+
+        A receipt names the recipe its tree was prepared from; building it
+        with a Ports checkout whose recipe differs (a stale Ports pin, or a
+        source prepared before a recipe change) would publish a sysroot that
+        the selected Ports does not describe.  Ports compares the receipts
+        with its current recipes once per run, from Git, in seconds."""
+        names = [name for name, _ in self.COMMON_SOURCES if name + '-source' in self.paths]
+        if not names:
+            return
+        script = os.path.join(self.paths['ports'], self.CURRENT_SOURCES)
+        if not os.path.isfile(script):
+            raise SDKError('selected Ports cannot check prepared sources against its recipes')
+        command = [self.paths['python'], '-B', script, '--sdk-source', self.paths['sdk-source'],
+                   '--git', self.git_command]
+        if 'libopts-source' in self.paths:
+            # Ports applies the infrastructure patches of the AutoGen recipe
+            # to its few recipe files with the selected native patch tool.
+            selector = native_toolset.load_host_prefix(self.native.bundle_root, required_roles={'gpatch'})
+            command += ['--patch', self.executable(selector.tool('gpatch'))]
+        for name in names:
+            command += ['--source', f"{name}={self.paths[name + '-source']}"]
+        try:
+            result = jsonio.loads_json(process.capture(command, env=self.environment).stdout)
+        except CommandError as exc:
+            detail = exc.stderr.decode('utf-8', 'replace').strip()
+            raise SDKError('prepared sources are stale for the selected Ports; prepare them again: ' + detail) from exc
+        if result != {'current': sorted(names)}:
+            raise SDKError('invalid prepared source check result')
+
     @staticmethod
     def prepared_source_record(name, package, record):
         if (not isinstance(record, dict) or record.get('format') != 'emberbsd-prepared-source' or
@@ -1190,6 +1226,7 @@ class SysrootBuilder:
         self.common_source_records = (self.verify_common_sources()
                                       if any(name + '-source' in self.paths for name, _ in self.COMMON_SOURCES)
                                       else {})
+        self.require_current_common_sources()
         self.python = self.python_identity()
         self.git(self.paths['os'], 'ls-files', '--error-unmatch', 'build.sh', 'Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk')
         self.git(self.paths['ports'], 'ls-files', '--error-unmatch', verifier)

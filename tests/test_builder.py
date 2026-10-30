@@ -218,6 +218,17 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
         source.mkdir()
         write(source / 'emberbsd-prepared-source.json', json.dumps(dict(format='emberbsd-prepared-source',
             version=1, package=package, identity={'fixture': name}, tree_sha256='0' * 64)))
+    # The Ports check of prepared sources against its recipes; the fixture
+    # receipts name no recipe, so it reports every selected source current
+    # unless the control injects a stale one.
+    write(ports / B.CURRENT_SOURCES, f'''import json, sys
+from pathlib import Path
+a = sys.argv[1:]
+names = sorted(a[i + 1].partition('=')[0] for i, v in enumerate(a) if v == '--source')
+stale = json.loads(Path({str(control)!r}).read_text()).get('stale_source')
+if stale in names: raise SystemExit(stale + ': prepared from another recipe')
+print(json.dumps({{'current': names}}))
+''')
     for path in (os_source, ports, root / 'sdk-source'):
         git(path, 'init', '-q'); commit(path)
     prepare_source(ports, root / 'libedit.tar.gz', root / 'libedit-source')
@@ -238,6 +249,15 @@ class BuilderTests(TemporaryCase):
         for name in ('gettext-source', 'libxml2-source'):
             with self.subTest(name=name), self.assertRaisesRegex(SDKError, 'selected together'):
                 B(self.options | {name: '/prepared/source'}).preflight()
+
+    def test_stale_prepared_source_for_the_selected_ports_fails_preflight(self):
+        # Without the Ports check a receipt is read by form only, so a source
+        # prepared from another Ports recipe would be built.
+        self.control(stale_source='libevent')
+        with self.assertRaisesRegex(SDKError, 'prepared sources are stale for the selected Ports.*libevent'):
+            B(self.options).preflight()
+        self.control()
+        B(self.options).preflight()
 
     def test_optional_openssl_is_verified_and_forwarded(self):
         options = self.options | {'openssl-source': str(self.root / 'openssl-source')}

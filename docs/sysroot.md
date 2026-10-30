@@ -164,7 +164,11 @@ New build records bind selected paths and commands. Historical records remain re
 A run is one `build-sysroot.py` or `build-os-release.py` invocation, including
 all of its LLVM phases. A common prepared source is identified by the receipt
 its owner wrote when it prepared it; the SDK reads the receipt and neither runs
-the owner again nor reads the tree. The Ports owner verifier of the common LLVM
+the owner again nor reads the tree. Once per run, before the build, Ports
+`scripts/prepared-source-current.py` compares every selected receipt with the
+effective recipe of the selected Ports checkout, from Git object ids and the
+small recipe files only; a source prepared from another recipe (a stale Ports
+pin) fails the run and must be prepared again. The Ports owner verifier of the common LLVM
 source and of each LLVM runtime stage runs the first time the run needs it.
 Later checks of the same input compare an in-memory metadata fingerprint
 instead of running the verifier again.
