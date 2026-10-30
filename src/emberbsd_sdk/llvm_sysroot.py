@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 
-from . import inventory, jsonio, llvm_runtime, llvm_stage_inputs, paths, process, workspace
+from . import inventory, jsonio, llvm_runtime, llvm_stage_inputs, paths, prepared_sources, process, workspace
 from .errors import SDKError
 from .elf import read_archive, read_elf_header
 from .sysroot_builder import SysrootBuilder
@@ -79,7 +79,9 @@ class LLVMPhaseBuilder(SysrootBuilder):
 
     def prepared_source_traversals(self):
         # bootstrap-headers enters only header directories; base is "tools libs".
-        return () if self.llvm_phase == 'headers' or self.options.get('c-foundation') else super().prepared_source_traversals()
+        if self.options.get('c-foundation'):
+            return prepared_sources.TOOLS_TRAVERSALS
+        return () if self.llvm_phase == 'headers' else super().prepared_source_traversals()
 
     def preflight(self):
         result = super().preflight()
@@ -257,7 +259,7 @@ class LLVMCoordinator:
         the final builder uses its own profile with the final LLVM knobs."""
         headers = self.headers
         if self.options.get('c-foundation'):
-            headers.require_prepared_sources(headers.flags, ())
+            headers.require_prepared_sources(headers.flags, prepared_sources.TOOLS_TRAVERSALS)
             return
         headers.require_prepared_sources(headers.flags, SysrootBuilder.prepared_source_profile(self.options)[1])
         flags, traversals = self.builder_type.prepared_source_profile(self.options)

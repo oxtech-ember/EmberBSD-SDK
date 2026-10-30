@@ -30,6 +30,7 @@ TARGET = re.compile(r'make\(([^()\s]+)\)')
 # Targets that compile or install a directory: build_install, do-build and
 # the release reach each subdirectory with these.
 BUILD_TARGETS = frozenset(('all', 'dependall', 'install'))
+TOOLS_TRAVERSALS = (('tools', BUILD_TARGETS),)
 # build.sh libs: "make includes" from the top, then "make do-lib", which is
 # "build_install" (dependall, install) in lib.
 LIBS_TRAVERSALS = (('.', frozenset(('includes',))), ('lib', BUILD_TARGETS))

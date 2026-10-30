@@ -202,6 +202,15 @@ class PreparedSourceTests(TemporaryCase):
         self.assertNotIn('MKX11=no', final_flags)
         self.assertNotIn('MKCXX=no', final_flags)
 
+    def test_c_foundation_preflight_includes_host_tool_sources(self):
+        from emberbsd_sdk.llvm_sysroot import LLVMPhaseBuilder
+        (self.os / 'tools/host/Makefile').write_text(BYACC)
+        builder = LLVMPhaseBuilder.__new__(LLVMPhaseBuilder)
+        builder.options, builder.llvm_phase = {'c-foundation': True}, 'headers'
+        needed = self.walk([], builder.prepared_source_traversals())
+        self.assertEqual(needed.get('EMBER_BYACC_SOURCE'), 'tools/host')
+        self.assertIn('--byacc-source', prepared_sources.missing_sources(needed, {})[0])
+
     def test_headers_phase_walks_nothing(self):
         from emberbsd_sdk.llvm_sysroot import LLVMPhaseBuilder
         builder = LLVMPhaseBuilder.__new__(LLVMPhaseBuilder)
