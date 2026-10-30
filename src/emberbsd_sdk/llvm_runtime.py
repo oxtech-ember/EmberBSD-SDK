@@ -13,6 +13,8 @@ from .targets import target_definition
 
 LLVM_RUNTIME_API = 1
 MANIFEST = 'runtime.json'
+# validate_stage(content=False) and validate_bootstrap_pair(content=False).
+STAGE_CONTENT_API = 1
 FULL_COMPONENTS = ('builtins', 'libunwind', 'libcxxabi', 'libcxx')
 _PROFILES = (('builtins',), ('builtins', 'libunwind-static'), FULL_COMPONENTS)
 
@@ -148,9 +150,10 @@ def _payload(rows):
             {name: row['target'] for name, row in rows.items() if row['kind'] == 'link'})
 
 
-def validate_bootstrap_pair(root, full, *, target):
+def validate_bootstrap_pair(root, full, *, target, content=True):
     """Verify the exact bootstrap stage consumed by a full runtime build."""
-    bootstrap = validate_stage(root, target=target, required_components=('builtins', 'libunwind-static'))
+    bootstrap = validate_stage(root, target=target, required_components=('builtins', 'libunwind-static'),
+                               content=content)
     pin = full.get('bootstrap')
     _require(isinstance(pin, dict), 'full LLVM runtime lacks bootstrap provenance')
     names = (bootstrap['artifacts']['builtins'], bootstrap['artifacts']['libunwind']['static'])
@@ -196,18 +199,23 @@ def validate_install(root, record, *, target=None, required_components=FULL_COMP
 
 
 def validate_stage(stage, *, target=None, required_components=(), ports=None,
-                   ports_revision=None, base=None):
+                   ports_revision=None, base=None, content=True):
     """Verify stage bytes and target object types, not runtime execution or PIC.
 
     Optional base checks compare actual preexisting headers/libraries. They do
     not require a completed SDK receipt. The owning Ports producer checks its
     build options and real linking before using the stage for an application.
+
+    With content false a reused stage is identified by its manifest, its
+    input key: the file bytes are not hashed again, while names, links,
+    modes, artifact object types and the recipe and base inputs are checked.
     """
     root = paths.canonical_existing(stage)
     paths.real_directory(root)
     record = validate_identity(jsonio.read_json(os.path.join(root, MANIFEST)), target=target,
                                required_components=required_components)
-    rows = inventory.snapshot_tree(root, machine=record['elf_machine'], exclude=(MANIFEST,))
+    rows = inventory.snapshot_tree(root, machine=record['elf_machine'], exclude=(MANIFEST,),
+                                   digests=None if content else record['files'])
     _require(_payload(rows) == (record['files'], record['symlinks']), 'LLVM runtime inventory changed')
     prefix = record['prefix']
     _require(all(name == prefix or name.startswith(prefix + '/') or prefix.startswith(name + '/')

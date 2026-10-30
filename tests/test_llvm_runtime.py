@@ -100,6 +100,44 @@ class LLVMRuntimeTests(LLVMRuntimeFixture):
         with self.assertRaises(SDKError):
             llvm_runtime.validate_bootstrap_pair(self.stage, full, target='aarch64')
 
+    def test_reused_stage_is_identified_by_its_manifest_without_hashing(self):
+        self.full()
+        payload = {str(self.stage / name) for name in self.record['files']}
+        original = inventory.sha256_file
+        def refuse(path):
+            if str(path) in payload:
+                raise AssertionError('reused stage file hashed again: ' + str(path))
+            return original(path)
+        bootstrap = copy.deepcopy(self.record)
+        full = copy.deepcopy(self.record)
+        full['bootstrap'] = dict(manifest_sha256=inventory.sha256_file(self.stage / 'runtime.json'),
+                                 files={name: self.record['files'][name] for name in (
+                                     self.builtins, self.record['artifacts']['libunwind']['static'])})
+        with patch.object(inventory, 'sha256_file', side_effect=refuse):
+            self.assertEqual(llvm_runtime.validate_stage(self.stage, content=False), self.record)
+            self.assertEqual(llvm_runtime.validate_bootstrap_pair(
+                self.stage, full, target='aarch64', content=False)['files'], bootstrap['files'])
+            known = inventory.snapshot_tree(self.prefix, machine=183, digests={
+                name[len('usr/pkg/llvm/'):]: digest for name, digest in self.record['files'].items()})
+        self.assertEqual(known, inventory.snapshot_tree(self.prefix, machine=183))
+        with self.assertRaises(AssertionError), patch.object(inventory, 'sha256_file', side_effect=refuse):
+            llvm_runtime.validate_stage(self.stage)
+        # Structure is still checked: a missing or extra file or a changed
+        # link fails a reused stage; a full check still finds changed bytes.
+        vector = self.prefix / 'include/c++/v1/vector'
+        vector.write_text('// changed\n')
+        llvm_runtime.validate_stage(self.stage, content=False)
+        with self.assertRaisesRegex(SDKError, 'inventory changed'):
+            llvm_runtime.validate_stage(self.stage)
+        (self.prefix / 'extra').write_text('x')
+        with self.assertRaisesRegex(SDKError, 'inventory changed'):
+            llvm_runtime.validate_stage(self.stage, content=False)
+        (self.prefix / 'extra').unlink()
+        (self.prefix / 'lib/libc++.so').unlink()
+        (self.prefix / 'lib/libc++.so').symlink_to('libc++abi.so.1')
+        with self.assertRaisesRegex(SDKError, 'inventory changed'):
+            llvm_runtime.validate_stage(self.stage, content=False)
+
     def test_shared_object_needs_its_recorded_soname_path(self):
         self.full()
         library = self.prefix / 'lib/libc++.so.1'

@@ -341,7 +341,7 @@ class LLVMCoordinator:
                         dict(ports=selected.paths['ports'], ports_revision=record['recipe']['ports_revision']))
         expected = llvm_runtime.validate_stage(stage, target=self.options['target'],
             required_components=('builtins', 'libunwind-static') if phase == 'bootstrap' else llvm_runtime.FULL_COMPONENTS,
-            base=base, **recipe_check)
+            base=base, content=False, **recipe_check)
         if record != expected:
             raise SDKError('LLVM runtime producer and shared validator disagree')
 

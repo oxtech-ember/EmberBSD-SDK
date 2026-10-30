@@ -399,7 +399,8 @@ def finalize_release(destination):
         check(signature.get('compiler_family') == 'clang', 'Finalization requires a selected LLVM runtime')
         check(receipt['version'] in SOURCE_TREE_SCHEMAS, 'Release receipt predates Git tree source identity; rebuild it')
         runtime = llvm_runtime.validate_stage(paths['llvm-runtime-stage'], target=target,
-            required_components=llvm_runtime.FULL_COMPONENTS, base=paths.get('llvm-runtime-base'))
+            required_components=llvm_runtime.FULL_COMPONENTS, base=paths.get('llvm-runtime-base'),
+            content=False)
         check(runtime == signature['runtime']['manifest'], 'LLVM runtime differs from receipt')
         if receipt['version'] in BASE_CXX_SCHEMAS:
             llvm_runtime.validate_install(output / 'dest', runtime, target=target)

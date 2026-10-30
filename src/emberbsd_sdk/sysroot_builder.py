@@ -336,7 +336,7 @@ class SysrootBuilder:
                 recipe_check = ({} if 'llvm-runtime-original-source' in self.paths else
                     dict(ports=self.paths['ports'], ports_revision=reported['recipe']['ports_revision']))
                 record = llvm_runtime.validate_stage(stage, target=self.options['target'],
-                    required_components=required, base=base, **recipe_check)
+                    required_components=required, base=base, content=False, **recipe_check)
                 if reported != record:
                     raise SDKError('LLVM runtime producer and shared validator disagree')
                 return record
@@ -355,11 +355,16 @@ class SysrootBuilder:
                 # preserving the runtime's original recorded revision.
                 self.git(self.sources['os']['path'], 'merge-base', '--is-ancestor',
                          record['base']['os_revision'], self.sources['os']['commit'])
-            rows = inventory.snapshot_tree(self.paths['runtime-prefix'], machine=self.target['elf'])
+            # The stage manifest is the input key of the reused runtime; its
+            # recorded digests stand for the bytes under the runtime prefix.
+            prefix = record['prefix'] + '/'
+            rows = inventory.snapshot_tree(self.paths['runtime-prefix'], machine=self.target['elf'],
+                digests={name[len(prefix):]: digest for name, digest in record['files'].items()
+                         if name.startswith(prefix)})
             self.commands.append(dict(argv=self.runtime_command, scope='runtime-check', status='passed'))
             if self.llvm_phase == 'final':
                 llvm_runtime.validate_bootstrap_pair(
-                    self.paths['llvm-bootstrap-stage'], record, target=self.options['target'])
+                    self.paths['llvm-bootstrap-stage'], record, target=self.options['target'], content=False)
             return dict(manifest=record, inventory=rows,
                         root_mode=stat.S_IMODE(os.stat(self.paths['runtime-prefix']).st_mode))
         result = process.capture(self.runtime_command, env=self.environment)
@@ -1203,10 +1208,11 @@ class SysrootBuilder:
                 from . import llvm_runtime
                 stage = self.paths['llvm-runtime-stage']
                 record = llvm_runtime.validate_stage(stage, target=self.options['target'],
-                    required_components=('builtins', 'libunwind-static'))
+                    required_components=('builtins', 'libunwind-static'), content=False)
                 self.paths.update(runtime_paths(stage, record))
                 if self.llvm_phase == 'final':
-                    boot = llvm_runtime.validate_bootstrap_pair(self.paths['llvm-bootstrap-stage'], record, target=self.options['target'])
+                    boot = llvm_runtime.validate_bootstrap_pair(self.paths['llvm-bootstrap-stage'], record,
+                                                                target=self.options['target'], content=False)
                     self.paths['llvm-libc-unwind'] = runtime_paths(self.paths['llvm-bootstrap-stage'], boot)['llvm-unwind']
                 prefix = self.paths['runtime-prefix']
                 self.runtime_command = producer + ['verify', '--stage', stage, '--target', self.options['target'],

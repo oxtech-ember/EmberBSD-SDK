@@ -1326,6 +1326,23 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
             builder.run()
         self.assertFalse(Path(builder.options['destination']).exists())
 
+    def test_reused_runtime_stage_is_identified_by_its_manifest(self):
+        builder, runtime = self.builder()
+        stages = [os.path.realpath(builder.options[name]) for name in ('llvm-runtime-stage', 'llvm-bootstrap-stage')
+                  if builder.options.get(name)]
+        original = inventory.sha256_file
+        def refuse(path):
+            real = os.path.realpath(path)
+            if os.path.basename(real) != 'runtime.json' and any(real.startswith(stage + os.sep) for stage in stages):
+                raise AssertionError('reused runtime stage file hashed again: ' + real)
+            return original(path)
+        with patch.object(inventory, 'sha256_file', side_effect=refuse):
+            builder.preflight()
+        self.assertEqual(builder.runtime_record['manifest'], runtime.record)
+        # The recorded digests give the same signature rows as a full read.
+        self.assertEqual(builder.runtime_record['inventory'],
+                         inventory.snapshot_tree(builder.paths['runtime-prefix'], machine=183))
+
     def test_compatible_runtime_survives_unrelated_ports_commit(self):
         builder, runtime = self.builder()
         builder.preflight()

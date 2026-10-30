@@ -31,6 +31,12 @@ For direct reuse, `--llvm-runtime-base` selects the unchanged foundation used
 to build that runtime. Its recorded headers and libraries are checked against
 this path; it does not replace the final target sysroot or release DESTDIR.
 The coordinator supplies its own foundation when it builds the stages.
+A reused stage is identified by its `runtime.json` manifest, its input key:
+the SDK does not hash its file bytes again. It still checks the stage's file
+names, links and modes, the object types of its artifacts and the recorded
+recipe and base inputs, so a missing, extra or relinked file fails reuse. The
+inventory of the runtime prefix takes its digests from the manifest. A changed
+key builds a new stage.
 Select a runtime whose
 ABI is compatible with the chosen OS, including libc, C++ ABI, TLS and unwinder;
 matching an OS commit alone does not establish compatibility. The manifest

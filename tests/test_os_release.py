@@ -825,9 +825,11 @@ class BuilderReleaseTests(TemporaryCase):
                     changed = output / 'dest/usr/share/emberbsd/ports/editline.distinfo'
                     prior = changed.read_bytes(); changed.write_bytes(b'changed')
                 else:
+                    # A reused stage is named by its manifest, so a missing
+                    # file is refused without hashing the others again.
                     stage = Path(receipt['paths']['llvm-runtime-stage'])
                     changed = next(stage / name for name in receipt['signature']['runtime']['manifest']['files'])
-                    prior = changed.read_bytes(); changed.write_bytes(prior + b'x')
+                    prior = changed.read_bytes(); changed.unlink()
                 try:
                     with self.assertRaises((SDKError, OSError)):
                         finalize_release(output)
