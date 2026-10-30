@@ -328,50 +328,73 @@ class GitSourceReceiptTests(TemporaryCase):
             self.assertEqual(self.builder().source(str(self.repository), 'os'), record)
         self.assertEqual(len(calls), 2)
 
-    def test_changed_file_or_commit_is_checked_with_git_again(self):
+    def test_final_recheck_finds_a_commit_or_change_during_the_run(self):
         builder = self.builder()
         record = builder.source(str(self.repository), 'os')
         # A commit changes only the Git directory, not the working files.
         self.commit('Empty', '--allow-empty')
-        moved = builder.source(str(self.repository), 'os')
+        # Phases reuse the start-of-run record; the final check asks Git.
+        self.assertEqual(builder.source(str(self.repository), 'os'), record)
+        moved = builder.source(str(self.repository), 'os', recheck=True)
         self.assertNotEqual(moved['commit'], record['commit'])
         self.write('os/sys/kern/main.c', 'int main(void) { return 1; }\n')
         with self.assertRaisesRegex(SDKError, 'clean Git root'):
-            builder.source(str(self.repository), 'os')
+            builder.source(str(self.repository), 'os', recheck=True)
         self.run_git('checkout', '-q', '--', '.')
         self.write('os/untracked.c', 'int x;\n')
         with self.assertRaisesRegex(SDKError, 'clean Git root'):
+            builder.source(str(self.repository), 'os', recheck=True)
+        # A failed check leaves no record to reuse.
+        with self.assertRaisesRegex(SDKError, 'clean Git root'):
             builder.source(str(self.repository), 'os')
 
-    def test_git_state_outside_the_root_is_checked_with_git_every_time(self):
-        builder = self.builder()
-        root = str(self.repository)
-        self.assertEqual(builder.git_source_inputs(root), [os.path.realpath(root), self.git_tool])
-        # A submodule whose Git directory is inside the root's Git directory.
-        self.write('os/.gitmodules', '[submodule "sub"]\n\tpath = upstream/sub\n\turl = ../sub\n')
-        self.write('os/.git/modules/sub/HEAD', 'ref: refs/heads/main\n')
-        self.write('os/upstream/sub/.git', 'gitdir: ../../.git/modules/sub\n')
-        self.assertIsNotNone(builder.git_source_inputs(root))
-        # The same submodule with its Git directory elsewhere.
-        self.write('elsewhere/HEAD', 'ref: refs/heads/main\n')
-        self.write('os/upstream/sub/.git', f'gitdir: {self.root / "elsewhere"}\n')
-        self.assertIsNone(builder.git_source_inputs(root))
-        os.unlink(self.repository / 'upstream/sub/.git')
-        os.symlink(self.root / 'elsewhere', self.repository / 'upstream/sub/.git')
-        self.assertIsNone(builder.git_source_inputs(root))
-        os.unlink(self.repository / 'upstream/sub/.git')
-        self.write('os/upstream/sub/.git', 'gitdir: ../../.git/modules/sub\n')
-        self.assertIsNotNone(builder.git_source_inputs(root))
-        # A Git tool named only through PATH can change without a changed file.
-        builder.git_command = 'git'
-        self.assertIsNone(builder.git_source_inputs(root))
-        # A linked worktree keeps its Git directory outside the checkout.
+    def test_linked_worktree_is_checked_with_git_once_per_run(self):
+        # Release checkouts are linked worktrees, whose Git directory lies
+        # outside the checkout; each phase used to run git status again.
         linked = self.root / 'linked'
         self.run_git('worktree', 'add', '-q', '--detach', str(linked))
-        builder.git_command = self.git_tool
-        self.assertIsNone(builder.git_source_inputs(str(linked)))
+        receipts = RunReceipts()
         calls, counted = self.counted()
         with counted:
-            for _ in range(2):
-                builder.source(str(linked), 'os')
+            phases = [self.builder(receipts=receipts) for _ in range(5)]
+            records = [phase.source(str(linked), 'os') for phase in phases]
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(phases[-1].source(str(linked), 'os', recheck=True), records[0])
         self.assertEqual(len(calls), 2)
+        self.assertTrue(all(record == records[0] for record in records))
+        with open(linked / 'Makefile', 'a') as handle:
+            handle.write('# edited\n')
+        with self.assertRaisesRegex(SDKError, 'clean Git root'):
+            phases[0].source(str(linked), 'os', recheck=True)
+
+    def test_only_the_final_build_checks_sources_with_git_after_building(self):
+        receipts = RunReceipts()
+        start = self.builder(receipts=receipts)
+        start.sources = {'os': start.source(str(self.repository), 'os')}
+        self.write('os/untracked.c', 'int x;\n')
+        calls, counted = self.counted()
+        with counted:
+            for phase in ('headers', 'base'):
+                stage = self.builder(receipts=receipts)
+                stage.sources, stage.llvm_phase = start.sources, phase
+                stage.require_unchanged_sources()
+            self.assertEqual(calls, [])
+            final = self.builder(receipts=receipts)
+            final.sources, final.llvm_phase = start.sources, 'final'
+            with self.assertRaisesRegex(SDKError, 'clean Git root'):
+                final.require_unchanged_sources()
+        self.assertEqual(len(calls), 1)
+
+    def test_run_once_receipt_reruns_only_on_recheck_or_failure(self):
+        receipts = RunReceipts()
+        results = iter([{'n': 1}, {'n': 2}])
+        first = receipts.once('key', lambda: next(results))
+        first['n'] = 99
+        self.assertEqual(receipts.once('key', lambda: self.fail('reused')), {'n': 1})
+        self.assertEqual(receipts.once('key', lambda: next(results), recheck=True), {'n': 2})
+        def broken():
+            raise SDKError('broken')
+        with self.assertRaisesRegex(SDKError, 'broken'):
+            receipts.once('key', broken, recheck=True)
+        self.assertEqual(receipts.once('key', lambda: {'n': 3}), {'n': 3})
+        self.assertEqual(receipts.content_checks['key'], 4)

@@ -171,14 +171,16 @@ plan still stops the run. A fingerprint is not used when an input is missing
 or contains a symbolic link out of it; such inputs are checked by content every
 time.
 
-The OS, Ports and SDK checkouts must be clean Git roots. The first check in a
-run asks Git (status, index entries and commit). A later check of the same
-checkout compares the fingerprint of every file below its root, including the
-Git directory, and of the selected Git program. A checkout is asked with Git
-every time when its Git directory or that of a submodule lies outside its root
-(a linked worktree or an external submodule directory), or when Git is not
-selected by an absolute path, since a commit there would not change a file
-below the root.
+The OS, Ports and SDK checkouts must be clean Git roots. Each checkout is
+checked with Git (status, index entries and commit) once per run, by the first
+phase that needs it. Later phases of the same run (the LLVM stage selection,
+the headers and base stages and the final build preflight) reuse that record
+without asking Git or walking the tree again, whether the Git directory is
+inside the checkout or elsewhere (a linked worktree). At the end of the final
+build every checkout is checked with Git again and must still equal the
+start-of-run record, so a commit, an edit or a new untracked file during the
+run stops it. On a large checkout on a slow disk each Git check costs about a
+minute; it is run twice per checkout per run, not once per phase.
 
 Receipts are never written to disk. A new run starts with an empty set and
 checks every input by content again, so a change between runs is found by

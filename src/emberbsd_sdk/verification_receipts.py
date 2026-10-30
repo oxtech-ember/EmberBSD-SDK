@@ -10,6 +10,9 @@ setting its times changes its change time, so any difference leads to a
 full content verification again.  Receipts live only in memory and are
 never written, so a new run always starts with content verification,
 unless the run selects a SourceReceiptStore for its prepared sources.
+Inputs a run requires unchanged from start to end, such as the clean
+source checkouts, are instead checked once per run and once more at the
+end of the build (RunReceipts.once).
 """
 
 import copy
@@ -78,6 +81,7 @@ class RunReceipts:
     """Results of content verifiers, valid only while their inputs are unchanged."""
     def __init__(self):
         self._entries = {}
+        self._once = {}
         self.content_checks = {}
 
     def verify(self, key, inputs, verifier, memo=None):
@@ -92,6 +96,20 @@ class RunReceipts:
         # content check also differs from it next time.
         if before is not None:
             self._entries[key] = (before, copy.deepcopy(result))
+        return result
+
+    def once(self, key, verifier, *, recheck=False):
+        """Run the verifier once per run, or again when recheck is set.
+
+        For inputs a run requires unchanged from start to end, such as the
+        clean source checkouts, whose final check runs with recheck.
+        """
+        if not recheck and key in self._once:
+            return copy.deepcopy(self._once[key])
+        self.content_checks[key] = self.content_checks.get(key, 0) + 1
+        self._once.pop(key, None)
+        result = verifier()
+        self._once[key] = copy.deepcopy(result)
         return result
 
 
