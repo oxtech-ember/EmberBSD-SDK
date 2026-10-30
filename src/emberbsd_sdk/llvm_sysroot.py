@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 
-from . import inventory, jsonio, llvm_runtime, paths, process, workspace
+from . import inventory, jsonio, llvm_runtime, llvm_stage_inputs, paths, process, workspace
 from .errors import SDKError
 from .sysroot_builder import SysrootBuilder
 from .verification_receipts import RunReceipts
@@ -35,7 +35,8 @@ def llvm_flags(selected, *, phase, base_cxx=False):
 
 class LLVMPhaseBuilder(SysrootBuilder):
     """Use the ordinary locked builder for the two incomplete OS inputs."""
-    def __init__(self, options, phase, *, receipts=None, select_only=False, resume=False):
+    def __init__(self, options, phase, *, receipts=None, select_only=False, resume=False,
+                 stage_inputs=None):
         if phase not in ('headers', 'base'):
             raise SDKError('unsupported LLVM OS bootstrap phase')
         super().__init__(options, receipts=receipts)
@@ -43,6 +44,8 @@ class LLVMPhaseBuilder(SysrootBuilder):
         # Selects the stage key from the inputs; its destination is not used.
         self.select_only = select_only
         self.resume = resume
+        # The stage set's recorded OS inputs, when it has an inputs.json.
+        self.stage_inputs = stage_inputs
 
     def empty_destination(self):
         if self.select_only:
@@ -116,17 +119,30 @@ class LLVMPhaseBuilder(SysrootBuilder):
                     raise SDKError('LLVM OS stage inputs or outputs changed; select new stage objects')
                 self.validate_source_ancestry(self.completed, self.paths['destination'])
                 # Object reuse permits incremental rebuilding after source changes.
-                # Returning a completed stage does not rebuild, so its OS tree
-                # must still be identical. Ports recipes are checked in preflight.
-                try:
-                    self.git(self.sources['os']['path'], 'diff', '--quiet',
-                             self.completed['sources']['os']['commit'],
-                             self.sources['os']['commit'], '--')
-                except SDKError as exc:
-                    raise SDKError('LLVM OS source tree changed; build a new stage with compatible objects') from exc
+                # Returning a completed stage does not rebuild, so the OS files
+                # it read must still be identical. Ports recipes are checked in
+                # preflight.
+                self.require_unchanged_inputs()
                 return self.completed
         self.require_runtime_work()
         return self._run_preflighted()
+
+    def require_unchanged_inputs(self):
+        root = self.sources['os']['path']
+        built = self.completed['sources']['os']['commit']
+        current = self.sources['os']['commit']
+        if self.stage_inputs is None:
+            # A stage without an input record compares the whole OS tree.
+            try:
+                self.git(root, 'diff', '--quiet', built, current, '--')
+            except SDKError as exc:
+                raise SDKError('LLVM OS source tree changed; build a new stage with compatible objects') from exc
+            return
+        directories = self.stage_inputs['directories']
+        if (self.stage_inputs['os_commit'] != built or
+                llvm_stage_inputs.inputs_digest(llvm_stage_inputs.tree_rows(self.git, root, built), directories) !=
+                llvm_stage_inputs.inputs_digest(llvm_stage_inputs.tree_rows(self.git, root, current), directories)):
+            raise SDKError('LLVM stage OS inputs changed; build a new stage with compatible objects')
 
 
 def set_aside(root, outputs):
@@ -155,6 +171,7 @@ class LLVMCoordinator:
         self.stage_root = self.options.get('llvm-stages', os.path.join(self.options['sdk'], 'stages',
                                       'llvm-bootstrap-' + self.options['target']))
         self.runtime_root = self.work
+        self.stage_inputs = None
         # Only SDK-named stages restart; explicit stage directories are left as they are.
         self.resume = self.keyed and builder_type.RESUMES_FAILED_STAGES
         self.object_root = self.options.get('llvm-objects', os.path.join(
@@ -180,11 +197,16 @@ class LLVMCoordinator:
             selector = LLVMPhaseBuilder(self.stage_options('headers'), 'headers',
                                         receipts=self.receipts, select_only=True)
             selector.preflight()
-            key = self.stage_key(selector)
+            key = self.matching_stage(selector) or self.stage_key(selector)
             self.stage_root = os.path.join(self.stage_root, key)
             self.runtime_root = os.path.join(self.work, key)
+        record = os.path.join(self.stage_root, llvm_stage_inputs.RECORD)
+        if paths.entry(record) is not None:
+            self.stage_inputs = llvm_stage_inputs.read_record(record)
+            if self.stage_inputs['target'] != self.options['target']:
+                raise SDKError(f'LLVM stage input record is for another target: {record}')
         self.headers = LLVMPhaseBuilder(self.stage_options('headers'), 'headers', receipts=self.receipts,
-                                        resume=self.resume)
+                                        resume=self.resume, stage_inputs=self.stage_inputs)
         self.headers.preflight()
         self.require_prepared_sources()
         self.headers.output_path(self.object_root, os.path.join(self.headers.paths['sdk'], 'obj'))
@@ -230,6 +252,40 @@ class LLVMCoordinator:
                         llvm_source=selected.llvm_source_record, compiler=selected.compiler_record)
         encoded = json.dumps(material, sort_keys=True, separators=(',', ':')).encode('utf-8')
         return 'os-' + hashlib.sha256(encoded).hexdigest()[:20]
+
+    def matching_stage(self, selected):
+        """Return the name of a completed stage set whose recorded inputs match.
+
+        A stage set records the OS files its build read (inputs.json). It is
+        reused when the Git ids of those files, the LLVM source and the
+        compiler are unchanged at the selected OS commit, so an OS change that
+        the stage never reads, such as usr.bin/config, keeps the stage."""
+        if paths.entry(self.stage_root) is None:
+            return None
+        source = selected.sources['os']
+        rows = None
+        for name in sorted(os.listdir(self.stage_root)):
+            record = os.path.join(self.stage_root, name, llvm_stage_inputs.RECORD)
+            if paths.entry(record) is None:
+                continue
+            record = llvm_stage_inputs.read_record(record)
+            if record['target'] != self.options['target']:
+                continue
+            if rows is None:
+                rows = llvm_stage_inputs.tree_rows(selected.git, source['path'], source['commit'])
+            digest = llvm_stage_inputs.inputs_digest(rows, record['directories'])
+            if llvm_stage_inputs.stage_key(self.options['target'], selected.llvm_source_record,
+                                           selected.compiler_record, digest) == record['key']:
+                return name
+        return None
+
+    def record_inputs(self, receipts):
+        """Write the stage set's input record once both OS phases completed."""
+        if self.stage_inputs is not None:
+            return
+        record = llvm_stage_inputs.make_record(receipts, self.headers.git, self.options['target'])
+        llvm_stage_inputs.write_record(os.path.join(self.stage_root, llvm_stage_inputs.RECORD), record)
+        self.stage_inputs = record
 
     def lock(self):
         return process.ContextLocks([self.work], os.path.join(self.headers.paths['sdk'], 'obj'))
@@ -291,11 +347,12 @@ class LLVMCoordinator:
                 {'phase': 'full', 'command': self.runtime_command('full', os.path.join(self.stage_root, 'base'))},
                 {'phase': 'final', 'inputs': ['full'], 'destination': self.options.get('destination')}])
         with self.lock():
-            LLVMPhaseBuilder(self.stage_options('headers'), 'headers', receipts=self.receipts,
-                             resume=self.resume).run()
+            headers = LLVMPhaseBuilder(self.stage_options('headers'), 'headers', receipts=self.receipts,
+                                       resume=self.resume, stage_inputs=self.stage_inputs).run()
             self.runtime('bootstrap', os.path.join(self.stage_root, 'headers'))
-            LLVMPhaseBuilder(self.stage_options('base'), 'base', receipts=self.receipts,
-                             resume=self.resume).run()
+            base = LLVMPhaseBuilder(self.stage_options('base'), 'base', receipts=self.receipts,
+                                    resume=self.resume, stage_inputs=self.stage_inputs).run()
+            self.record_inputs(dict(headers=headers, base=base))
             self.runtime('full', os.path.join(self.stage_root, 'base'))
             final_options = self.options | {'llvm-runtime-stage': os.path.join(self.runtime_root, 'full-stage'),
                                             'llvm-runtime-base': os.path.join(self.stage_root, 'base'),

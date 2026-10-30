@@ -111,14 +111,39 @@ directories when a different build context must be retained alongside an
 existing one. Existing contexts and stages are not overwritten.
 
 Without `--llvm-stages`, the headers and base stages are kept in a
-subdirectory of `stages/llvm-bootstrap-TARGET` named by a hash of the OS
-source tree (not the commit), the LLVM source record and the compiler record.
-The bootstrap and full runtime stages use the same name below `--runtime-work`.
-A changed OS tree therefore builds new stages, incrementally from the shared
-`obj/llvm-bootstrap` objects, instead of refusing the completed ones; a new
-commit with the same tree reuses them. Each stage is still checked against
-its receipt before reuse. Older stage subdirectories are kept; remove unused
-ones when no build uses them. An explicit `--llvm-stages` is used as given.
+subdirectory of `stages/llvm-bootstrap-TARGET`. The bootstrap and full
+runtime stages use the same name below `--runtime-work`. When both OS phases
+of a stage set complete, the coordinator writes `inputs.json` beside them:
+the OS directories that the stage build read, taken from the stage's own
+build rather than from a list of consumers:
+
+* every directory with outputs in the stage object trees and every directory
+  named by a compiler dependency file there;
+* every OS path that the stage build log names, except the sources of host
+  tools that the stage never runs (the stage builds all host tools, but runs
+  only some; config(1), for example, is never run);
+* for the host tools that the log runs, matched to their object directories
+  by the installed program's content, those directories and their dependency
+  files, and always bmake. If a program that the log runs has no matching
+  object directory, every host tool counts as an input;
+* build.sh, the top Makefile, share/mk, etc/mtree, tools/, every shared
+  makefile fragment, and every header and makefile below common, crypto,
+  external, gnu, include, lib and sys.
+
+The direct files of each listed directory and of its parent directories are
+included, so a new file in a used directory is an input. The record's key is
+a hash of the Git blob ids and modes of those files, the LLVM source record
+and the compiler record. A later run selects the first recorded stage set
+whose key, computed at the new OS commit, is unchanged, so an OS change that
+the stage never reads, such as usr.bin/config, reuses the completed stages.
+Otherwise the run uses a stage set named by a hash of the whole OS source
+tree (not the commit), the LLVM source record and the compiler record, which
+builds new stages incrementally from the shared `obj/llvm-bootstrap`
+objects; a new commit with the same tree reuses them. Each stage is still
+checked against its receipt before reuse: its recorded inputs, or without a
+record its whole OS tree, must be identical at the built and the current
+commit. Older stage subdirectories are kept; remove unused ones when no
+build uses them. An explicit `--llvm-stages` is used as given.
 
 A development run continues after a failed run from the failed stage. Completed
 stages are reused as above. A headers or base stage that the failed run left

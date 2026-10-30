@@ -124,11 +124,12 @@ Removing or replacing a tool, changing a compiler binding, or changing ABI
 inputs refuses reuse. Published source ancestry is checked as before.
 Completed LLVM header/base stages use the same significant-input comparison
 and retain their original build records when reused. Their complete output
-inventory and OS source tree must remain identical; an ancestor OS revision
+inventory and the OS files recorded in the stage set's `inputs.json` (the
+whole OS source tree without a record) must remain identical; an ancestor OS revision
 alone cannot prove that a completed stage contains newer source changes.
 Unrelated Ports commits and SDK controller changes do not require rebuilding
 these stages when the measured common recipes and all compiled inputs match.
-Changed OS trees need a new stage, reusing compatible objects incrementally.
+Changed recorded OS inputs need a new stage, reusing compatible objects incrementally.
 Native-tool and headers-only contexts do not use the target linker and may
 reuse their outputs after its binary changes at the same selected path.
 Compiler identities, selected command routes and ABI inputs still must match.

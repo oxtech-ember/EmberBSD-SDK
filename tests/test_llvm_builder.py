@@ -14,7 +14,7 @@ import sys
 from unittest.mock import patch
 
 from test_core import TemporaryCase, SDK_SOURCE
-from emberbsd_sdk import inventory, jsonio
+from emberbsd_sdk import inventory, jsonio, llvm_stage_inputs
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.sysroot_builder import SysrootBuilder
 from emberbsd_sdk.os_release_builder import OSReleaseBuilder
@@ -1108,9 +1108,12 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         coordinator.builder_type = Final
         with patch.object(coordinator, 'prepare', return_value=None), \
              patch.object(coordinator, 'lock'), \
+             patch.object(coordinator, 'record_inputs') as record_inputs, \
              patch('emberbsd_sdk.llvm_sysroot.LLVMPhaseBuilder', Stage), \
              patch.object(coordinator, 'runtime', side_effect=lambda phase, base: events.append(phase)):
             result = coordinator.run()
+        # The stage input record is written from the two OS phase receipts.
+        record_inputs.assert_called_once_with({'headers': {'phase': 'headers'}, 'base': {'phase': 'base'}})
         self.assertEqual(events, ['headers', 'bootstrap', 'base', 'full', 'final'])
         # Every phase of the run shares one set of verification receipts.
         self.assertEqual(len(shared), 3)
@@ -1243,6 +1246,64 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         # An explicitly selected stage directory keeps its exact path.
         explicit = LLVMCoordinator(options | {'llvm-stages': str(root / 'chosen')}, SysrootBuilder)
         self.assertEqual(explicit.stage_options('headers')['destination'], str(root / 'chosen/headers'))
+
+    def test_recorded_stage_inputs_keep_the_stage_across_unrelated_os_changes(self):
+        headers, _ = self.completed_headers()
+        options = {name: value for name, value in headers.options.items()
+                   if name not in ('destination', 'objects', 'tools', 'llvm-runtime-stage', 'llvm-bootstrap-stage')}
+        options['runtime-work'] = str(Path(options['sdk']) / 'obj/llvm-runtime')
+        built = []
+        class Headers(type(headers)):
+            def __init__(self, selected, phase, **selection):
+                LLVMPhaseBuilder.__init__(self, selected, phase, **selection)
+            def build_payload(self):
+                built.append(self.paths['destination'])
+                super().build_payload()
+        class Stop(Exception):
+            pass
+        def headers_stage():
+            coordinator = LLVMCoordinator(options, SysrootBuilder)
+            with patch('emberbsd_sdk.llvm_sysroot.LLVMPhaseBuilder', Headers), \
+                 patch.object(coordinator, 'runtime', side_effect=Stop):
+                with self.assertRaises(Stop):
+                    coordinator.run()
+            return coordinator
+        source = options['os']
+        write(Path(source) / 'usr.bin/config/main.c', 'int config;\n')
+        write(Path(source) / 'include/used.h', '/* used */\n')
+        commit(source)
+        first = headers_stage()
+        self.assertEqual(len(built), 1)
+        # The stage set records the OS directories its build read.
+        receipt = jsonio.read_json(Path(first.stage_root) / 'headers' / LLVMPhaseBuilder.RECEIPT)
+        rows = llvm_stage_inputs.tree_rows(git, source, receipt['sources']['os']['commit'])
+        directories = ['include']
+        digest = llvm_stage_inputs.inputs_digest(rows, directories)
+        record = dict(format=llvm_stage_inputs.FORMAT, version=llvm_stage_inputs.VERSION, target='aarch64',
+                      os_commit=receipt['sources']['os']['commit'], directories=directories, phases={},
+                      inputs=digest, key=llvm_stage_inputs.stage_key(
+                          'aarch64', receipt['signature']['llvm_source'], receipt['signature']['compiler'], digest))
+        llvm_stage_inputs.write_record(str(Path(first.stage_root) / llvm_stage_inputs.RECORD), record)
+        # config(1) is not read by the stage: the completed stage is returned.
+        write(Path(source) / 'usr.bin/config/main.c', 'int config_changed;\n')
+        commit(source)
+        second = headers_stage()
+        self.assertEqual(second.stage_root, first.stage_root)
+        self.assertEqual(second.stage_inputs, record)
+        self.assertEqual(len(built), 1)
+        # A header the stage read selects a new stage.
+        write(Path(source) / 'include/used.h', '/* changed */\n')
+        commit(source)
+        third = headers_stage()
+        self.assertNotEqual(third.stage_root, first.stage_root)
+        self.assertEqual(built[-1], third.stage_root + '/headers')
+        # A recorded stage selected explicitly refuses a changed input.
+        explicit = options | {'llvm-stages': first.stage_root}
+        coordinator = LLVMCoordinator(explicit, SysrootBuilder)
+        with patch('emberbsd_sdk.llvm_sysroot.LLVMPhaseBuilder', Headers), \
+             patch.object(coordinator, 'runtime', side_effect=Stop):
+            with self.assertRaisesRegex(SDKError, 'LLVM stage OS inputs changed'):
+                coordinator.run()
 
     def test_failed_keyed_stage_restarts_only_in_development_runs(self):
         headers, _ = self.completed_headers()
