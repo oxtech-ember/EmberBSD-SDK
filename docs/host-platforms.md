@@ -46,10 +46,17 @@ different process. The parent must keep the same recorded birth identity across
 the row snapshot. Session leaders, reparented or traced rows, and changed parent
 identities do not use this proof. A stable identity read after the snapshot can
 seed the next snapshot's cache; it does not establish the current row's identity.
-If a child and its parent both disappear before their identities can be checked,
-the result remains uncertain. Heavy unrelated fork activity can therefore still
-cause a checked refusal at preflight or after a successful producer exit.
-The parent-proof regression does not establish general immunity to such churn.
+
+The parent can also be proven foreign in the same snapshot. The ps rows are
+one coherent snapshot, so a row's PPID names the process listed under that PID.
+A row whose listed parent is proven foreign was forked in that foreign session,
+and a process cannot join another existing session. The proof follows PPID
+links through any number of listed rows, with the same exclusions as above.
+It covers the new short-lived children of new short-lived parents that an
+unrelated parallel build creates between two snapshots. No earlier snapshot can
+know those parents, so without this proof a loaded host rarely produced a
+complete empty snapshot within the inspection budget. A chain that reaches PID 1,
+a traced row, an owned row or an unlisted parent remains uncertain.
 
 Both backends check their native prerequisites before a producer starts. The
 producer must retain its effective UID and session. Linux needs readable procfs

@@ -84,6 +84,8 @@ class SessionInspector:
     rows. Its build producers must retain their effective UID. Traced or
     reparented rows have no foreign-parent proof. Escaped setsid() producers,
     including a parent that escapes before observation, are outside the scope.
+    Foreign ancestry is proven within one coherent snapshot, so unrelated
+    process churn on a loaded host does not make an empty session unprovable.
     """
 
     def __init__(self, *, env=None, empty_snapshot_timeout=2):
@@ -204,7 +206,10 @@ class SessionInspector:
         known = self.known
         barrier = self.identity.now()
         rows = self._rows()
-        members, uncertain, observed = set(), False, {}
+        members, observed = set(), {}
+        # Same-UID rows proven foreign at the snapshot, and rows not yet
+        # classified, mapped to their snapshot parent and state.
+        foreign, pending = set(), {}
         failures = []
         def birth_of(pid):
             try:
@@ -242,6 +247,8 @@ class SessionInspector:
                 # even when it cannot identify the PID row in this snapshot.
                 observed[pid] = (before, actual)
                 if before <= barrier:
+                    if actual != sid:
+                        foreign.add(pid)
                     continue
             if actual == sid:
                 continue
@@ -253,10 +260,26 @@ class SessionInspector:
                     # row, whether its PID vanished or was reused afterwards.
                     # A process cannot join another existing POSIX session.
                     # PPID1 and traced rows have no such parent proof.
+                    foreign.add(pid)
                     continue
-            # Reuse after the barrier, a changed birth, or an unclassified
-            # vanished process must not turn an owned fork into false emptiness.
-            uncertain = True
+            pending[pid] = (ppid, state)
+        # The snapshot rows are coherent: a row's PPID names the process listed
+        # under that PID in the same snapshot. A row whose listed parent is
+        # proven foreign was forked in that foreign session, so it was foreign
+        # too, whether its PID vanished or was reused afterwards. This proves
+        # short-lived descendants of unrelated builds, which no earlier
+        # snapshot can know. The leader, PPID1 and traced rows keep no proof.
+        progress = True
+        while progress:
+            progress = False
+            for pid, (ppid, state) in sorted(pending.items()):
+                if pid != sid and ppid > 1 and b'X' not in state and ppid in foreign:
+                    foreign.add(pid)
+                    del pending[pid]
+                    progress = True
+        # Reuse after the barrier, a changed birth, or an unclassified
+        # vanished process must not turn an owned fork into false emptiness.
+        uncertain = bool(pending)
         self.known = observed
         self.uncertainty = failures[-1] if uncertain and failures else None
         return members, uncertain

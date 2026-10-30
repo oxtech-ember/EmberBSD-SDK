@@ -91,6 +91,41 @@ class SnapshotTests(TemporaryCase):
                     {pid: 201, ppid: parent_birth}, {pid: 7},
                     {ppid: (100, parent_sid)}), (set(), True))
 
+    def test_new_descendants_of_a_foreign_build_have_snapshot_parent_proof(self):
+        # A foreign make (20) forks a shell (30) that forks a compiler (10)
+        # between two scans. No earlier scan knows 30. Both rows are foreign
+        # because their listed parents are foreign in the same snapshot.
+        rows = {20: (5, 501, b'S'), 30: (20, 501, b'S'), 10: (30, 501, b'R')}
+        self.assertEqual(self.scan(rows, {20: 100, 30: 201}, {20: 7, 30: 7}), (set(), False))
+        # Row order does not matter: the proof reaches every listed level.
+        rows = {10: (20, 501, b'S'), 20: (30, 501, b'S'), 30: (40, 501, b'R'), 40: (5, 501, b'S')}
+        self.assertEqual(self.scan(rows, {40: 100}, {40: 7}), (set(), False))
+        self.assertEqual(self.inspector.known, {40: (100, 7)})
+
+    def test_snapshot_parent_proof_retains_identity_guards(self):
+        foreign = {20: (5, 501, b'S')}
+        cases = [
+            ({42: (20, 501, b'R')}, {20: 100}, {20: 7}),        # The leader has a foreign parent.
+            ({10: (1, 501, b'R')}, {}, {}),                      # A reparented row has no ancestry.
+            ({10: (20, 501, b'RX')}, {20: 100}, {20: 7}),       # Tracing can change the parent.
+            ({10: (20, 501, b'R')}, {20: 100}, {20: 42}),       # An owned parent proves nothing.
+            ({10: (20, 501, b'R')}, {20: 201}, {20: 7}),        # A post-barrier parent is unproven.
+            ({10: (20, 501, b'R')}, {20: [100, 101]}, {20: 7}), # A changed parent birth is unproven.
+            ({10: (30, 501, b'R'), 30: (10, 501, b'R')}, {}, {}),  # A cycle of unknown rows.
+            ({10: (30, 501, b'R')}, {}, {}),                     # The parent is not listed.
+        ]
+        for extra, births, sids in cases:
+            with self.subTest(rows=extra, births=births, sids=sids):
+                rows = {**(foreign if 20 in births else {}), **extra}
+                members, uncertain = self.scan(rows, births, sids)
+                self.assertTrue(uncertain)
+                self.assertNotIn(10, members)
+        # A foreign UID row is outside the profile and proves no descendant.
+        self.assertEqual(self.scan({20: (5, 0, b'S'), 10: (20, 501, b'R')}, {}, {}), (set(), True))
+        # A proven foreign ancestor cannot hide an owned descendant.
+        rows = {20: (5, 501, b'S'), 30: (20, 501, b'S'), 10: (30, 501, b'R')}
+        self.assertEqual(self.scan(rows, {20: 100, 10: 150}, {20: 7, 10: 42}), ({10}, False))
+
     def test_changed_birth_around_getsid_is_uncertain(self):
         self.assertEqual(self.scan({10: (20, 501, b'R')}, {10: [100, 101]}, {10: 7}), (set(), True))
 
@@ -159,6 +194,40 @@ class SnapshotTests(TemporaryCase):
             # A real Darwin host can retry during unrelated same-UID process
             # churn. The contract is an empty result, not one snapshot per call.
             self.assertGreater(len(calls), before)
+
+    @skipUnless(sys.platform == 'darwin', 'Darwin native birth-identity profile')
+    def test_real_foreign_fork_chain_is_proven_in_one_snapshot(self):
+        # Under a parallel build each snapshot lists new short-lived children
+        # of new short-lived parents. A previous snapshot cannot know those
+        # parents, so a proof that waits for a clean snapshot fails under load.
+        inspector = process.SessionInspector()
+        original = inspector._rows
+        code = 'import os,sys\nr=int(sys.argv[1]);w=int(sys.argv[2])\npid=os.fork()\nif pid==0:\n os.read(r,1);os._exit(0)\nos.write(w,str(pid).encode()+b"\\n");os.read(r,1);os.waitpid(pid,0)\n'
+        chains = []
+        def rows():
+            go_read, go_write = os.pipe()
+            pid_read, pid_write = os.pipe()
+            parent = subprocess.Popen([sys.executable, '-B', '-c', code, str(go_read), str(pid_write)],
+                                      pass_fds=(go_read, pid_write))
+            os.close(go_read)
+            os.close(pid_write)
+            try:
+                child = int(os.read(pid_read, 32))
+                result = original()
+                self.assertEqual(result[child][0], parent.pid)
+                chains.append((parent.pid, child))
+                os.write(go_write, b'xx')
+                parent.wait(timeout=5)
+                return result
+            finally:
+                os.close(go_write)
+                os.close(pid_read)
+                if parent.poll() is None:
+                    parent.kill(); parent.wait()
+        for index in range(3):
+            with patch.object(inspector, '_rows', side_effect=rows):
+                self.assertEqual(inspector.members(99999999), set())
+            self.assertEqual(len(chains), index + 1)
 
     @skipUnless(sys.platform in ('darwin', 'linux'), 'Qualified native process profile')
     def test_owned_fork_after_snapshot_is_found_before_drain(self):
