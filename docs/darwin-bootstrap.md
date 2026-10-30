@@ -5,8 +5,8 @@ It selects explicit initial tools before the final Ports prefix exists.
 It needs no tool descriptor, producer receipt, inventory hash, or independent admission.
 The current exported Ports profile owns package options, dependencies, and tool handoff.
 
-First export Ports with its normal `scripts/prepare-pkgsrc.py` command.
-Read the Ports [Darwin profile](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/darwin-bootstrap.md).
+First prepare the pkgsrc export using the Ports [Darwin profile](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/darwin-bootstrap.md).
+It describes the shared export for SDK builds and the standalone alternative.
 Use the common Clang, LLVM, and LLD recipes and their complete Darwin patches.
 The default family is `clang`. `--compiler-family gcc` selects the GCC alternative explicitly.
 
