@@ -101,6 +101,9 @@ def validate_native_binding(signature, selected_paths, shell=None):
         raise SDKError('Missing native producer binding') from exc
 
 
+# The manifest the Ports LLVM owner writes into a prepared source tree.
+LLVM_SOURCE_MANIFEST = 'llvm-source.json'
+
 class SysrootBuilder:
     TARGETS = TARGETS
     FLAGS = ('TOOLCHAIN_MISSING=yes MKGCCCMDS=no MKCOMPAT=no MKCXX=yes '
@@ -334,7 +337,8 @@ class SysrootBuilder:
                     raise SDKError('LLVM runtime producer and shared validator disagree')
                 return record
             inputs = [stage, *([base] if base else []), *self.receipt_tools(command)]
-            inputs += [self.paths[name] for name in ('llvm-source', 'llvm-runtime-original-source')
+            inputs += [os.path.join(self.paths[name], LLVM_SOURCE_MANIFEST)
+                       for name in ('llvm-source', 'llvm-runtime-original-source')
                        if name in self.paths and self.paths[name] in command]
             record = self.verification.verify(('llvm-runtime', tuple(command), tuple(required), base), inputs, check)
             if (record['llvm_version'] != self.compiler_record['version'] or
@@ -596,8 +600,10 @@ class SysrootBuilder:
 
     def verify_llvm_source(self):
         command = self.llvm_source_command
+        # The owner identifies a prepared LLVM tree by its manifest, so the
+        # manifest, not a walk of the whole tree, keys the verification.
         record = self.verification.verify(('llvm-source', tuple(command)),
-            [self.paths['llvm-source'], *self.receipt_tools(command)],
+            [os.path.join(self.paths['llvm-source'], LLVM_SOURCE_MANIFEST), *self.receipt_tools(command)],
             lambda: jsonio.loads_json(process.capture(command, env=self.environment).stdout))
         if (not isinstance(record, dict) or record.get('format') != 'emberbsd-llvm-source' or
                 record.get('version') != 1 or

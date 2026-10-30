@@ -173,8 +173,10 @@ The fingerprint covers every file, directory and symbolic link below the
 stage, the archive, the shared pkgsrc export, and the files named by the
 verifier command (Python, the owner script, patch, lzip and Git). For each
 entry it records the device, inode, mode, size, modification time and change
-time. Any difference runs the verifier again, and the builder compares its
-record with the plan as before. A fingerprint is not used when an input is
+time. A prepared LLVM source, about 150,000 entries, is keyed by its
+`llvm-source.json` manifest file alone, since its owner identifies the tree by
+that manifest. Any difference runs the verifier again, and the builder
+compares its record with the plan as before. A fingerprint is not used when an input is
 missing or contains a symbolic link out of it; such inputs are checked every
 time.
 

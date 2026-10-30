@@ -300,6 +300,20 @@ class BuilderTests(TemporaryCase):
             builder.preflight()
         self.assertFalse(Path(builder.paths['destination'], builder.MARKER).exists())
 
+    def test_llvm_source_is_keyed_by_its_manifest_not_a_tree_walk(self):
+        # The prepared LLVM tree has about 150k entries; each verification
+        # used to walk all of them for a fingerprint.
+        from emberbsd_sdk import verification_receipts
+        seen, real = [], verification_receipts._fingerprint_one
+        def recorded(value):
+            seen.append(value)
+            return real(value)
+        source = self.options['llvm-source']
+        with patch.object(verification_receipts, '_fingerprint_one', side_effect=recorded):
+            B(self.options | {'plan': True}).run()
+        self.assertIn(os.path.join(source, 'llvm-source.json'), seen)
+        self.assertNotIn(source, seen)
+
     def test_gcc_selects_common_llvm_sources_independently_of_its_runtime(self):
         builder = B(self.options | {'plan': True})
         result = builder.run()
