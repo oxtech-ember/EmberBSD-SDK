@@ -198,6 +198,69 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
         self.assertEqual(command[command.index('--runtime-stage') + 1], '/sdk/llvm-runtime-stage')
         self.assertEqual(command[command.index('--runtime-base') + 1], '/sdk/llvm-runtime-base')
 
+    def test_gettext_libtool_reads_the_selected_pkgsrc_export_stage(self):
+        from emberbsd_sdk.os_release_builder import gettext_libtool_command
+        paths = {name: '/sdk/' + name for name in (
+            'python', 'ports', 'sdk-source', 'host-prefix', 'compiler', 'tools', 'destination', 'objects')}
+        command = gettext_libtool_command(paths, '/usr/bin/git', 'aarch64', '2', 'clang', 'clang')
+        self.assertNotIn('--pkgsrc-export', command)
+        paths['pkgsrc-export'] = '/sdk/stages/pkgsrc-export/' + 'f' * 64
+        command = gettext_libtool_command(paths, '/usr/bin/git', 'aarch64', '2', 'clang', 'clang')
+        self.assertEqual(command[command.index('--pkgsrc-export') + 1], paths['pkgsrc-export'])
+
+    def test_pkgsrc_export_stage_is_selected_and_prepared_before_the_os_build(self):
+        import json, os, tempfile
+        from pathlib import Path
+        from unittest import mock
+        from emberbsd_sdk.errors import SDKError
+        from emberbsd_sdk.os_release_builder import OSReleaseBuilder
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'ports/scripts').mkdir(parents=True)
+            (root / 'sdk').mkdir()
+            (root / 'destination').mkdir()
+            builder = OSReleaseBuilder.__new__(OSReleaseBuilder)
+            builder.paths = {'ports': str(root / 'ports'), 'sdk': str(root / 'sdk'), 'python': '/host/python',
+                             'git': '/host/git', 'gettext-source': '/sdk/gettext',
+                             'destination': str(root / 'destination'), 'os': '/os'}
+            builder.native = mock.Mock(bundle_root='/host')
+            builder.receipt = {}
+            builder.sources = {'os': {'commit': 'a' * 40}}
+            calls, key = [], 'e' * 64
+            stage = str(root / 'sdk/stages/pkgsrc-export' / key)
+            replies = {'fingerprint': {'fingerprint': key}, 'prepare': {'directory': stage, 'fingerprint': key, 'reused': True}}
+            builder.capture = lambda *argv: (calls.append(argv) or json.dumps(replies[argv[3]]), '')
+            selector = mock.Mock(**{'tool.return_value': '/host/bin/gpatch'})
+            with mock.patch('emberbsd_sdk.native_toolset.load_host_prefix', return_value=selector):
+                # Ports pins without the stage script keep the per-run export.
+                builder.select_pkgsrc_export()
+                self.assertNotIn('pkgsrc-export', builder.paths)
+                self.assertEqual(calls, [])
+                (root / 'ports/scripts/pkgsrc-export-stage.py').write_text('')
+                builder.select_pkgsrc_export()
+                self.assertEqual(builder.paths['pkgsrc-export'], stage)
+                self.assertEqual(calls[-1], ('/host/python', '-B', str(root / 'ports/scripts/pkgsrc-export-stage.py'),
+                                             'fingerprint', '--git', '/host/git', '--patch', '/host/bin/gpatch'))
+                # The stage is prepared as its own step before the first OS command.
+                events = []
+                builder.git = lambda *argv: (root / 'destination/source.tar.gz').write_bytes(b'source')
+                builder.flags, builder.release_commands = [], [['/tools/bin/nbmake-evbarm', 'tools']]
+                builder.dispatch = lambda command: events.append(('dispatch', calls[-1][3]))
+                builder.verify_runtime = mock.Mock(side_effect=SDKError('stop after the commands'))
+                with self.assertRaisesRegex(SDKError, 'stop after the commands'):
+                    builder.build_payload()
+                self.assertEqual(events, [('dispatch', 'prepare')])
+                self.assertEqual(calls[-1][3:5], ('prepare', str(root / 'sdk/stages/pkgsrc-export')))
+                self.assertEqual(builder.receipt['pkgsrc_export'], {'fingerprint': key, 'reused': True})
+                self.assertTrue(os.path.isdir(root / 'sdk/stages/pkgsrc-export'))
+                # A stage for other inputs is refused.
+                replies['prepare'] = dict(replies['prepare'], directory=stage[:-1] + 'd')
+                with self.assertRaisesRegex(SDKError, 'pkgsrc export stage differs'):
+                    builder.prepare_pkgsrc_export()
+                replies['fingerprint'] = {'fingerprint': 'short'}
+                with self.assertRaisesRegex(SDKError, 'invalid pkgsrc export fingerprint'):
+                    builder.select_pkgsrc_export()
+
     def test_gettext_release_builds_foundation_before_distribution(self):
         paths = {name: '/sdk/' + name for name in (
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',

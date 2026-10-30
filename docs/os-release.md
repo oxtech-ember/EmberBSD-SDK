@@ -90,6 +90,16 @@ producers of the tools; use it for a published release. The selected mode is
 recorded as `object_mode` in the build receipt and in `build-profile.json`.
 Completed LLVM bootstrap stages are keyed by their recorded inputs (see
 `native-os-routing.md`) and are reused in both modes.
+
+A profile with `--gettext-source` builds the common cross-libtool from a
+pkgsrc export. When the selected Ports checkout has
+`scripts/pkgsrc-export-stage.py`, preflight takes that export's Git fingerprint
+and selects `stages/pkgsrc-export/FINGERPRINT` under the SDK work root. The
+stage is created or verified as its own step after the source archive and
+before the first OS build command, so it never runs alongside the compile;
+later builds with the same pkgsrc inputs reuse it, and the receipt records the
+fingerprint and whether the stage was reused as `pkgsrc_export`. The libtool
+producer only reads the stage. Older Ports checkouts keep the per-run export.
 No compilation or output writes occur in plan mode.
 The three optional driver/interpreter path options are checked aliases for the selected
 native prefix roles. The context binds the complete normalized native selection.

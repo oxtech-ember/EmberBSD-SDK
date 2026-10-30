@@ -14,7 +14,7 @@ import re
 import shutil
 
 from .errors import SDKError
-from . import inventory, jsonio, libedit, llvm_runtime, llvm_runtime_install, process, provenance
+from . import inventory, jsonio, libedit, llvm_runtime, llvm_runtime_install, native_toolset, process, provenance
 from .target_toolchain import validate_clang_identity
 from .sysroot_builder import (SysrootBuilder, native_host_flags, gettext_target_host_flags, gnu_target_host_flags, check_native_command_identity,
                               validate_native_binding)
@@ -78,6 +78,8 @@ def gettext_libtool_command(paths, git, target, jobs, compiler_family, host_fami
                '--git', git, '--target', target,
                '--jobs', jobs, '--compiler-family', compiler_family,
                '--host-compiler-family', host_family]
+    if 'pkgsrc-export' in paths:
+        command += ['--pkgsrc-export', paths['pkgsrc-export']]
     if compiler_family == 'clang' and 'llvm-runtime-stage' in paths:
         command += ['--runtime-stage', paths['llvm-runtime-stage']]
         if 'llvm-runtime-base' in paths:
@@ -425,6 +427,8 @@ class OSReleaseBuilder(SysrootBuilder):
     # Flags that only name the OS commit being built. build.sh -u rebuilds
     # what an OS source change affects; these values do not select objects.
     COMMIT_FLAGS = ('MKREPRO_TIMESTAMP=', 'EMBER_BUILD_ID=', 'BUILDINFO=')
+    # The Ports pkgsrc export stage, keyed by the Git fingerprint of its inputs.
+    PKGSRC_EXPORT_STAGE = 'scripts/pkgsrc-export-stage.py'
 
     def __init__(self, options, *, receipts=None):
         self.object_mode = options.get('object-mode', 'incremental')
@@ -461,6 +465,7 @@ class OSReleaseBuilder(SysrootBuilder):
             require_x11_profile(self.options['target'], self.compiler_family())
             check_x11_pin(self.paths['os'], self.common_source_records.get('x11'))
         self.timestamp = self.source_timestamp()
+        self.select_pkgsrc_export()
         self.product_version = source_version(Path(self.paths['os'], 'share/mk/bsd.own.mk').read_text())
         self.signature['product_version'] = self.product_version
         self.flags, self.release_commands = producer_commands(self.options['target'], self.paths, self.host_tools,
@@ -468,6 +473,32 @@ class OSReleaseBuilder(SysrootBuilder):
             self.compiler_family(), base_cxx=self.options.get('base-cxx', False))
         self.signature['flags'] = self.flags
         self.signature['release_profile'] = self.options['target']
+
+    def pkgsrc_export_command(self, action, *args):
+        patch = native_toolset.load_host_prefix(self.native.bundle_root, required_roles={'gpatch'}).tool('gpatch')
+        return [self.paths['python'], '-B', os.path.join(self.paths['ports'], self.PKGSRC_EXPORT_STAGE),
+                action, *args, '--git', self.paths['git'], '--patch', patch]
+
+    def select_pkgsrc_export(self):
+        # Only the gettext cross-libtool reads a pkgsrc export. Ports pins
+        # without the stage script keep the per-run export.
+        if ('gettext-source' not in self.paths or
+                not os.path.isfile(os.path.join(self.paths['ports'], self.PKGSRC_EXPORT_STAGE))):
+            return
+        record = jsonio.loads_json(self.capture(*self.pkgsrc_export_command('fingerprint'))[0])
+        fingerprint = record.get('fingerprint') if isinstance(record, dict) else None
+        check(full_hash(fingerprint), 'invalid pkgsrc export fingerprint')
+        self.paths['pkgsrc-export'] = os.path.join(self.paths['sdk'], 'stages', 'pkgsrc-export', fingerprint)
+
+    def prepare_pkgsrc_export(self):
+        # A separate step before the first OS build command: it never runs
+        # alongside the compile, and later builds reuse the same stage.
+        root = os.path.dirname(self.paths['pkgsrc-export'])
+        self.mkdirs(root, self.paths['sdk'])
+        result = jsonio.loads_json(self.capture(*self.pkgsrc_export_command('prepare', root))[0])
+        check(isinstance(result, dict) and result.get('directory') == self.paths['pkgsrc-export'] and
+              type(result.get('reused')) is bool, 'pkgsrc export stage differs from the selected fingerprint')
+        self.receipt['pkgsrc_export'] = dict(fingerprint=result['fingerprint'], reused=result['reused'])
 
     def preflight(self):
         check('destination' in self.options, 'OS release requires an explicit destination stage')
@@ -492,6 +523,8 @@ class OSReleaseBuilder(SysrootBuilder):
         self.source_sha256 = inventory.sha256_file(output / 'source.tar.gz')
         base_cxx = llvm_runtime_install.base_cxx_enabled(self.flags)
         imported = False
+        if 'pkgsrc-export' in self.paths:
+            self.prepare_pkgsrc_export()
         for command in self.release_commands:
             if base_cxx and command[-1] == 'checkflist':
                 self.import_base_runtime()
