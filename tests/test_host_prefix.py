@@ -3,6 +3,7 @@
 """Prefix containment and native command contracts. No compiler runs."""
 
 import os
+import struct
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -90,6 +91,25 @@ class HostPrefixTests(TemporaryCase):
     def test_missing_tool_is_not_found_in_ambient_path(self):
         with self.assertRaisesRegex(SDKError, 'missing native tool.*ninja'):
             self.fixture.load(roles=('ninja',))
+        self.assertEqual(self.fixture.queries, [])
+
+    def test_elf_linker_is_distinct_from_native_and_generic_lld(self):
+        self.fixture.host = {'os': 'Darwin', 'cpu': 'arm64'}
+        image = struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 2, 0, 0, 0, 0)
+        native = self.fixture.write('ld64.lld', image)
+        generic = self.fixture.write('lld', image)
+        elf = self.fixture.write('ld.lld', image)
+        selected = self.fixture.load(roles=('ld', 'lld', 'elf-ld'),
+                                     compiler_family='clang')
+        self.assertEqual(selected.tool('ld'), str(native))
+        self.assertEqual(selected.tool('lld'), str(generic))
+        self.assertEqual(selected.command('elf-ld'), (str(elf),))
+        elf.unlink()
+        with self.assertRaisesRegex(SDKError, 'missing native tool.*elf-ld'):
+            self.fixture.load(roles=('elf-ld',), compiler_family='clang')
+        elf.symlink_to('/bin/sh')
+        with self.assertRaisesRegex(SDKError, 'escapes host prefix'):
+            self.fixture.load(roles=('elf-ld',), compiler_family='clang')
         self.assertEqual(self.fixture.queries, [])
 
     def test_gpatch_checks_native_cpu_and_interpreter(self):

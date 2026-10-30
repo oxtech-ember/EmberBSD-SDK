@@ -43,6 +43,9 @@ Make lookup prefers `bin/bmake`, then `bin/make`.
 Shell lookup supports `sh`, `mksh`, `dash`, and `bash` inside `bin`.
 Python lookup prefers `python3.15`, then `python3` and `python`.
 LLVM selects the `llvm-` archiver, ranlib, nm, strip, and object tools.
+The `elf-ld` role explicitly selects `bin/ld.lld` for ELF firmware and cross
+targets, including on Darwin. The ordinary `ld` role still follows the native
+host ABI (`ld64.lld` on Darwin); `lld` names the generic dispatcher.
 The GCC alternative supports generic and `llvm-` archive and symbol names.
 Package queries prefer `sbin/pkg_info`, then `bin/pkg_info`.
 The `otool` role also supports `bin/llvm-otool`.
