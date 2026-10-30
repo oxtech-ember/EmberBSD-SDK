@@ -68,15 +68,17 @@ start a different session. This contract does not contain arbitrary detached
 daemons. Hosts other than Darwin and Linux require a separately qualified
 process backend.
 
-`process.ContextLocks(paths, lock_root, *, shared=False)` keeps nonblocking
-`flock` handles open until the caller closes the context. The default remains
-exclusive and is required for producers or installers. `shared=True` allows
-concurrent read-only context users and refuses while an exclusive holder owns
-the same lock. It does not authorize writes or installation; callers must
-acquire the default exclusive mode before mutation. Lock names, supplied path
-identity, lock root, no-follow regular-file checks and busy refusal are the
-same in both modes. Every user of a context must pass the same canonical path
-value and lock root.
+`process.ContextLocks(paths, lock_root, *, shared=False, wait=False)` keeps
+`flock` handles open until the caller closes the context. By default acquisition
+is nonblocking and refuses a busy context. `wait=True` waits for each lock in
+the same sorted path order; interruption closes handles already acquired. It
+does not promise a timeout, fairness or priority over later readers. The
+default remains exclusive and is required for producers or installers. `shared=True` allows
+concurrent read-only context users; an exclusive holder conflicts with it.
+It does not authorize writes or installation; callers must acquire the default exclusive mode before mutation. Lock names, supplied path
+identity, lock root and no-follow regular-file checks are the same in both
+modes. Every user of a context must pass the same canonical path value and lock
+root.
 
 `CommandError` retains the completed command's exit status or signal.
 `ProcessOwnershipError` means that producer shutdown could not be confirmed.

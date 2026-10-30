@@ -378,13 +378,16 @@ class OwnedProcessGroup:
 class ContextLocks:
     """POSIX flock handles remain open for the entire owned-producer lifetime."""
 
-    def __init__(self, paths, lock_root, *, shared=False):
+    def __init__(self, paths, lock_root, *, shared=False, wait=False):
+        if type(wait) is not bool:
+            raise SDKError('wait lock mode must be a boolean')
         if type(shared) is not bool:
             raise SDKError('shared lock mode must be a boolean')
         require_posix()
         self.paths = sorted(paths)
         self.lock_root = lock_root
         self.shared = shared
+        self.wait = wait
         self.handles = []
 
     def acquire(self):
@@ -403,7 +406,7 @@ class ContextLocks:
                     raise SDKError(f'invalid object lock: {lock}')
                 try:
                     mode = fcntl.LOCK_SH if self.shared else fcntl.LOCK_EX
-                    fcntl.flock(fd, mode | fcntl.LOCK_NB)
+                    fcntl.flock(fd, mode if self.wait else mode | fcntl.LOCK_NB)
                 except BlockingIOError as exc:
                     raise SDKError(f'object context is busy: {path}') from exc
             return self

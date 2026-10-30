@@ -4,6 +4,7 @@
 
 import hashlib
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -26,7 +27,7 @@ ready=Path(sys.argv[4]); release=Path(sys.argv[5])
 shared=mode.startswith('shared')
 hold=mode.endswith('hold')
 try:
-    kwargs={'shared': True} if shared else {}
+    kwargs={'shared': shared, 'wait': mode.startswith('wait-')}
     with ContextLocks([str(root/'context')],root,**kwargs):
         ready.write_text('acquired')
         if hold:
@@ -120,6 +121,62 @@ class ContextLockTests(TemporaryCase):
         self.finish_worker(exclusive, release)
         self.assertEqual(self.try_lock('shared-after', 'shared-try'), 'acquired')
         self.assertEqual(self.try_lock('default-after', 'exclusive-try'), 'acquired')
+
+    def test_waiting_writer_acquires_after_reader_releases(self):
+        reader, ready, release = self.start_worker('wait-reader', 'shared-hold')
+        self.assertEqual(self.worker_state(reader, ready), 'acquired')
+        writer, writer_ready, writer_release = self.start_worker('wait-writer', 'wait-hold')
+        time.sleep(.1)
+        self.assertIsNone(writer.poll())
+        self.assertFalse(writer_ready.exists())
+        self.finish_worker(reader, release)
+        self.assertEqual(self.worker_state(writer, writer_ready), 'acquired')
+        self.finish_worker(writer, writer_release)
+
+    def test_interrupted_wait_releases_earlier_sorted_lock(self):
+        first, second = (self.root / 'a', self.root / 'b')
+        ready = self.root / 'waiting.ready'
+        script = """import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from emberbsd_sdk.process import ContextLocks
+root = Path(sys.argv[2])
+Path(sys.argv[3]).touch()
+with ContextLocks([str(root/'b'), str(root/'a')], root, wait=True):
+    pass
+"""
+        with process.ContextLocks([str(second)], self.root, shared=True):
+            child = subprocess.Popen([sys.executable, '-B', '-I', '-S', '-c', script,
+                                      str(SDK_SOURCE / 'src'), str(self.root), str(ready)],
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.children.append((child, self.root / 'unused-release'))
+            deadline = time.monotonic() + 10
+            acquired = False
+            while time.monotonic() < deadline:
+                if child.poll() is not None:
+                    self.fail('waiting child exited before acquiring first lock')
+                try:
+                    with process.ContextLocks([str(first)], self.root):
+                        pass
+                except SDKError as error:
+                    if 'context is busy' not in str(error):
+                        raise
+                    acquired = True
+                    break
+                time.sleep(.01)
+            self.assertTrue(ready.exists() and acquired)
+            child.send_signal(signal.SIGINT)
+            child.communicate(timeout=10)
+            self.assertNotEqual(child.returncode, 0)
+            with process.ContextLocks([str(first)], self.root):
+                pass
+
+    def test_invalid_wait_mode_refuses_before_lock_creation(self):
+        for value in (None, 0, 1, 'true'):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                    SDKError, 'wait lock mode must be a boolean'):
+                process.ContextLocks([str(self.root / 'context')], self.root, wait=value)
+        self.assertEqual(list(self.root.glob('.prebuild-sdk-lock-*')), [])
 
     def test_invalid_shared_mode_refuses_before_lock_creation(self):
         for value in (None, 0, 1, 'true'):
