@@ -790,6 +790,32 @@ class BuilderReleaseTests(TemporaryCase):
         self.assertEqual(profile['sdk_receipt']['signature']['libedit'], prepared)
         validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
 
+    def test_release_checks_each_checkout_with_git_once(self):
+        # The start-of-run clean check is the only Git status of a release:
+        # no recheck after the build, none by libedit, none in finalization.
+        from collections import Counter
+        from emberbsd_sdk import provenance
+        from emberbsd_sdk.os_release_builder import finalize_release
+        class ClangRelease(OSReleaseBuilder):
+            compiler = llvm_fixtures.ClangBuilder.compiler
+        builder, _ = llvm_fixtures.LLVMBuilderTests.builder(
+            self, release_fixture(self.root, 'aarch64'), ClangRelease)
+        builder.options['base-cxx'] = False
+        calls, real = [], provenance.git_source
+        def counted(root, *args, **kwargs):
+            calls.append(os.path.realpath(root))
+            return real(root, *args, **kwargs)
+        with patch.object(provenance, 'git_source', side_effect=counted):
+            builder.run()
+            built = list(calls)
+            output = Path(builder.paths['destination'])
+            (output / 'build-profile.json').unlink()
+            (output / 'build-success').unlink()
+            finalize_release(output)
+        self.assertTrue(built)
+        self.assertEqual([n for n in Counter(built).values() if n != 1], [], Counter(built))
+        self.assertEqual(calls[len(built):], [])
+
     def test_finalize_inspected_release_and_repeat(self):
         from emberbsd_sdk.os_release_builder import finalize_release
         class ClangRelease(OSReleaseBuilder):

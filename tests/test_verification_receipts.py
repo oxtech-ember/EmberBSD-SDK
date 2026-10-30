@@ -59,23 +59,11 @@ class GitSourceReceiptTests(TemporaryCase):
             self.assertEqual(self.builder().source(str(self.repository), 'os'), record)
         self.assertEqual(len(calls), 2)
 
-    def test_final_recheck_finds_a_commit_or_change_during_the_run(self):
-        builder = self.builder()
-        record = builder.source(str(self.repository), 'os')
-        # A commit changes only the Git directory, not the working files.
-        self.commit('Empty', '--allow-empty')
-        # Phases reuse the start-of-run record; the final check asks Git.
-        self.assertEqual(builder.source(str(self.repository), 'os'), record)
-        moved = builder.source(str(self.repository), 'os', recheck=True)
-        self.assertNotEqual(moved['commit'], record['commit'])
-        self.write('os/sys/kern/main.c', 'int main(void) { return 1; }\n')
-        with self.assertRaisesRegex(SDKError, 'clean Git root'):
-            builder.source(str(self.repository), 'os', recheck=True)
-        self.run_git('checkout', '-q', '--', '.')
+    def test_a_failed_check_leaves_no_record_to_reuse(self):
         self.write('os/untracked.c', 'int x;\n')
+        builder = self.builder()
         with self.assertRaisesRegex(SDKError, 'clean Git root'):
-            builder.source(str(self.repository), 'os', recheck=True)
-        # A failed check leaves no record to reuse.
+            builder.source(str(self.repository), 'os')
         with self.assertRaisesRegex(SDKError, 'clean Git root'):
             builder.source(str(self.repository), 'os')
 
@@ -89,32 +77,25 @@ class GitSourceReceiptTests(TemporaryCase):
         with counted:
             phases = [self.builder(receipts=receipts) for _ in range(5)]
             records = [phase.source(str(linked), 'os') for phase in phases]
-            self.assertEqual(len(calls), 1)
-            self.assertEqual(phases[-1].source(str(linked), 'os', recheck=True), records[0])
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 1)
         self.assertTrue(all(record == records[0] for record in records))
         with open(linked / 'Makefile', 'a') as handle:
             handle.write('# edited\n')
         with self.assertRaisesRegex(SDKError, 'clean Git root'):
-            phases[0].source(str(linked), 'os', recheck=True)
+            self.builder().source(str(linked), 'os')
 
-    def test_only_the_final_build_checks_sources_with_git_after_building(self):
+    def test_no_phase_checks_sources_with_git_after_building(self):
+        # A build used to run git status of every checkout again at its end
+        # (about four minutes for the OS tree); the start record is final.
+        self.assertFalse(hasattr(SysrootBuilder, 'require_unchanged_sources'))
         receipts = RunReceipts()
         start = self.builder(receipts=receipts)
-        start.sources = {'os': start.source(str(self.repository), 'os')}
+        record = start.source(str(self.repository), 'os')
         self.write('os/untracked.c', 'int x;\n')
         calls, counted = self.counted()
         with counted:
-            for phase in ('headers', 'base'):
-                stage = self.builder(receipts=receipts)
-                stage.sources, stage.llvm_phase = start.sources, phase
-                stage.require_unchanged_sources()
-            self.assertEqual(calls, [])
-            final = self.builder(receipts=receipts)
-            final.sources, final.llvm_phase = start.sources, 'final'
-            with self.assertRaisesRegex(SDKError, 'clean Git root'):
-                final.require_unchanged_sources()
-        self.assertEqual(len(calls), 1)
+            self.assertEqual(self.builder(receipts=receipts).source(str(self.repository), 'os'), record)
+        self.assertEqual(calls, [])
 
     def test_run_once_receipt_reruns_only_on_recheck_or_failure(self):
         receipts = RunReceipts()

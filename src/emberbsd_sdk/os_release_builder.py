@@ -12,7 +12,7 @@ import re
 import shutil
 
 from .errors import SDKError
-from . import inventory, jsonio, libedit, llvm_runtime, llvm_runtime_install, native_toolset, process, provenance
+from . import inventory, jsonio, libedit, llvm_runtime, llvm_runtime_install, native_toolset, process
 from .target_toolchain import validate_clang_identity
 from .sysroot_builder import (SysrootBuilder, native_host_flags, gettext_target_host_flags, gnu_target_host_flags, check_native_command_identity,
                               validate_native_binding)
@@ -387,11 +387,9 @@ def finalize_release(destination):
               'Release has not completed inspection')
         check(all(row.get('status') == 'passed' for row in receipt['commands']),
               'Release contains a failed command')
-        for name in ('os', 'ports'):
-            check(provenance.git_source(paths[name], kind=name, git=git) == receipt['sources'][name],
-                  name + ' source differs from receipt')
-        identity = libedit.validate_source(paths['libedit-source'], ports=paths['ports'], git=git)
-        check(identity == receipt['signature']['libedit'], 'libedit source differs from receipt')
+        # The build checked its sources once and recorded them; finalization
+        # publishes the inspected outputs, identified by their hashes below.
+        identity = receipt['signature']['libedit']
         target = receipt['signature']['release_profile']
         installed = libedit.validate_installation(output / 'dest', identity, target_definition(target)['elf'])
         check(installed == receipt['libedit_installation'], 'Installed libedit differs from receipt')

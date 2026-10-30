@@ -223,26 +223,19 @@ class SysrootBuilder:
                                  env=process.git_environment(self.environment))
         return result.stdout.decode('utf-8', 'strict').strip()
 
-    def source(self, root, kind=None, *, recheck=False):
+    def source(self, root, kind=None):
         """Clean-checkout record of a Git root, checked with Git once per run.
 
         Later checks in the same run, by any phase that shares this run's
         receipts, reuse the record without asking Git or walking the tree
-        again. The final build checks with Git again at its end
-        (recheck=True), so a change made during the run fails it.
+        again. The record names the commit the run builds; the outputs are
+        identified by their own hashes, so the checkouts are not checked
+        again after the build.
         """
         environment = tuple(sorted(process.git_environment(self.environment).items()))
         key = ('git-source', os.path.realpath(root), kind, self.git_command, environment)
         return self.verification.once(
-            key, lambda: provenance.git_source(root, kind=kind, git=self.git_command, env=self.environment),
-            recheck=recheck)
-
-    def require_unchanged_sources(self):
-        """After a build: earlier phases of a run reuse the start-of-run
-        records; the final build checks the checkouts with Git again."""
-        for name, expected in self.sources.items():
-            if self.source(expected['path'], name, recheck=self.llvm_phase == 'final') != expected:
-                raise SDKError(f'{name} source changed during build')
+            key, lambda: provenance.git_source(root, kind=kind, git=self.git_command, env=self.environment))
 
     def output_path(self, value, boundary):
         path = paths.build_path(value)
@@ -1187,7 +1180,7 @@ class SysrootBuilder:
         self.require_ppp_source_support()
         self.require_gettext_source_support()
         self.sources['sdk'] = self.source(self.paths['sdk-source'], 'sdk')
-        self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command, content=False)
+        self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports_source=self.sources['ports'], content=False)
         self.common_source_records = (self.verify_common_sources()
                                       if any(name + '-source' in self.paths for name, _ in self.COMMON_SOURCES)
                                       else {})
@@ -1506,22 +1499,14 @@ class SysrootBuilder:
             self.prepare_contexts()
             self.contexts_prepared = True
             self.prepare_native_routing()
-            if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command, content=False) != self.libedit_record:
-                raise SDKError('libedit source changed before build')
-            if self.common_source_records and self.verify_common_sources() != self.common_source_records:
-                raise SDKError('common sources changed before build')
+            # Sources were identified once, at preflight, by their Git commits
+            # and preparation receipts; they are not checked again after the
+            # build. The selected tools still are.
             self.build_payload()
-            if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command, content=False) != self.libedit_record:
-                raise SDKError('libedit source changed during build')
-            if self.common_source_records and self.verify_common_sources() != self.common_source_records:
-                raise SDKError('common sources changed during build')
-            self.require_unchanged_sources()
             if self.compiler() != self.compiler_record:
                 raise SDKError('compiler changed during build')
             if self.python_identity() != self.python:
                 raise SDKError('Python or SDK implementation changed during build')
-            if self.verify_llvm_source() != self.llvm_source_record:
-                raise SDKError('common LLVM source changed during build')
             self.verify_native_toolset()
             self.receipt['outputs'] = self.inspect_payload()
             self.interrupted()

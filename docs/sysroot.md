@@ -162,40 +162,37 @@ New build records bind selected paths and commands. Historical records remain re
 ### Repeated input checks within one run
 
 A run is one `build-sysroot.py` or `build-os-release.py` invocation, including
-all of its LLVM phases. Each Ports owner verifier checks its input by content
-the first time the run needs it: every common prepared source, the common LLVM
-source and each LLVM runtime stage. The same input is checked again before and
-after every phase build. Those repeated checks compare an in-memory metadata
-fingerprint instead of reading the content again.
+all of its LLVM phases. A common prepared source is identified by the receipt
+its owner wrote when it prepared it; the SDK reads the receipt and neither runs
+the owner again nor reads the tree. The Ports owner verifier of the common LLVM
+source and of each LLVM runtime stage runs the first time the run needs it.
+Later checks of the same input compare an in-memory metadata fingerprint
+instead of running the verifier again.
 
 The fingerprint covers every file, directory and symbolic link below the
-prepared source or stage, the archive, the shared pkgsrc export, and the files
-named by the verifier command (Python, the owner script, patch, lzip and Git).
-For each entry it records the device, inode, mode, size, modification time and
-change time. Any difference runs the full content verifier again, and the
-builder compares its record with the plan as before. A write, a replacement or
-a reset of file times changes the change time, so a changed input after the
-plan still stops the run. A fingerprint is not used when an input is missing
-or contains a symbolic link out of it; such inputs are checked by content every
+stage, the archive, the shared pkgsrc export, and the files named by the
+verifier command (Python, the owner script, patch, lzip and Git). For each
+entry it records the device, inode, mode, size, modification time and change
+time. Any difference runs the verifier again, and the builder compares its
+record with the plan as before. A fingerprint is not used when an input is
+missing or contains a symbolic link out of it; such inputs are checked every
 time.
 
 The OS, Ports and SDK checkouts must be clean Git roots. Each checkout is
 checked with Git (status, index entries and commit) once per run, by the first
 phase that needs it. Later phases of the same run (the LLVM stage selection,
-the headers and base stages and the final build preflight) reuse that record
-without asking Git or walking the tree again, whether the Git directory is
-inside the checkout or elsewhere (a linked worktree). At the end of the final
-build every checkout is checked with Git again and must still equal the
-start-of-run record, so a commit, an edit or a new untracked file during the
-run stops it. On a large checkout on a slow disk each Git check costs about a
-minute; it is run twice per checkout per run, not once per phase.
+the headers and base stages, the final build and the libedit recipe check)
+reuse that record without asking Git or walking the tree again, whether the
+Git directory is inside the checkout or elsewhere (a linked worktree). The
+checkouts are not checked again after the build: the record names the commit
+the run builds, and the outputs are identified by their own hashes. Keep the
+checkouts unchanged while a build runs. Release finalization publishes the
+inspected outputs and does not inspect the checkouts.
 
 Receipts are never written to disk. A new run starts with an empty set and
-checks every input by content again, so a change between runs is found by
-content. These checks still read content every time: the compiler, Python and
-SDK implementation hashes, the native toolset selection, the libedit source and
-the output inspection. Release finalization and publication do not read these
-receipts.
+checks every input again, so a change between runs is found. The compiler,
+Python and SDK implementation hashes and the native toolset selection are also
+checked after the build, and the outputs are inspected.
 
 ## Recorded producer sequence
 
