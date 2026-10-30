@@ -751,6 +751,10 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         write(root / 'usr/lib/libc.a', archive(header(183, 1)))
         with patch.object(builder, 'verify_runtime', return_value=builder.runtime_record):
             builder.inspect_payload()
+            write(root / 'usr/lib/crt0.o', b'not an ELF')
+            with self.assertRaises(SDKError):
+                builder.inspect_payload()
+            write(root / 'usr/lib/crt0.o', header(183, 1))
             (root / 'usr/lib/libc.a').unlink()
             with self.assertRaises(SDKError):
                 builder.inspect_payload()

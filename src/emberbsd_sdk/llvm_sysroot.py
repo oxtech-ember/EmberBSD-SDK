@@ -110,8 +110,9 @@ class LLVMPhaseBuilder(SysrootBuilder):
             root = self.paths['destination']
             for name in ('crt0.o', 'crti.o', 'crtbegin.o', 'crtend.o', 'crtn.o'):
                 path = inventory.required_file(root, 'usr/lib/' + name)
-                read_elf_header(path, self.target['elf'], 1,
-                                riscv32_soft_float=self.options.get('target') == 'riscv32')
+                if read_elf_header(path, self.target['elf'], 1,
+                                   riscv32_soft_float=self.options.get('target') == 'riscv32') is None:
+                    raise SDKError('required ELF CRT missing: ' + name)
             archive = inventory.required_file(root, 'usr/lib/libc.a')
             if not read_archive(archive, self.target['elf'],
                     riscv32_soft_float=self.options.get('target') == 'riscv32')['elf_members']:
