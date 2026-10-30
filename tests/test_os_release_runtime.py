@@ -425,13 +425,13 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
             'libedit-source', 'openssl-source', 'objects', 'tools', 'destination', 'os')}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
-                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++', 'perl': '/host/perl'},
+                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++', 'perl': '/host/perl', 'python': '/host/python', 'gmake': '/host/gmake'},
                      'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
         flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
                                         '/host/sh', compiler_family='clang', base_cxx=True,
                                         native_selection=selection)
-        for flag in ('EMBER_OPENSSL_SOURCE=/sdk/openssl-source', 'HOST_PERL=/host/perl'):
+        for flag in ('EMBER_OPENSSL_SOURCE=/sdk/openssl-source', 'HOST_PERL=/host/perl', 'HOST_PYTHON=/host/python', 'HOST_GMAKE=/host/gmake'):
             self.assertIn(flag, flags)
             for command in commands:
                 self.assertIn(flag, command)

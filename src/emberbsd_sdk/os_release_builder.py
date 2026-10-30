@@ -119,8 +119,10 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
             flags.append(f'EMBER_{name.upper().replace("-", "_")}_SOURCE={paths[name + "-source"]}')
     if 'openssl-source' in paths and native_selection is not None:
         flags.append('HOST_PERL=' + native_selection['tools']['perl'])
-    if 'tdb-source' in paths and native_selection is not None:
+    if ('openssl-source' in paths or 'tdb-source' in paths) and native_selection is not None:
         flags.append('HOST_PYTHON=' + native_selection['tools']['python'])
+    if 'openssl-source' in paths and not any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'gettext-source')) and native_selection is not None:
+        flags.append('HOST_GMAKE=' + native_selection['tools']['gmake'])
     if any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'gettext-source')) and native_selection is not None:
         flags += gnu_target_host_flags(native_selection)
     if 'gettext-source' in paths and native_selection is not None:
@@ -190,8 +192,10 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
                     for name in ('libarchive', 'libevent', 'openssl', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in paths]
     if 'openssl-source' in paths and native_selection is not None:
         source_flags.append('HOST_PERL=' + native_selection['tools']['perl'])
-    if 'tdb-source' in paths and native_selection is not None:
+    if ('openssl-source' in paths or 'tdb-source' in paths) and native_selection is not None:
         source_flags.append('HOST_PYTHON=' + native_selection['tools']['python'])
+    if 'openssl-source' in paths and not any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'gettext-source')) and native_selection is not None:
+        source_flags.append('HOST_GMAKE=' + native_selection['tools']['gmake'])
     if any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'gettext-source')) and native_selection is not None:
         source_flags += gnu_target_host_flags(native_selection)
     if 'gettext-source' in paths and native_selection is not None:

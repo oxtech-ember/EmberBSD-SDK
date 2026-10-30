@@ -178,7 +178,7 @@ class SysrootBuilder:
         if self.options.get('texinfo-source') or self.options.get('rcs-source') or self.options.get('diffutils-source') or self.options.get('grep-source'):
             roles = roles | {'gmake'}
         if self.options.get('openssl-source'):
-            roles |= {'perl'}
+            roles |= {'perl', 'gmake'}
         if self.options.get('gettext-source'):
             roles |= {'gmake', 'pkg-config', 'od', 'msgfmt', 'msgmerge', 'xgettext', 'msginit', 'msgconv', 'msgfilter', 'sed'}
         return native_toolset.load_host_prefix(self.options['host-prefix'], required_roles=roles | {'python'},
@@ -1389,8 +1389,10 @@ class SysrootBuilder:
                        for name in ('libarchive', 'libevent', 'openssl', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in self.paths]
         if 'openssl-source' in self.paths:
             self.flags.append('HOST_PERL=' + self.native.tool('perl'))
-        if 'tdb-source' in self.paths:
+        if 'openssl-source' in self.paths or 'tdb-source' in self.paths:
             self.flags.append('HOST_PYTHON=' + self.native.tool('python'))
+        if 'openssl-source' in self.paths and not any(name + '-source' in self.paths for name in ('texinfo', 'rcs', 'diffutils', 'grep', 'gettext')):
+            self.flags.append('HOST_GMAKE=' + self.native.tool('gmake'))
         if any(name + '-source' in self.paths for name in ('texinfo', 'rcs', 'diffutils', 'grep', 'gettext')):
             self.flags += gnu_target_host_flags(self.native_selection)
         if 'gettext-source' in self.paths:

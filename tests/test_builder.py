@@ -35,6 +35,7 @@ def fixture_native_selection(builder):
     tools = {name: str(prefix / name) for name in ('cc', 'cxx', 'cpp', 'as', 'ld', 'python', 'sh', 'cmp', 'make', 'readlink')}
     if builder.options.get('openssl-source'):
         tools['perl'] = str(prefix / 'perl')
+        tools['gmake'] = str(prefix / 'gmake')
     if 'hostname hostname -' in Path(builder.native_contract).read_text():
         tools['hostname'] = str(prefix / 'libexec/gettext/hostname')
     return HostPrefix(str(prefix), MappingProxyType({'os': 'Darwin', 'cpu': 'arm64'}),
@@ -251,6 +252,8 @@ class BuilderTests(TemporaryCase):
         self.assertEqual(builder.common_source_records['openssl']['package'], 'security/openssl')
         self.assertIn('EMBER_OPENSSL_SOURCE=' + options['openssl-source'], builder.flags)
         self.assertIn('HOST_PERL=' + builder.native.tool('perl'), builder.flags)
+        self.assertIn('HOST_GMAKE=' + builder.native.tool('gmake'), builder.flags)
+        self.assertIn('HOST_PYTHON=' + builder.native.tool('python'), builder.flags)
         receipt = Path(options['openssl-source']) / 'receipt.json'
         record = json.loads(receipt.read_text())
         record['package'] = 'other/package'
