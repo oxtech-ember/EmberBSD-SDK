@@ -53,12 +53,17 @@ def clang_compiler(prefix, triplet, *, host, env):
     names = {'cc': 'clang', 'cxx': 'clang++', 'cpp': 'clang', 'as': 'clang',
              'ld': 'ld.lld', **{name: 'llvm-' + name for name in
                  ('ar', 'ranlib', 'nm', 'strip', 'objcopy', 'objdump', 'readelf', 'size', 'strings')}}
-    binaries = {}
+    binaries, hashes = {}, {}
     for role, name in names.items():
         selected = os.path.join(root, 'bin', name)
         _member(selected, root, host, search_path=env['PATH'])
         path = paths.canonical_existing(selected)
-        binaries[role] = dict(selected_path=selected, path=path, sha256=inventory.sha256_file(path))
+        before = paths.regular_file(path)
+        key = (path, paths.stable_identity(before))
+        if key not in hashes:
+            hashes[key] = inventory.sha256_file(path)
+        paths.verify_stable(path, before)
+        binaries[role] = dict(selected_path=selected, path=path, sha256=hashes[key])
     target = '--target=' + triplet
     linker = binaries['ld']['selected_path']
     commands = {role: [row['selected_path']] for role, row in binaries.items()}
