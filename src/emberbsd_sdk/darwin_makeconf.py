@@ -280,6 +280,15 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
         args = compiler_args[role]
         _require(isinstance(args, (list, tuple)), 'compiler arguments must be an argv sequence')
         commands[role] = [tools[role], *(_word(word) for word in args)]
+    # Clang selects objc_msgSendClass$ stubs for ld64 >= 1250; ld64.lld only
+    # synthesizes objc_msgSend$ stubs, so bind the selected lld and disable them.
+    if compiler_family == 'clang' and os.path.basename(tools.get('ld', '')) == 'ld64.lld':
+        for role in ('cc', 'cxx'):
+            extra = [word for word in ('--ld-path=' + tools['ld'], '-fno-objc-msgsend-class-selector-stubs')
+                     if not any(w == word or (word.startswith('--ld-path=') and w.startswith('--ld-path='))
+                                for w in commands[role])]
+            if extra:
+                commands[role] += ['--start-no-unused-arguments', *extra, '--end-no-unused-arguments']
     _require(all(isinstance(role, str) and ROLE.fullmatch(role) for role in source_tools),
              'invalid source tool role')
     sources = set(source_tools) | (set(compression[0].split()) - set(tools))
