@@ -5,8 +5,6 @@
 """Complete OS release orchestration on the shared SDK compiler/runtime contract."""
 
 import gzip
-import hashlib
-import subprocess
 import tempfile
 import os
 from pathlib import Path
@@ -19,7 +17,8 @@ from .target_toolchain import validate_clang_identity
 from .sysroot_builder import (SysrootBuilder, native_host_flags, gettext_target_host_flags, gnu_target_host_flags, check_native_command_identity,
                               validate_native_binding)
 from .targets import target_definition
-from .os_release import check, full_hash, tag, images, product_version, source_version, KERNEL, SYSROOT_SETS
+from .os_release import (check, full_hash, tag, images, product_version, git_source_identity, release_schema, KERNEL, SYSROOT_SETS,
+                         GCC_SCHEMAS, CLANG_SCHEMAS, BASE_CXX_SCHEMAS, SOURCE_TREE_SCHEMAS)
 
 # Optional Clang-only aarch64 X11 sets built from the prepared xsrc input.
 X11_SETS = ['xbase.tar.xz', 'xcomp.tar.xz', 'xetc.tar.xz', 'xfont.tar.xz', 'xserver.tar.xz']
@@ -210,13 +209,16 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
 
 def validate_profile(profile, sha, target):
     """Validate current and historical profiles without reading mutable tool paths."""
-    check(type(profile['schema']) is int and profile['schema'] in (2, 3, 4, 5) and profile['status'] == 'built', 'Incomplete release build profile')
+    check(type(profile['schema']) is int and profile['schema'] in GCC_SCHEMAS + CLANG_SCHEMAS and profile['status'] == 'built', 'Incomplete release build profile')
     explicit_native = profile['schema'] >= 3
     check(profile['source_commit'] == sha and full_hash(sha, 40), 'Build receipt belongs to another source')
     check(profile['source_repository'] == 'https://github.com/oxtech-ember/EmberBSD', 'Wrong source repository')
     check(profile['architecture'] == target and profile['machine'] == target_definition(target)['machine'], 'Wrong release target')
-    check(full_hash(profile['source_sha256']) and type(profile['source_timestamp']) is int and profile['source_timestamp'] > 0,
-          'Invalid source export identity')
+    if profile['schema'] in SOURCE_TREE_SCHEMAS:
+        check(full_hash(profile['source_tree'], 40) and 'source_sha256' not in profile, 'Invalid source tree identity')
+    else:
+        check(full_hash(profile['source_sha256']), 'Invalid source export identity')
+    check(type(profile['source_timestamp']) is int and profile['source_timestamp'] > 0, 'Invalid source timestamp')
     version = product_version(profile['product_version'])
     receipt = profile['sdk_receipt']
     check(receipt['format'] == 'emberbsd-os-release-build' and receipt['version'] == profile['schema'] and
@@ -234,9 +236,9 @@ def validate_profile(profile, sha, target):
           re.fullmatch(r'(?:lib|usr/lib)/libedit\.so\.3(?:\.[0-9]+)?', installed['library']) is not None,
           'Incomplete native libedit installation receipt')
     compiler = signature['compiler']
-    clang = profile['schema'] in (4, 5)
+    clang = profile['schema'] in CLANG_SCHEMAS
     base_cxx = llvm_runtime_install.base_cxx_enabled(signature.get('flags', []))
-    check(profile['schema'] != 5 or base_cxx, 'Common-runtime release must select base C++')
+    check(profile['schema'] not in BASE_CXX_SCHEMAS or base_cxx, 'Common-runtime release must select base C++')
     if clang:
         check(signature['compiler_family'] == 'clang', 'Mixed release compiler family')
         validate_clang_identity(compiler, target_definition(target)['triplet'])
@@ -302,7 +304,7 @@ def validate_profile(profile, sha, target):
         native = signature['native_toolset']
     flags, commands = producer_commands(target, paths, signature['host_tools'], sha, profile['source_timestamp'], profile['jobs'], profile['shell'], native,
                                        signature.get('compiler_family'), base_cxx=base_cxx,
-                                       install_base_cxx=profile['schema'] == 5)
+                                       install_base_cxx=profile['schema'] in BASE_CXX_SCHEMAS)
     check(signature['flags'] == flags and profile['commands'] == commands, 'Build command does not select the exact required profile')
     executed = [r for r in receipt['commands'] if r.get('scope') != 'runtime-check']
     check([r['argv'] for r in executed] == commands and all(r['status'] == 'passed' and r['exit_status'] == 0 for r in executed),
@@ -320,14 +322,14 @@ def validate_profile(profile, sha, target):
     check(receipt['outputs'] == profile['output_sha256'], 'Mixed output receipts')
 
 
-def make_release_profile(receipt, timestamp, jobs, shell, commands, source_sha256):
+def make_release_profile(receipt, timestamp, jobs, shell, commands, source_tree):
     target = receipt['signature']['release_profile']
     sha = receipt['sources']['os']['commit']
     profile = dict(schema=receipt['version'], status='built',
                    source_repository='https://github.com/oxtech-ember/EmberBSD',
                    source_commit=sha, source_timestamp=timestamp,
                    product_version=receipt['signature']['product_version'],
-                   source_sha256=source_sha256, architecture=target,
+                   source_tree=source_tree, architecture=target,
                    machine=target_definition(target)['machine'], jobs=jobs, shell=shell,
                    commands=commands, output_sha256=receipt['outputs'], sdk_receipt=receipt)
     validate_profile(profile, sha, target)
@@ -395,10 +397,11 @@ def finalize_release(destination):
         check(installed == receipt['libedit_installation'], 'Installed libedit differs from receipt')
         signature = receipt['signature']
         check(signature.get('compiler_family') == 'clang', 'Finalization requires a selected LLVM runtime')
+        check(receipt['version'] in SOURCE_TREE_SCHEMAS, 'Release receipt predates Git tree source identity; rebuild it')
         runtime = llvm_runtime.validate_stage(paths['llvm-runtime-stage'], target=target,
             required_components=llvm_runtime.FULL_COMPONENTS, base=paths.get('llvm-runtime-base'))
         check(runtime == signature['runtime']['manifest'], 'LLVM runtime differs from receipt')
-        if receipt['version'] == 5:
+        if receipt['version'] in BASE_CXX_SCHEMAS:
             llvm_runtime.validate_install(output / 'dest', runtime, target=target)
             llvm_runtime_install.validate_base_aliases(output / 'dest', runtime)
         commands = receipt['plan'][1:-1]
@@ -409,22 +412,10 @@ def finalize_release(destination):
         check(len(job_values) == 1 and len(stamps) == 1 and stamps[0].isdigit(),
               'Missing saved release job count or timestamp')
         jobs, timestamp = job_values[0], int(stamps[0])
-        source_sha256 = inventory.sha256_file(output / 'source.tar.gz')
-        proc = subprocess.Popen([git, '-C', paths['os'], 'archive', '--format=tar.gz',
-                                 receipt['sources']['os']['commit']], stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, env=process.git_environment())
-        digest = hashlib.sha256()
-        while True:
-            chunk = proc.stdout.read(1024 * 1024)
-            if not chunk:
-                break
-            digest.update(chunk)
-        proc.stdout.close()
-        error = proc.stderr.read()
-        proc.stderr.close()
-        check(proc.wait() == 0 and digest.hexdigest() == source_sha256,
-              'OS source archive differs from saved commit: ' + error.decode('utf-8', 'replace'))
-        profile = make_release_profile(receipt, timestamp, jobs, shell, commands, source_sha256)
+        # The saved commit names the source; its Git tree is the source identity.
+        source_tree, version = git_source_identity(git, paths['os'], receipt['sources']['os']['commit'])
+        check(version == signature['product_version'], 'OS product version differs from receipt')
+        profile = make_release_profile(receipt, timestamp, jobs, shell, commands, source_tree)
         for name, expected in receipt['outputs'].items():
             check(inventory.sha256_file(output / name) == expected, 'Release output changed: ' + name)
         publish_release_profile(output, profile)
@@ -477,7 +468,8 @@ class OSReleaseBuilder(SysrootBuilder):
             check_x11_pin(self.paths['os'], self.common_source_records.get('x11'))
         self.timestamp = self.source_timestamp()
         self.select_pkgsrc_export()
-        self.product_version = source_version(Path(self.paths['os'], 'share/mk/bsd.own.mk').read_text())
+        self.source_tree, self.product_version = git_source_identity(
+            self.git_command, self.paths['os'], self.sources['os']['commit'], self.environment)
         self.signature['product_version'] = self.product_version
         self.flags, self.release_commands = producer_commands(self.options['target'], self.paths, self.host_tools,
             self.sources['os']['commit'], self.timestamp, self.options['jobs'], self.shell, self.native_selection,
@@ -520,7 +512,7 @@ class OSReleaseBuilder(SysrootBuilder):
                   'fresh object mode needs a new or empty objects directory: ' + self.paths['objects'])
             check(self.contexts['tools'] is None or self.tools_new_in_run,
                   'fresh object mode needs a new or empty tools directory: ' + self.paths['tools'])
-        version = (5 if llvm_runtime_install.base_cxx_enabled(self.flags) else 4) if self.compiler_family() == 'clang' else 3
+        version = release_schema(self.compiler_family() == 'clang', llvm_runtime_install.base_cxx_enabled(self.flags))
         self.receipt.update(format='emberbsd-os-release-build', version=version, scope='os-release-build',
                             previous_contexts=self.contexts, object_mode=self.object_mode, plan=[self.runtime_command, *self.release_commands, self.runtime_command],
                             not_checked=['target execution', 'VM installation', 'physical hardware', 'binary publication'])
@@ -529,9 +521,7 @@ class OSReleaseBuilder(SysrootBuilder):
 
     def build_payload(self):
         output = Path(self.paths['destination'])
-        self.git(self.paths['os'], 'archive', '--format=tar.gz',
-                 '-o', str(output / 'source.tar.gz'), self.sources['os']['commit'])
-        self.source_sha256 = inventory.sha256_file(output / 'source.tar.gz')
+        self.payload_built = True
         base_cxx = llvm_runtime_install.base_cxx_enabled(self.flags)
         imported = False
         if 'pkgsrc-export' in self.paths:
@@ -586,10 +576,10 @@ class OSReleaseBuilder(SysrootBuilder):
         if self.options.get('plan') or receipt['format'] != 'emberbsd-os-release-build':
             return receipt
         # The coordinator's final child already wrote and checked this profile.
-        if not hasattr(self, 'source_sha256'):
+        if not getattr(self, 'payload_built', False):
             return receipt
         output = Path(self.paths['destination'])
         profile = make_release_profile(receipt, self.timestamp, self.options['jobs'], self.shell,
-                                       self.release_commands, self.source_sha256)
+                                       self.release_commands, self.source_tree)
         publish_release_profile(output, profile)
         return receipt

@@ -81,8 +81,9 @@ first runtime from OS headers, then builds libc/CRT and the full C++ runtime.
 It never imports the GCC runtime or chooses GCC automatically. Use
 `--compiler-family gcc` only when intentionally building the GCC alternative.
 Clang sysroot receipts use version 3 and transfer manifests version 2. OS release
-profiles use version 5 by default when the common C++ runtime is installed in
-the base; an explicit `--no-base-cxx` selects the version 4 build-only layout.
+profiles use version 8 by default when the common C++ runtime is installed in
+the base; an explicit `--no-base-cxx` selects the version 7 build-only layout.
+Versions 4 and 5 are the same layouts with a git-archive source identity.
 Historical GCC schemas retain their original meaning.
 These format checks establish input consistency, not target execution or ABI
 acceptance; the completed build still needs the relevant target checks.

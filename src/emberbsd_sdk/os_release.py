@@ -28,7 +28,17 @@ VM_CHECKS = ('local_install https_install first_boot_without_media reboot_persis
 SYSROOT_SETS = ['base.tar.xz', 'comp.tar.xz']
 KERNEL = 'netbsd-EMBER64.gz'
 EVIDENCE = 'target-acceptance.log'
-SYSROOT_REQUIRED = SYSROOT_SETS + [KERNEL, 'build-profile.json', 'source-export.sha256', 'release-notes.md']
+SYSROOT_REQUIRED = SYSROOT_SETS + [KERNEL, 'build-profile.json', 'release-notes.md']
+# Build profile schemas: GCC 2, 3 and 6; Clang 4 and 7; Clang with the common
+# C++ runtime in base 5 and 8. Schemas 6-8 name the OS source by its Git
+# commit and tree; older ones carry the hash of a git-archive export.
+GCC_SCHEMAS = (2, 3, 6)
+CLANG_SCHEMAS = (4, 5, 7, 8)
+BASE_CXX_SCHEMAS = (5, 8)
+SOURCE_TREE_SCHEMAS = (6, 7, 8)
+SOURCE_TREE_MANIFESTS = ('emberbsd.aarch64.sysroot.v4', 'emberbsd.amd64.release.v4')
+# Historical kits also carry the hash of the removed source export.
+SOURCE_EXPORT = 'source-export.sha256'
 SYSROOT_CHECKS = 'libc_aliases cross_c11 cross_cxx20 target_c11 target_cxx20 base_loader_smoke fork_cas'.split()
 SYSROOT_V2_CHECKS = SYSROOT_CHECKS + ['libm_valid', 'setjmp_valid']
 # Historical schema 1 is an immutable receipt format, not a current build profile.
@@ -55,6 +65,19 @@ def command(*argv):
 
 def git(*argv):
     return capture(['git', *(str(arg) for arg in argv)], env=git_environment()).stdout
+
+
+def release_schema(clang, base_cxx):
+    return (8 if base_cxx else 7) if clang else 6
+
+
+def git_source_identity(git_command, root, commit, env=None):
+    """The Git tree and canonical product version of an OS commit."""
+    def invoke(*args):
+        return capture([git_command, '-C', str(root), *args], env=git_environment(env)).stdout.decode('utf-8', 'strict')
+    tree = invoke('rev-parse', '--verify', commit + '^{tree}').strip()
+    check(full_hash(tree, 40), 'Invalid OS source tree')
+    return tree, source_version(invoke('show', commit + ':share/mk/bsd.own.mk'))
 
 
 def tag(sha, profile):
@@ -85,6 +108,10 @@ def images(version):
 
 
 def build_version(build, profile):
+    if profile.get('schema') in SOURCE_TREE_SCHEMAS:
+        tree, version = git_source_identity('git', profile['sdk_receipt']['paths']['os'], profile['source_commit'])
+        check(tree == profile['source_tree'], 'OS source tree differs from build profile')
+        return version
     archive = build / 'source.tar.gz'
     if archive.exists():
         check(sha256_file(archive) == profile['source_sha256'], 'Source export differs')
@@ -235,7 +262,7 @@ def require_qualification(manifest, profile):
                   full_hash(q.get('ports_source_commit'), 40) and
                   full_hash(q.get('test_source_inventory_sha256'), 64),
                   'Extended target corpus lacks source provenance')
-        if manifest['build_profile'].get('schema') in (4, 5):
+        if manifest['build_profile'].get('schema') in CLANG_SCHEMAS:
             version = manifest['build_profile']['sdk_receipt']['signature']['compiler']['version']
             check(q.get('consumer_compiler_family') == 'clang' and
                   isinstance(q.get('consumer_compiler'), str) and 'clang' in q['consumer_compiler'].lower() and
@@ -261,13 +288,16 @@ def _verify(directory, profile):
     check(m['repository'] == REPOSITORY and m['release_tag'] == tag(sha, profile), 'Wrong repository or release tag')
     version = product_version(m['product_version'])
     check(m['base_version'] == '11.0', 'Wrong base version')
+    tree_kit = m['schema'] in SOURCE_TREE_MANIFESTS
     llvm = m['schema'] in ('emberbsd.aarch64.sysroot.v3', 'emberbsd.amd64.release.v3')
-    modern = llvm or m['schema'] in ('emberbsd.aarch64.sysroot.v2', 'emberbsd.amd64.release.v2')
+    modern = tree_kit or llvm or m['schema'] in ('emberbsd.aarch64.sysroot.v2', 'emberbsd.amd64.release.v2')
+    if tree_kit:
+        check(full_hash(m['source_tree'], 40) and 'source_archive_sha256' not in m, 'Missing source tree identity')
     if profile == 'amd64':
         check(((type(m['schema']) is int and m['schema'] == 1) or m['schema'] in
-               ('emberbsd.amd64.release.v2', 'emberbsd.amd64.release.v3')) and m['architecture'] == 'amd64', 'Wrong installation identity')
+               ('emberbsd.amd64.release.v2', 'emberbsd.amd64.release.v3', 'emberbsd.amd64.release.v4')) and m['architecture'] == 'amd64', 'Wrong installation identity')
         check([m['profile'][n] for n in ('MKX11', 'MKRUMP', 'MKGCCCMDS', 'KERNEL_SETS')] == ['no', 'no', 'no', 'GENERIC'], 'Wrong release profile')
-        check(full_hash(m['source_archive_sha256']), 'Missing source archive hash')
+        check(tree_kit or full_hash(m['source_archive_sha256']), 'Missing source archive hash')
         for name in ('image', 'kernel', 'modules', 'base'):
             check(m['components'][name]['source_commit'] == sha, f'Mixed {name} source')
         if 'image_checker' in m:
@@ -278,12 +308,13 @@ def _verify(directory, profile):
         check(kernel['buildinfo'] == f'EmberBSD:{sha}' and full_hash(kernel['sha256']), 'Invalid kernel identity')
         required = images(version) + ['release-notes.md'] + [n + '.tar.xz' for n in SETS]
         if modern:
-            required += ['build-profile.json', 'source-export.sha256']
+            required += ['build-profile.json'] + ([] if tree_kit else [SOURCE_EXPORT])
         allowed = required + [n + '.tar.xz' for n in OPTIONAL_SETS] + ['SHA512', 'qualification.json']
     else:
-        check(m['schema'] in ('emberbsd.aarch64.sysroot.v1', 'emberbsd.aarch64.sysroot.v2', 'emberbsd.aarch64.sysroot.v3') and
+        check(m['schema'] in ('emberbsd.aarch64.sysroot.v1', 'emberbsd.aarch64.sysroot.v2', 'emberbsd.aarch64.sysroot.v3',
+                              'emberbsd.aarch64.sysroot.v4') and
               m['architecture'] == 'aarch64' and m['machine'] == 'evbarm', 'Wrong sysroot identity')
-        required = SYSROOT_REQUIRED
+        required = SYSROOT_REQUIRED + ([] if tree_kit else [SOURCE_EXPORT])
         allowed = required + ['qualification.json', 'build-run.json', EVIDENCE]
     files = m['files']
     check(isinstance(files, list) and all(isinstance(f, dict) for f in files), 'Invalid asset list')
@@ -299,10 +330,13 @@ def _verify(directory, profile):
     check((directory / 'SHA256').read_text() == checksum_text(directory, names + ['manifest.json']), 'Checksum manifest changed')
     if profile != 'amd64' or modern:
         p = read_json(directory / 'build-profile.json')
-        check(type(p['schema']) is int and p['schema'] in ((4, 5) if llvm else (2, 3) if modern else (1,)), 'Manifest and build profile schema differ')
+        check(type(p['schema']) is int and p['schema'] in (SOURCE_TREE_SCHEMAS if tree_kit else (4, 5) if llvm else (2, 3) if modern else (1,)), 'Manifest and build profile schema differ')
         profile_check(p, sha, version, 'amd64' if profile == 'amd64' else 'aarch64')
-        check(m['source_archive_sha256'] == p['source_sha256'] and m['build_profile'] == p, 'Source/build receipt changed')
-        check((directory / 'source-export.sha256').read_text() == p['source_sha256'] + '  source.tar.gz\n', 'Source export hash receipt changed')
+        if tree_kit:
+            check(m['source_tree'] == p['source_tree'] and m['build_profile'] == p, 'Source/build receipt changed')
+        else:
+            check(m['source_archive_sha256'] == p['source_sha256'] and m['build_profile'] == p, 'Source/build receipt changed')
+            check((directory / SOURCE_EXPORT).read_text() == p['source_sha256'] + '  source.tar.gz\n', 'Source export hash receipt changed')
         if profile != 'amd64':
             for name in SYSROOT_SETS:
                 check(p['output_sha256']['release/evbarm-aarch64/binary/sets/' + name] == sha256_file(directory / name), 'Set belongs to another build: ' + name)
@@ -359,8 +393,11 @@ def prepare_sysroot(build, directory, qualification):
         shutil.copyfile(build / 'release/evbarm-aarch64/binary/sets' / name, directory / name)
     for name in (KERNEL, 'build-profile.json'):
         shutil.copyfile(build / name, directory / name)
-    (directory / 'source-export.sha256').write_text(p['source_sha256'] + '  source.tar.gz\n')
+    tree_kit = p.get('schema') in SOURCE_TREE_SCHEMAS
     names = list(SYSROOT_REQUIRED)
+    if not tree_kit:
+        (directory / SOURCE_EXPORT).write_text(p['source_sha256'] + '  source.tar.gz\n')
+        names.append(SOURCE_EXPORT)
     if (build / 'build-run.json').is_file():
         shutil.copyfile(build / 'build-run.json', directory / 'build-run.json')
         names.append('build-run.json')
@@ -368,21 +405,24 @@ def prepare_sysroot(build, directory, qualification):
         write_json(directory / 'qualification.json', q)
         shutil.copyfile(evidence, directory / EVIDENCE)
         names += ['qualification.json', EVIDENCE]
-    modern = p.get('schema') in (2, 3, 4, 5)
-    llvm = p.get('schema') in (4, 5)
+    modern = p.get('schema') in GCC_SCHEMAS + CLANG_SCHEMAS
+    llvm = p.get('schema') in CLANG_SCHEMAS
     compiler = ('the common Clang/LLVM compiler and runtime' if llvm else
                 'the verified common GCC16 and runtime' if modern else 'the historical in-tree GCC12.5 bootstrap')
     (directory / 'release-notes.md').write_text(
         f'# EmberBSD {version} AArch64 development sysroot\n\nSource: `{sha}`. Compatibility base: NetBSD 11.0.\n'
         f'The complete base and comp sets use {compiler}.\n'
         'Native bootstrap compiler commands are excluded. Build commands and hashes are in build-profile.json.\n'
-        'source-export.sha256 identifies the git archive, not the GitHub generated source archive.\n'
-        f'Source: https://github.com/{REPOSITORY}/tree/{sha}.\n\n'
+        + ('build-profile.json names the OS source by its Git commit and tree hash.\n' if tree_kit else
+           'source-export.sha256 identifies the git archive, not the GitHub generated source archive.\n')
+        + f'Source: https://github.com/{REPOSITORY}/tree/{sha}.\n\n'
         + ('The bound target receipt records finite C/C++ and libc checks with the selected compiler.\n' if q else 'No target qualification receipt is bound to this kit.\n')
         + 'This kit does not qualify installation media or physical hardware. Firmware and source licences remain in the sets.\n'
         'Verify SHA256 and provenance before extracting into an empty sysroot. Do not install over a live system.\n')
-    m = dict(schema='emberbsd.aarch64.sysroot.v3' if llvm else 'emberbsd.aarch64.sysroot.v2' if modern else 'emberbsd.aarch64.sysroot.v1', repository=REPOSITORY,
-             source_commit=sha, release_tag=tag(sha, 'aarch64-sysroot'), source_archive_sha256=p['source_sha256'],
+    m = dict(schema=('emberbsd.aarch64.sysroot.v4' if tree_kit else 'emberbsd.aarch64.sysroot.v3' if llvm else
+                     'emberbsd.aarch64.sysroot.v2' if modern else 'emberbsd.aarch64.sysroot.v1'), repository=REPOSITORY,
+             source_commit=sha, release_tag=tag(sha, 'aarch64-sysroot'),
+             **(dict(source_tree=p['source_tree']) if tree_kit else dict(source_archive_sha256=p['source_sha256'])),
              architecture='aarch64', machine='evbarm', product_version=version, base_version='11.0', build_profile=p,
              files=[asset(directory, n) for n in names], qualification=q, hardware_qualification='not-tested')
     seal(directory, m)
@@ -443,13 +483,14 @@ def prepare_amd64(build, directory, qualification, os_source):
         write_json(directory / 'qualification.json', q)
     if p:
         profile_check(p, sha, version, 'amd64')
-        check(sha256_file(build / 'source.tar.gz') == p['source_sha256'], 'Source export differs')
         shutil.copyfile(build / 'build-profile.json', directory / 'build-profile.json')
-        (directory / 'source-export.sha256').write_text(p['source_sha256'] + '  source.tar.gz\n')
+        if p.get('schema') not in SOURCE_TREE_SCHEMAS:
+            check(sha256_file(build / 'source.tar.gz') == p['source_sha256'], 'Source export differs')
+            (directory / SOURCE_EXPORT).write_text(p['source_sha256'] + '  source.tar.gz\n')
     (directory / 'release-notes.md').write_text(
         f'# EmberBSD {version} amd64 UEFI installation candidate\n\nSource: `{sha}`. Compatibility base: NetBSD 11.0.\n'
         'Profile: no X11, no rump, GENERIC kernel and matching modules/base. Native bootstrap compiler commands are excluded.\n'
-        + ('The build uses the common Clang/LLVM compiler and runtime.\n' if p and p.get('schema') in (4, 5) else
+        + ('The build uses the common Clang/LLVM compiler and runtime.\n' if p and p.get('schema') in CLANG_SCHEMAS else
            'The build uses the common verified GCC16 compiler and runtime.\n' if p else
            'This historical build uses the in-tree bootstrap compiler; it does not qualify a GCC16 userland.\n')
         + ('The bound VM receipt records installation, persistence and TLS rejection checks.\n' if q else 'No VM qualification receipt is bound to this kit.\n')
@@ -460,8 +501,11 @@ def prepare_amd64(build, directory, qualification, os_source):
         'Source archives are not in this binary channel.\n')
     components = {n: {'source_commit': sha} for n in ('image', 'kernel', 'modules', 'base')}
     components['kernel'].update(buildinfo=buildinfo, sha256=kernel_sha)
-    m = dict(schema='emberbsd.amd64.release.v3' if p and p.get('schema') in (4, 5) else 'emberbsd.amd64.release.v2' if p else 1, repository=REPOSITORY, source_commit=sha,
-             source_archive_sha256=p['source_sha256'] if p else sha256_file(build / 'source.tar'),
+    tree_kit = bool(p) and p.get('schema') in SOURCE_TREE_SCHEMAS
+    m = dict(schema=('emberbsd.amd64.release.v4' if tree_kit else 'emberbsd.amd64.release.v3' if p and p.get('schema') in (4, 5) else
+                     'emberbsd.amd64.release.v2' if p else 1), repository=REPOSITORY, source_commit=sha,
+             **(dict(source_tree=p['source_tree']) if tree_kit else
+                dict(source_archive_sha256=p['source_sha256'] if p else sha256_file(build / 'source.tar'))),
              release_tag=tag(sha, 'amd64'), architecture='amd64', product_version=version, base_version='11.0',
              profile=dict(MKX11='no', MKRUMP='no', MKGCCCMDS='no', KERNEL_SETS='GENERIC', BUILD_KERNELS='INSTALL'),
              components=components, files=[asset(directory, n) for n in sorted(os.listdir(directory))], qualification=q,

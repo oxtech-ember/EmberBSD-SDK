@@ -243,7 +243,6 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
                                              'fingerprint', '--git', '/host/git', '--patch', '/host/bin/gpatch'))
                 # The stage is prepared as its own step before the first OS command.
                 events = []
-                builder.git = lambda *argv: (root / 'destination/source.tar.gz').write_bytes(b'source')
                 builder.flags, builder.release_commands = [], [['/tools/bin/nbmake-evbarm', 'tools']]
                 builder.dispatch = lambda command: events.append(('dispatch', calls[-1][3]))
                 builder.verify_runtime = mock.Mock(side_effect=SDKError('stop after the commands'))

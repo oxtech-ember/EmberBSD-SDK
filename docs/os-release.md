@@ -37,8 +37,8 @@ builds headers, the initial runtime, C base and full C++ runtime before the
 release. An explicitly supplied full stage is checked against these same inputs. When selecting a full stage directly, also pass `--llvm-bootstrap-stage` for the exact bootstrap stage recorded by that full runtime. For a separate recorded foundation, select `--llvm-runtime-base` as described in [the runtime guide](llvm-runtime.md). The OS embeds its checked static libunwind archive into libc; the full runtime remains the application runtime.
 
 When the selected OS consumes the common Ports OpenSSL source, pass the
-prepared tree with `--openssl-source`. The optional input is verified by its
-Ports owner and recorded with the other common source inputs; it is forwarded
+prepared tree with `--openssl-source`. The optional input is identified by its
+preparation receipt and recorded with the other common source inputs; it is forwarded
 to the OS as `EMBER_OPENSSL_SOURCE`. An older OS build can omit it.
 
 Select `aarch64-sysroot` for complete base/comp sets and an EMBER64 test kernel.
@@ -47,9 +47,19 @@ The product version comes from canonical `EMBER_VERSION` in the pinned
 `share/mk/bsd.own.mk`. Release tags set this source value before a build.
 Images, manifests, notes and publication titles use that version. The compatibility
 base remains 11.0. Verification uses each kit's recorded version and does not
-rewrite historical receipts. Preparation reads the pinned source archive. Only
-historical AArch64 receipts with agreeing explicit version overrides can be
-prepared after that archive is removed.
+rewrite historical receipts. A build reads the version with
+`git show COMMIT:share/mk/bsd.own.mk`; preparation reads it again from the
+recorded OS checkout and checks that commit's Git tree. Profiles before schema 6
+read it from their git-archive export instead. Of those, only historical AArch64
+receipts with agreeing explicit version overrides can be prepared after that
+archive is removed.
+
+The OS source of a build is its commit and the commit's Git tree
+(`git rev-parse COMMIT^{tree}`), recorded as `source_tree` in build profile
+schemas 6, 7 and 8 and in the version 4 kit manifests. The builder writes no
+`source.tar.gz`, and a kit has no `source-export.sha256`; the published outputs
+keep their SHA256 hashes. Older kits keep their `source_archive_sha256` and
+`source-export.sha256` and remain verifiable.
 
 Canonical version behavior follows OS commit
 `70368a97ed5be79e3594d9f596e0e57b8a781593`.
@@ -100,8 +110,8 @@ A profile with `--gettext-source` builds the common cross-libtool from a
 pkgsrc export. When the selected Ports checkout has
 `scripts/pkgsrc-export-stage.py`, preflight takes that export's Git fingerprint
 and selects `stages/pkgsrc-export/FINGERPRINT` under the SDK work root. The
-stage is created or verified as its own step after the source archive and
-before the first OS build command, so it never runs alongside the compile;
+stage is created or verified as its own step before the first OS build
+command, so it never runs alongside the compile;
 later builds with the same pkgsrc inputs reuse it, and the receipt records the
 fingerprint and whether the stage was reused as `pkgsrc_export`. The libtool
 producer only reads the stage. Older Ports checkouts keep the per-run export.
@@ -111,9 +121,9 @@ native prefix roles. The context binds the complete normalized native selection.
 Only native `HOST_*` flags receive its ABI arguments. Saved profile verification
 checks command and selection consistency; it does not requalify local tools.
 
-The historical Clang schema 4 AArch64 sequence uses `tools kernel=EMBER64`,
+The Clang schema 7 (formerly 4) AArch64 sequence uses `tools kernel=EMBER64`,
 then `distribution sets`; amd64 runs `tools release`, the OS UEFI
-`install_image` target, then `iso-image`. Schema 5 is selected only when the
+`install_image` target, then `iso-image`. Schema 8 (formerly 5) is selected only when the
 Clang release enables the common base C++ runtime. It separates distribution,
 imports that runtime and its derived base aliases into `dest`, runs the normal
 sets check, then builds sets from the SDK-derived overlay. On amd64 the
@@ -127,25 +137,26 @@ Both Clang profiles omit native bootstrap compiler commands, X11 and rump.
 The `aarch64-sysroot` release build can add the X11 sets with `--x11-source`
 (see `native-os-routing.md`); published sysroot manifests still require
 `MKX11=no`.
-The outer AArch64 sysroot and amd64 release manifests remain version 3 for
-either Clang build-profile schema. The explicit GCC alternative retains build
-profile schema 3 and the version 2 kit wrapper. For GCC and historical Clang
-schema 4, select one matching Ports runtime provider separately and check image
+New AArch64 sysroot and amd64 release manifests are version 4 for every
+build-profile schema that names its source by Git tree. The explicit GCC
+alternative uses build profile schema 6. For GCC and Clang schema 7 (or 4),
+select one matching Ports runtime provider separately and check image
 dependency closure before VM qualification; those release kits do not compose
-that runtime package. Clang schema 5 includes the selected common C++ runtime
-in the base set.
+that runtime package. Clang schema 8 (or 5) includes the selected common C++
+runtime in the base set.
 
 The producer records exact commands, source commits, compiler/runtime
-hashes, source archive and output hashes. It sanitizes inherited make controls.
+hashes, the OS source tree and output hashes. It sanitizes inherited make controls.
 The common SDK log and incomplete receipt remain on failure. `build-success`
 appears only after all producer operations and receipt checks succeed.
 A build result is not a VM, hardware or publication qualification.
 
-Clang release profiles use schema 4 for the historical build-only runtime
-command sequence, or schema 5 when the common runtime is installed into the
-base set through the SDK-derived overlay. Both retain version 3 outer kit
-manifests. The explicit GCC alternative retains schema 3 and version 2
-manifests. Portable verification binds the native selection,
+Clang release profiles use schema 7 for the build-only runtime command
+sequence, or schema 8 when the common runtime is installed into the base set
+through the SDK-derived overlay. The explicit GCC alternative uses schema 6.
+All three use version 4 outer kit manifests. Historical Clang schemas 4 and 5
+(version 3 manifests) and GCC schemas 2 and 3 (version 2 manifests) differ only
+in their git-archive source identity and remain verifiable. Portable verification binds the native selection,
 input pins, tool paths, ABI flags, and environment. It does not read the original compiler files.
 Historical schema 2 profiles retain their original command contract and acquire no native-toolset qualification.
 For GCC, add `--compiler-family gcc`, select the GCC16 cross prefix and runtime
@@ -172,7 +183,7 @@ checker independently from the build source. The checker must match its tracked
 HEAD bytes. New manifests record its commit and SHA256 separately; they never
 replace the producer's source identity. This permits a current Python checker
 to inspect a preserved historical build. The tool defaults to the recorded OS
-checkout for a schema 2 or 3 build. Historical exported trees need `--os-source`.
+checkout for a build with a schema 2 or later profile. Historical exported trees need `--os-source`.
 
 The amd64 kit takes sets from the actual ISO and verifies its embedded SHA512.
 It compares the boot and installed kernel bytes and checks USB gzip integrity.
@@ -237,7 +248,7 @@ verifiable without rewriting their receipts. Their bootstrap GCC12 provenance
 stays explicit. It is not evidence for the current compiler/runtime profiles.
 Historical schema 2 receipts retain their source, compiler, runtime and command
 checks. They do not establish native toolset qualification. New Clang plans use
-schema 4 and bind the selected native prefix. Builds use the OS native command mapping. Existing immutable tags must not
+schema 7 or 8 and bind the selected native prefix. Builds use the OS native command mapping. Existing immutable tags must not
 be repurposed.
 
 Run `python3 -B -m unittest discover -s tests -p 'test_*.py'`.

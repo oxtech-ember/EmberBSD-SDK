@@ -555,13 +555,13 @@ class BuilderReleaseTests(TemporaryCase):
             receipt = builder.run()
         output = Path(builder.paths['destination'])
         profile = jsonio.read_json(output / 'build-profile.json')
-        self.assertEqual((profile['schema'], receipt['version']), (5, 5))
+        self.assertEqual((profile['schema'], receipt['version']), (8, 8))
         self.assertNotEqual(receipt['sources']['os']['commit'], runtime.record['base']['os_revision'])
         self.assertIn('MKLIBCXX=yes', receipt['signature']['flags'])
         validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
         manifest = kit.prepare(output, self.root / 'common-runtime-kit', 'aarch64-sysroot')
-        self.assertEqual(manifest['schema'], 'emberbsd.aarch64.sysroot.v3')
-        self.assertEqual(manifest['build_profile']['schema'], 5)
+        self.assertEqual(manifest['schema'], 'emberbsd.aarch64.sysroot.v4')
+        self.assertEqual(manifest['build_profile']['schema'], 8)
         self.assertTrue((output / 'dest/usr/include/c++').is_dir())
         observed = [json.loads(line) for line in (output / 'observed-argv.jsonl').read_text().splitlines()]
         self.assertEqual([row[-1] for row in observed],
@@ -580,7 +580,13 @@ class BuilderReleaseTests(TemporaryCase):
 
         wrong_manifest = self.root / 'wrong-outer-schema'
         shutil.copytree(self.root / 'common-runtime-kit', wrong_manifest)
-        reseal(wrong_manifest, lambda m: m.update(schema='emberbsd.aarch64.sysroot.v2'))
+        # A complete git-archive era wrapper around a Git-tree profile.
+        (wrong_manifest / kit.SOURCE_EXPORT).write_text('0' * 64 + '  source.tar.gz\n')
+        def older_wrapper(m):
+            m.update(schema='emberbsd.aarch64.sysroot.v2', source_archive_sha256='0' * 64)
+            del m['source_tree']
+            m['files'].append(dict(name=kit.SOURCE_EXPORT))
+        reseal(wrong_manifest, older_wrapper)
         with self.assertRaisesRegex(SDKError, 'Manifest and build profile schema differ'):
             kit.verify(wrong_manifest, 'aarch64-sysroot')
 
@@ -622,18 +628,18 @@ class BuilderReleaseTests(TemporaryCase):
             receipt = builder.run()
         output = Path(builder.paths['destination'])
         profile = jsonio.read_json(output / 'build-profile.json')
-        self.assertEqual((profile['schema'], receipt['version']), (5, 5))
+        self.assertEqual((profile['schema'], receipt['version']), (8, 8))
         validate_profile(profile, receipt['sources']['os']['commit'], 'amd64')
         observed = [json.loads(line) for line in (output / 'observed-argv.jsonl').read_text().splitlines()]
         self.assertEqual([row[-1] for row in observed],
                          ['distribution', 'checkflist', 'release', 'install_image', 'iso-image'])
         manifest = kit.prepare(output, self.root / 'common-runtime-amd64-kit', 'amd64',
                                os_source=Path(builder.paths['os']))
-        self.assertEqual(manifest['schema'], 'emberbsd.amd64.release.v3')
-        self.assertEqual(manifest['build_profile']['schema'], 5)
+        self.assertEqual(manifest['schema'], 'emberbsd.amd64.release.v4')
+        self.assertEqual(manifest['build_profile']['schema'], 8)
         self.assertTrue((output / 'dest/usr/include/c++').is_dir())
 
-    def test_historical_schema4_base_cxx_selection_keeps_old_commands(self):
+    def test_clang_schema7_base_cxx_selection_keeps_old_commands(self):
         class ClangRelease(OSReleaseBuilder):
             compiler = llvm_fixtures.ClangBuilder.compiler
         builder, _ = llvm_fixtures.LLVMBuilderTests.builder(
@@ -654,7 +660,7 @@ class BuilderReleaseTests(TemporaryCase):
         profile['sdk_receipt']['commands'] = [
             dict(scope='producer', argv=argv, status='passed', exit_status=0)
             for argv in commands]
-        self.assertEqual((profile['schema'], receipt['version']), (4, 4))
+        self.assertEqual((profile['schema'], receipt['version']), (7, 7))
         self.assertIn('MKLIBCXX=yes', flags)
         self.assertEqual([command[-1] for command in commands],
                          ['kernel=EMBER64', 'sets'])
@@ -670,13 +676,13 @@ class BuilderReleaseTests(TemporaryCase):
         receipt = builder.run()
         output = Path(builder.paths['destination'])
         profile = jsonio.read_json(output / 'build-profile.json')
-        self.assertEqual((profile['schema'], receipt['version']), (4, 4))
+        self.assertEqual((profile['schema'], receipt['version']), (7, 7))
         self.assertIn('EMBER_COMPILER_FAMILY=clang', receipt['signature']['flags'])
         self.assertFalse(any(v.startswith(('EMBER_EXTERNAL_GCC_RUNTIME=', 'MKLIBSTDCXX='))
                              for v in receipt['signature']['flags']))
         directory = self.root / 'llvm-kit'
         manifest = kit.prepare(output, directory, 'aarch64-sysroot')
-        self.assertEqual(manifest['schema'], 'emberbsd.aarch64.sysroot.v3')
+        self.assertEqual(manifest['schema'], 'emberbsd.aarch64.sysroot.v4')
         self.assertEqual(kit.verify(directory, 'aarch64-sysroot'), manifest)
         advanced = copy.deepcopy(profile)
         advanced['sdk_receipt']['sources']['ports']['commit'] = '1' * 40
@@ -692,13 +698,13 @@ class BuilderReleaseTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, 'Clang consumers'):
             kit.require_qualification(qualified, 'aarch64-sysroot')
 
-    def test_native_schema3_identity_and_historical_schema2(self):
+    def test_native_schema6_identity_and_historical_schema2(self):
         options = release_fixture(self.root, 'aarch64')
         receipt = OSReleaseBuilder(options).run()
         output = Path(options['destination'])
         profile = jsonio.read_json(output / 'build-profile.json')
         sha = receipt['sources']['os']['commit']
-        self.assertEqual(profile['schema'], 3)
+        self.assertEqual(profile['schema'], 6)
         for mutation in ('identity', 'inputs', 'pin', 'host-cc', 'host-cxx', 'python',
                          'host-prefix', 'host-binutils', 'native-routing', 'flags', 'environment'):
             changed = copy.deepcopy(profile)
@@ -712,6 +718,10 @@ class BuilderReleaseTests(TemporaryCase):
             with self.subTest(mutation=mutation), self.assertRaises(SDKError): validate_profile(changed, sha, 'aarch64')
         historical = copy.deepcopy(profile)
         historical['schema'] = historical['sdk_receipt']['version'] = 2
+        # Schema 2 named its source by a git-archive export of the commit.
+        write(output / 'source.tar.gz', tar_bytes({'share/mk/bsd.own.mk': b'EMBER_VERSION?= 1.0\n'}, mode='w:gz'))
+        del historical['source_tree']
+        historical['source_sha256'] = kit.sha256_file(output / 'source.tar.gz')
         signature = historical['sdk_receipt']['signature']
         del signature['native_toolset']; del signature['native_inputs']; del signature['compiler_family']
         for key in ('host-cc', 'host-cxx', 'host-prefix', 'host-binutils', 'native-routing'):
@@ -794,12 +804,15 @@ class BuilderReleaseTests(TemporaryCase):
         (output / 'build-success').unlink()
         receipt_path = output / '.prebuild-sdk-build.json'
         original_receipt = receipt_path.read_bytes()
-        for mutation in ('incomplete', 'failed', 'output', 'marker', 'archive', 'runtime'):
+        for mutation in ('incomplete', 'failed', 'output', 'marker', 'old-receipt', 'runtime'):
             with self.subTest(mutation=mutation):
-                if mutation in ('incomplete', 'failed'):
+                if mutation in ('incomplete', 'failed', 'old-receipt'):
                     bad = copy.deepcopy(receipt)
                     if mutation == 'incomplete':
                         bad['qualification'] = 'incomplete'
+                    elif mutation == 'old-receipt':
+                        # A git-archive era receipt cannot be finalized without its export.
+                        bad['version'] = 4
                     else:
                         bad['commands'][0]['status'] = 'failed'
                     jsonio.write_json(receipt_path, bad, exclusive=False)
@@ -811,9 +824,6 @@ class BuilderReleaseTests(TemporaryCase):
                 elif mutation == 'marker':
                     changed = output / 'dest/usr/share/emberbsd/ports/editline.distinfo'
                     prior = changed.read_bytes(); changed.write_bytes(b'changed')
-                elif mutation == 'archive':
-                    changed = output / 'source.tar.gz'
-                    prior = changed.read_bytes(); changed.write_bytes(prior + b'x')
                 else:
                     stage = Path(receipt['paths']['llvm-runtime-stage'])
                     changed = next(stage / name for name in receipt['signature']['runtime']['manifest']['files'])
@@ -872,7 +882,7 @@ class BuilderReleaseTests(TemporaryCase):
             receipt = builder.run()
         output = Path(builder.paths['destination'])
         expected = jsonio.read_json(output / 'build-profile.json')
-        self.assertEqual(receipt['version'], 5)
+        self.assertEqual(receipt['version'], 8)
         (output / 'build-profile.json').unlink()
         (output / 'build-success').unlink()
         runtime = receipt['signature']['runtime']['manifest']
@@ -922,13 +932,13 @@ class BuilderReleaseTests(TemporaryCase):
         validate_profile(p, receipt['sources']['os']['commit'], 'aarch64')
         observed = [json.loads(line) for line in (output / 'observed-argv.jsonl').read_text().splitlines()]
         self.assertEqual(observed, [a[2:] for a in p['commands']])
-        self.assertEqual(p['schema'], 3)
+        self.assertEqual(p['schema'], 6)
         self.assertEqual(p['product_version'], '2.7+fixture')
         self.assertFalse(any(a.startswith('EMBER_VERSION=') for c in p['commands'] for a in c))
         self.assertFalse(any('HAVE_GCC=' in a for c in p['commands'] for a in c))
         self.assertTrue(all('TOOLCHAIN_MISSING=yes' in c for c in p['commands']))
         manifest = kit.prepare(output, self.root / 'kit', 'aarch64-sysroot')
-        self.assertEqual(manifest['schema'], 'emberbsd.aarch64.sysroot.v2')
+        self.assertEqual(manifest['schema'], 'emberbsd.aarch64.sysroot.v4')
         self.assertIsNone(manifest['qualification'])
         self.assertEqual(manifest['product_version'], '2.7+fixture')
         self.assertIn('EmberBSD 2.7+fixture', GitHub(self.root / 'kit', 'aarch64-sysroot').title)
@@ -940,6 +950,42 @@ class BuilderReleaseTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, 'new or empty'):
             OSReleaseBuilder(options).run()
         self.assertEqual(snapshot(output), before)
+
+    def test_release_source_identity_is_the_git_tree(self):
+        options = release_fixture(self.root, 'aarch64')
+        receipt = OSReleaseBuilder(options).run()
+        output = Path(options['destination'])
+        p = jsonio.read_json(output / 'build-profile.json')
+        sha = receipt['sources']['os']['commit']
+        tree = subprocess.run(['git', '-C', options['os'], 'rev-parse', sha + '^{tree}'], check=True, capture_output=True,
+                              env=git_environment()).stdout.decode().strip()
+        self.assertEqual(p['source_tree'], tree)
+        self.assertNotIn('source_sha256', p)
+        # No git-archive export is written, hashed or published.
+        self.assertFalse((output / 'source.tar.gz').exists())
+        # The product version comes from the commit, not the working tree.
+        own = Path(options['os'], 'share/mk/bsd.own.mk')
+        committed = own.read_text()
+        own.write_text('EMBER_VERSION?= 9.9\n')
+        try:
+            self.assertEqual(kit.git_source_identity('git', options['os'], sha), (tree, '1.0'))
+            manifest = kit.prepare(output, self.root / 'kit', 'aarch64-sysroot')
+        finally:
+            own.write_text(committed)
+        self.assertEqual((manifest['schema'], manifest['source_tree'], manifest['product_version']),
+                         ('emberbsd.aarch64.sysroot.v4', tree, '1.0'))
+        self.assertNotIn('source_archive_sha256', manifest)
+        self.assertNotIn(kit.SOURCE_EXPORT, [f['name'] for f in manifest['files']])
+        self.assertIn('Git commit and tree hash', (self.root / 'kit/release-notes.md').read_text())
+        reseal(self.root / 'kit', lambda m: m.update(source_tree='0' * 40))
+        with self.assertRaisesRegex(SDKError, 'Source/build receipt changed'):
+            kit.verify(self.root / 'kit', 'aarch64-sysroot')
+        foreign = dict(p, source_tree='0' * 40)
+        jsonio.write_json(output / 'build-profile.json', foreign, exclusive=False)
+        with self.assertRaisesRegex(SDKError, 'OS source tree differs'):
+            kit.prepare(output, self.root / 'foreign-kit', 'aarch64-sysroot')
+        with self.assertRaisesRegex(SDKError, 'source tree identity'):
+            validate_profile(dict(p, source_sha256='0' * 64), sha, 'aarch64')
 
     def test_failures_never_expose_success(self):
         for failure in ('kernel=EMBER64', 'sets', 'omit_comp'):

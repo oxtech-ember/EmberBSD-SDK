@@ -15,11 +15,12 @@ base. Run the fork CAS and bounded libc/loader regressions against those inputs.
 The target needs no compiler. Record actual library paths and SHA256 values.
 
 A qualification JSON binds `source_commit`, `base_sha256`, `comp_sha256` and
-`kernel_gzip_sha256`. For Clang schema 4 or 5 build profiles, record
+`kernel_gzip_sha256`. For Clang schema 4, 5, 7 or 8 build profiles, record
 `consumer_compiler_family: "clang"` and the measured Clang banner in
 `consumer_compiler`, with the same version as the SDK build receipt.
-Schema 5 selects the common Clang C++ runtime in the OS base set. Schema 4
-retains the historical build-only runtime selection and command sequence.
+Schema 8 (formerly 5) selects the common Clang C++ runtime in the OS base set.
+Schema 7 (formerly 4) keeps the build-only runtime selection and command sequence.
+Schemas 7 and 8 name the OS source by its Git tree instead of a git-archive hash.
 Both produce the existing `emberbsd.aarch64.sysroot.v3` outer kit manifest;
 this version describes the kit format, not target acceptance. The explicit
 GCC route and historical schemas retain the GCC16.2.0 consumer identity.
