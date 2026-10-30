@@ -90,7 +90,7 @@ class LLVMRuntimeTests(LLVMRuntimeFixture):
         path.write_bytes(archive(rv32(1)))
         self.save()
         llvm_runtime.validate_stage(self.stage, target='riscv32')
-        for member in (rv32(5), rv32(3), header(243, 1)):
+        for member in (rv32(5), rv32(3), rv32(9), header(243, 1)):
             path.write_bytes(archive(member))
             self.save()
             with self.assertRaises(SDKError):

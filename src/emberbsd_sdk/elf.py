@@ -58,7 +58,7 @@ def parse_elf_header(data, *, label='<bytes>', machine=None, required_type=None,
     if required_type is not None and kind != required_type:
         raise SDKError(f'wrong ELF type: {label}')
     if riscv32_soft_float and (actual != 243 or elf_class != 1 or
-            struct.unpack_from('<I', data, 36)[0] & 0x6):
+            struct.unpack_from('<I', data, 36)[0] & 0xe):
         raise SDKError(f'expected RV32 soft-float target header: {label}')
     return dict({'class': 32 if elf_class == 1 else 64}, endian='little', machine=actual, type=kind)
 

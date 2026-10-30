@@ -772,6 +772,22 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
             with self.assertRaisesRegex(SDKError, 'RV32'):
                 builder.inspect_payload()
 
+    def test_riscv_foundation_rejects_ilp32e_crt(self):
+        import struct
+        builder = LLVMPhaseBuilder({'c-foundation': True, 'target': 'riscv32'}, 'base')
+        builder.paths = {'destination': str(self.root / 'foundation')}
+        builder.target = {'elf': 243}
+        builder.runtime_record = {'fixture': True}
+        data = bytearray(52)
+        data[:7] = b'\x7fELF\x01\x01\x01'
+        struct.pack_into('<HHI', data, 16, 1, 243, 1)
+        struct.pack_into('<I', data, 36, 8)
+        struct.pack_into('<H', data, 40, 52)
+        write(Path(builder.paths['destination']) / 'usr/lib/crt0.o', bytes(data))
+        with patch.object(builder, 'verify_runtime', return_value=builder.runtime_record):
+            with self.assertRaisesRegex(SDKError, 'RV32'):
+                builder.inspect_payload()
+
     def test_c_foundation_plan_omits_full_runtime_and_final_sysroot(self):
         options = {'sdk': '/sdk', 'runtime-work': '/sdk/obj/runtime', 'target': 'riscv32',
                    'c-foundation': True}
