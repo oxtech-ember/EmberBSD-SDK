@@ -1088,6 +1088,8 @@ class SysrootBuilder:
                   'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
                   'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
                   'MKREPRO_TIMESTAMP=' + str(self.source_timestamp())]
+        if any(start == 'tools' for start, _ in traversals):
+            common.append('HOST_YACC=' + self.native.tool('yacc'))
         query = prepared_sources.bmake_query(self.native.tool('make'), root, common + list(flags), env=env)
         needed = prepared_sources.required_sources(root, query, traversals,
                                                    jobs=max(1, min(8, int(self.options['jobs']))))

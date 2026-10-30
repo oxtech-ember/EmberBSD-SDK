@@ -211,6 +211,15 @@ class PreparedSourceTests(TemporaryCase):
         self.assertEqual(needed.get('EMBER_BYACC_SOURCE'), 'tools/host')
         self.assertIn('--byacc-source', prepared_sources.missing_sources(needed, {})[0])
 
+    def test_host_tool_source_query_routes_selected_yacc(self):
+        (self.os / 'tools/host/Makefile').write_text(BYACC)
+        builder = self.builder(('byacc',))
+        with patch('emberbsd_sdk.prepared_sources.process.capture', side_effect=self.fake_make) as run:
+            builder.require_prepared_sources(self.source_flags(('byacc',)),
+                                             (('tools', prepared_sources.BUILD_TARGETS),))
+        for call in run.call_args_list:
+            self.assertIn('HOST_YACC=/host/yacc', call.args[0])
+
     def test_headers_phase_walks_nothing(self):
         from emberbsd_sdk.llvm_sysroot import LLVMPhaseBuilder
         builder = LLVMPhaseBuilder.__new__(LLVMPhaseBuilder)
