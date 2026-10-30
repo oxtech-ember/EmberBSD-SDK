@@ -86,14 +86,20 @@ A different existing utility map fails without changing it.
 
 The command prints the exact `initial_command` and its environment as JSON data.
 This is an invocation description, not a receipt.
-Run that command with the returned environment and ordinary process failure handling.
-The environment sets `PATH_SEPARATOR` to the native Python `os.pathsep`.
+If a compatible bmake closure is not installed, run that command with the
+returned environment and ordinary process failure handling. It builds and installs
+`devel/bmake` and its dependencies through the shared recipes. If the first
+pkgsrc bootstrap already installed compatible bmake, makefiles and mksh, reuse
+them instead. If their `bootstrap-mk-files` lacks the Darwin builtin helper,
+replace that package using its ordinary recipe. Follow the Ports
+[make handoff](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/common-build-tools/bootstrap/README.md#make-handoff).
+
+The returned environment sets `PATH_SEPARATOR` to the native Python `os.pathsep`.
 Autoconf must not discover it by running a shell from `/bin`.
-It builds and installs `devel/bmake` through the shared recipe and its dependencies.
 The utility mapping contains only explicit selected utility links.
 It excludes raw compiler and make names whose plain links would lose command arguments.
 
-After that closure installs bmake, its makefiles, and mksh, use the resulting tools.
+Use the resulting bmake, makefiles, and mksh for the remaining closure.
 If the native package closure needs gettext, first run the Ports
 [plain-to-full gettext sequence](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/development-toolchain/darwin-bootstrap.md#first-tools)
 with those selected tools and the same prefix. The sequence avoids the
