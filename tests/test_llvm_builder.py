@@ -200,23 +200,6 @@ class LLVMBuilderTests(TemporaryCase):
         with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/prepared/ntp\n/prepared/libopts\n')):
             builder.require_ntp_source_support()
 
-    def test_ntp_and_libopts_sources_verified_by_owners(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk',
-                         'ntp-source': '/prepared/ntp', 'libopts-source': '/prepared/libopts'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        records = [{'format': 'emberbsd-prepared-source', 'version': 1, 'package': name}
-                   for name in ('net/ntp4', 'devel/autogen')]
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   side_effect=[SimpleNamespace(stdout=json.dumps(record)) for record in records]) as run:
-            self.assertEqual(builder.verify_common_sources(), dict(zip(('ntp', 'libopts'), records)))
-        commands = [call.args[0] for call in run.call_args_list]
-        self.assertIn('/ports/scripts/source-inputs/ntp/source.py', commands[0])
-        self.assertIn('/ports/scripts/source-inputs/autogen/source.py', commands[1])
-        self.assertIn('verify-source', commands[1])
-
     def test_libpcap_source_requires_real_os_producer(self):
         from types import SimpleNamespace
         builder = SysrootBuilder({})
@@ -309,94 +292,6 @@ class LLVMBuilderTests(TemporaryCase):
             with self.assertRaisesRegex(SDKError, 'does not support'):
                 builder.require_gettext_source_support()
 
-    def test_optional_ekermit_source_verified_by_owner(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'ekermit-source': '/prepared/ekermit'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'comms/ekermit'}
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
-            self.assertEqual(builder.verify_common_sources(), {'ekermit': record})
-        self.assertIn('/ports/scripts/source-inputs/ekermit/source.py', run.call_args.args[0])
-
-    def test_optional_nvi_source_verified_by_owner(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'nvi-source': '/prepared/nvi'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'editors/nvi'}
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
-            self.assertEqual(builder.verify_common_sources(), {'nvi': record})
-        self.assertIn('/ports/scripts/source-inputs/nvi/source.py', run.call_args.args[0])
-
-    def test_optional_top_source_verified_by_owner(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'top-source': '/prepared/top'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'sysutils/top'}
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
-            self.assertEqual(builder.verify_common_sources(), {'top': record})
-        self.assertIn('/ports/scripts/source-inputs/top/source.py', run.call_args.args[0])
-
-    def test_optional_iscsi_source_verified_by_owner(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'iscsi-source': '/prepared/iscsi'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'devel/netbsd-iscsi-lib'}
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
-            self.assertEqual(builder.verify_common_sources(), {'iscsi': record})
-        self.assertIn('/ports/scripts/source-inputs/iscsi/source.py', run.call_args.args[0])
-
-    def test_optional_libpcap_source_verified_by_owner(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'libpcap-source': '/prepared/libpcap'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'net/libpcap'}
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
-            self.assertEqual(builder.verify_common_sources(), {'libpcap': record})
-        self.assertIn('/ports/scripts/source-inputs/libpcap/source.py', run.call_args.args[0])
-
-    def test_optional_tcpdump_source_verified_by_owner(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'tcpdump-source': '/prepared/tcpdump'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'net/tcpdump'}
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
-            self.assertEqual(builder.verify_common_sources(), {'tcpdump': record})
-        self.assertIn('/ports/scripts/source-inputs/tcpdump/source.py', run.call_args.args[0])
-
-    def test_optional_tcp_wrappers_source_verified_by_owner(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'tcp-wrappers-source': '/prepared/tcp-wrappers'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'security/tcp_wrappers'}
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
-            self.assertEqual(builder.verify_common_sources(), {'tcp-wrappers': record})
-        self.assertIn('/ports/scripts/source-inputs/tcp_wrappers/source.py', run.call_args.args[0])
-
-    def test_optional_ppp_source_verified_by_owner(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'ppp-source': '/prepared/ppp'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'net/pppd'}
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
-            self.assertEqual(builder.verify_common_sources(), {'ppp': record})
-        self.assertIn('/ports/scripts/source-inputs/ppp/source.py', run.call_args.args[0])
-
     def test_rcs_source_requires_real_os_producer(self):
         from types import SimpleNamespace
         builder = SysrootBuilder({})
@@ -418,18 +313,6 @@ class LLVMBuilderTests(TemporaryCase):
         with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
             builder.require_rcs_source_support()
             run.assert_not_called()
-
-    def test_optional_rcs_source_verified_by_owner(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'rcs-source': '/prepared/rcs'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'devel/rcs'}
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
-            self.assertEqual(builder.verify_common_sources(), {'rcs': record})
-        self.assertIn('/ports/scripts/source-inputs/rcs/source.py', run.call_args.args[0])
 
     def test_diffutils_source_requires_real_os_producer(self):
         from types import SimpleNamespace
@@ -453,18 +336,6 @@ class LLVMBuilderTests(TemporaryCase):
             builder.require_diffutils_source_support()
             run.assert_not_called()
 
-    def test_optional_diffutils_source_verified_by_owner(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'diffutils-source': '/prepared/diffutils'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'devel/diffutils'}
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
-            self.assertEqual(builder.verify_common_sources(), {'diffutils': record})
-        self.assertIn('/ports/scripts/source-inputs/diffutils/source.py', run.call_args.args[0])
-
     def test_tdb_source_requires_real_os_producer(self):
         from types import SimpleNamespace
         builder = SysrootBuilder({})
@@ -485,19 +356,6 @@ class LLVMBuilderTests(TemporaryCase):
         with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
             builder.require_tdb_source_support()
             run.assert_not_called()
-
-    def test_optional_tdb_source_verified_by_owner(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports',
-                         'sdk-source': '/sdk', 'tdb-source': '/prepared/tdb'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'databases/tdb'}
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
-            self.assertEqual(builder.verify_common_sources(), {'tdb': record})
-        self.assertIn('/ports/scripts/source-inputs/tdb/source.py', run.call_args.args[0])
 
     def test_grep_source_requires_real_os_producer(self):
         from types import SimpleNamespace
@@ -520,18 +378,6 @@ class LLVMBuilderTests(TemporaryCase):
         with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
             builder.require_grep_source_support()
             run.assert_not_called()
-
-    def test_optional_grep_source_verified_by_owner(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk', 'grep-source': '/prepared/grep'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'textproc/grep'}
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
-            self.assertEqual(builder.verify_common_sources(), {'grep': record})
-        self.assertIn('/ports/scripts/source-inputs/grep/source.py', run.call_args.args[0])
 
     def test_texinfo_source_requires_real_c_only_os_producer(self):
         builder = SysrootBuilder({})
@@ -591,267 +437,6 @@ class LLVMBuilderTests(TemporaryCase):
             builder.options['diffutils-source'] = '/source/diffutils'
             builder.load_native_toolset()
             self.assertIn('gmake', load.call_args.kwargs['required_roles'])
-
-    def test_optional_texinfo_source_is_verified_by_its_owner(self):
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports',
-                         'sdk-source': '/sdk', 'texinfo-source': '/prepared/texinfo'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        record = {'format': 'emberbsd-prepared-source', 'version': 1,
-                  'package': 'devel/gtexinfo'}
-        from types import SimpleNamespace
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
-            self.assertEqual(builder.verify_common_sources(), {'texinfo': record})
-        self.assertEqual(run.call_args.args[0], [
-            '/host/python', '-B', '/ports/scripts/source-inputs/texinfo/source.py',
-            '--sdk-source', '/sdk', '--git', '/host/git', 'verify-source',
-            '--source', '/prepared/texinfo'])
-
-    def test_optional_byacc_source_is_verified_by_its_owner(self):
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports',
-                         'sdk-source': '/sdk', 'byacc-source': '/prepared/byacc'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        record = {'format': 'emberbsd-prepared-source', 'version': 1,
-                  'package': 'devel/byacc'}
-        from types import SimpleNamespace
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
-            self.assertEqual(builder.verify_common_sources(), {'byacc': record})
-        self.assertEqual(run.call_args.args[0], [
-            '/host/python', '-B', '/ports/scripts/source-inputs/byacc/source.py',
-            '--sdk-source', '/sdk', '--git', '/host/git', 'verify-source',
-            '--source', '/prepared/byacc'])
-
-    def test_source_owners_share_one_pkgsrc_export_per_run(self):
-        from types import SimpleNamespace
-        from emberbsd_sdk import sysroot_builder
-        ports = self.root / 'ports'
-        script = ports / SysrootBuilder.SHARED_EXPORT_SCRIPT
-        write(script, '# shared export fixture\n')
-        tool = self.root / 'host/bin/gpatch'
-        write(tool, '#!/bin/sh\n', 0o755)
-        builder = SysrootBuilder({'source-patch': str(tool)})
-        builder.paths = {'python': '/host/python', 'ports': str(ports), 'sdk-source': '/sdk',
-                         'libarchive-source': '/prepared/libarchive', 'byacc-source': '/prepared/byacc',
-                         'rcs-source': '/prepared/rcs', 'nvi-source': '/prepared/nvi',
-                         'tdb-source': '/prepared/tdb', 'top-source': '/prepared/top',
-                         'iscsi-source': '/prepared/iscsi', 'ntp-source': '/prepared/ntp',
-                         'libopts-source': '/prepared/libopts', 'gettext-source': '/prepared/gettext',
-                         'libxml2-source': '/prepared/libxml2'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        builder.native = SimpleNamespace(bundle_root='/host')
-        commits = {'HEAD': 'a' * 40, 'HEAD:upstream/pkgsrc': '1' * 40}
-        packages = {'libarchive-source.py': 'archivers/libarchive', 'byacc': 'devel/byacc', 'rcs': 'devel/rcs',
-                    'nvi': 'editors/nvi', 'tdb': 'databases/tdb', 'top': 'sysutils/top',
-                    'iscsi': 'devel/netbsd-iscsi-lib', 'ntp': 'net/ntp4',
-                    'autogen': 'devel/autogen', 'gettext': 'devel/gettext',
-                    'libxml2': 'textproc/libxml2'}
-        exports, owners = [], []
-        def capture(command, **kwargs):
-            if command[2] == str(script):
-                exports.append(command)
-                return SimpleNamespace(stdout=b'{}')
-            if command[-1] == '--help':
-                return SimpleNamespace(stdout=b'usage: source.py verify-source [--source SOURCE]\n')
-            owners.append(command)
-            name = Path(command[2]).name if command[2].endswith('libarchive-source.py') else Path(command[2]).parent.name
-            return SimpleNamespace(stdout=json.dumps({'format': 'emberbsd-prepared-source', 'version': 1,
-                                                      'package': packages[name]}))
-        self.addCleanup(sysroot_builder._remove_shared_pkgsrc_exports)
-        with patch.object(sysroot_builder.native_toolset, 'load_host_prefix',
-                          return_value=SimpleNamespace(tool=lambda role: str(tool))), \
-                patch.object(builder, 'git', side_effect=lambda root, *args: commits[args[-1]]), \
-                patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=capture):
-            # Preflight, before and after the build: one export for all of them.
-            for _ in range(3):
-                builder.verify_common_sources()
-            self.assertEqual(len(exports), 1)
-            self.assertEqual(exports[0][4:], ['--sdk-source', '/sdk', '--git', '/host/git', '--patch', str(tool.resolve())])
-            shared = exports[0][3]
-            self.assertEqual(len(owners), 33)
-            for command in owners:
-                self.assertIn('--patch', command)
-                if Path(command[2]).parent.name == 'tdb':
-                    # An owner without --pkgsrc-export support keeps its own export.
-                    self.assertNotIn('--pkgsrc-export', command)
-                else:
-                    self.assertEqual(command[command.index('--pkgsrc-export') + 1], shared)
-            # A later phase builder of the same process reuses it as well.
-            later = copy.copy(builder)
-            later.verify_common_sources()
-            self.assertEqual(len(exports), 1)
-            # Another Ports commit, pkgsrc commit or patch tool needs a new export.
-            for change in (lambda: commits.update({'HEAD': 'b' * 40}),
-                           lambda: commits.update({'HEAD:upstream/pkgsrc': '2' * 40}),
-                           lambda: tool.write_text('#!/bin/sh\n# other\n')):
-                change()
-                builder.verify_common_sources()
-            self.assertEqual(len(exports), 4)
-            self.assertEqual(len({command[3] for command in exports}), 4)
-            # Ports revisions without the shared exporter keep per-owner exports.
-            script.unlink()
-            owners.clear()
-            builder.verify_common_sources()
-            self.assertEqual(len(exports), 4)
-            self.assertTrue(all('--pkgsrc-export' not in command for command in owners))
-        shutil.rmtree(Path(shared).parent)
-
-    def test_optional_owner_export_capabilities_and_cache(self):
-        from types import SimpleNamespace
-        from emberbsd_sdk import sysroot_builder
-        ports = self.root / 'ports-capabilities'
-        write(ports / SysrootBuilder.SHARED_EXPORT_SCRIPT, 'exporter')
-        tool = self.root / 'host-capabilities/bin/gpatch'
-        write(tool, '#!/bin/sh\n', 0o755)
-        packages = {'tdb': 'databases/tdb', 'ppp': 'net/pppd',
-                    'libpcap': 'net/libpcap', 'tcp_wrappers': 'security/tcp_wrappers'}
-        names = {'tdb': 'tdb', 'ppp': 'ppp', 'libpcap': 'libpcap', 'tcp_wrappers': 'tcp-wrappers'}
-        builder = SysrootBuilder({'source-patch': str(tool)})
-        builder.paths = {'python': '/host/python', 'ports': str(ports), 'sdk-source': '/sdk'}
-        for dirname, name in names.items():
-            write(ports / 'scripts/source-inputs' / dirname / 'source.py', dirname)
-            builder.paths[name + '-source'] = '/prepared/' + name
-        builder.git_command, builder.environment = '/host/git', {}
-        builder.native = SimpleNamespace(bundle_root='/host')
-        probes, verified = [], []
-        supported = {'tdb', 'libpcap'}
-        def capture(command, **kwargs):
-            name = Path(command[2]).parent.name
-            if command[-1] == '--help':
-                probes.append(name)
-                extra = ' [--pkgsrc-export PATH]' if name in supported else ''
-                return SimpleNamespace(stdout=('usage: source.py verify-source' + extra + '\n').encode())
-            verified.append(command)
-            return SimpleNamespace(stdout=json.dumps({'format': 'emberbsd-prepared-source',
-                'version': 1, 'package': packages[name]}))
-        with patch.object(sysroot_builder.native_toolset, 'load_host_prefix',
-                          return_value=SimpleNamespace(tool=lambda role: str(tool))), \
-             patch.object(builder, 'shared_pkgsrc_export', return_value='/shared') as export, \
-             patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=capture):
-            builder.verify_common_sources()
-            builder.verify_common_sources()
-            self.assertEqual(sorted(probes), sorted(packages))
-            self.assertEqual(export.call_count, 2)
-            for command in verified:
-                name = Path(command[2]).parent.name
-                self.assertEqual('--pkgsrc-export' in command, name in supported)
-            # Every owner must support both the new and legacy CLI.
-            for enabled in (set(packages), set()):
-                supported.clear(); supported.update(enabled)
-                for dirname in names:
-                    write(ports / 'scripts/source-inputs' / dirname / 'source.py', dirname + str(len(enabled)))
-                probes.clear(); verified.clear()
-                builder.verify_common_sources()
-                self.assertEqual(sorted(probes), sorted(packages))
-                for command in verified:
-                    name = Path(command[2]).parent.name
-                    self.assertEqual('--pkgsrc-export' in command, name in enabled)
-            builder.options.pop('source-patch')
-            probes.clear(); export.reset_mock()
-            builder.verify_common_sources()
-            self.assertEqual(probes, [])
-            export.assert_not_called()
-
-    def test_optional_owner_invalid_help_fails(self):
-        from types import SimpleNamespace
-        from emberbsd_sdk.errors import SDKError
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'sdk-source': '/sdk'}
-        builder.git_command, builder.environment = '/host/git', {}
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'not help')):
-            with self.assertRaisesRegex(SDKError, 'invalid source owner help'):
-                builder.owner_supports_shared_export('/owner.py', {})
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=SDKError('owner failed')):
-            with self.assertRaisesRegex(SDKError, 'owner failed'):
-                builder.owner_supports_shared_export('/owner.py', {})
-
-    def test_shared_export_is_lazy_without_patch_or_supported_owner(self):
-        from types import SimpleNamespace
-        from emberbsd_sdk import sysroot_builder
-        tool = self.root / 'host/bin/gpatch'
-        write(tool, '#!/bin/sh\n', 0o755)
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports', 'sdk-source': '/sdk',
-                         'gettext-source': '/prepared/gettext'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        builder.native = SimpleNamespace(bundle_root='/host')
-        def capture(command, **kwargs):
-            self.assertNotIn('--pkgsrc-export', command)
-            return SimpleNamespace(stdout=json.dumps({'format': 'emberbsd-prepared-source',
-                'version': 1, 'package': 'devel/gettext'}))
-        with patch.object(builder, 'shared_pkgsrc_export') as export, \
-                patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=capture):
-            builder.verify_common_sources()
-            export.assert_not_called()
-        builder.options['source-patch'] = str(tool)
-        builder.paths.pop('gettext-source')
-        builder.paths['tdb-source'] = '/prepared/tdb'
-        def capture_tdb(command, **kwargs):
-            self.assertNotIn('--pkgsrc-export', command)
-            return SimpleNamespace(stdout=json.dumps({'format': 'emberbsd-prepared-source',
-                'version': 1, 'package': 'databases/tdb'}))
-        with patch.object(builder, 'shared_pkgsrc_export') as export, \
-                patch.object(sysroot_builder.native_toolset, 'load_host_prefix',
-                             return_value=SimpleNamespace(tool=lambda role: str(tool))), \
-                patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=capture_tdb):
-            builder.verify_common_sources()
-            export.assert_not_called()
-
-    def test_source_comparison_uses_selected_prefix_patch_and_archive(self):
-        from types import SimpleNamespace
-        prefix = self.root / 'host'
-        prefix.mkdir()
-        patch_tool = prefix / 'patch'
-        patch_tool.write_text('fixture')
-        patch_tool.chmod(0o755)
-        archive = self.root / 'byacc.tgz'
-        archive.write_text('archive')
-        builder = SysrootBuilder({'source-patch': str(patch_tool), 'byacc-archive': str(archive)})
-        builder.native = SimpleNamespace(bundle_root=str(prefix), tool=lambda name: str(patch_tool))
-        builder.paths = {'python': '/host/python', 'ports': '/ports',
-                         'sdk-source': '/sdk', 'byacc-source': '/prepared/byacc'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'devel/byacc'}
-        with patch('emberbsd_sdk.sysroot_builder.native_toolset.load_host_prefix',
-                   return_value=SimpleNamespace(tool=lambda name: str(patch_tool))) as load, \
-                patch('emberbsd_sdk.sysroot_builder.process.capture',
-                      return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
-            builder.verify_common_sources()
-        self.assertEqual(load.call_args.kwargs['required_roles'], {'gpatch'})
-        self.assertEqual(run.call_args.args[0][-4:], ['--patch', str(patch_tool), '--archive', str(archive)])
-        builder.options['source-patch'] = str(archive)
-        archive.chmod(0o755)
-        with patch('emberbsd_sdk.sysroot_builder.native_toolset.load_host_prefix',
-                   return_value=SimpleNamespace(tool=lambda name: str(patch_tool))):
-            with self.assertRaisesRegex(SDKError, 'differs from the selected native gpatch'):
-                builder.verify_common_sources()
-
-    def test_optional_x11_source_is_verified_by_its_owner(self):
-        builder = SysrootBuilder({})
-        builder.paths = {'python': '/host/python', 'ports': '/ports',
-                         'sdk-source': '/sdk', 'x11-source': '/prepared/xsrc'}
-        builder.git_command = '/host/git'
-        builder.environment = {}
-        record = {'format': 'emberbsd-prepared-source', 'version': 1, 'package': 'netbsd/xsrc'}
-        from types import SimpleNamespace
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=SimpleNamespace(stdout=json.dumps(record))) as run:
-            self.assertEqual(builder.verify_common_sources(), {'x11': record})
-        self.assertEqual(run.call_args.args[0], [
-            '/host/python', '-B', '/ports/scripts/source-inputs/xsrc/source.py',
-            '--sdk-source', '/sdk', 'verify-source', '--source', '/prepared/xsrc'])
-        record['package'] = 'devel/other'
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=SimpleNamespace(stdout=json.dumps(record))), \
-                self.assertRaisesRegex(SDKError, 'invalid x11 prepared source'):
-            builder.verify_common_sources()
 
     def test_base_cxx_builder_default_tracks_family_and_explicit_value(self):
         self.assertIs(SysrootBuilder({'compiler-family': 'clang'}).options['base-cxx'], True)

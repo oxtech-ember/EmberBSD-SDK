@@ -52,58 +52,36 @@ provides the GNU build triple for this target producer. Its omitted Perl test
 fixture makes it unsuitable for a full Perl/text producer. Native makeinfo and
 install-info come from the selected host prefix.
 
-For common libarchive, libevent, byacc and Texinfo sources prepared with package-scoped
-identity, select `--source-patch` inside the host prefix. To compare libevent
-byacc or Texinfo records when source inputs changed, also select
-the corresponding `--libevent-archive`, `--byacc-archive` or `--texinfo-archive`; the owner checks the
-archive and full patch set before comparing the prepared payload.
+Each prepared source carries `emberbsd-prepared-source.json`, written by
+its Ports owner when it prepared the tree from the distfile Ports fetch checked
+against `distinfo`. The SDK takes that receipt as the source identity and
+checks only its form and package; it neither runs the owner again nor reads or
+hashes the tree. The receipts are compared again before and after the build,
+so a source prepared again during a run still fails it. Prepare a source again
+with its Ports owner when its recipe changes.
 
 The optional `--rcs-source` selects the common Ports RCS source for the OS
 producer, with the same checked GNU make and native compiler triplet. The SDK
 queries the producer's effective source and passes `EMBER_RCS_SOURCE` to the
-sysroot and release commands. When changed prepared inputs need comparison,
-provide `--rcs-archive` and `--source-patch`; the owner uses the selected
-prefix lzip to compare the full prepared payload.
+sysroot and release commands.
 
 The optional `--diffutils-source` selects the common Ports diffutils source
 for the OS producer and passes `EMBER_DIFFUTILS_SOURCE` to sysroot, release,
 and set checks. GNU make and the native compiler triplet are selected from the
-same host prefix. For changed source inputs, `--diffutils-archive` and
-`--source-patch` allow the owner to compare a freshly prepared payload.
+same host prefix.
 
 The optional `--grep-source` selects the common Ports GNU grep source for
 sysroot, release and set checks. It uses the selected native GNU make and
-passes `EMBER_GREP_SOURCE` to the OS producer. When source inputs change,
-`--grep-archive` and `--source-patch` permit a fresh payload comparison.
+passes `EMBER_GREP_SOURCE` to the OS producer.
 
 The optional `--ekermit-source` selects the common Ports E-Kermit source for
 the OS producer and passes `EMBER_EKERMIT_SOURCE` to sysroot, release and set
-checks. When source inputs changed, `--ekermit-archive` and `--source-patch`
-allow the owner to compare the prepared payload.
+checks.
 
 The optional `--tdb-source` selects the prepared common Ports TDB source for
 OS headers, the target library and release/set producers. The selected host
-Python is passed only for this Waf producer. When preparation inputs change,
-`--tdb-archive` and `--source-patch` let the owner compare the full prepared
-payload. The OS producer supplies its target configuration independently of
+Python is passed only for this Waf producer. The OS producer supplies its target configuration independently of
 the machine used for runtime tests.
-
-With `--source-patch` and a Ports revision that provides
-`scripts/pkgsrc-shared-export.py`, the SDK exports pkgsrc once per process
-for the libarchive, libevent, byacc, texinfo, RCS, diffutils, grep,
-E-Kermit, nvi and tcpdump owners (preflight, the checks before and after the build, and
-every LLVM phase) and passes it as `--pkgsrc-export`. The export is keyed by
-the Ports commit, the pinned pkgsrc commit and the patch tool; each owner
-also checks it against its current Ports inputs. Older Ports revisions keep
-one export per owner.
-
-`--source-receipts DIR` keeps each verified prepared-source record in `DIR`
-for later runs. An entry is reused only when the owner command, the
-environment (except `TMPDIR`), the checked Ports and SDK commits and the
-metadata fingerprint of every input still match; otherwise the owner verifies
-the source again and the entry is replaced. A reused record needs no pkgsrc
-export, so the shared export is made only when an owner must run. Without
-the option, records live only for the current process.
 
 The sysroot builder accepts `--llvm-objects` and `--llvm-stages` to select
 LLVM coordinator subdirectories inside the existing SDK's `obj` and `stages`
@@ -164,43 +142,34 @@ identity is part of the native tools context because OS tools build X11 font
 tools from it. Without the option the profile keeps `MKX11=no`.
 
 The optional `--nvi-source` selects the common Ports nvi source for the
-native OS producer. `--nvi-archive` and `--source-patch` support verification
-when the effective Ports inputs change. Native nvi uses the base DB1 API;
+native OS producer. Native nvi uses the base DB1 API;
 the separate package uses Berkeley DB 18.
 
 The optional `--ppp-source` selects the common Ports PPP source for the OS
-producer. `--ppp-archive` and `--source-patch` permit verification against
-changed recipe inputs.
+producer.
 
 The optional `--top-source` selects the common Ports top source for the OS
-producer. `--top-archive` and `--source-patch` support changed-input comparison.
+producer.
 
 The optional `--tcp-wrappers-source` selects the common Ports TCP wrappers
-source for native headers, library and consumers. `--tcp-wrappers-archive`
-and `--source-patch` support verification after owner inputs change.
+source for native headers, library and consumers.
 
 The optional `--libpcap-source` selects the common Ports stable libpcap source for
-native headers, library and release producers. `--libpcap-archive` and
-`--source-patch` support verification when the effective inputs change. The
+native headers, library and release producers. The
 stable native library uses SONAME 12; consumers of SONAME 10 or 11 must be
 relinked.
 
 The optional `--tcpdump-source` selects the shared Ports tcpdump source for
-the native OS producer. `--tcpdump-archive` and `--source-patch` support
-verification when effective inputs change. The native program retains its
+the native OS producer. The native program retains its
 OS installation policy and links against the selected native libpcap.
 
 Select `--ntp-source` and `--libopts-source` together for the native NTP
 producer. The former is prepared by the common Ports NTP owner and the latter
-by the common AutoGen owner. `--source-patch` selects the host patch tool;
-`--ntp-archive` supports comparison when NTP inputs change. AutoGen source
-verification does not require its host package to remain installed after the
+by the common AutoGen owner. The AutoGen host package need not remain installed after the
 tearoff has been prepared.
 
 Select `--gettext-source` and `--libxml2-source` together for the native
-gettext tools. Their Ports owners verify the prepared inputs; the corresponding
-`--gettext-archive`, `--libxml2-archive` and `--source-patch` options support
-comparison after recipe inputs change. The release builds the ordinary target
+gettext tools. Their Ports owners prepare them. The release builds the ordinary target
 foundation first, then prepares the shared Ports cross-libtool in its OS
 TOOLDIR before building the gettext and static libxml2 consumers. This path
 uses the selected native tools and target runtime; it does not add GNU libintl

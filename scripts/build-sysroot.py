@@ -25,11 +25,6 @@ def main():
                         help='required for GCC or to build an LLVM runtime; not needed with a selected LLVM stage')
     for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source'):
         parser.add_argument('--' + name, action=UniqueOption, help='required for the OS base build')
-    parser.add_argument('--source-patch', action=UniqueOption, help='selected patch executable inside the native prefix')
-    parser.add_argument('--source-receipts', action=UniqueOption,
-                        help='directory keeping verified prepared-source records for later runs')
-    for name in ('libevent-archive', 'openssl-archive', 'byacc-archive', 'texinfo-archive', 'rcs-archive', 'diffutils-archive', 'grep-archive', 'ekermit-archive', 'nvi-archive', 'tdb-archive', 'ppp-archive', 'top-archive', 'iscsi-archive', 'libpcap-archive', 'tcpdump-archive', 'tcp-wrappers-archive', 'ntp-archive', 'gettext-archive', 'libxml2-archive'):
-        parser.add_argument('--' + name, action=UniqueOption, help='archive for comparing changed source inputs')
     parser.add_argument('--host-compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
                         help='Clang by default; select GCC explicitly for a platform exception')
     parser.add_argument('--compiler-family', choices=('clang', 'gcc'), action=UniqueOption,

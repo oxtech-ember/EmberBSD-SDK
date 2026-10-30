@@ -212,18 +212,12 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
     write(os_source / 'build.sh', '#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' -B ' + shlex.quote(str(os_source / 'fixture-producer.py')) + ' "$@"\n', 0o755)
     shutil.copytree(SDK_SOURCE / 'src', root / 'sdk-source/src', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     recipe_fixture(ports, root / 'libedit.tar.gz')
-    for name, package, script in (
-        ('libarchive', 'archivers/libarchive', 'scripts/libarchive-source.py'),
-        ('libevent', 'devel/libevent', 'scripts/source-inputs/libevent/source.py'),
-        ('openssl', 'security/openssl', 'scripts/source-inputs/openssl/source.py'),
-    ):
+    for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'),
+                          ('openssl', 'security/openssl')):
         source = root / (name + '-source')
         source.mkdir()
-        write(source / 'receipt.json', json.dumps(dict(format='emberbsd-prepared-source',
+        write(source / 'emberbsd-prepared-source.json', json.dumps(dict(format='emberbsd-prepared-source',
             version=1, package=package, identity={'fixture': name}, tree_sha256='0' * 64)))
-        write(ports / script, 'import sys\nfrom pathlib import Path\na=sys.argv[1:]\n'
-              'source=a[a.index("--source")+1] if "--source" in a else a[a.index("verify")+1]\n'
-              'print((Path(source)/"receipt.json").read_text())\n')
     for path in (os_source, ports, root / 'sdk-source'):
         git(path, 'init', '-q'); commit(path)
     prepare_source(ports, root / 'libedit.tar.gz', root / 'libedit-source')
@@ -254,7 +248,7 @@ class BuilderTests(TemporaryCase):
         self.assertIn('HOST_PERL=' + builder.native.tool('perl'), builder.flags)
         self.assertIn('HOST_GMAKE=' + builder.native.tool('gmake'), builder.flags)
         self.assertIn('HOST_PYTHON=' + builder.native.tool('python'), builder.flags)
-        receipt = Path(options['openssl-source']) / 'receipt.json'
+        receipt = Path(options['openssl-source']) / 'emberbsd-prepared-source.json'
         record = json.loads(receipt.read_text())
         record['package'] = 'other/package'
         receipt.write_text(json.dumps(record))
@@ -267,13 +261,13 @@ class BuilderTests(TemporaryCase):
             options.pop(name + '-source')
             with self.assertRaisesRegex(SDKError, '--' + name + '-source'):
                 B(options).preflight()
-            path = Path(self.options[name + '-source']) / 'receipt.json'
+            path = Path(self.options[name + '-source']) / 'emberbsd-prepared-source.json'
             original = path.read_text()
             record = json.loads(original)
             record['package'] = 'other/package'
             path.write_text(json.dumps(record))
             try:
-                with self.assertRaisesRegex(SDKError, 'invalid ' + name):
+                with self.assertRaisesRegex(SDKError, 'receipt is not for'):
                     B(self.options).preflight()
             finally:
                 path.write_text(original)
@@ -540,27 +534,17 @@ class BuilderTests(TemporaryCase):
                 self.assertEqual(record['qualification'], 'incomplete')
                 self.assertTrue((root / 'sdk/sysroot' / B.MARKER).exists())
 
-    def test_libedit_tamper_refuses_before_writes(self):
-        (Path(self.options['libedit-source']) / 'src/input0').write_text('changed')
-        self.refusal_unchanged('libedit source tree changed')
+    def test_libedit_receipt_tamper_refuses_before_writes(self):
+        # The prepared tree is identified by its receipt; a changed receipt
+        # is still refused before any write.
+        (Path(self.options['libedit-source']) / 'ports.distinfo').write_text('changed')
+        self.refusal_unchanged('libedit distinfo changed')
 
     def test_libedit_replacement_invalidates_object_reuse(self):
         self.run_builder()
         updated = self.root / 'libedit-replacement'
         prepare_source(self.options['ports'], self.root / 'libedit.tar.gz', updated)
         self.refusal_unchanged('incompatible', **{'libedit-source': str(updated), 'destination': str(self.root / 'sdk/stages/next')})
-
-    def test_libedit_tamper_during_producer_leaves_incomplete_receipt(self):
-        original = B.build_payload
-        def changed(builder):
-            original(builder)
-            (Path(builder.paths['libedit-source']) / 'src/input0').write_text('changed')
-        with patch.object(B, 'build_payload', changed):
-            with self.assertRaisesRegex(SDKError, 'libedit source tree changed'):
-                self.run_builder()
-        receipt = jsonio.read_json(self.root / 'sdk/sysroot' / B.RECEIPT)
-        self.assertEqual(receipt['qualification'], 'incomplete')
-        self.assertTrue((self.root / 'sdk/sysroot' / B.MARKER).exists())
 
     def test_missing_source_subtree(self):
         (Path(self.options['os']) / 'lib').rmdir(); self.refusal_unchanged('real directory')

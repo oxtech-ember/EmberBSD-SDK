@@ -65,11 +65,6 @@ def main():
     parser.add_argument('--grep-source', action=UniqueOption, help='prepared common Ports GNU grep source')
     parser.add_argument('--rcs-source', action=UniqueOption, help='prepared common Ports RCS source')
     parser.add_argument('--byacc-source', action=UniqueOption, help='prepared common Ports byacc source')
-    parser.add_argument('--source-patch', action=UniqueOption, help='selected patch executable inside the native prefix')
-    parser.add_argument('--source-receipts', action=UniqueOption,
-                        help='directory keeping verified prepared-source records for later runs')
-    for name in ('libevent-archive', 'openssl-archive', 'byacc-archive', 'texinfo-archive', 'rcs-archive', 'diffutils-archive', 'grep-archive', 'ekermit-archive', 'nvi-archive', 'tdb-archive', 'ppp-archive', 'top-archive', 'iscsi-archive', 'libpcap-archive', 'tcpdump-archive', 'tcp-wrappers-archive', 'ntp-archive', 'gettext-archive', 'libxml2-archive'):
-        parser.add_argument('--' + name, action=UniqueOption, help='archive for comparing changed source inputs')
     parser.add_argument('--x11-source', action=UniqueOption,
                         help='prepared Ports xsrc source; builds the X11 sets (Clang aarch64-sysroot only)')
     parser.add_argument('--host-compiler-family', choices=('clang', 'gcc'), action=UniqueOption,

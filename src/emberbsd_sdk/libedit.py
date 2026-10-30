@@ -148,14 +148,17 @@ def _tree_hash(root):
     return _digest(jsonio.json_bytes(inventory.snapshot_tree(str(root), exclude=(RECEIPT,))))
 
 
-def validate_source(root, *, ports=None, git='git'):
-    """Verify source contents, receipt and, when supplied, the current clean recipe."""
+def validate_source(root, *, ports=None, git='git', content=True):
+    """Verify the receipt, the source contents and, when supplied, the current clean recipe.
+
+    With content false the tree is identified by its preparation receipt and
+    not read again; the recipe is still compared with the Ports checkout."""
     root = Path(paths.canonical_existing(root))
     record = validate_identity(jsonio.read_json(root / RECEIPT))
     for name in ('src', 'doc'):
         paths.real_directory(root / name)
     _require(inventory.sha256_file(root / 'ports.distinfo') == record['recipe']['distinfo_sha256'], 'libedit distinfo changed')
-    _require(_tree_hash(root) == record['tree_sha256'], 'libedit source tree changed')
+    _require(not content or _tree_hash(root) == record['tree_sha256'], 'libedit source tree changed')
     if ports is not None:
         _, metadata, entries, _ = _recipe(ports, git=git)
         # Retain the preparation commit as provenance. Unrelated Ports commits

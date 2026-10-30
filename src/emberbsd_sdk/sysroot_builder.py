@@ -3,7 +3,6 @@
 # Origin: EmberBSD; AI-assisted OS and Ports build orchestration.
 """Checked separate-stage OS sysroot builder. No build occurs on import."""
 
-import atexit
 import copy
 import hashlib
 import itertools
@@ -16,25 +15,12 @@ import shutil
 import signal
 import stat
 import sysconfig
-import tempfile
 import time
-from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, prepared_sources, process, provenance, workspace
-from .verification_receipts import RunReceipts, SourceReceiptStore, fingerprint
+from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, prepared_sources, process, provenance, sourceprep, workspace
+from .verification_receipts import RunReceipts
 from .errors import SDKError, ProcessOwnershipError
 from .native_os_routing import gettext_target_host_flags, gnu_target_host_flags, native_host_flags, native_path
 from .targets import TARGETS, target_definition
-
-# Shared pkgsrc exports of this process, so that every source owner check of
-# one run (preflight, before and after the build, and each LLVM phase) uses
-# a single export.  Keyed by Ports root, Ports commit, pkgsrc commit and
-# patch tool; each owner also binds the export to its current Ports inputs.
-_SHARED_PKGSRC_EXPORTS = {}
-
-
-def _remove_shared_pkgsrc_exports():
-    for directory in _SHARED_PKGSRC_EXPORTS.values():
-        shutil.rmtree(os.path.dirname(directory), ignore_errors=True)
-    _SHARED_PKGSRC_EXPORTS.clear()
 
 NATIVE_INPUTS = ('native-toolset', 'native-toolset-sha256',
                  'native-producer-receipt', 'native-producer-receipt-sha256')
@@ -621,139 +607,35 @@ class SysrootBuilder:
             raise SDKError('common LLVM source and selected compiler differ')
         return record
 
-    SHARED_EXPORT_SCRIPT = 'scripts/pkgsrc-shared-export.py'
-    SHARED_EXPORT_OWNERS = ('libarchive', 'libevent', 'openssl', 'byacc', 'texinfo', 'rcs', 'diffutils',
-                            'grep', 'ekermit', 'nvi', 'tcpdump', 'top', 'iscsi', 'ntp',
-                            'libopts', 'gettext', 'libxml2')
-
-    def shared_pkgsrc_export(self, patch):
-        """Return the one pkgsrc export of this run, or None for older Ports."""
-        script = os.path.join(self.paths['ports'], self.SHARED_EXPORT_SCRIPT)
-        if not os.path.isfile(script):
-            return None
-        key = (self.paths['ports'], self.git(self.paths['ports'], 'rev-parse', 'HEAD'),
-               self.git(self.paths['ports'], 'rev-parse', 'HEAD:upstream/pkgsrc'),
-               patch, inventory.sha256_file(patch))
-        directory = _SHARED_PKGSRC_EXPORTS.get(key)
-        if directory is not None:
-            return directory
-        parent = tempfile.mkdtemp(prefix='.pkgsrc-shared-export-')
-        directory = os.path.join(parent, 'export')
-        try:
-            process.capture([self.paths['python'], '-B', script, directory,
-                             '--sdk-source', self.paths['sdk-source'], '--git', self.git_command,
-                             '--patch', patch], env=self.environment)
-        except BaseException:
-            shutil.rmtree(parent, ignore_errors=True)
-            raise
-        if not _SHARED_PKGSRC_EXPORTS:
-            atexit.register(_remove_shared_pkgsrc_exports)
-        _SHARED_PKGSRC_EXPORTS[key] = directory
-        return directory
-
-    OPTIONAL_SHARED_EXPORT_OWNERS = ('tdb', 'ppp', 'libpcap', 'tcp-wrappers')
-
-    def owner_supports_shared_export(self, script, memo):
-        """Ask the selected owner CLI; older owners retain their existing route."""
-        command = [self.paths['python'], '-B', script, '--sdk-source', self.paths['sdk-source'],
-                   '--git', self.git_command, 'verify-source', '--help']
-        def probe():
-            output = process.capture(command, env=self.environment).stdout
-            try:
-                help_text = output.decode('utf-8') if isinstance(output, bytes) else output
-            except UnicodeDecodeError as exc:
-                raise SDKError('invalid source owner help output') from exc
-            if not isinstance(help_text, str) or not re.search(r'(?m)^usage:\s+.*verify-source', help_text):
-                raise SDKError('invalid source owner help output')
-            return re.search(r'(?<![\w-])--pkgsrc-export(?![\w-])', help_text) is not None
-        return self.verification.verify(('source-owner-help', tuple(command)),
-                                        self.receipt_tools(command), probe, memo)
+    # Prepared sources and their Ports packages.  Each owner writes the
+    # receipt of a prepared tree once, when it prepares it from the distfile
+    # Ports fetch checked against distinfo; the receipt names the package
+    # inputs and the digest of the tree it published.
+    COMMON_SOURCES = (
+        ('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'),
+        ('openssl', 'security/openssl'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'),
+        ('diffutils', 'devel/diffutils'), ('grep', 'textproc/grep'), ('ekermit', 'comms/ekermit'),
+        ('nvi', 'editors/nvi'), ('top', 'sysutils/top'), ('iscsi', 'devel/netbsd-iscsi-lib'),
+        ('ntp', 'net/ntp4'), ('libopts', 'devel/autogen'), ('libpcap', 'net/libpcap'),
+        ('tcpdump', 'net/tcpdump'), ('tcp-wrappers', 'security/tcp_wrappers'),
+        ('gettext', 'devel/gettext'), ('libxml2', 'textproc/libxml2'), ('ppp', 'net/pppd'),
+        ('tdb', 'databases/tdb'), ('x11', 'netbsd/xsrc'))
 
     def verify_common_sources(self):
+        """The prepare receipts of the selected prepared sources.
+
+        A tree is identified by the receipt its owner wrote when it prepared
+        it; the SDK neither runs the owner again nor reads or hashes the tree.
+        A later call compares receipts, so a source prepared again during the
+        run still fails it."""
         result = {}
-        patch = self.options.get('source-patch')
-        if patch:
-            patch = self.executable(patch)
-            selector = native_toolset.load_host_prefix(self.native.bundle_root, required_roles={'gpatch'})
-            if patch != self.executable(selector.tool('gpatch')):
-                raise SDKError('source patch differs from the selected native gpatch')
-        lzip = None
-        if 'rcs-source' in self.paths and self.options.get('rcs-archive'):
-            # Select every host tool before the first owner verifier runs, so
-            # a missing tool fails the run before minutes of source checks.
-            lzip = native_toolset.load_host_prefix(self.native.bundle_root, required_roles={'lzip'}).tool('lzip')
-        shared = None
-        memo = {}
-        store = self.source_receipt_store()
-        for name, package, argv in (
-            ('libarchive', 'archivers/libarchive', ['scripts/libarchive-source.py', 'verify']),
-            ('libevent', 'devel/libevent', ['scripts/source-inputs/libevent/source.py']),
-            ('openssl', 'security/openssl', ['scripts/source-inputs/openssl/source.py']),
-            ('byacc', 'devel/byacc', ['scripts/source-inputs/byacc/source.py']),
-            ('texinfo', 'devel/gtexinfo', ['scripts/source-inputs/texinfo/source.py']),
-            ('rcs', 'devel/rcs', ['scripts/source-inputs/rcs/source.py']),
-            ('diffutils', 'devel/diffutils', ['scripts/source-inputs/diffutils/source.py']),
-            ('grep', 'textproc/grep', ['scripts/source-inputs/grep/source.py']),
-            ('ekermit', 'comms/ekermit', ['scripts/source-inputs/ekermit/source.py']),
-            ('nvi', 'editors/nvi', ['scripts/source-inputs/nvi/source.py']),
-            ('top', 'sysutils/top', ['scripts/source-inputs/top/source.py']),
-            ('iscsi', 'devel/netbsd-iscsi-lib', ['scripts/source-inputs/iscsi/source.py']),
-            ('ntp', 'net/ntp4', ['scripts/source-inputs/ntp/source.py']),
-            ('libopts', 'devel/autogen', ['scripts/source-inputs/autogen/source.py']),
-            ('libpcap', 'net/libpcap', ['scripts/source-inputs/libpcap/source.py']),
-            ('tcpdump', 'net/tcpdump', ['scripts/source-inputs/tcpdump/source.py']),
-            ('tcp-wrappers', 'security/tcp_wrappers', ['scripts/source-inputs/tcp_wrappers/source.py']),
-            ('gettext', 'devel/gettext', ['scripts/source-inputs/gettext/source.py']),
-            ('libxml2', 'textproc/libxml2', ['scripts/source-inputs/libxml2/source.py']),
-            ('ppp', 'net/pppd', ['scripts/source-inputs/ppp/source.py']),
-            ('tdb', 'databases/tdb', ['scripts/source-inputs/tdb/source.py']),
-            ('x11', 'netbsd/xsrc', ['scripts/source-inputs/xsrc/source.py']),
-        ):
-            if name + '-source' not in self.paths:
-                continue
-            command = [self.paths['python'], '-B', os.path.join(self.paths['ports'], argv[0])]
-            if name == 'x11':
-                # The xsrc pin is an archive identity; it inspects no Git input.
-                command += ['--sdk-source', self.paths['sdk-source'], 'verify-source', '--source', self.paths[name + '-source']]
-            elif name == 'libarchive':
-                command += ['verify', self.paths[name + '-source'], '--sdk-source', self.paths['sdk-source'], '--git', self.git_command]
-            else:
-                command += ['--sdk-source', self.paths['sdk-source'], '--git', self.git_command, 'verify-source', '--source', self.paths[name + '-source']]
-            if name in ('libarchive', 'libevent', 'openssl', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') and patch:
-                command += ['--patch', patch]
-            supports_shared = False
-            if name in ('libarchive', 'libevent', 'openssl', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') and patch:
-                supports_shared = name in self.SHARED_EXPORT_OWNERS
-                if (name in self.OPTIONAL_SHARED_EXPORT_OWNERS and
-                        os.path.isfile(os.path.join(self.paths['ports'], self.SHARED_EXPORT_SCRIPT))):
-                    supports_shared = self.owner_supports_shared_export(command[2], memo)
-            if name in ('libevent', 'openssl', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'gettext', 'libxml2') and self.options.get(name + '-archive'):
-                archive = paths.canonical_existing(self.options[name + '-archive'])
-                paths.regular_file(archive)
-                command += ['--archive', archive]
-                if name == 'rcs':
-                    command += ['--lzip', lzip]
-            inputs = [self.paths[name + '-source'], *self.receipt_tools(command)]
-            if store is not None:
-                # The shared export is a throwaway view of the pinned Ports
-                # inputs named by the material; it is made only on a miss.
-                material = self.source_receipt_material(name, command, supports_shared)
-                current = fingerprint(inputs, memo)
-                record = store.load(material, current)
-                if record is not None:
-                    result[name] = self.prepared_source_record(name, package, record)
-                    continue
-            if supports_shared:
-                if shared is None:
-                    shared = self.shared_pkgsrc_export(patch) or ''
-                if shared:
-                    command += ['--pkgsrc-export', shared]
-                    inputs.append(shared)
-            record = self.verification.verify(('common-source', name, tuple(command)), inputs,
-                lambda: jsonio.loads_json(process.capture(command, env=self.environment).stdout), memo)
-            result[name] = self.prepared_source_record(name, package, record)
-            if store is not None:
-                store.save(material, current, record)
+        for name, package in self.COMMON_SOURCES:
+            if name + '-source' in self.paths:
+                try:
+                    record = sourceprep.read_prepared_tree_receipt(self.paths[name + '-source'], package=package)
+                except SDKError as exc:
+                    raise SDKError(f'invalid {name} prepared source receipt: {exc}') from exc
+                result[name] = self.prepared_source_record(name, package, record)
         return result
 
     @staticmethod
@@ -763,44 +645,6 @@ class SysrootBuilder:
                 record.get('package') != package):
             raise SDKError(f'invalid {name} prepared source receipt')
         return record
-
-    def source_receipt_store(self):
-        """The selected cross-run store of prepared-source records, or None."""
-        directory = self.options.get('source-receipts')
-        if directory is None:
-            return None
-        if not os.path.isabs(directory):
-            raise SDKError('--source-receipts must be an absolute directory')
-        for name in ('ports', 'sdk'):
-            if name not in getattr(self, 'sources', {}):
-                raise SDKError('source receipts need the checked Ports and SDK checkouts')
-        try:
-            return SourceReceiptStore(directory)
-        except (OSError, ValueError) as exc:
-            raise SDKError(f'invalid source receipt directory: {exc}') from exc
-
-    def source_receipt_material(self, name, command, shared):
-        """Everything a stored record depends on besides its input files.
-
-        The owner reads Ports and SDK modules and the pinned pkgsrc through
-        Git, so the clean-checkout records of both checkouts are part of it.
-        The native routing tree is named by the digest of its OS contract and
-        is generated from the HOST_* tools already in the environment, so only
-        that name is kept: a new tools directory with the same contract does
-        not invalidate a record."""
-        environment = {key: value for key, value in self.environment.items() if key != 'TMPDIR'}
-        routing = getattr(self, 'paths', {}).get('native-routing')
-        routing_name = os.path.basename(routing) if routing else ''
-        if re.fullmatch(r'native-routing-[0-9a-f]{64}', routing_name):
-            for key, value in environment.items():
-                if key == 'EMBER_NATIVE_TOOLS' and value == routing:
-                    environment[key] = routing_name
-                elif key == 'PATH':
-                    environment[key] = os.pathsep.join(routing_name if part == routing else part
-                                                       for part in value.split(os.pathsep))
-        return dict(format='emberbsd-source-receipt-material', version=1, name=name,
-                    command=list(command), shared_export=bool(shared), git=self.git_command,
-                    environment=environment, ports=self.sources['ports'], sdk=self.sources['sdk'])
 
     def python_identity(self):
         python = self.paths['python']
@@ -1338,9 +1182,9 @@ class SysrootBuilder:
         self.require_ppp_source_support()
         self.require_gettext_source_support()
         self.sources['sdk'] = self.source(self.paths['sdk-source'], 'sdk')
-        self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command)
+        self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command, content=False)
         self.common_source_records = (self.verify_common_sources()
-                                      if any(name + '-source' in self.paths for name in ('libarchive', 'libevent', 'openssl', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'x11'))
+                                      if any(name + '-source' in self.paths for name, _ in self.COMMON_SOURCES)
                                       else {})
         self.python = self.python_identity()
         self.git(self.paths['os'], 'ls-files', '--error-unmatch', 'build.sh', 'Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk')
@@ -1656,12 +1500,12 @@ class SysrootBuilder:
             self.prepare_contexts()
             self.contexts_prepared = True
             self.prepare_native_routing()
-            if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command) != self.libedit_record:
+            if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command, content=False) != self.libedit_record:
                 raise SDKError('libedit source changed before build')
             if self.common_source_records and self.verify_common_sources() != self.common_source_records:
                 raise SDKError('common sources changed before build')
             self.build_payload()
-            if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command) != self.libedit_record:
+            if libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command, content=False) != self.libedit_record:
                 raise SDKError('libedit source changed during build')
             if self.common_source_records and self.verify_common_sources() != self.common_source_records:
                 raise SDKError('common sources changed during build')

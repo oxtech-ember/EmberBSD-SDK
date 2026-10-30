@@ -235,6 +235,27 @@ def write_prepared_tree_receipt(root, *, package, identity):
     return record
 
 
+def read_prepared_tree_receipt(root, *, package):
+    """The receipt of a prepared tree, checked by form only.
+
+    The receipt is the identity its owner wrote when it prepared the tree;
+    the tree itself is not read."""
+    from . import jsonio, paths
+    root = paths.canonical_existing(root)
+    paths.real_directory(root)
+    record = jsonio.read_json(os.path.join(root, PREPARED_TREE_RECEIPT))
+    if (not isinstance(record, dict) or
+            set(record) != {'format', 'version', 'package', 'identity', 'tree_sha256'} or
+            record['format'] != 'emberbsd-prepared-source' or
+            type(record['version']) is not int or record['version'] != 1 or
+            record['package'] != package or
+            not isinstance(record['identity'], dict) or not record['identity'] or
+            not isinstance(record['tree_sha256'], str) or
+            re.fullmatch('[0-9a-f]{64}', record['tree_sha256']) is None):
+        raise SDKError('prepared source receipt is not for ' + package)
+    return record
+
+
 def validate_prepared_tree(root, *, package, identity):
     """Refuse changed package inputs, receipt or prepared payload."""
     from . import jsonio, paths

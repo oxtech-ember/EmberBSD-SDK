@@ -59,9 +59,9 @@ See [libedit preparation](libedit.md) for the mandatory `--libedit-source` input
 For an OS producer that consumes common OpenSSL, prepare the current Ports
 `security/openssl` source using `scripts/source-inputs/openssl/source.py` and
 select it with `--openssl-source`. The owner verifies its archive and complete
-patch set. This optional selector is forwarded as `EMBER_OPENSSL_SOURCE`;
-older OS producers remain usable without it. `--openssl-archive` supplies the
-archive when comparing changed owner inputs. Source preparation needs no
+patch set when it prepares the tree; the SDK reads the tree's preparation
+receipt. This optional selector is forwarded as `EMBER_OPENSSL_SOURCE`;
+older OS producers remain usable without it. Source preparation needs no
 application sysroot.
 
 Prepare libarchive with the Ports `scripts/libarchive-source.py prepare` command

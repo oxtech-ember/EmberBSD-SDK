@@ -8,8 +8,7 @@ and directory below the declared inputs: device, inode, mode, size,
 modification time and change time.  Writing a file, replacing it or
 setting its times changes its change time, so any difference leads to a
 full content verification again.  Receipts live only in memory and are
-never written, so a new run always starts with content verification,
-unless the run selects a SourceReceiptStore for its prepared sources.
+never written, so a new run always starts with content verification.
 Inputs a run requires unchanged from start to end, such as the clean
 source checkouts, are instead checked once per run and once more at the
 end of the build (RunReceipts.once).
@@ -17,10 +16,8 @@ end of the build (RunReceipts.once).
 
 import copy
 import hashlib
-import json
 import os
 import stat
-import tempfile
 
 
 def _row(digest, name, info):
@@ -111,65 +108,3 @@ class RunReceipts:
         result = verifier()
         self._once[key] = copy.deepcopy(result)
         return result
-
-
-class SourceReceiptStore:
-    """Prepared-source records that a later run may reuse, when selected.
-
-    A run selects a store directory explicitly; without one nothing is
-    written and every run verifies by content.  An entry is reused only for
-    the same verifier command, environment and Ports and SDK checkout records,
-    and only while the metadata fingerprint of every declared input equals
-    the one taken before its content verification: the same rule a run uses
-    for its own later checks.  Any difference verifies by content again and
-    replaces the entry.
-    """
-    FORMAT = 'emberbsd-source-receipt'
-
-    def __init__(self, directory):
-        if not isinstance(directory, str) or not os.path.isabs(directory):
-            raise ValueError('source receipt directory must be absolute')
-        os.makedirs(directory, mode=0o755, exist_ok=True)
-        if os.path.islink(directory) or not os.path.isdir(directory):
-            raise ValueError('source receipt directory must be a real directory')
-        self.directory = os.path.realpath(directory)
-
-    @staticmethod
-    def _encode(value):
-        return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('ascii')
-
-    def _path(self, material):
-        return os.path.join(self.directory, hashlib.sha256(self._encode(material)).hexdigest() + '.json')
-
-    def load(self, material, current):
-        """Return the stored record, or None when it must be verified by content."""
-        if current is None:
-            return None
-        try:
-            with open(self._path(material), 'rb') as handle:
-                saved = json.loads(handle.read(1 << 22))
-        except (OSError, ValueError):
-            return None
-        if (not isinstance(saved, dict) or saved.get('format') != self.FORMAT or saved.get('version') != 1 or
-                saved.get('material') != json.loads(self._encode(material)) or saved.get('fingerprint') != current):
-            return None
-        return copy.deepcopy(saved.get('record'))
-
-    def save(self, material, current, record):
-        if current is None:
-            return
-        data = self._encode(dict(format=self.FORMAT, version=1, material=material,
-                                 fingerprint=current, record=record))
-        fd, temporary = tempfile.mkstemp(prefix='.receipt-', dir=self.directory)
-        try:
-            with os.fdopen(fd, 'wb') as handle:
-                handle.write(data)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, self._path(material))
-        except BaseException:
-            try:
-                os.unlink(temporary)
-            except OSError:
-                pass
-            raise
