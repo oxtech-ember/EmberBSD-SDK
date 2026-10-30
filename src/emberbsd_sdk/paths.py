@@ -46,7 +46,10 @@ def regular_file(value):
 
 def canonical_existing(value):
     try:
-        return path_string(os.path.realpath(_raw_absolute(value), strict=True))
+        # os.path.realpath(strict=) needs Python 3.10; resolve then stat.
+        resolved = os.path.realpath(_raw_absolute(value))
+        os.stat(resolved)
+        return path_string(resolved)
     except OSError as exc:
         raise SDKError(str(exc)) from exc
 
