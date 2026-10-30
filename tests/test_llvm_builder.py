@@ -1893,6 +1893,21 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.llvm_phase = 'base'
         self.assertFalse(builder.compatible_context(records[objects], objects))
 
+    def test_openssl_selection_changes_headers_but_not_native_tools(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        tools, objects = builder.paths['tools'], builder.paths['objects']
+        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+        builder.paths['openssl-source'] = '/prepared/openssl'
+        builder.signature['common_sources']['openssl'] = {'tree_sha256': 'a' * 64}
+        builder.signature['flags'].extend(('EMBER_OPENSSL_SOURCE=/prepared/openssl', 'HOST_PERL=/host/perl'))
+        self.assertTrue(builder.compatible_context(records[tools], tools))
+        self.assertFalse(builder.compatible_context(records[objects], objects))
+        builder.signature['common_sources']['openssl']['tree_sha256'] = 'b' * 64
+        self.assertFalse(builder.compatible_context(records[objects], objects))
+
     def test_tdb_selection_changes_headers_but_not_native_tools(self):
         builder, _ = self.builder()
         builder.preflight()

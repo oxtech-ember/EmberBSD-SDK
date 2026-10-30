@@ -420,6 +420,22 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             self.assertIn('EMBER_LIBARCHIVE_SOURCE=/sdk/libarchive-source', command)
             self.assertIn('EMBER_LIBEVENT_SOURCE=/sdk/libevent-source', command)
 
+    def test_optional_openssl_source_reaches_release_commands(self):
+        paths = {name: '/sdk/' + name for name in (
+            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
+            'libedit-source', 'openssl-source', 'objects', 'tools', 'destination', 'os')}
+        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++', 'perl': '/host/perl'},
+                     'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27'},
+                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
+        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
+                                        '/host/sh', compiler_family='clang', base_cxx=True,
+                                        native_selection=selection)
+        for flag in ('EMBER_OPENSSL_SOURCE=/sdk/openssl-source', 'HOST_PERL=/host/perl'):
+            self.assertIn(flag, flags)
+            for command in commands:
+                self.assertIn(flag, command)
+
     def test_release_uses_bootstrap_libc_unwind_and_full_runtime(self):
         paths = {name: '/sdk/' + name for name in (
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-libc-unwind',

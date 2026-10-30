@@ -36,6 +36,11 @@ producer. Without `--llvm-runtime-stage`, the [LLVM coordinator](llvm-runtime.md
 builds headers, the initial runtime, C base and full C++ runtime before the
 release. An explicitly supplied full stage is checked against these same inputs. When selecting a full stage directly, also pass `--llvm-bootstrap-stage` for the exact bootstrap stage recorded by that full runtime. For a separate recorded foundation, select `--llvm-runtime-base` as described in [the runtime guide](llvm-runtime.md). The OS embeds its checked static libunwind archive into libc; the full runtime remains the application runtime.
 
+When the selected OS consumes the common Ports OpenSSL source, pass the
+prepared tree with `--openssl-source`. The optional input is verified by its
+Ports owner and recorded with the other common source inputs; it is forwarded
+to the OS as `EMBER_OPENSSL_SOURCE`. An older OS build can omit it.
+
 Select `aarch64-sysroot` for complete base/comp sets and an EMBER64 test kernel.
 Select `amd64` for the reduced UEFI ISO, USB image and installation sets.
 The product version comes from canonical `EMBER_VERSION` in the pinned

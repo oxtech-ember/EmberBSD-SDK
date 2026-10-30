@@ -56,6 +56,14 @@ libevent producers require the pinned pkgsrc checkout to prepare and verify
 their export inputs. Other gitlinks are rejected by this backend.
 
 See [libedit preparation](libedit.md) for the mandatory `--libedit-source` input.
+For an OS producer that consumes common OpenSSL, prepare the current Ports
+`security/openssl` source using `scripts/source-inputs/openssl/source.py` and
+select it with `--openssl-source`. The owner verifies its archive and complete
+patch set. This optional selector is forwarded as `EMBER_OPENSSL_SOURCE`;
+older OS producers remain usable without it. `--openssl-archive` supplies the
+archive when comparing changed owner inputs. Source preparation needs no
+application sysroot.
+
 Prepare libarchive with the Ports `scripts/libarchive-source.py prepare` command
 and libevent with `scripts/source-inputs/libevent/source.py prepare`; both use
 the selected SDK source and canonical Ports export. Pass the resulting trees

@@ -46,6 +46,7 @@ def main():
         parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix'}.get(name))
     parser.add_argument('--runtime-work', action=UniqueOption,
                         help='required for GCC or to build an LLVM runtime; not needed with a selected LLVM stage')
+    parser.add_argument('--openssl-source', action=UniqueOption, help='prepared common Ports OpenSSL source')
     parser.add_argument('--texinfo-source', action=UniqueOption, help='prepared common Ports Texinfo C-only source')
     parser.add_argument('--nvi-source', action=UniqueOption, help='prepared common Ports nvi source')
     parser.add_argument('--ekermit-source', action=UniqueOption, help='prepared common Ports E-Kermit source')
@@ -67,7 +68,7 @@ def main():
     parser.add_argument('--source-patch', action=UniqueOption, help='selected patch executable inside the native prefix')
     parser.add_argument('--source-receipts', action=UniqueOption,
                         help='directory keeping verified prepared-source records for later runs')
-    for name in ('libevent-archive', 'byacc-archive', 'texinfo-archive', 'rcs-archive', 'diffutils-archive', 'grep-archive', 'ekermit-archive', 'nvi-archive', 'tdb-archive', 'ppp-archive', 'top-archive', 'iscsi-archive', 'libpcap-archive', 'tcpdump-archive', 'tcp-wrappers-archive', 'ntp-archive', 'gettext-archive', 'libxml2-archive'):
+    for name in ('libevent-archive', 'openssl-archive', 'byacc-archive', 'texinfo-archive', 'rcs-archive', 'diffutils-archive', 'grep-archive', 'ekermit-archive', 'nvi-archive', 'tdb-archive', 'ppp-archive', 'top-archive', 'iscsi-archive', 'libpcap-archive', 'tcpdump-archive', 'tcp-wrappers-archive', 'ntp-archive', 'gettext-archive', 'libxml2-archive'):
         parser.add_argument('--' + name, action=UniqueOption, help='archive for comparing changed source inputs')
     parser.add_argument('--x11-source', action=UniqueOption,
                         help='prepared Ports xsrc source; builds the X11 sets (Clang aarch64-sysroot only)')

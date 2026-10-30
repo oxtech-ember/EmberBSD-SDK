@@ -177,6 +177,8 @@ class SysrootBuilder:
         self.native_contract = contract
         if self.options.get('texinfo-source') or self.options.get('rcs-source') or self.options.get('diffutils-source') or self.options.get('grep-source'):
             roles = roles | {'gmake'}
+        if self.options.get('openssl-source'):
+            roles |= {'perl'}
         if self.options.get('gettext-source'):
             roles |= {'gmake', 'pkg-config', 'od', 'msgfmt', 'msgmerge', 'xgettext', 'msginit', 'msgconv', 'msgfilter', 'sed'}
         return native_toolset.load_host_prefix(self.options['host-prefix'], required_roles=roles | {'python'},
@@ -471,6 +473,8 @@ class SysrootBuilder:
                     signature.pop('llvm_source', None)
                     common_sources = signature.pop('common_sources', {})
                     # TDB includes install tdb.h during the headers phase.
+                    if 'openssl' in common_sources:
+                        signature['header_openssl_source'] = common_sources['openssl']
                     if 'tdb' in common_sources:
                         signature['header_tdb_source'] = common_sources['tdb']
                     if 'iscsi' in common_sources:
@@ -618,7 +622,7 @@ class SysrootBuilder:
         return record
 
     SHARED_EXPORT_SCRIPT = 'scripts/pkgsrc-shared-export.py'
-    SHARED_EXPORT_OWNERS = ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils',
+    SHARED_EXPORT_OWNERS = ('libarchive', 'libevent', 'openssl', 'byacc', 'texinfo', 'rcs', 'diffutils',
                             'grep', 'ekermit', 'nvi', 'tcpdump', 'top', 'iscsi', 'ntp',
                             'libopts', 'gettext', 'libxml2')
 
@@ -684,6 +688,7 @@ class SysrootBuilder:
         for name, package, argv in (
             ('libarchive', 'archivers/libarchive', ['scripts/libarchive-source.py', 'verify']),
             ('libevent', 'devel/libevent', ['scripts/source-inputs/libevent/source.py']),
+            ('openssl', 'security/openssl', ['scripts/source-inputs/openssl/source.py']),
             ('byacc', 'devel/byacc', ['scripts/source-inputs/byacc/source.py']),
             ('texinfo', 'devel/gtexinfo', ['scripts/source-inputs/texinfo/source.py']),
             ('rcs', 'devel/rcs', ['scripts/source-inputs/rcs/source.py']),
@@ -714,15 +719,15 @@ class SysrootBuilder:
                 command += ['verify', self.paths[name + '-source'], '--sdk-source', self.paths['sdk-source'], '--git', self.git_command]
             else:
                 command += ['--sdk-source', self.paths['sdk-source'], '--git', self.git_command, 'verify-source', '--source', self.paths[name + '-source']]
-            if name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') and patch:
+            if name in ('libarchive', 'libevent', 'openssl', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') and patch:
                 command += ['--patch', patch]
             supports_shared = False
-            if name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') and patch:
+            if name in ('libarchive', 'libevent', 'openssl', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') and patch:
                 supports_shared = name in self.SHARED_EXPORT_OWNERS
                 if (name in self.OPTIONAL_SHARED_EXPORT_OWNERS and
                         os.path.isfile(os.path.join(self.paths['ports'], self.SHARED_EXPORT_SCRIPT))):
                     supports_shared = self.owner_supports_shared_export(command[2], memo)
-            if name in ('libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'gettext', 'libxml2') and self.options.get(name + '-archive'):
+            if name in ('libevent', 'openssl', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'gettext', 'libxml2') and self.options.get(name + '-archive'):
                 archive = paths.canonical_existing(self.options[name + '-archive'])
                 paths.regular_file(archive)
                 command += ['--archive', archive]
@@ -1259,7 +1264,7 @@ class SysrootBuilder:
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
-        input_names += [name for name in ('libarchive-source', 'libevent-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'x11-source') if self.options.get(name)]
+        input_names += [name for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'x11-source') if self.options.get(name)]
         if clang and self.llvm_phase != 'headers' and self.options.get('llvm-runtime-original-source'):
             input_names.append('llvm-runtime-original-source')
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
@@ -1335,7 +1340,7 @@ class SysrootBuilder:
         self.sources['sdk'] = self.source(self.paths['sdk-source'], 'sdk')
         self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports=self.paths['ports'], git=self.git_command)
         self.common_source_records = (self.verify_common_sources()
-                                      if any(name + '-source' in self.paths for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'x11'))
+                                      if any(name + '-source' in self.paths for name in ('libarchive', 'libevent', 'openssl', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'x11'))
                                       else {})
         self.python = self.python_identity()
         self.git(self.paths['os'], 'ls-files', '--error-unmatch', 'build.sh', 'Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk')
@@ -1381,7 +1386,9 @@ class SysrootBuilder:
         self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}',
                        f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
         self.flags += [f'EMBER_{name.upper().replace("-", "_")}_SOURCE={self.paths[name + "-source"]}'
-                       for name in ('libarchive', 'libevent', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in self.paths]
+                       for name in ('libarchive', 'libevent', 'openssl', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in self.paths]
+        if 'openssl-source' in self.paths:
+            self.flags.append('HOST_PERL=' + self.native.tool('perl'))
         if 'tdb-source' in self.paths:
             self.flags.append('HOST_PYTHON=' + self.native.tool('python'))
         if any(name + '-source' in self.paths for name in ('texinfo', 'rcs', 'diffutils', 'grep', 'gettext')):

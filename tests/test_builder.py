@@ -33,6 +33,8 @@ def fixture_native_selection(builder):
     builder.native_contract = str(Path(builder.options['os']) / 'tools/native-tools/contract')
     builder.native_contract_sha256 = inventory.sha256_file(builder.native_contract)
     tools = {name: str(prefix / name) for name in ('cc', 'cxx', 'cpp', 'as', 'ld', 'python', 'sh', 'cmp', 'make', 'readlink')}
+    if builder.options.get('openssl-source'):
+        tools['perl'] = str(prefix / 'perl')
     if 'hostname hostname -' in Path(builder.native_contract).read_text():
         tools['hostname'] = str(prefix / 'libexec/gettext/hostname')
     return HostPrefix(str(prefix), MappingProxyType({'os': 'Darwin', 'cpu': 'arm64'}),
@@ -212,6 +214,7 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
     for name, package, script in (
         ('libarchive', 'archivers/libarchive', 'scripts/libarchive-source.py'),
         ('libevent', 'devel/libevent', 'scripts/source-inputs/libevent/source.py'),
+        ('openssl', 'security/openssl', 'scripts/source-inputs/openssl/source.py'),
     ):
         source = root / (name + '-source')
         source.mkdir()
@@ -240,6 +243,20 @@ class BuilderTests(TemporaryCase):
         for name in ('gettext-source', 'libxml2-source'):
             with self.subTest(name=name), self.assertRaisesRegex(SDKError, 'selected together'):
                 B(self.options | {name: '/prepared/source'}).preflight()
+
+    def test_optional_openssl_is_verified_and_forwarded(self):
+        options = self.options | {'openssl-source': str(self.root / 'openssl-source')}
+        builder = B(options)
+        builder.preflight()
+        self.assertEqual(builder.common_source_records['openssl']['package'], 'security/openssl')
+        self.assertIn('EMBER_OPENSSL_SOURCE=' + options['openssl-source'], builder.flags)
+        self.assertIn('HOST_PERL=' + builder.native.tool('perl'), builder.flags)
+        receipt = Path(options['openssl-source']) / 'receipt.json'
+        record = json.loads(receipt.read_text())
+        record['package'] = 'other/package'
+        receipt.write_text(json.dumps(record))
+        with self.assertRaisesRegex(SDKError, 'invalid openssl'):
+            B(options).preflight()
 
     def test_common_source_missing_and_wrong_package_are_refused(self):
         for name in ('libarchive', 'libevent'):
