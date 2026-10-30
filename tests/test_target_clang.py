@@ -2,11 +2,14 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Target compiler routing, independent of a completed application runtime."""
 
+import hashlib
+import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from test_core import TemporaryCase, header
 from test_host_clang import ClangFixture
+from emberbsd_sdk import inventory, target_toolchain
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.sysroot_builder import SysrootBuilder
 from emberbsd_sdk.targets import target_definition
@@ -51,6 +54,62 @@ class TargetClangTests(TemporaryCase):
         self.assertEqual(record['binaries']['ar']['selected_path'], str(self.fixture.root / 'bin/llvm-ar'))
         self.assertEqual(record['commands']['as'], [str(self.fixture.root / 'bin/clang'),
             '--target=aarch64--netbsd', '-c', '-x', 'assembler'])
+
+    def test_shared_executable_is_hashed_once_per_identity(self):
+        with patch('emberbsd_sdk.target_toolchain.inventory.sha256_file', wraps=inventory.sha256_file) as hashed:
+            record = self.compiler()
+        self.assertEqual(hashed.call_count, 11)
+        clang = str(self.fixture.root / 'bin/clang')
+        self.assertEqual(sum(call.args == (clang,) for call in hashed.call_args_list), 1)
+        for role in ('cxx', 'cpp', 'as'):
+            self.assertEqual(record['binaries'][role]['sha256'], record['binaries']['cc']['sha256'])
+
+    def test_distinct_executable_keeps_its_own_hash(self):
+        cxx = self.fixture.root / 'bin/clang++'
+        cxx.unlink()
+        content = header(62, 2) + b'cxx'
+        self.fixture.write('clang++', content)
+        def capture(argv, *, env):
+            result = self.capture(argv, env=env)
+            if '-###' in argv and argv[0] == str(cxx):
+                result.stderr = result.stderr.replace(b'/bin/clang"', b'/bin/clang++"')
+            return result
+        with patch('emberbsd_sdk.host_prefix.process.capture', side_effect=capture), \
+                patch('emberbsd_sdk.target_toolchain.inventory.sha256_file', wraps=inventory.sha256_file) as hashed:
+            record = self.builder.compiler()
+        self.assertEqual(hashed.call_count, 12)
+        self.assertEqual(record['binaries']['cxx']['sha256'], hashlib.sha256(content).hexdigest())
+        self.assertNotEqual(record['binaries']['cc']['sha256'], record['binaries']['cxx']['sha256'])
+
+    def test_shared_executable_change_between_roles_is_rehashed(self):
+        clang = self.fixture.root / 'bin/clang'
+        member = target_toolchain._member
+        content = header(62, 2) + b'changed'
+        def change_cxx(selected, *args, **kwargs):
+            if selected == str(self.fixture.root / 'bin/clang++'):
+                clang.write_bytes(content)
+            return member(selected, *args, **kwargs)
+        with patch('emberbsd_sdk.target_toolchain._member', side_effect=change_cxx), \
+                patch('emberbsd_sdk.target_toolchain.inventory.sha256_file', wraps=inventory.sha256_file) as hashed:
+            record = self.compiler()
+        self.assertEqual(sum(call.args == (str(clang),) for call in hashed.call_args_list), 2)
+        self.assertNotEqual(record['binaries']['cc']['sha256'], record['binaries']['cxx']['sha256'])
+        for role in ('cxx', 'cpp', 'as'):
+            self.assertEqual(record['binaries'][role]['sha256'], hashlib.sha256(content).hexdigest())
+
+    def test_each_identity_rehashes_same_size_changes_with_restored_mtime(self):
+        clang = self.fixture.root / 'bin/clang'
+        before = clang.stat()
+        with patch('emberbsd_sdk.target_toolchain.inventory.sha256_file', wraps=inventory.sha256_file) as hashed:
+            first = self.compiler()
+            content = bytearray(clang.read_bytes())
+            content[-1] = 1
+            clang.write_bytes(content)
+            os.utime(clang, ns=(before.st_atime_ns, before.st_mtime_ns))
+            second = self.compiler()
+        self.assertEqual(hashed.call_count, 22)
+        self.assertNotEqual(first['binaries']['cc']['sha256'], second['binaries']['cc']['sha256'])
+        self.assertEqual(second['binaries']['cc']['sha256'], hashlib.sha256(content).hexdigest())
 
     def test_portable_clang_identity_rejects_mixed_commands_without_reading_tools(self):
         record = self.compiler()
