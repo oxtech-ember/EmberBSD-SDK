@@ -218,7 +218,8 @@ class PreparedSourceTests(TemporaryCase):
             builder.require_prepared_sources(self.source_flags(('byacc',)),
                                              (('tools', prepared_sources.BUILD_TARGETS),))
         for call in run.call_args_list:
-            self.assertIn('HOST_YACC=/host/yacc', call.args[0])
+            for flag in ('HOST_YACC=/host/yacc', 'HOST_MV_CP=/host/cp', 'HOST_MV_RM=/host/rm'):
+                self.assertIn(flag, call.args[0])
 
     def test_headers_phase_walks_nothing(self):
         from emberbsd_sdk.llvm_sysroot import LLVMPhaseBuilder
