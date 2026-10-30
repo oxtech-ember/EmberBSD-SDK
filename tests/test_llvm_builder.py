@@ -1305,6 +1305,28 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
             with self.assertRaisesRegex(SDKError, 'LLVM stage OS inputs changed'):
                 coordinator.run()
 
+    def test_fresh_object_mode_refuses_kept_tools_before_the_first_phase(self):
+        headers, _ = self.completed_headers()
+        options = {name: value for name, value in headers.options.items()
+                   if name not in ('destination', 'objects', 'llvm-runtime-stage', 'llvm-bootstrap-stage')}
+        options['runtime-work'] = str(Path(options['sdk']) / 'obj/llvm-runtime')
+        options['tools'] = headers.paths['tools']
+        self.assertTrue(os.listdir(options['tools']))
+        class Headers(type(headers)):
+            def __init__(self, selected, phase, **selection):
+                LLVMPhaseBuilder.__init__(self, selected, phase, **selection)
+            def build_payload(self):
+                raise AssertionError('no phase may build')
+        coordinator = LLVMCoordinator(options | {'object-mode': 'fresh'}, SysrootBuilder)
+        with patch('emberbsd_sdk.llvm_sysroot.LLVMPhaseBuilder', Headers):
+            with self.assertRaisesRegex(SDKError, 'fresh object mode needs a new or empty tools'):
+                coordinator.run()
+        options['tools'] = str(Path(options['sdk']) / 'obj/new-tools')
+        coordinator = LLVMCoordinator(options | {'object-mode': 'fresh'}, SysrootBuilder)
+        with patch('emberbsd_sdk.llvm_sysroot.LLVMPhaseBuilder', Headers):
+            coordinator.prepare()
+        self.assertTrue(coordinator.tools_new)
+
     def test_failed_keyed_stage_restarts_only_in_development_runs(self):
         headers, _ = self.completed_headers()
         options = {name: value for name, value in headers.options.items()

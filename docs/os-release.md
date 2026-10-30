@@ -74,6 +74,22 @@ profile. The destination must be new or empty and must be outside the active
 sysroot. Use paths without whitespace. `--objects` and `--tools` select shared
 workspace object paths; reuse requires an identical compatible context.
 Do not point this producer at a core-sysroot object's incompatible context.
+
+`--object-mode incremental` (the default) keeps the objects and tools of the
+same profile between builds. The kept trees are reused only when their recorded
+context matches the profile, the toolchain (compiler, LLVM runtime and stage
+records, native tools), the SDK build configuration and every compiled input;
+any difference refuses them, and the build needs new directories. Only the
+flags that name the OS commit (`MKREPRO_TIMESTAMP`, `EMBER_BUILD_ID`,
+`BUILDINFO`) are left out of that comparison, so a new OS commit updates the
+kept trees with `build.sh -u`. The source ancestry check still requires the
+kept trees' commits to be ancestors of the selected ones.
+`--object-mode fresh` requires new or empty `--objects` and `--tools`
+directories at the start of the run, so the OS phases of this run are the only
+producers of the tools; use it for a published release. The selected mode is
+recorded as `object_mode` in the build receipt and in `build-profile.json`.
+Completed LLVM bootstrap stages are keyed by their recorded inputs (see
+`native-os-routing.md`) and are reused in both modes.
 No compilation or output writes occur in plan mode.
 The three optional driver/interpreter path options are checked aliases for the selected
 native prefix roles. The context binds the complete normalized native selection.

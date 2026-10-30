@@ -93,6 +93,9 @@ def main():
     parser.add_argument('--base-cxx', action=argparse.BooleanOptionalAction, default=argparse.SUPPRESS,
                         help='install the selected LLVM libc++ headers and linker aliases into the OS base paths (default for Clang)')
     parser.add_argument('--profile', required=True, choices=('amd64', 'aarch64-sysroot'))
+    parser.add_argument('--object-mode', choices=('incremental', 'fresh'), action=UniqueOption,
+                        help='incremental (default) updates compatible kept objects with build.sh -u; '
+                             'fresh requires new objects and tools directories, for a published release')
     for name in ('destination', 'objects', 'tools'):
         parser.add_argument('--' + name, action=UniqueOption, required=name == 'destination')
     for name in ('host-cc', 'host-cxx', 'python'):

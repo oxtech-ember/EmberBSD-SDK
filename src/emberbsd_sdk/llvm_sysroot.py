@@ -172,6 +172,8 @@ class LLVMCoordinator:
                                       'llvm-bootstrap-' + self.options['target']))
         self.runtime_root = self.work
         self.stage_inputs = None
+        # Set by prepare(): whether this run found the tools directory new.
+        self.tools_new = False
         # Only SDK-named stages restart; explicit stage directories are left as they are.
         self.resume = self.keyed and builder_type.RESUMES_FAILED_STAGES
         self.object_root = self.options.get('llvm-objects', os.path.join(
@@ -225,6 +227,12 @@ class LLVMCoordinator:
         paths.reject_overlap(final, self.stage_root)
         if paths.entry(final) is not None and os.listdir(final):
             raise SDKError('destination must be new or empty; active sysroot is never overwritten')
+        # The OS phases build the shared tools first; a fresh release needs
+        # them new at the start of the run. Its objects are checked by the
+        # final builder.
+        self.tools_new = paths.entry(self.tools) is None or not os.listdir(self.tools)
+        if self.options.get('object-mode') == 'fresh' and not self.tools_new:
+            raise SDKError('fresh object mode needs a new or empty tools directory: ' + self.tools)
 
     def require_prepared_sources(self):
         """Refuse, before the first phase, sources a later phase will need.
@@ -358,4 +366,7 @@ class LLVMCoordinator:
                                             'llvm-runtime-base': os.path.join(self.stage_root, 'base'),
                                             'llvm-bootstrap-stage': os.path.join(self.runtime_root, 'bootstrap-stage'),
                                             'tools': self.tools}
-            return self.builder_type(final_options, receipts=self.receipts).run()
+            final = self.builder_type(final_options, receipts=self.receipts)
+            if self.tools_new:
+                final.tools_new_in_run = True
+            return final.run()

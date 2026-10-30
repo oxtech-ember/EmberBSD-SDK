@@ -464,10 +464,14 @@ class SysrootBuilder:
         except (KeyError, TypeError) as exc:
             raise SDKError(f'invalid source history: {path}: {exc}') from exc
 
+    def reuse_signature(self, signature):
+        """Return the part of a context signature that object reuse compares."""
+        return signature
+
     def compatible_context(self, record, path):
         """Compare compiled inputs, allowing controller updates and new utilities."""
-        old = copy.deepcopy(record['signature'])
-        new = copy.deepcopy(self.context_signature(path))
+        old = self.reuse_signature(copy.deepcopy(record['signature']))
+        new = self.reuse_signature(copy.deepcopy(self.context_signature(path)))
         if old == new:
             return True
         try:

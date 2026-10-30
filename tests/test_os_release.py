@@ -978,6 +978,49 @@ class BuilderReleaseTests(TemporaryCase):
         self.assertEqual(first['signature'], second['signature'])
         self.assertIsNotNone(second['previous_contexts']['objects'])
 
+    def test_os_commit_change_updates_kept_objects_incrementally(self):
+        options = release_fixture(self.root, 'aarch64')
+        first = OSReleaseBuilder(options).run()
+        self.assertEqual(first['object_mode'], 'incremental')
+        write(Path(options['os']) / 'usr.bin/config/main.c', 'int changed;\n')
+        commit(options['os'])
+        # Same profile, toolchain and configuration: build.sh -u updates the
+        # kept objects although the commit metadata flags differ.
+        second = OSReleaseBuilder(options | {'destination': str(Path(options['sdk']) / 'stages/next-release')}).run()
+        self.assertNotEqual(first['signature']['flags'], second['signature']['flags'])
+        self.assertEqual(second['previous_contexts']['objects']['sources']['os']['commit'],
+                         first['sources']['os']['commit'])
+        self.assertIn('-u', second['plan'][1])
+        profile = jsonio.read_json(Path(options['sdk']) / 'stages/next-release/build-profile.json')
+        self.assertEqual(profile['sdk_receipt']['object_mode'], 'incremental')
+        # Only the commit metadata is left out; other flags are compared.
+        signature = dict(flags=['MKREPRO_TIMESTAMP=1', 'EMBER_BUILD_ID=a', 'BUILDINFO=EmberBSD:a', 'MKFOO=yes'])
+        selected = ProductionReleaseBuilder.__new__(ProductionReleaseBuilder)
+        self.assertEqual(selected.reuse_signature(signature), dict(flags=['MKFOO=yes']))
+
+    def test_fresh_object_mode_needs_new_trees_and_is_recorded(self):
+        options = release_fixture(self.root, 'aarch64')
+        OSReleaseBuilder(options).run()
+        later = options | {'destination': str(Path(options['sdk']) / 'stages/fresh'), 'object-mode': 'fresh'}
+        with self.assertRaisesRegex(SDKError, 'fresh object mode needs a new or empty objects'):
+            OSReleaseBuilder(later).run()
+        self.assertFalse(Path(later['destination'], 'build-success').exists())
+        # The kept tools are refused too; the LLVM coordinator test covers the
+        # tools that its own OS phases create in the same run.
+        selected = OSReleaseBuilder(later | {'objects': str(Path(options['sdk']) / 'obj/fresh-objects')})
+        with patch.object(OSReleaseBuilder, 'compatible_context', return_value=True):
+            with self.assertRaisesRegex(SDKError, 'fresh object mode needs a new or empty tools'):
+                selected.run()
+        later['objects'] = str(Path(options['sdk']) / 'obj/fresh-objects')
+        later['tools'] = str(Path(options['sdk']) / 'obj/fresh-tools')
+        receipt = OSReleaseBuilder(later).run()
+        self.assertEqual(receipt['object_mode'], 'fresh')
+        self.assertEqual(receipt['previous_contexts'], {'objects': None, 'tools': None})
+        profile = jsonio.read_json(Path(later['destination']) / 'build-profile.json')
+        self.assertEqual(profile['sdk_receipt']['object_mode'], 'fresh')
+        with self.assertRaisesRegex(SDKError, 'object mode must be'):
+            OSReleaseBuilder(options | {'object-mode': 'reuse'})
+
     def test_wrong_compiler_and_dirty_source_before_output(self):
         options = release_fixture(self.root, 'aarch64')
         write(self.root / 'control.json', '{"version":"12.5.0"}')

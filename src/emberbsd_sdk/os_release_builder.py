@@ -421,8 +421,18 @@ def finalize_release(destination):
 class OSReleaseBuilder(SysrootBuilder):
     # A publishable release does not continue after failed stages.
     RESUMES_FAILED_STAGES = False
+    OBJECT_MODES = ('incremental', 'fresh')
+    # Flags that only name the OS commit being built. build.sh -u rebuilds
+    # what an OS source change affects; these values do not select objects.
+    COMMIT_FLAGS = ('MKREPRO_TIMESTAMP=', 'EMBER_BUILD_ID=', 'BUILDINFO=')
 
     def __init__(self, options, *, receipts=None):
+        self.object_mode = options.get('object-mode', 'incremental')
+        if self.object_mode not in self.OBJECT_MODES:
+            raise SDKError('object mode must be incremental or fresh')
+        # Set by the LLVM coordinator when it found the tools directory new
+        # before this run's first phase.
+        self.tools_new_in_run = False
         target = options.get('target')
         self.FLAGS = flags_for(target, options.get('compiler-family', 'clang'), bool(options.get('x11-source')))
         super().__init__(options, receipts=receipts)
@@ -433,6 +443,14 @@ class OSReleaseBuilder(SysrootBuilder):
         from .prepared_sources import RELEASE_TRAVERSALS
         return (flags_for(options.get('target'), options.get('compiler-family', 'clang'), bool(options.get('x11-source'))),
                 RELEASE_TRAVERSALS)
+
+    def reuse_signature(self, signature):
+        # The same profile, toolchain and configuration at another OS commit
+        # updates the kept objects; the commit metadata itself is not compared.
+        if isinstance(signature.get('flags'), list):
+            signature['flags'] = [flag for flag in signature['flags']
+                                  if not (isinstance(flag, str) and flag.startswith(self.COMMIT_FLAGS))]
+        return signature
 
     def configure_signature(self):
         if type(self.options.get('base-cxx', False)) is not bool:
@@ -454,9 +472,15 @@ class OSReleaseBuilder(SysrootBuilder):
     def preflight(self):
         check('destination' in self.options, 'OS release requires an explicit destination stage')
         super().preflight()
+        if self.object_mode == 'fresh':
+            # A published release is built once from new trees.
+            check(self.contexts['objects'] is None,
+                  'fresh object mode needs a new or empty objects directory: ' + self.paths['objects'])
+            check(self.contexts['tools'] is None or self.tools_new_in_run,
+                  'fresh object mode needs a new or empty tools directory: ' + self.paths['tools'])
         version = (5 if llvm_runtime_install.base_cxx_enabled(self.flags) else 4) if self.compiler_family() == 'clang' else 3
         self.receipt.update(format='emberbsd-os-release-build', version=version, scope='os-release-build',
-                            previous_contexts=self.contexts, plan=[self.runtime_command, *self.release_commands, self.runtime_command],
+                            previous_contexts=self.contexts, object_mode=self.object_mode, plan=[self.runtime_command, *self.release_commands, self.runtime_command],
                             not_checked=['target execution', 'VM installation', 'physical hardware', 'binary publication'])
         self.receipt.pop('copy', None)
         return self.receipt
