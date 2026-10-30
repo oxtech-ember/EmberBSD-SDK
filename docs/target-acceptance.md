@@ -18,8 +18,10 @@ A same-build `nbmakefs` creates a separate FAT boot volume; the FFS root disk
 is attached first. A virtio RNG uses the host OS random device. The firmware
 is read-only, and the result records hashes of the firmware, loader, boot
 configuration, and boot volume. The root
-device is mandatory; the runner does not assume a QEMU unit number. It verifies
-the mounted root is read-only and uses tmpfs for test scratch files.
+device is mandatory; the runner does not assume a QEMU unit number. Under
+this EFI boot with QEMU 11.1 EDK2 the root disk attaches as `ld4`, so select
+`ld4a`. It verifies the mounted root is read-only and uses tmpfs for test
+scratch files.
 
 ```sh
 /absolute/native-ports-prefix/bin/python3.15 -B scripts/target-acceptance.py \
@@ -31,7 +33,7 @@ the mounted root is read-only and uses tmpfs for test scratch files.
     --target-prefix /absolute/aarch64-clang \
     --host-prefix /absolute/native-ports-prefix \
     --compiler-family clang \
-    --root-device ld0a \
+    --root-device ld4a \
     --output /absolute/new-acceptance-output \
     --sdk-source /absolute/EmberBSD-SDK
 ```
