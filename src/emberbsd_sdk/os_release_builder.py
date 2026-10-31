@@ -116,13 +116,15 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
     for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'wpa', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2'):
         if name + '-source' in paths:
             flags.append(f'EMBER_{name.upper().replace("-", "_")}_SOURCE={paths[name + "-source"]}')
-    if 'openssl-source' in paths and native_selection is not None:
+    if ('openssl-source' in paths or 'openssh-source' in paths) and native_selection is not None:
         flags.append('HOST_PERL=' + native_selection['tools']['perl'])
-    if ('openssl-source' in paths or 'tdb-source' in paths) and native_selection is not None:
+    if 'openssh-source' in paths and native_selection is not None:
+        flags.append('HOST_AUTOCONF=' + native_selection['tools']['autoconf'])
+    if any(name in paths for name in ('openssl-source', 'tdb-source', 'openssh-source')) and native_selection is not None:
         flags.append('HOST_PYTHON=' + native_selection['tools']['python'])
-    if 'openssl-source' in paths and not any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'gettext-source')) and native_selection is not None:
+    if 'openssl-source' in paths and not any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'gettext-source', 'openssh-source')) and native_selection is not None:
         flags.append('HOST_GMAKE=' + native_selection['tools']['gmake'])
-    if any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'gettext-source')) and native_selection is not None:
+    if any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'gettext-source', 'openssh-source')) and native_selection is not None:
         flags += gnu_target_host_flags(native_selection)
     if 'gettext-source' in paths and native_selection is not None:
         flags += gettext_target_host_flags(native_selection)
@@ -189,13 +191,15 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
         commands.insert(2, provider)
     source_flags = [f'EMBER_{name.upper().replace("-", "_")}_SOURCE={paths[name + "-source"]}'
                     for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'wpa', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in paths]
-    if 'openssl-source' in paths and native_selection is not None:
+    if ('openssl-source' in paths or 'openssh-source' in paths) and native_selection is not None:
         source_flags.append('HOST_PERL=' + native_selection['tools']['perl'])
-    if ('openssl-source' in paths or 'tdb-source' in paths) and native_selection is not None:
+    if 'openssh-source' in paths and native_selection is not None:
+        source_flags.append('HOST_AUTOCONF=' + native_selection['tools']['autoconf'])
+    if any(name in paths for name in ('openssl-source', 'tdb-source', 'openssh-source')) and native_selection is not None:
         source_flags.append('HOST_PYTHON=' + native_selection['tools']['python'])
-    if 'openssl-source' in paths and not any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'gettext-source')) and native_selection is not None:
+    if 'openssl-source' in paths and not any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'gettext-source', 'openssh-source')) and native_selection is not None:
         source_flags.append('HOST_GMAKE=' + native_selection['tools']['gmake'])
-    if any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'gettext-source')) and native_selection is not None:
+    if any(name in paths for name in ('texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'gettext-source', 'openssh-source')) and native_selection is not None:
         source_flags += gnu_target_host_flags(native_selection)
     if 'gettext-source' in paths and native_selection is not None:
         source_flags += gettext_target_host_flags(native_selection)

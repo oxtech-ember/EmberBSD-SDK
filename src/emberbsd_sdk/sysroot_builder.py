@@ -168,6 +168,8 @@ class SysrootBuilder:
             roles = roles | {'gmake'}
         if self.options.get('openssl-source'):
             roles |= {'perl', 'gmake'}
+        if self.options.get('openssh-source'):
+            roles |= {'autoconf', 'autom4te', 'gm4', 'perl', 'gmake'}
         if self.options.get('gettext-source'):
             roles |= {'gmake', 'pkg-config', 'od', 'msgfmt', 'msgmerge', 'xgettext', 'msginit', 'msgconv', 'msgfilter', 'sed'}
         return native_toolset.load_host_prefix(self.options['host-prefix'], required_roles=roles | {'python'},
@@ -1402,13 +1404,15 @@ class SysrootBuilder:
                        f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
         self.flags += [f'EMBER_{name.upper().replace("-", "_")}_SOURCE={self.paths[name + "-source"]}'
                        for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'wpa', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in self.paths]
-        if 'openssl-source' in self.paths:
+        if 'openssl-source' in self.paths or 'openssh-source' in self.paths:
             self.flags.append('HOST_PERL=' + self.native.tool('perl'))
-        if 'openssl-source' in self.paths or 'tdb-source' in self.paths:
+        if 'openssh-source' in self.paths:
+            self.flags.append('HOST_AUTOCONF=' + self.native.tool('autoconf'))
+        if any(name in self.paths for name in ('openssl-source', 'tdb-source', 'openssh-source')):
             self.flags.append('HOST_PYTHON=' + self.native.tool('python'))
-        if 'openssl-source' in self.paths and not any(name + '-source' in self.paths for name in ('texinfo', 'rcs', 'diffutils', 'grep', 'gettext')):
+        if 'openssl-source' in self.paths and not any(name + '-source' in self.paths for name in ('texinfo', 'rcs', 'diffutils', 'grep', 'gettext', 'openssh')):
             self.flags.append('HOST_GMAKE=' + self.native.tool('gmake'))
-        if any(name + '-source' in self.paths for name in ('texinfo', 'rcs', 'diffutils', 'grep', 'gettext')):
+        if any(name + '-source' in self.paths for name in ('texinfo', 'rcs', 'diffutils', 'grep', 'gettext', 'openssh')):
             self.flags += gnu_target_host_flags(self.native_selection)
         if 'gettext-source' in self.paths:
             self.flags += gettext_target_host_flags(self.native_selection)

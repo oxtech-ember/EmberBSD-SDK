@@ -441,6 +441,32 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             self.assertIn('EMBER_HEIMDAL_SOURCE=/sdk/heimdal-source', command)
             self.assertIn('EMBER_OPENSSH_SOURCE=/sdk/openssh-source', command)
 
+    def test_openssh_host_config_tools_are_optional_and_forwarded(self):
+        names = ('compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind',
+                 'llvm-resource', 'libedit-source', 'objects', 'tools', 'destination', 'os')
+        paths = {name: '/sdk/' + name for name in names}
+        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++',
+                               'perl': '/host/perl', 'python': '/host/python',
+                               'gmake': '/host/gmake', 'autoconf': '/host/autoconf'},
+                     'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27'},
+                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
+        flags, _ = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
+                                     '/host/sh', compiler_family='clang', base_cxx=True,
+                                     native_selection=selection)
+        self.assertNotIn('HOST_AUTOCONF=/host/autoconf', flags)
+        paths['openssh-source'] = '/sdk/openssh-source'
+        paths['openssl-source'] = '/sdk/openssl-source'
+        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
+                                            '/host/sh', compiler_family='clang', base_cxx=True,
+                                            native_selection=selection)
+        for flag in ('HOST_AUTOCONF=/host/autoconf', 'HOST_PERL=/host/perl',
+                     'HOST_PYTHON=/host/python', 'HOST_GMAKE=/host/gmake',
+                     'EMBER_HOST_GNU_TRIPLE=aarch64-apple-darwin27'):
+            self.assertEqual(flags.count(flag), 1)
+            for command in commands:
+                self.assertIn(flag, command)
+
     def test_optional_openssl_source_reaches_release_commands(self):
         paths = {name: '/sdk/' + name for name in (
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
