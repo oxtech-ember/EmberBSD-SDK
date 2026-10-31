@@ -1620,9 +1620,16 @@ class SysrootBuilder:
             self.log = self.exclusive_file(os.path.join(self.paths['destination'], self.LOG))
             self.receipt['qualification'] = 'incomplete'
             self.save_receipt()
-            self.prepare_native_routing()
+            refresh = getattr(self, 'refresh_dirs', None)
+            if refresh:
+                # Prepared-source cleanup runs nbmake through the routing
+                # in the existing tools tree.
+                self.prepare_native_routing()
             self.prepare_contexts()
             self.contexts_prepared = True
+            if not refresh:
+                # A new tools tree exists only once its context is written.
+                self.prepare_native_routing()
             # Sources were identified once, at preflight, by their Git commits
             # and preparation receipts; they are not checked again after the
             # build. The selected tools still are.
