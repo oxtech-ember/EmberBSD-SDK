@@ -16,7 +16,7 @@ import signal
 import stat
 import sysconfig
 import time
-from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, prepared_sources, process, provenance, sourceprep, workspace
+from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, prepared_sources, prepared_refresh, process, provenance, sourceprep, workspace
 from .verification_receipts import RunReceipts
 from .errors import CommandError, SDKError, ProcessOwnershipError
 from .native_os_routing import gettext_target_host_flags, gnu_target_host_flags, native_host_flags, native_path, read_native_os_contract
@@ -414,10 +414,45 @@ class SysrootBuilder:
             return None
         record = jsonio.read_json(os.path.join(path, self.CONTEXT))
         if (not isinstance(record, dict) or set(record) != {'format', 'signature', 'sources', 'version'} or
-                record['format'] != 'emberbsd-sysroot-object-context' or type(record['version']) is not int or record['version'] != 1 or not self.compatible_context(record, path)):
+                record['format'] != 'emberbsd-sysroot-object-context' or type(record['version']) is not int or record['version'] != 1):
             raise SDKError(f'unknown or incompatible object context; leave it unchanged: {path}')
+        if not self.compatible_context(record, path):
+            if path != self.paths['objects'] or not self.plan_prepared_refresh(record, path):
+                raise SDKError(f'unknown or incompatible object context; leave it unchanged: {path}')
         self.validate_source_ancestry(record, path)
         return record
+
+    def plan_prepared_refresh(self, record, path):
+        """Allow only OS-declared prepared-source changes with scoped cleaning."""
+        try:
+            old = copy.deepcopy(record['signature'])
+            new = copy.deepcopy(self.context_signature(path))
+            before, after = old['common_sources'], new['common_sources']
+            if not isinstance(before, dict) or not isinstance(after, dict) or set(before) - set(after):
+                return False
+            changed = {name for name in after if name not in before or
+                       before[name].get('tree_sha256') != after[name].get('tree_sha256')}
+            if not changed:
+                return False
+            prefixes = tuple('EMBER_' + name.upper().replace('-', '_') + '_SOURCE=' for name in changed)
+            old_flags = self.reuse_signature(copy.deepcopy(old))['flags']
+            new_flags = self.reuse_signature(copy.deepcopy(new))['flags']
+            if [f for f in old_flags if not f.startswith(prefixes)] != [f for f in new_flags if not f.startswith(prefixes)]:
+                return False
+            for name in changed:
+                before[name] = copy.deepcopy(after[name])
+            old['flags'] = copy.deepcopy(new['flags'])
+            candidate = dict(record, signature=old)
+            if not self.compatible_context(candidate, path):
+                return False
+            def members(archive):
+                result = process.capture([self.compiler_record['binaries']['ar']['selected_path'],
+                                          't', str(archive)], env=self.environment)
+                return result.stdout.decode('utf-8', 'strict').splitlines()
+            self.refresh_dirs = prepared_refresh.plan(self.paths['os'], path, changed, members)
+            return bool(self.refresh_dirs)
+        except (KeyError, TypeError, AttributeError):
+            return False
 
     def validate_source_ancestry(self, record, path):
         """Check prior pins from a context or completed stage in current sources."""
@@ -1357,6 +1392,20 @@ class SysrootBuilder:
         for name in ('objects', 'tools'):
             if self.inspect_context(self.paths[name]) != self.contexts[name]:
                 raise SDKError('object context changed after preflight')
+        # Hold the existing object-tree lease throughout cleanup and context update.
+        for directory in getattr(self, 'refresh_dirs', []):
+            wrapper = os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine'])
+            base = [wrapper, '-C', os.path.join(self.paths['os'], directory),
+                    'DESTDIR=' + self.paths['destination'],
+                    'EMBER_NATIVE_TOOLS=' + self.paths['native-routing'], *self.flags]
+            if 'openssl-source' in self.paths:
+                generated = os.path.join(self.paths['objects'], 'crypto/external/apache2/openssl/generated')
+                base.append('EMBER_OPENSSL_GENERATED=' + generated)
+            selected = process.capture(base + ['-V', '${.OBJDIR}'], env=self.environment).stdout.decode('utf-8').strip()
+            expected = os.path.join(self.paths['objects'], directory)
+            if selected != expected or os.path.realpath(selected) != expected:
+                raise SDKError('prepared source refresh selected the wrong object directory: ' + directory)
+            self.dispatch(base + ['cleandir'])
         for name in ('objects', 'tools'):
             path = self.paths[name]
             record = dict(format='emberbsd-sysroot-object-context', version=1,
@@ -1565,9 +1614,9 @@ class SysrootBuilder:
             self.log = self.exclusive_file(os.path.join(self.paths['destination'], self.LOG))
             self.receipt['qualification'] = 'incomplete'
             self.save_receipt()
+            self.prepare_native_routing()
             self.prepare_contexts()
             self.contexts_prepared = True
-            self.prepare_native_routing()
             # Sources were identified once, at preflight, by their Git commits
             # and preparation receipts; they are not checked again after the
             # build. The selected tools still are.
