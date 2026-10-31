@@ -60,6 +60,10 @@ For OS builds using common `net/unbound`, prepare its source with the Ports
 `scripts/source-inputs/unbound/source.py` owner and select `--unbound-source`.
 The SDK forwards `EMBER_UNBOUND_SOURCE`.
 
+For OS builds using common `net/wpa_supplicant`, prepare its source with the
+Ports `scripts/source-inputs/wpa/source.py` owner and select `--wpa-source`.
+The SDK forwards `EMBER_WPA_SOURCE`.
+
 Select `aarch64-sysroot` for complete base/comp sets and an EMBER64 test kernel.
 Select `amd64` for the reduced UEFI ISO, USB image and installation sets.
 The product version comes from canonical `EMBER_VERSION` in the pinned

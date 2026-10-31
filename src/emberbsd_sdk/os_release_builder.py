@@ -113,7 +113,7 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
         f'EMBER_LIBEDIT_SOURCE={paths["libedit-source"]}',
         f'MKREPRO_TIMESTAMP={timestamp}', f'EMBER_BUILD_ID={sha}', f'BUILDINFO=EmberBSD:{sha}',
         f'KERNOBJDIR={paths["objects"]}/kernels'] + (native_host_flags(native_selection) if native_selection is not None else [])
-    for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2'):
+    for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'wpa', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2'):
         if name + '-source' in paths:
             flags.append(f'EMBER_{name.upper().replace("-", "_")}_SOURCE={paths[name + "-source"]}')
     if 'openssl-source' in paths and native_selection is not None:
@@ -188,7 +188,7 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
                                           native_selection['compiler']['family'])
         commands.insert(2, provider)
     source_flags = [f'EMBER_{name.upper().replace("-", "_")}_SOURCE={paths[name + "-source"]}'
-                    for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in paths]
+                    for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'wpa', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in paths]
     if 'openssl-source' in paths and native_selection is not None:
         source_flags.append('HOST_PERL=' + native_selection['tools']['perl'])
     if ('openssl-source' in paths or 'tdb-source' in paths) and native_selection is not None:
@@ -262,14 +262,14 @@ def validate_profile(profile, sha, target):
         for key in ('GCC_RUNTIME_INPUTS_SHA256', 'GCC_RUNTIME_STAGE_SHA256', 'GCC_RUNTIME_LINKS_SHA256'):
             check(full_hash(metadata[key]), 'Missing runtime receipt hash')
     paths = receipt['paths']
-    if any(name + '-source' in paths for name in ('openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound')) and 'common_sources' not in signature:
+    if any(name + '-source' in paths for name in ('openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'wpa')) and 'common_sources' not in signature:
         raise SDKError('Missing common source selection')
     if ('gettext-source' in paths or 'libxml2-source' in paths) and 'common_sources' not in signature:
         raise SDKError('Mixed gettext and libxml2 source selection')
     if 'common_sources' in signature:
         common_sources = signature['common_sources']
         check(isinstance(common_sources, dict) and {'libarchive', 'libevent'} <= set(common_sources) <=
-              {'libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'x11'}, 'Invalid common source selection')
+              {'libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'wpa', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'x11'}, 'Invalid common source selection')
         check(('x11' in common_sources) == ('x11-source' in paths), 'Mixed X11 source selection')
         check(('openssl' in common_sources) == ('openssl-source' in paths), 'Mixed OpenSSL source selection')
         check(('libfido2' in common_sources) == ('libfido2-source' in paths), 'Mixed libfido2 source selection')
@@ -277,13 +277,14 @@ def validate_profile(profile, sha, target):
         check(('libfetch' in common_sources) == ('libfetch-source' in paths), 'Mixed libfetch source selection')
         check(('openldap' in common_sources) == ('openldap-source' in paths), 'Mixed openldap source selection')
         check(('unbound' in common_sources) == ('unbound-source' in paths), 'Mixed unbound source selection')
+        check(('wpa' in common_sources) == ('wpa-source' in paths), 'Mixed wpa source selection')
         check(('ntp' in common_sources) == ('libopts' in common_sources) ==
               ('ntp-source' in paths) == ('libopts-source' in paths),
               'Mixed NTP and libopts source selection')
         check(('gettext' in common_sources) == ('libxml2' in common_sources) ==
               ('gettext-source' in paths) == ('libxml2-source' in paths),
               'Mixed gettext and libxml2 source selection')
-        for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'), ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'), ('diffutils', 'devel/diffutils'), ('grep', 'textproc/grep'), ('ekermit', 'comms/ekermit'), ('nvi', 'editors/nvi'), ('tdb', 'databases/tdb'), ('ppp', 'net/pppd'), ('top', 'sysutils/top'), ('iscsi', 'devel/netbsd-iscsi-lib'), ('libpcap', 'net/libpcap'), ('tcpdump', 'net/tcpdump'), ('tcp-wrappers', 'security/tcp_wrappers'), ('ntp', 'net/ntp4'), ('libopts', 'devel/autogen'), ('gettext', 'devel/gettext'), ('libxml2', 'textproc/libxml2'),
+        for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'), ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'), ('diffutils', 'devel/diffutils'), ('grep', 'textproc/grep'), ('ekermit', 'comms/ekermit'), ('nvi', 'editors/nvi'), ('tdb', 'databases/tdb'), ('ppp', 'net/pppd'), ('top', 'sysutils/top'), ('iscsi', 'devel/netbsd-iscsi-lib'), ('libpcap', 'net/libpcap'), ('tcpdump', 'net/tcpdump'), ('tcp-wrappers', 'security/tcp_wrappers'), ('ntp', 'net/ntp4'), ('libopts', 'devel/autogen'), ('gettext', 'devel/gettext'), ('libxml2', 'textproc/libxml2'),
                               ('x11', X11_PACKAGE)):
             if name not in common_sources:
                 continue

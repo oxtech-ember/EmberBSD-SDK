@@ -83,6 +83,10 @@ For OS builds using common `net/unbound`, prepare its source with the Ports
 `scripts/source-inputs/unbound/source.py` owner and select `--unbound-source`.
 The SDK forwards `EMBER_UNBOUND_SOURCE`.
 
+For OS builds using common `net/wpa_supplicant`, prepare its source with the
+Ports `scripts/source-inputs/wpa/source.py` owner and select `--wpa-source`.
+The SDK forwards `EMBER_WPA_SOURCE`.
+
 Prepare libarchive with the Ports `scripts/libarchive-source.py prepare` command
 and libevent with `scripts/source-inputs/libevent/source.py prepare`; both use
 the selected SDK source and canonical Ports export. Pass the resulting trees
