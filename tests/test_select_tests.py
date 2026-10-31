@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 SDK_SOURCE = Path(__file__).resolve().parents[1]
@@ -54,6 +55,8 @@ class SelectTestsTest(unittest.TestCase):
         self.assertEqual(self.select('tests/test_gamma.py'), ['test_gamma'])
 
     def test_programs_and_files_are_selected_by_name(self):
+        with patch.object(select_tests, 'graph', side_effect=AssertionError('no changes need no graph')):
+            self.assertEqual(self.select(), [])
         # A script reaches its imports; a test that runs it names its path.
         self.assertEqual(self.select('src/emberbsd_sdk/delta.py'), ['test_tool'])
         self.assertEqual(self.select('scripts/tool.py'), ['test_tool'])

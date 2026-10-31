@@ -53,9 +53,9 @@ def python_files(root):
     return files
 
 
-def imports(node_name, path, known):
+def imports(node_name, path, known, source):
     """Return the known modules that a file imports."""
-    tree = ast.parse(path.read_bytes(), str(path))
+    tree = ast.parse(source, str(path))
     package = node_name.split('.')[:-1] if '.' in node_name and path.name != '__init__.py' else node_name.split('.')
     found = set()
     for node in ast.walk(tree):
@@ -83,8 +83,11 @@ def imports(node_name, path, known):
 
 def graph(root):
     files = python_files(root)
-    edges = {name: imports(name, path, files) for name, path in files.items()}
-    texts = {name: path.read_text('utf-8', 'replace') for name, path in files.items()}
+    edges, texts = {}, {}
+    for name, path in files.items():
+        source = path.read_bytes()
+        edges[name] = imports(name, path, files, source)
+        texts[name] = source.decode('utf-8', 'replace')
     # A file that runs another one as a program or loads it by path names it.
     spelled = {other: (path.name if other.startswith(('scripts:', 'tests:')) else
                        other if path.name != '__init__.py' else None)
@@ -109,6 +112,8 @@ def closure(name, edges):
 
 def select(root, changed):
     """Return (sorted test module names, reason). None means the whole suite."""
+    if not changed:
+        return [], '0 changed paths'
     files, edges, texts = graph(root)
     tests = sorted(name for name in files if name.startswith('tests:test_'))
     reach = {test: closure(test, edges) for test in tests}
