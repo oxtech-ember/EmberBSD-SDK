@@ -40,7 +40,10 @@ def plan(os_root, objects, names, archive_members=None):
             linked.update(relative(p) for p in entry['linked_names'])
         def walk_error(error):
             raise error
-        for directory, subdirs, files in os.walk(obj, followlinks=False, onerror=walk_error):
+        # A source with no installed headers or linked libraries affects only
+        # its declared producers and consumers; no global object scan is needed.
+        walk = os.walk(obj, followlinks=False, onerror=walk_error) if headers or linked else ()
+        for directory, subdirs, files in walk:
             base = Path(directory)
             for name in subdirs:
                 alias = base / name

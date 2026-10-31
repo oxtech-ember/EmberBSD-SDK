@@ -69,6 +69,21 @@ class PreparedRefreshTests(unittest.TestCase):
         with self.assertRaises(SDKError):
             prepared_refresh.plan(self.os, self.obj, {'libcbor'})
 
+    def test_source_without_headers_or_libraries_keeps_unrelated_unknown_objects(self):
+        self.contract['sources']['EMBER_WPA_SOURCE'] = {
+            'producer_dirs': ['external/cbor'], 'consumer_dirs': [],
+            'header_prefixes': [], 'linked_names': []}
+        self.write_contract()
+        unknown = self.obj / 'unknown/generated/nested'
+        unknown.mkdir()
+        (unknown / 'file.o').write_bytes(b'object')
+        # There is intentionally no owning source Makefile in the nested
+        # directory, as in a Waf object subdirectory.
+        self.assertEqual(prepared_refresh.plan(self.os, self.obj, {'wpa'}, lambda p: []),
+                         ['external/cbor'])
+        with self.assertRaisesRegex(SDKError, 'missing OS makefiles'):
+            prepared_refresh.plan(self.os, self.obj, {'wpa', 'libcbor'}, lambda p: [])
+
 
 class TransitionTests(unittest.TestCase):
     def test_failure_before_context_update_preserves_record(self):
