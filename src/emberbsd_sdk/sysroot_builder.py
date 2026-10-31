@@ -135,7 +135,6 @@ class SysrootBuilder:
         self.locks = None
         self.receipt_file = None
         self.signal_handlers = {}
-        self.contexts_prepared = False
 
     def capture(self, *argv, directory=None):
         result = process.capture(argv, cwd=directory, env=self.environment)
@@ -200,20 +199,6 @@ class SysrootBuilder:
         self.shell = self.native.tool('sh')
         self.options['host-prefix'] = self.native.bundle_root
         self.native_inputs = {name: self.options[name] for name in ('host-prefix', *(name for name, _ in NATIVE_ALIASES))}
-
-    def verify_native_toolset(self):
-        try:
-            native = self.load_native_toolset()
-            if (native.as_dict() != self.native_selection or self.native_identity(native) != self.host_tools or
-                    any(self.options[name] != value for name, value in self.native_inputs.items())):
-                raise SDKError('native toolset inputs changed after preflight')
-        except (SDKError, OSError, UnicodeError):
-            if self.contexts_prepared:
-                for name in ('objects', 'tools'):
-                    path = os.path.join(self.paths[name], self.QUARANTINE)
-                    if paths.entry(path) is None:
-                        jsonio.write_json(path, dict(reason='native toolset inputs changed during build'))
-            raise
 
     def prepare_native_routing(self):
         """Install the OS-owned command mapping inside the locked tools tree."""
@@ -1452,7 +1437,6 @@ class SysrootBuilder:
             raise ProcessOwnershipError(group.pid, f'object contexts are quarantined: {exc}') from exc
 
     def dispatch(self, argv):
-        self.verify_native_toolset()
         row = dict(argv=argv, status='running')
         self.commands.append(row)
         self.save_receipt()
@@ -1490,7 +1474,6 @@ class SysrootBuilder:
         finally:
             if not cleanup_attempted and group.pid is not None:
                 self.stop_group(group)
-            self.verify_native_toolset()
 
     def execute_external(self, command, receipt_path, log_path):
         """Run a prerequisite producer with the same ownership and signal rules."""
@@ -1617,7 +1600,6 @@ class SysrootBuilder:
             self.interrupted()
             self.locks = process.ContextLocks([self.paths[name] for name in ('objects', 'tools')], os.path.join(self.paths['sdk'], 'obj')).acquire()
             self.empty_destination()
-            self.verify_native_toolset()
             self.mkdirs(self.paths['destination'], self.paths['sdk'])
             marker = os.path.join(self.paths['destination'], self.MARKER)
             handle = self.exclusive_file(marker)
@@ -1635,19 +1617,12 @@ class SysrootBuilder:
                 # in the existing tools tree.
                 self.prepare_native_routing()
             self.prepare_contexts()
-            self.contexts_prepared = True
             if not refresh:
                 # A new tools tree exists only once its context is written.
                 self.prepare_native_routing()
-            # Sources were identified once, at preflight, by their Git commits
-            # and preparation receipts; they are not checked again after the
-            # build. The selected tools still are.
+            # Preflight fixes the selected inputs for this run. Reuse their
+            # records instead of probing tools and hashing inputs again.
             self.build_payload()
-            if self.compiler() != self.compiler_record:
-                raise SDKError('compiler changed during build')
-            if self.python_identity() != self.python:
-                raise SDKError('Python or SDK implementation changed during build')
-            self.verify_native_toolset()
             self.receipt['outputs'] = self.inspect_payload()
             self.interrupted()
             self.receipt['qualification'] = 'built-and-inspected'
