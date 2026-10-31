@@ -1602,6 +1602,26 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.signature['common_sources']['openssl']['tree_sha256'] = 'b' * 64
         self.assertFalse(builder.compatible_context(records[objects], objects))
 
+    def test_prepared_source_provenance_change_does_not_change_payload_context(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        objects = builder.paths['objects']
+        record = {'signature': copy.deepcopy(builder.context_signature(objects)),
+                  'sources': copy.deepcopy(builder.sources)}
+        old = builder.signature['common_sources']['libevent']
+        old['identity'] = {'owner_sha256': 'a' * 64}
+        record['signature']['common_sources']['libevent']['identity'] = {'owner_sha256': 'b' * 64}
+        self.assertTrue(builder.compatible_context(record, objects))
+        original_flags = builder.signature['flags'][:]
+        builder.signature['flags'] = [flag.replace('EMBER_LIBEVENT_SOURCE=', 'EMBER_LIBEVENT_SOURCE=/other/')
+                                      for flag in original_flags]
+        self.assertFalse(builder.compatible_context(record, objects))
+        builder.signature['flags'] = original_flags
+        builder.signature['common_sources']['libevent']['tree_sha256'] = 'c' * 64
+        self.assertFalse(builder.compatible_context(record, objects))
+        builder.signature['common_sources']['libevent']['tree_sha256'] = None
+        self.assertFalse(builder.compatible_context(record, objects))
+
     def test_libfido2_selection_changes_headers_but_not_native_tools(self):
         builder, _ = self.builder()
         builder.preflight()

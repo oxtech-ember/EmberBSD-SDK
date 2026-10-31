@@ -431,7 +431,16 @@ class SysrootBuilder:
             raise SDKError(f'invalid source history: {path}: {exc}') from exc
 
     def reuse_signature(self, signature):
-        """Return the part of a context signature that object reuse compares."""
+        """Compare compiled payload, keeping provenance in the saved context."""
+        records = signature.get('common_sources')
+        if isinstance(records, dict):
+            for name, record in records.items():
+                if (name != 'x11' and isinstance(record, dict) and
+                        record.get('format') == 'emberbsd-prepared-source' and
+                        record.get('version') == 1 and isinstance(record.get('package'), str) and
+                        isinstance(record.get('tree_sha256'), str) and
+                        re.fullmatch('[0-9a-f]{64}', record['tree_sha256'])):
+                    records[name] = {key: record[key] for key in ('format', 'version', 'package', 'tree_sha256')}
         return signature
 
     def compatible_context(self, record, path):
