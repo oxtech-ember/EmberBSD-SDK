@@ -213,7 +213,7 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
     shutil.copytree(SDK_SOURCE / 'src', root / 'sdk-source/src', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     recipe_fixture(ports, root / 'libedit.tar.gz')
     for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'),
-                          ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor')):
+                          ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch')):
         source = root / (name + '-source')
         source.mkdir()
         write(source / 'emberbsd-prepared-source.json', json.dumps(dict(format='emberbsd-prepared-source',
@@ -283,6 +283,19 @@ class BuilderTests(TemporaryCase):
         record['package'] = 'wrong/package'
         receipt.write_text(json.dumps(record))
         with self.assertRaisesRegex(SDKError, 'invalid libcbor'):
+            B(options).preflight()
+
+    def test_optional_libfetch_is_verified_and_forwarded(self):
+        options = self.options | {'libfetch-source': str(self.root / 'libfetch-source')}
+        builder = B(options)
+        builder.preflight()
+        self.assertEqual(builder.common_source_records['libfetch']['package'], 'net/libfetch')
+        self.assertIn('EMBER_LIBFETCH_SOURCE=' + options['libfetch-source'], builder.flags)
+        receipt = Path(options['libfetch-source']) / 'emberbsd-prepared-source.json'
+        record = json.loads(receipt.read_text())
+        record['package'] = 'wrong/package'
+        receipt.write_text(json.dumps(record))
+        with self.assertRaisesRegex(SDKError, 'invalid libfetch'):
             B(options).preflight()
 
     def test_optional_openssl_is_verified_and_forwarded(self):

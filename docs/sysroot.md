@@ -71,6 +71,10 @@ Ports `scripts/source-inputs/libcbor/source.py` owner and select it with
 `--libcbor-source`; SDK forwards `EMBER_LIBCBOR_SOURCE`. Source preparation
 needs no application sysroot.
 
+For OS builds using common `net/libfetch`, prepare its source using the Ports
+`scripts/source-inputs/libfetch/source.py` owner and select `--libfetch-source`.
+The SDK forwards `EMBER_LIBFETCH_SOURCE` to the OS build.
+
 Prepare libarchive with the Ports `scripts/libarchive-source.py prepare` command
 and libevent with `scripts/source-inputs/libevent/source.py prepare`; both use
 the selected SDK source and canonical Ports export. Pass the resulting trees

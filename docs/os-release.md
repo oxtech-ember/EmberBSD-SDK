@@ -48,6 +48,10 @@ For OS builds using the common `devel/libcbor` source, prepare it using the
 Ports `scripts/source-inputs/libcbor/source.py` owner and select it with
 `--libcbor-source`; SDK forwards `EMBER_LIBCBOR_SOURCE`.
 
+For OS builds using common `net/libfetch`, prepare its source using the Ports
+`scripts/source-inputs/libfetch/source.py` owner and select `--libfetch-source`.
+The SDK forwards `EMBER_LIBFETCH_SOURCE` to the OS build.
+
 Select `aarch64-sysroot` for complete base/comp sets and an EMBER64 test kernel.
 Select `amd64` for the reduced UEFI ISO, USB image and installation sets.
 The product version comes from canonical `EMBER_VERSION` in the pinned
