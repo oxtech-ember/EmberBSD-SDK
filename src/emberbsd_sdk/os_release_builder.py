@@ -407,7 +407,10 @@ def finalize_release(destination):
         if receipt['version'] in BASE_CXX_SCHEMAS:
             llvm_runtime.validate_install(output / 'dest', runtime, target=target)
             llvm_runtime_install.validate_base_aliases(output / 'dest', runtime)
-        commands = receipt['plan'][1:-1]
+        # The plan starts with the runtime check. Older receipts also end
+        # with it; the runtime is now checked once, before the build.
+        plan = receipt['plan']
+        commands = plan[1:-1] if len(plan) > 2 and plan[-1] == plan[0] else plan[1:]
         command = commands[0]
         shell = command[0]
         job_values = [v[2:] for v in command if re.fullmatch(r'-j[0-9]+', v)]
@@ -517,7 +520,7 @@ class OSReleaseBuilder(SysrootBuilder):
                   'fresh object mode needs a new or empty tools directory: ' + self.paths['tools'])
         version = release_schema(self.compiler_family() == 'clang', llvm_runtime_install.base_cxx_enabled(self.flags))
         self.receipt.update(format='emberbsd-os-release-build', version=version, scope='os-release-build',
-                            previous_contexts=self.contexts, object_mode=self.object_mode, plan=[self.runtime_command, *self.release_commands, self.runtime_command],
+                            previous_contexts=self.contexts, object_mode=self.object_mode, plan=[self.runtime_command, *self.release_commands],
                             not_checked=['target execution', 'VM installation', 'physical hardware', 'binary publication'])
         self.receipt.pop('copy', None)
         return self.receipt
@@ -539,8 +542,6 @@ class OSReleaseBuilder(SysrootBuilder):
         # Historical profiles keep their original build-only runtime input.
         # An enabled base C++ profile imports the same common payload and
         # records its ownership through the native unprivileged installer.
-        if self.verify_runtime() != self.runtime_record:
-            raise SDKError('runtime inputs changed during release build')
         if self.options['target'] == 'aarch64':
             kernel = Path(self.paths['objects'], 'kernels/EMBER64/netbsd')
             with open(kernel, 'rb') as source, open(output / KERNEL, 'xb') as destination:

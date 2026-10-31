@@ -191,16 +191,18 @@ source and of each LLVM runtime stage runs the first time the run needs it.
 Later checks of the same input compare an in-memory metadata fingerprint
 instead of running the verifier again.
 
-The fingerprint covers every file, directory and symbolic link below the
-stage, the archive, the shared pkgsrc export, and the files named by the
-verifier command (Python, the owner script, patch, lzip and Git). For each
-entry it records the device, inode, mode, size, modification time and change
-time. A prepared LLVM source, about 150,000 entries, is keyed by its
-`llvm-source.json` manifest file alone, since its owner identifies the tree by
-that manifest. Any difference runs the verifier again, and the builder
-compares its record with the plan as before. A fingerprint is not used when an input is
-missing or contains a symbolic link out of it; such inputs are checked every
-time.
+The fingerprint covers only input-key files: the stage manifest
+(`runtime.json`), the `llvm-source.json` manifest of a prepared LLVM source,
+and the files named by the verifier command (Python, the owner script, patch,
+lzip and Git). For each file it records the device, inode, mode, size,
+modification time and change time. A stage or source tree is never walked:
+its manifest is its [input key](input-keys.md). A changed manifest runs the
+verifier again. A directory or a missing input gets no fingerprint and is
+checked every time.
+
+The LLVM or GCC runtime is verified once, at preflight. The build does not
+verify it again before or after the copy into the sysroot or release, and does
+not inventory the copied files again.
 
 The OS, Ports and SDK checkouts must be clean Git roots. Each checkout is
 checked with Git (status, index entries and commit) once per run, by the first
@@ -246,7 +248,7 @@ With the full selected runtime, the OS source provides these operations:
 3. The same generated make wrapper builds and installs `libexec/ld.elf_so`.
 4. The builder copies the verified developer stage into `usr/pkg/llvm` for
    Clang, or `usr/pkg/gcc16` for the explicit GCC alternative.
-5. It verifies the copied inventory and runs the normal runtime verifier again.
+5. It records the runtime by its preflight record; it does not verify it again.
 
 The `libs` operation exists in the fork's
 [`build.sh`](https://github.com/oxtech-ember/EmberBSD/blob/main/build.sh).

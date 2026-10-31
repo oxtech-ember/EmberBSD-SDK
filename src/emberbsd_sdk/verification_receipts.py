@@ -3,15 +3,14 @@
 """Per-run receipts for repeated input verification.
 
 A run checks each input by content the first time.  A later check of the
-same input in the same run compares a metadata fingerprint of every file
-and directory below the declared inputs: device, inode, mode, size,
-modification time and change time.  Writing a file, replacing it or
-setting its times changes its change time, so any difference leads to a
-full content verification again.  Receipts live only in memory and are
-never written, so a new run always starts with content verification.
-Inputs a run requires unchanged from start to end, such as the clean
-source checkouts, are instead checked once per run and once more at the
-end of the build (RunReceipts.once).
+same input in the same run compares a metadata fingerprint of the named
+files: device, inode, mode, size, modification time and change time.  The
+inputs are input-key files, such as a stage manifest, and the executables
+of the verifier.  A directory is never walked: a stage is identified by its
+manifest, not by its files.  Receipts live only in memory and are never
+written, so a new run always starts with content verification.  Clean
+source checkouts are checked once per run (RunReceipts.once) and are not
+checked again at the end of the build.
 """
 
 import copy
@@ -47,30 +46,19 @@ def fingerprint(inputs, memo=None):
 
 
 def _fingerprint_one(value):
+    """Metadata of one named file. A directory is not walked: its input key
+    file names it, so a directory input gets no fingerprint."""
     if not os.path.isabs(value):
         return None
     try:
         root = os.path.realpath(value)
-        digest = hashlib.sha256()
-        _row(digest, value + '\0' + root, os.lstat(root))
-        if not stat.S_ISDIR(os.lstat(root).st_mode):
-            return digest.digest()
-        pending = [root]
-        while pending:
-            directory = pending.pop()
-            with os.scandir(directory) as entries:
-                rows = sorted(entries, key=lambda item: item.name)
-            for item in rows:
-                info = item.stat(follow_symlinks=False)
-                _row(digest, item.path, info)
-                if stat.S_ISDIR(info.st_mode):
-                    pending.append(item.path)
-                elif stat.S_ISLNK(info.st_mode):
-                    target = os.path.realpath(item.path)
-                    if os.path.commonpath((target, root)) != root:
-                        return None
+        info = os.lstat(root)
     except (OSError, ValueError):
         return None
+    if not stat.S_ISREG(info.st_mode):
+        return None
+    digest = hashlib.sha256()
+    _row(digest, value + '\0' + root, info)
     return digest.digest()
 
 
@@ -95,13 +83,10 @@ class RunReceipts:
             self._entries[key] = (before, copy.deepcopy(result))
         return result
 
-    def once(self, key, verifier, *, recheck=False):
-        """Run the verifier once per run, or again when recheck is set.
-
-        For inputs a run requires unchanged from start to end, such as the
-        clean source checkouts, whose final check runs with recheck.
-        """
-        if not recheck and key in self._once:
+    def once(self, key, verifier):
+        """Run the verifier once per run, for example for the clean source
+        checkouts. A failed verifier leaves no record."""
+        if key in self._once:
             return copy.deepcopy(self._once[key])
         self.content_checks[key] = self.content_checks.get(key, 0) + 1
         self._once.pop(key, None)

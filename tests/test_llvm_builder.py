@@ -16,6 +16,7 @@ from unittest.mock import patch
 from test_core import TemporaryCase, SDK_SOURCE
 from emberbsd_sdk import inventory, jsonio, llvm_stage_inputs
 from emberbsd_sdk.errors import SDKError
+from emberbsd_sdk.verification_receipts import RunReceipts
 from emberbsd_sdk.sysroot_builder import SysrootBuilder
 from emberbsd_sdk.os_release_builder import OSReleaseBuilder
 from emberbsd_sdk.llvm_sysroot import runtime_paths, llvm_flags, LLVMCoordinator, LLVMPhaseBuilder
@@ -1257,7 +1258,14 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertEqual(builder.paths['llvm-runtime-base'], str(base))
         self.assertEqual(builder.signature['runtime']['manifest']['base']['files'],
                          runtime.record['base']['files'])
+        record = builder.runtime_record
         write(base / 'usr/include/stdint.h', 'changed foundation')
+        # Within the run, the stage manifest and the foundation path are the
+        # receipt key: the foundation is not read again.
+        with patch.object(inventory, 'sha256_file', side_effect=AssertionError('foundation hashed again')):
+            self.assertEqual(builder.verify_runtime(), record)
+        # A new run checks the foundation and refuses the changed input.
+        builder.verification = RunReceipts()
         with self.assertRaisesRegex(SDKError, 'base inputs changed'):
             builder.verify_runtime()
 
@@ -1454,6 +1462,9 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertEqual(builder.verify_runtime()['manifest'], runtime.record)
         artifact = Path(builder.paths['llvm-runtime-stage']) / runtime.record['artifacts']['builtins']
         artifact.write_bytes(artifact.read_bytes() + b'changed')
+        # The run identifies the stage by its manifest key and does not rehash it.
+        self.assertEqual(builder.verify_runtime()['manifest'], runtime.record)
+        builder.verification = RunReceipts()
         with self.assertRaises(SDKError):
             builder.verify_runtime()
 

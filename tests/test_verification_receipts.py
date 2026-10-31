@@ -9,7 +9,7 @@ from test_core import TemporaryCase, git_environment
 from emberbsd_sdk import provenance
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.sysroot_builder import SysrootBuilder
-from emberbsd_sdk.verification_receipts import RunReceipts
+from emberbsd_sdk.verification_receipts import RunReceipts, fingerprint
 
 
 class GitSourceReceiptTests(TemporaryCase):
@@ -97,16 +97,42 @@ class GitSourceReceiptTests(TemporaryCase):
             self.assertEqual(self.builder(receipts=receipts).source(str(self.repository), 'os'), record)
         self.assertEqual(calls, [])
 
-    def test_run_once_receipt_reruns_only_on_recheck_or_failure(self):
+    def test_run_once_receipt_reruns_only_after_a_failure(self):
         receipts = RunReceipts()
-        results = iter([{'n': 1}, {'n': 2}])
-        first = receipts.once('key', lambda: next(results))
+        first = receipts.once('key', lambda: {'n': 1})
         first['n'] = 99
         self.assertEqual(receipts.once('key', lambda: self.fail('reused')), {'n': 1})
-        self.assertEqual(receipts.once('key', lambda: next(results), recheck=True), {'n': 2})
+        receipts = RunReceipts()
         def broken():
             raise SDKError('broken')
         with self.assertRaisesRegex(SDKError, 'broken'):
-            receipts.once('key', broken, recheck=True)
+            receipts.once('key', broken)
         self.assertEqual(receipts.once('key', lambda: {'n': 3}), {'n': 3})
-        self.assertEqual(receipts.content_checks['key'], 4)
+        self.assertEqual(receipts.content_checks['key'], 2)
+
+
+class ContentReceiptTests(TemporaryCase):
+    """A receipt is keyed by input-key files; a stage tree is never walked."""
+
+    def test_stage_tree_is_not_walked_and_a_changed_manifest_verifies_again(self):
+        manifest = self.write('stage/runtime.json', '{"key": 1}\n')
+        for index in range(20):
+            self.write(f'stage/lib/file{index}', 'x')
+        receipts, runs = RunReceipts(), []
+        def verifier():
+            runs.append(True)
+            return {'run': len(runs)}
+        with patch.object(os, 'scandir', side_effect=AssertionError('stage tree walked')):
+            self.assertEqual(receipts.verify('stage', [str(manifest)], verifier), {'run': 1})
+            self.assertEqual(receipts.verify('stage', [str(manifest)], verifier), {'run': 1})
+            # A stage file is not read again; the manifest is the key.
+            (self.root / 'stage/lib/file0').write_text('changed')
+            self.assertEqual(receipts.verify('stage', [str(manifest)], verifier), {'run': 1})
+        os.utime(manifest, ns=(1, 1))
+        manifest.write_text('{"key": 2}\n')
+        self.assertEqual(receipts.verify('stage', [str(manifest)], verifier), {'run': 2})
+
+    def test_directory_input_has_no_fingerprint(self):
+        self.write('stage/runtime.json', '{}\n')
+        with patch.object(os, 'scandir', side_effect=AssertionError('walked')):
+            self.assertIsNone(fingerprint([str(self.root / 'stage')]))

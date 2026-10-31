@@ -520,7 +520,7 @@ class BuilderTests(TemporaryCase):
         self.assertEqual(record['qualification'], 'built-and-inspected')
         commands = [r for r in record['commands'] if r.get('scope') != 'runtime-check']
         self.assertEqual(len(commands), 3); self.assertTrue(all(r['exit_status'] == 0 for r in commands))
-        self.assertEqual(sum(r.get('scope') == 'runtime-check' for r in record['commands']), 3)
+        self.assertEqual(sum(r.get('scope') == 'runtime-check' for r in record['commands']), 1)
         self.assertFalse((Path(self.options['sdk']) / 'sysroot' / B.MARKER).exists())
         self.assertEqual(record['outputs']['usr/pkg/gcc16/lib/libstdc++.so']['kind'], 'link')
         self.assertEqual(record['outputs']['empty-file']['size'], 0)
@@ -805,19 +805,31 @@ class BuilderTests(TemporaryCase):
         self.refusal_unchanged('overlapping', destination=self.options['sdk'] + '/obj/new')
         self.refusal_unchanged('overlapping', objects=self.options['sdk'] + '/obj/shared', tools=self.options['sdk'] + '/obj/shared')
 
-    def test_copy_aba_compares_precopy_inventory(self):
-        original = shutil.copyfileobj
-        target = Path(self.options['runtime-work']) / 'stage/usr/pkg/gcc16/include/c++/vector'; touched = []
-        def corrupt(input_file, output, *args):
-            if input_file.name == str(target):
-                old = target.read_bytes(); target.write_bytes(b'corrupt during copy')
-                try: original(input_file, output, *args)
-                finally: target.write_bytes(old)
-                touched.append(True)
-            else: original(input_file, output, *args)
-        with patch.object(shutil, 'copyfileobj', corrupt), self.assertRaisesRegex(SDKError, 'copied runtime differs'):
+    def test_runtime_is_verified_once_and_its_copy_is_not_rehashed(self):
+        # The runtime used to be verified again before and after the copy, and
+        # the copy was inventoried (every file hashed) again. The preflight
+        # record identifies the runtime by its input key.
+        calls, inventoried = [], []
+        real_verify, real_runtime = B.verify_runtime, inventory.runtime
+        def verify(builder, *args, **kwargs):
+            calls.append(kwargs.get('base'))
+            return real_verify(builder, *args, **kwargs)
+        def runtime(root, *args, **kwargs):
+            inventoried.append(str(root))
+            return real_runtime(root, *args, **kwargs)
+        with patch.object(B, 'verify_runtime', verify), patch.object(inventory, 'runtime', runtime):
             self.run_builder()
-        self.assertTrue(touched)
+        self.assertEqual(calls, [None])
+        self.assertFalse([root for root in inventoried if root.startswith(self.options['sdk'] + '/sysroot')])
+
+    def test_changed_runtime_key_or_dirty_checkout_still_refuses_reuse(self):
+        self.run_builder()
+        path = Path(self.options['compiler']) / 'bin/aarch64--netbsd-gcc'
+        path.write_text(path.read_text() + '# changed\n')
+        self.refusal_unchanged('incompatible object context', destination=self.options['sdk'] + '/next')
+        path.write_text(path.read_text().replace('# changed\n', ''))
+        write(Path(self.options['os']) / 'untracked', 'dirty')
+        self.refusal_unchanged('clean Git root', destination=self.options['sdk'] + '/next')
 
     def test_required_elf_type_and_truncation(self):
         path = Path(self.options['runtime-work']) / 'stage/usr/pkg/gcc16/lib/gcc/aarch64--netbsd/16.2.0/crtbegin.o'

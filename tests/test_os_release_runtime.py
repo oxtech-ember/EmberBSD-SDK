@@ -255,8 +255,11 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
                 # The stage is prepared as its own step before the first OS command.
                 events = []
                 builder.flags, builder.release_commands = [], [['/tools/bin/nbmake-evbarm', 'tools']]
-                builder.dispatch = lambda command: events.append(('dispatch', calls[-1][3]))
-                builder.verify_runtime = mock.Mock(side_effect=SDKError('stop after the commands'))
+                def dispatch(command):
+                    events.append(('dispatch', calls[-1][3]))
+                    raise SDKError('stop after the commands')
+                builder.dispatch = dispatch
+                builder.verify_runtime = mock.Mock(side_effect=AssertionError('runtime verified again'))
                 with self.assertRaisesRegex(SDKError, 'stop after the commands'):
                     builder.build_payload()
                 self.assertEqual(events, [('dispatch', 'prepare')])

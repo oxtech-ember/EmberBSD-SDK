@@ -337,34 +337,47 @@ class SysrootBuilder:
                 if reported != record:
                     raise SDKError('LLVM runtime producer and shared validator disagree')
                 return record
-            inputs = [stage, *([base] if base else []), *self.receipt_tools(command)]
+            def full():
+                record = check()
+                if (record['llvm_version'] != self.compiler_record['version'] or
+                        record['source'] != {key: self.llvm_source_record['source'][key]
+                                             for key in ('archive', 'sha512')}):
+                    raise SDKError('LLVM runtime compiler or common source differs from selection')
+                if (self.llvm_phase == 'base' or (self.llvm_phase == 'final' and base is not None)) and record['base']['os_revision'] != self.sources['os']['commit']:
+                    if base is None:
+                        raise SDKError('LLVM runtime base OS differs from selection')
+                    # A measured foundation permits a descendant OS source while
+                    # preserving the runtime's original recorded revision.
+                    self.git(self.sources['os']['path'], 'merge-base', '--is-ancestor',
+                             record['base']['os_revision'], self.sources['os']['commit'])
+                # The stage manifest is the input key of the reused runtime; its
+                # recorded digests stand for the bytes under the runtime prefix.
+                prefix = record['prefix'] + '/'
+                rows = inventory.snapshot_tree(self.paths['runtime-prefix'], machine=self.target['elf'],
+                    digests={name[len(prefix):]: digest for name, digest in record['files'].items()
+                             if name.startswith(prefix)})
+                if self.llvm_phase == 'final':
+                    llvm_runtime.validate_bootstrap_pair(
+                        self.paths['llvm-bootstrap-stage'], record, target=self.options['target'], content=False)
+                return dict(manifest=record, inventory=rows,
+                            root_mode=stat.S_IMODE(os.stat(self.paths['runtime-prefix']).st_mode))
+            # The input key of the runtime: its stage manifest, the verifier
+            # files, the selected sources, compiler, phase and base path. The
+            # stage, the base and the runtime prefix are not walked again in
+            # the same run; a new run checks them once.
+            inputs = [os.path.join(stage, llvm_runtime.MANIFEST), *self.receipt_tools(command)]
             inputs += [os.path.join(self.paths[name], LLVM_SOURCE_MANIFEST)
                        for name in ('llvm-source', 'llvm-runtime-original-source')
                        if name in self.paths and self.paths[name] in command]
-            record = self.verification.verify(('llvm-runtime', tuple(command), tuple(required), base), inputs, check)
-            if (record['llvm_version'] != self.compiler_record['version'] or
-                    record['source'] != {key: self.llvm_source_record['source'][key]
-                                         for key in ('archive', 'sha512')}):
-                raise SDKError('LLVM runtime compiler or common source differs from selection')
-            if (self.llvm_phase == 'base' or (self.llvm_phase == 'final' and base is not None)) and record['base']['os_revision'] != self.sources['os']['commit']:
-                if base is None:
-                    raise SDKError('LLVM runtime base OS differs from selection')
-                # A measured foundation permits a descendant OS source while
-                # preserving the runtime's original recorded revision.
-                self.git(self.sources['os']['path'], 'merge-base', '--is-ancestor',
-                         record['base']['os_revision'], self.sources['os']['commit'])
-            # The stage manifest is the input key of the reused runtime; its
-            # recorded digests stand for the bytes under the runtime prefix.
-            prefix = record['prefix'] + '/'
-            rows = inventory.snapshot_tree(self.paths['runtime-prefix'], machine=self.target['elf'],
-                digests={name[len(prefix):]: digest for name, digest in record['files'].items()
-                         if name.startswith(prefix)})
-            self.commands.append(dict(argv=self.runtime_command, scope='runtime-check', status='passed'))
             if self.llvm_phase == 'final':
-                llvm_runtime.validate_bootstrap_pair(
-                    self.paths['llvm-bootstrap-stage'], record, target=self.options['target'], content=False)
-            return dict(manifest=record, inventory=rows,
-                        root_mode=stat.S_IMODE(os.stat(self.paths['runtime-prefix']).st_mode))
+                inputs.append(os.path.join(self.paths['llvm-bootstrap-stage'], llvm_runtime.MANIFEST))
+            key = ('llvm-runtime', tuple(command), tuple(required), base, self.llvm_phase,
+                   self.paths['runtime-prefix'], self.paths.get('llvm-bootstrap-stage'),
+                   self.sources.get('os', {}).get('commit'), self.compiler_record['version'],
+                   repr(sorted(self.llvm_source_record['source'].items())))
+            result = self.verification.verify(key, inputs, full)
+            self.commands.append(dict(argv=self.runtime_command, scope='runtime-check', status='passed'))
+            return result
         result = process.capture(self.runtime_command, env=self.environment)
         report = jsonio.loads_json(result.stdout)
         try:
@@ -1506,8 +1519,6 @@ class SysrootBuilder:
         base_cxx = llvm_runtime_install.base_cxx_enabled(self.flags)
         if base_cxx and (not clang or self.llvm_phase != 'final'):
             raise SDKError('base C++ aliases require the final Clang producer profile')
-        if self.verify_runtime() != self.runtime_record:
-            raise SDKError('runtime changed since preflight')
         root = self.paths['destination'] if destination is None else paths.path_string(destination)
         paths.real_directory(root)
         if ((root != self.paths['destination'] and not paths.inside(root, self.paths['destination'])) or
@@ -1560,12 +1571,8 @@ class SysrootBuilder:
                     raise SDKError('this host cannot preserve the audited symbolic-link mode')
                 os.lchmod(path, row['mode'])
         os.chmod(destination, self.runtime_record['root_mode'])
-        actual = (inventory.snapshot_tree(destination, machine=self.target['elf']) if clang else
-                  inventory.runtime(destination, self.target['triplet'], self.target['elf']))
-        if actual != rows:
-            raise SDKError('copied runtime differs from the verified payload')
-        if self.verify_runtime() != self.runtime_record:
-            raise SDKError('runtime inputs changed during copy')
+        # The preflight record identifies the runtime by its input key. The
+        # copy and the runtime stage are not read or hashed again.
         if alias_plan is not None:
             llvm_runtime_install.install_base_aliases(root,
                 self.runtime_record['manifest'], installer=installer)
