@@ -23,7 +23,7 @@ def main():
         parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix'}.get(name))
     parser.add_argument('--runtime-work', action=UniqueOption,
                         help='required for GCC or to build an LLVM runtime; not needed with a selected LLVM stage')
-    for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'libfido2-source', 'libcbor-source', 'libfetch-source', 'openldap-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source'):
+    for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'libfido2-source', 'libcbor-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source'):
         parser.add_argument('--' + name, action=UniqueOption, help='required for the OS base build')
     parser.add_argument('--host-compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
                         help='Clang by default; select GCC explicitly for a platform exception')
