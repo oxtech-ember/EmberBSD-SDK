@@ -53,6 +53,7 @@ def main():
     parser.add_argument('--openldap-source', action=UniqueOption, help='prepared common Ports OpenLDAP source')
     parser.add_argument('--unbound-source', action=UniqueOption, help='prepared common Ports Unbound source')
     parser.add_argument('--wpa-source', action=UniqueOption, help='prepared common Ports WPA source')
+    parser.add_argument('--heimdal-source', action=UniqueOption, help='prepared common Ports Heimdal source')
     parser.add_argument('--texinfo-source', action=UniqueOption, help='prepared common Ports Texinfo C-only source')
     parser.add_argument('--nvi-source', action=UniqueOption, help='prepared common Ports nvi source')
     parser.add_argument('--ekermit-source', action=UniqueOption, help='prepared common Ports E-Kermit source')

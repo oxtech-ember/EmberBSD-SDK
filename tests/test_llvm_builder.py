@@ -1725,6 +1725,24 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.llvm_phase = 'base'
         self.assertFalse(builder.compatible_context(records[objects], objects))
 
+    def test_heimdal_selection_changes_headers_and_native_tools(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        contract = Path(builder.paths['os']) / 'share/mk/prepared-source-refresh.json'
+        write(contract, json.dumps({'version': 1, 'sources': {
+            'EMBER_HEIMDAL_SOURCE': {'native_producer_dirs': ['tools/compile_et']}}}))
+        builder.llvm_phase = 'headers'
+        tools, objects = builder.paths['tools'], builder.paths['objects']
+        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+        builder.paths['heimdal-source'] = '/prepared/heimdal'
+        builder.signature['common_sources']['heimdal'] = {'tree_sha256': 'a' * 64}
+        builder.signature['flags'].append('EMBER_HEIMDAL_SOURCE=/prepared/heimdal')
+        self.assertFalse(builder.compatible_context(records[tools], tools))
+        self.assertFalse(builder.compatible_context(records[objects], objects))
+        builder.llvm_phase = 'base'
+        self.assertFalse(builder.compatible_context(records[objects], objects))
+
     def test_tcpdump_selection_reuses_headers_and_native_tools(self):
         builder, _ = self.builder()
         builder.preflight()

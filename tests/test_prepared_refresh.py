@@ -61,6 +61,15 @@ class PreparedRefreshTests(unittest.TestCase):
         with self.assertRaises(SDKError):
             prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [])
 
+    def test_native_producers_are_scoped_and_paths_validated(self):
+        self.contract['sources']['EMBER_LIBCBOR_SOURCE']['native_producer_dirs'] = ['external/cbor']
+        self.write_contract()
+        self.assertEqual(prepared_refresh.plan_native(self.os, self.obj, {'libcbor'}), ['external/cbor'])
+        self.contract['sources']['EMBER_LIBCBOR_SOURCE']['native_producer_dirs'] = ['../outside']
+        self.write_contract()
+        with self.assertRaises(SDKError):
+            prepared_refresh.plan_native(self.os, self.obj, {'libcbor'})
+
     def test_unknown_source_or_unsafe_path_is_refused(self):
         with self.assertRaises(SDKError):
             prepared_refresh.plan(self.os, self.obj, {'unknown'})
@@ -86,6 +95,92 @@ class PreparedRefreshTests(unittest.TestCase):
 
 
 class TransitionTests(unittest.TestCase):
+    def test_pending_native_refresh_accepts_repaired_source_not_toolchain(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from emberbsd_sdk.sysroot_builder import SysrootBuilder
+        original = {'compiler': 'same', 'native_sources': {'demo': {'path': 'old'}}}
+        interrupted = {'compiler': 'same', 'native_sources': {'demo': {'path': 'failed'}}}
+        record = {'signature': original, 'pending_native': interrupted}
+        selected = {'compiler': 'same', 'native_sources': {'demo': {'path': 'old'}}}
+        fake = SimpleNamespace(paths={'os': '/os', 'objects': '/obj'},
+            context_signature=lambda p: selected,
+            compatible_context=lambda r, p: r['signature'] == selected)
+        with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan_native',
+                   return_value=['tools/demo']) as plan:
+            self.assertTrue(SysrootBuilder.plan_native_refresh(fake, record, '/tools'))
+            plan.assert_called_with('/os', '/obj', {'demo'})
+            selected = {'compiler': 'same', 'native_sources': {'demo': {'path': 'fixed'}}}
+            self.assertTrue(SysrootBuilder.plan_native_refresh(fake, record, '/tools'))
+            selected = {'compiler': 'changed', 'native_sources': {'demo': {'path': 'fixed'}}}
+            self.assertFalse(SysrootBuilder.plan_native_refresh(fake, record, '/tools'))
+
+    def test_native_partial_install_is_pending_and_retries_same_inputs(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from emberbsd_sdk.sysroot_builder import SysrootBuilder
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            dirs = ['tools/compile_et', 'tools/slc']
+            for name in ('obj/tools/compile_et', 'obj/tools/slc', 'tools',
+                         'os/tools/compile_et', 'os/tools/slc', 'dest'):
+                (root / name).mkdir(parents=True)
+            for name in ('obj', 'tools'):
+                (root / name / '.prebuild-sdk-context.json').write_text('old context')
+            old = {'format': 'emberbsd-sysroot-object-context', 'version': 1,
+                   'signature': {}, 'sources': {}}
+            selected = {'native_sources': {'demo': 'new'}}
+            calls = []
+            def dispatch(command):
+                calls.append(command)
+                if command[-2:] == ['dependall', 'install']:
+                    name = Path(command[command.index('-C') + 1]).name
+                    if name == 'slc':
+                        raise SDKError('install failed')
+                    (root/'tools/installed').write_text('new')
+            fake = SimpleNamespace(paths={'objects': str(root/'obj'), 'tools': str(root/'tools'),
+                         'os': str(root/'os'), 'destination': str(root/'dest'),
+                         'native-routing': str(root/'tools/routing'), 'sdk': str(root)},
+                         contexts={'objects': old, 'tools': old}, native_refresh_dirs=dirs,
+                         target={'machine': 'evbarm'}, flags=[], environment={},
+                         inspect_context=lambda p: old, dispatch=dispatch,
+                         context_signature=lambda p: selected, sources={},
+                         options={'jobs': '4'}, CONTEXT='.prebuild-sdk-context.json',
+                         QUARANTINE='.quarantine')
+            def capture(command, **kwargs):
+                name = Path(command[command.index('-C') + 1]).name
+                return SimpleNamespace(stdout=(str(root/'obj/tools'/name)+'\n').encode())
+            with patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=capture):
+                with self.assertRaisesRegex(SDKError, 'install failed'):
+                    SysrootBuilder.prepare_contexts(fake)
+            self.assertEqual((root/'tools/installed').read_text(), 'new')
+            pending = json.loads((root/'tools/.prebuild-sdk-context.json').read_text())
+            self.assertEqual(pending['signature'], {})
+            self.assertEqual(pending['pending_native'], selected)
+            self.assertEqual((root/'obj/.prebuild-sdk-context.json').read_text(), 'old context')
+            fake.plan_native_refresh = lambda record, path: selected.get('toolchain') != 'different'
+            fake.validate_source_ancestry = lambda record, path: None
+            self.assertEqual(SysrootBuilder.inspect_context(fake, str(root/'tools')), pending)
+            selected = {'native_sources': {'demo': 'old'}}
+            self.assertEqual(SysrootBuilder.inspect_context(fake, str(root/'tools')), pending)
+            selected = {'native_sources': {'demo': 'fixed'}}
+            self.assertEqual(SysrootBuilder.inspect_context(fake, str(root/'tools')), pending)
+            selected = {'native_sources': {'demo': 'new'}, 'toolchain': 'different'}
+            with self.assertRaisesRegex(SDKError, 'cannot safely resume'):
+                SysrootBuilder.inspect_context(fake, str(root/'tools'))
+            selected = {'native_sources': {'demo': 'new'}}
+            fake.contexts = {'objects': old, 'tools': pending}
+            fake.inspect_context = lambda p: old if p == str(root/'obj') else pending
+            fake.dispatch = lambda command: calls.append(command)
+            fake.mkdirs = lambda *args: None
+            with patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=capture):
+                SysrootBuilder.prepare_contexts(fake)
+            final = json.loads((root/'tools/.prebuild-sdk-context.json').read_text())
+            self.assertNotIn('pending_native', final)
+            self.assertEqual(final['signature'], selected)
+            self.assertEqual([Path(c[c.index('-C')+1]).name for c in calls[-4:]],
+                             ['compile_et', 'compile_et', 'slc', 'slc'])
+
     def test_failure_before_context_update_preserves_record(self):
         from types import SimpleNamespace
         from unittest.mock import patch

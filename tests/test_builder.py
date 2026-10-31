@@ -213,7 +213,7 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
     shutil.copytree(SDK_SOURCE / 'src', root / 'sdk-source/src', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     recipe_fixture(ports, root / 'libedit.tar.gz')
     for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'),
-                          ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant')):
+                          ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('heimdal', 'security/heimdal')):
         source = root / (name + '-source')
         source.mkdir()
         write(source / 'emberbsd-prepared-source.json', json.dumps(dict(format='emberbsd-prepared-source',
@@ -335,6 +335,19 @@ class BuilderTests(TemporaryCase):
         record['package'] = 'wrong/package'
         receipt.write_text(json.dumps(record))
         with self.assertRaisesRegex(SDKError, 'invalid wpa'):
+            B(options).preflight()
+
+    def test_optional_heimdal_is_verified_and_forwarded(self):
+        options = self.options | {'heimdal-source': str(self.root / 'heimdal-source')}
+        builder = B(options)
+        builder.preflight()
+        self.assertEqual(builder.common_source_records['heimdal']['package'], 'security/heimdal')
+        self.assertIn('EMBER_HEIMDAL_SOURCE=' + options['heimdal-source'], builder.flags)
+        receipt = Path(options['heimdal-source']) / 'emberbsd-prepared-source.json'
+        record = json.loads(receipt.read_text())
+        record['package'] = 'wrong/package'
+        receipt.write_text(json.dumps(record))
+        with self.assertRaisesRegex(SDKError, 'invalid heimdal'):
             B(options).preflight()
 
     def test_optional_openssl_is_verified_and_forwarded(self):
@@ -461,6 +474,23 @@ class BuilderTests(TemporaryCase):
         self.refusal_unchanged('--host-binutils', **{'host-binutils': ''})
         (Path(self.options['host-binutils']) / 'host-bfd.mk').unlink()
         self.refusal_unchanged()
+
+    def test_native_only_refresh_routes_before_contexts(self):
+        builder = B(self.options)
+        builder.preflight()
+        builder.refresh_dirs = []
+        builder.native_refresh_dirs = ['tools/compile_et']
+        calls = []
+        def routing():
+            calls.append('routing')
+        def contexts():
+            calls.append('contexts')
+            raise SDKError('stop after routing')
+        with patch.object(builder, 'prepare_native_routing', side_effect=routing), \
+                patch.object(builder, 'prepare_contexts', side_effect=contexts), \
+                self.assertRaisesRegex(SDKError, 'stop after routing'):
+            builder._run_preflighted()
+        self.assertEqual(calls, ['routing', 'contexts'])
 
     def test_ordinary_builder_plan_preflights_each_run(self):
         original = ProductionBuilder.preflight

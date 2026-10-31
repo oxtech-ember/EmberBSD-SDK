@@ -411,11 +411,19 @@ class SysrootBuilder:
         if not os.listdir(path):
             return None
         record = jsonio.read_json(os.path.join(path, self.CONTEXT))
-        if (not isinstance(record, dict) or set(record) != {'format', 'signature', 'sources', 'version'} or
+        if (not isinstance(record, dict) or
+                set(record) not in ({'format', 'signature', 'sources', 'version'},
+                                    {'format', 'signature', 'sources', 'version', 'pending_native'}) or
                 record['format'] != 'emberbsd-sysroot-object-context' or type(record['version']) is not int or record['version'] != 1):
             raise SDKError(f'unknown or incompatible object context; leave it unchanged: {path}')
-        if not self.compatible_context(record, path):
-            if path != self.paths['objects'] or not self.plan_prepared_refresh(record, path):
+        if 'pending_native' in record:
+            pending = record['pending_native']
+            if (path != self.paths['tools'] or not isinstance(pending, dict) or
+                    not self.plan_native_refresh(record, path)):
+                raise SDKError(f'cannot safely resume incomplete native source refresh: {path}')
+        elif not self.compatible_context(record, path):
+            if not ((path == self.paths['objects'] and self.plan_prepared_refresh(record, path)) or
+                    (path == self.paths['tools'] and self.plan_native_refresh(record, path))):
                 raise SDKError(f'unknown or incompatible object context; leave it unchanged: {path}')
         self.validate_source_ancestry(record, path)
         return record
@@ -449,6 +457,40 @@ class SysrootBuilder:
                 return result.stdout.decode('utf-8', 'strict').splitlines()
             self.refresh_dirs = prepared_refresh.plan(self.paths['os'], path, changed, members)
             return bool(self.refresh_dirs)
+        except (KeyError, TypeError, AttributeError):
+            return False
+
+    def plan_native_refresh(self, record, path):
+        """Rebuild OS-declared tools whenever their prepared source changes."""
+        try:
+            old = copy.deepcopy(record['signature'])
+            new = copy.deepcopy(self.context_signature(path))
+            pending = copy.deepcopy(record.get('pending_native', old))
+            before = old.pop('native_sources', {})
+            after = new.pop('native_sources', {})
+            interrupted = pending.pop('native_sources', {})
+            if not all(isinstance(value, dict) for value in (before, after, interrupted)):
+                return False
+            # A pending transition may be repaired with another source only;
+            # compiler, routing and all other tools must still match.
+            if not self.compatible_context(dict(record, signature=old), path):
+                candidate = dict(record, signature=copy.deepcopy(old))
+                if after:
+                    candidate['signature']['native_sources'] = copy.deepcopy(after)
+                if not self.compatible_context(candidate, path):
+                    return False
+            pending['native_sources'] = copy.deepcopy(after)
+            if not after:
+                pending.pop('native_sources')
+            if not self.compatible_context(dict(record, signature=pending), path):
+                return False
+            names = set(before) | set(after) | set(interrupted)
+            changed = {name for name in names if before.get(name) != after.get(name) or
+                       before.get(name) != interrupted.get(name)}
+            if not changed:
+                return False
+            self.native_refresh_dirs = prepared_refresh.plan_native(self.paths['os'], self.paths['objects'], changed)
+            return bool(self.native_refresh_dirs)
         except (KeyError, TypeError, AttributeError):
             return False
 
@@ -516,6 +558,8 @@ class SysrootBuilder:
                         signature['header_openldap_source'] = common_sources['openldap']
                     if 'unbound' in common_sources:
                         signature['header_unbound_source'] = common_sources['unbound']
+                    if 'heimdal' in common_sources:
+                        signature['header_heimdal_source'] = common_sources['heimdal']
                     if 'tdb' in common_sources:
                         signature['header_tdb_source'] = common_sources['tdb']
                     if 'iscsi' in common_sources:
@@ -641,6 +685,12 @@ class SysrootBuilder:
         if 'byacc-source' in self.paths:
             signature['byacc_source'] = {'path': self.paths['byacc-source'],
                                          'record': self.signature['common_sources']['byacc']}
+        native_sources = prepared_refresh.native_sources(self.paths['os'])
+        selected = {name: {'path': self.paths[name + '-source'],
+                           'record': self.signature['common_sources'][name]}
+                    for name in native_sources if name + '-source' in self.paths}
+        if selected:
+            signature['native_sources'] = selected
         if 'x11-source' in self.paths:
             # OS tools build X11 host font tools from X11SRCDIR.
             signature['x11_source'] = {'path': self.paths['x11-source'],
@@ -671,7 +721,7 @@ class SysrootBuilder:
     # inputs and the digest of the tree it published.
     COMMON_SOURCES = (
         ('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'),
-        ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'),
+        ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('heimdal', 'security/heimdal'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'),
         ('diffutils', 'devel/diffutils'), ('grep', 'textproc/grep'), ('ekermit', 'comms/ekermit'),
         ('nvi', 'editors/nvi'), ('top', 'sysutils/top'), ('iscsi', 'devel/netbsd-iscsi-lib'),
         ('ntp', 'net/ntp4'), ('libopts', 'devel/autogen'), ('libpcap', 'net/libpcap'),
@@ -1211,7 +1261,7 @@ class SysrootBuilder:
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
-        input_names += [name for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'libfido2-source', 'libcbor-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'x11-source') if self.options.get(name)]
+        input_names += [name for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'libfido2-source', 'libcbor-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'heimdal-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'x11-source') if self.options.get(name)]
         if clang and self.llvm_phase != 'headers' and self.options.get('llvm-runtime-original-source'):
             input_names.append('llvm-runtime-original-source')
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
@@ -1335,7 +1385,7 @@ class SysrootBuilder:
         self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}',
                        f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
         self.flags += [f'EMBER_{name.upper().replace("-", "_")}_SOURCE={self.paths[name + "-source"]}'
-                       for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'wpa', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in self.paths]
+                       for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'wpa', 'heimdal', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in self.paths]
         if 'openssl-source' in self.paths:
             self.flags.append('HOST_PERL=' + self.native.tool('perl'))
         if 'openssl-source' in self.paths or 'tdb-source' in self.paths:
@@ -1420,6 +1470,24 @@ class SysrootBuilder:
             # BSD clean normally visits both the object and source directories.
             # A refresh owns only the selected objects, never tracked sources.
             self.dispatch(base + ['MKCLEANSRC=no', 'cleandir'])
+        # Mark the current context before the first install can change a tool.
+        # Only the same selected inputs may retry a partially installed set.
+        native_dirs = getattr(self, 'native_refresh_dirs', [])
+        if native_dirs:
+            old = copy.deepcopy(self.contexts['tools'])
+            old['pending_native'] = self.context_signature(self.paths['tools'])
+            jsonio.write_json(os.path.join(self.paths['tools'], self.CONTEXT), old, exclusive=False)
+        for directory in native_dirs:
+            wrapper = os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine'])
+            base = [wrapper, '-C', os.path.join(self.paths['os'], directory),
+                    'DESTDIR=' + self.paths['destination'],
+                    'EMBER_NATIVE_TOOLS=' + self.paths['native-routing'], *self.flags]
+            selected = process.capture(base + ['-V', '${.OBJDIR}'], env=self.environment).stdout.decode('utf-8').strip()
+            expected = os.path.join(self.paths['objects'], directory)
+            if selected != expected or os.path.realpath(selected) != expected:
+                raise SDKError('native source refresh selected the wrong object directory: ' + directory)
+            self.dispatch(base + ['MKCLEANSRC=no', 'cleandir'])
+            self.dispatch(base + ['-j' + self.options['jobs'], 'dependall', 'install'])
         for name in ('objects', 'tools'):
             path = self.paths[name]
             record = dict(format='emberbsd-sysroot-object-context', version=1,
@@ -1619,7 +1687,8 @@ class SysrootBuilder:
             self.log = self.exclusive_file(os.path.join(self.paths['destination'], self.LOG))
             self.receipt['qualification'] = 'incomplete'
             self.save_receipt()
-            refresh = getattr(self, 'refresh_dirs', None)
+            refresh = bool(getattr(self, 'refresh_dirs', None) or
+                           getattr(self, 'native_refresh_dirs', None))
             if refresh:
                 # Prepared-source cleanup runs nbmake through the routing
                 # in the existing tools tree.

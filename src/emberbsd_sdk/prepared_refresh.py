@@ -21,6 +21,48 @@ def relative(value, *, pattern=False):
     return value
 
 
+def native_sources(os_root):
+    """Return source names and native producers declared by the OS owner."""
+    try:
+        path = Path(os_root) / CONTRACT
+        if not path.exists():
+            return {}
+        contract = json.loads(path.read_text())
+        if contract.get('version') != 1 or not isinstance(contract.get('sources'), dict):
+            raise ValueError('unsupported contract')
+        result = {}
+        for selector, entry in contract['sources'].items():
+            native = entry.get('native_producer_dirs', [])
+            if not isinstance(native, list):
+                raise ValueError('invalid native producers')
+            if native:
+                match = re.fullmatch(r'EMBER_([A-Z0-9_]+)_SOURCE', selector)
+                if not match:
+                    raise ValueError('invalid source selector')
+                result[match[1].lower().replace('_', '-')] = [relative(p) for p in native]
+        return result
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        raise SDKError('cannot safely read native producer contract: ' + str(exc)) from exc
+
+
+def plan_native(os_root, objects, names):
+    root, obj = Path(os_root).resolve(), Path(objects).resolve()
+    entries = native_sources(root)
+    result = set()
+    for name in names:
+        if name not in entries:
+            raise SDKError('missing native producer contract for ' + name)
+        for directory in entries[name]:
+            source, built = root / directory, obj / directory
+            if (not source.resolve().is_relative_to(root) or
+                    not built.resolve().is_relative_to(obj) or
+                    not (source / 'Makefile').is_file() or
+                    (built.exists() and (built.is_symlink() or not built.is_dir()))):
+                raise SDKError('invalid native producer directory: ' + directory)
+            result.add(directory)
+    return sorted(result)
+
+
 def plan(os_root, objects, names, archive_members=None):
     root, obj = Path(os_root), Path(objects)
     try:
@@ -33,7 +75,8 @@ def plan(os_root, objects, names, archive_members=None):
         dirs, headers, linked = set(), set(), set()
         for name in names:
             entry = sources['EMBER_' + name.upper().replace('-', '_') + '_SOURCE']
-            if set(entry) != {'producer_dirs', 'consumer_dirs', 'header_prefixes', 'linked_names'}:
+            if set(entry) not in ({'producer_dirs', 'consumer_dirs', 'header_prefixes', 'linked_names'},
+                                   {'producer_dirs', 'consumer_dirs', 'header_prefixes', 'linked_names', 'native_producer_dirs'}):
                 raise ValueError('unsupported source entry')
             dirs.update(relative(p) for p in entry['producer_dirs'] + entry['consumer_dirs'])
             headers.update(relative(p) for p in entry['header_prefixes'])
