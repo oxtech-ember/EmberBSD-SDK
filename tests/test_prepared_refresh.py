@@ -2,9 +2,11 @@
 """Scoped invalidation of prepared-source object consumers."""
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk import prepared_refresh
 from emberbsd_sdk.errors import SDKError
 
@@ -86,6 +88,8 @@ class TransitionTests(unittest.TestCase):
                          contexts={'objects': old, 'tools': None}, refresh_dirs=['producer'],
                          target={'machine': 'evbarm'}, flags=[], environment={},
                          inspect_context=lambda p: old if p == str(root/'obj') else None,
+                         mkdirs=lambda path, boundary: None,
+                         prepare_native_routing=lambda: None,
                          dispatch=lambda command: (_ for _ in ()).throw(SDKError('clean failed')))
             with patch('emberbsd_sdk.sysroot_builder.process.capture',
                        return_value=SimpleNamespace(stdout=(str(root/'obj/producer')+'\n').encode())):

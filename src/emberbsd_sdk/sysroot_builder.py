@@ -1398,6 +1398,8 @@ class SysrootBuilder:
         for name in ('objects', 'tools'):
             if self.inspect_context(self.paths[name]) != self.contexts[name]:
                 raise SDKError('object context changed after preflight')
+        self.mkdirs(self.paths['tools'], os.path.join(self.paths['sdk'], 'obj'))
+        self.prepare_native_routing()
         # Hold the existing object-tree lease throughout cleanup and context update.
         for directory in getattr(self, 'refresh_dirs', []):
             wrapper = os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine'])
@@ -1620,7 +1622,6 @@ class SysrootBuilder:
             self.log = self.exclusive_file(os.path.join(self.paths['destination'], self.LOG))
             self.receipt['qualification'] = 'incomplete'
             self.save_receipt()
-            self.prepare_native_routing()
             self.prepare_contexts()
             self.contexts_prepared = True
             # Sources were identified once, at preflight, by their Git commits
