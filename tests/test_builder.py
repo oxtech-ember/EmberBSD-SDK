@@ -489,6 +489,26 @@ class BuilderTests(TemporaryCase):
         self.assertEqual(self.run_builder(plan=True), record)
         self.assertEqual(snapshot(self.root), before)
 
+    def test_selected_sdk_checkout_modules_are_not_hashed_again(self):
+        builder = B(self.options | {'plan': True})
+        builder.preflight()
+        # The loaded package is the selected checkout: its Git commit names it.
+        builder.paths['sdk-source'] = str(SDK_SOURCE)
+        builder.sources['sdk'] = dict(commit='a' * 40)
+        hashed = []
+        original = inventory.sha256_file
+        def counted(path):
+            hashed.append(str(path))
+            return original(path)
+        with patch.object(inventory, 'sha256_file', counted):
+            identity = builder.python_identity()
+        self.assertEqual(identity['modules'], dict(source_commit='a' * 40))
+        self.assertFalse([path for path in hashed if path.endswith('.py')])
+        # Another SDK copy is still compared module by module.
+        builder.paths['sdk-source'] = self.options['sdk-source']
+        with patch.object(inventory, 'sha256_file', counted):
+            self.assertIn('sysroot_builder.py', builder.python_identity()['modules'])
+
     def test_wrong_target_cli_refuses_without_writes(self):
         before = snapshot(self.root)
         result = subprocess.run(self.cli(target='amd64'), cwd=self.root, capture_output=True)

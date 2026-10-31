@@ -754,6 +754,12 @@ class SysrootBuilder:
             raise SDKError('selected Python imported a different SDK source')
         # Programmatic callers must also use exactly the selected implementation.
         loaded = Path(__file__).resolve().parent
+        selected_dir = Path(paths.canonical_existing(os.path.join(source, 'src', 'emberbsd_sdk')))
+        if loaded == selected_dir:
+            # The loaded package is the selected clean SDK checkout, identified
+            # by its Git commit; its modules are not hashed again.
+            return dict(path=python, sha256=inventory.sha256_file(self.executable(python)), version=result['version'],
+                        api_version=API_VERSION, modules=dict(source_commit=self.sources['sdk']['commit']))
         module_hashes = {}
         for module in sorted(loaded.glob('*.py')):
             selected = os.path.join(source, 'src', 'emberbsd_sdk', module.name)

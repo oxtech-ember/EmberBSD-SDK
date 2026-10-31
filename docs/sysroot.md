@@ -146,8 +146,10 @@ remain subject to the normal compatibility check.
 The context includes the selected native prefix, tool paths, host and target, and flags.
 SDK controller module updates do not by themselves invalidate objects: the
 selected Python and API, computed build flags, compiler, runtime, and native ABI
-still must match. Module fingerprints remain in each build record and are
-checked against the loaded source before and after execution. An OS contract
+still must match. When the loaded SDK package is the selected clean SDK
+checkout, the build record names its modules by that checkout's Git commit
+and does not hash them. Another SDK copy is compared with the loaded modules
+file by file. An OS contract
 may add an explicit utility role while every existing command, binding, tool
 selection, and the relative order of existing search directories stays intact.
 Removing or replacing a tool, changing a compiler binding, or changing ABI
