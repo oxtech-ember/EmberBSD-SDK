@@ -56,9 +56,9 @@ Each prepared source carries `emberbsd-prepared-source.json`, written by
 its Ports owner when it prepared the tree from the distfile Ports fetch checked
 against `distinfo`. The SDK takes that receipt as the source identity and
 checks only its form and package; it neither runs the owner again nor reads or
-hashes the tree. The receipts are compared again before and after the build,
-so a source prepared again during a run still fails it. Prepare a source again
-with its Ports owner when its recipe changes.
+hashes the tree. The receipts are read once, at preflight, and become part
+of the build's input key. Prepare a source again with its Ports owner when its
+recipe changes; its new receipt changes the key.
 
 The optional `--rcs-source` selects the common Ports RCS source for the OS
 producer, with the same checked GNU make and native compiler triplet. The SDK

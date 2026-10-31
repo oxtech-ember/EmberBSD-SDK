@@ -683,8 +683,7 @@ class SysrootBuilder:
 
         A tree is identified by the receipt its owner wrote when it prepared
         it; the SDK neither runs the owner again nor reads or hashes the tree.
-        A later call compares receipts, so a source prepared again during the
-        run still fails it."""
+        The receipts are read once, at preflight, into the build signature."""
         result = {}
         for name, package in self.COMMON_SOURCES:
             if name + '-source' in self.paths:
