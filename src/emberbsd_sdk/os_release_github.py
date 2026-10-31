@@ -25,6 +25,19 @@ class GitHub:
         self.tag = self.manifest['release_tag']
         self.sha = self.manifest['source_commit']
         self.repo = 'github.com/' + kit.REPOSITORY
+        # The kit is hashed once, here. Later steps compare these digests and
+        # the files' stat identity; they do not hash the local kit again.
+        self.digests = {f['name']: f['sha256'] for f in self.manifest['files']}
+        for name in ('manifest.json', 'SHA256'):
+            self.digests[name] = sha256_file(self.directory / name)
+        self.identity = self.stat_identity()
+
+    def stat_identity(self):
+        result = []
+        for name in self.names:
+            st = (self.directory / name).stat()
+            result.append((name, st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns))
+        return result
 
     @staticmethod
     def run(*args):
@@ -104,11 +117,11 @@ class GitHub:
         for a in assets:
             path = self.directory / a['name']
             kit.check(a['state'] == 'uploaded' and a['size'] == path.stat().st_size and
-                      a['digest'] == 'sha256:' + sha256_file(path), 'Remote asset differs: ' + a['name'] + '; do not clobber it')
+                      a['digest'] == 'sha256:' + self.digests[a['name']], 'Remote asset differs: ' + a['name'] + '; do not clobber it')
         return [n for n in self.names if n not in existing]
 
     def check_local(self):
-        kit.check(kit.verify(self.directory, self.profile) == self.manifest, 'Local kit changed since preflight')
+        kit.check(self.stat_identity() == self.identity, 'Local kit changed since preflight')
 
     def check_draft(self, release):
         kit.check(release['draft'] is True, 'Release is already published; no asset writes are allowed')
@@ -141,9 +154,9 @@ class GitHub:
         with tempfile.TemporaryDirectory(prefix='ember-release-download-') as directory:
             patterns = [arg for name in self.names for arg in ('--pattern', name)]
             self.runner('release', 'download', self.tag, '--repo', self.repo, '--dir', directory, *patterns)
-            kit.verify(directory, self.profile)
+            # Download check: each downloaded file must equal the verified local kit.
             for name in self.names:
-                kit.check(sha256_file(Path(directory) / name) == sha256_file(self.directory / name), 'Downloaded asset differs: ' + name)
+                kit.check(sha256_file(Path(directory) / name) == self.digests[name], 'Downloaded asset differs: ' + name)
         if release['draft'] is False:
             kit.check(release['immutable'] is True, 'Published release is not immutable')
             self.verify_attestation()

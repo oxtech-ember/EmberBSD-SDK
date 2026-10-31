@@ -1167,6 +1167,38 @@ class GitHubTests(TemporaryCase):
         self.assertEqual(sum(a[:2] == ('release', 'edit') for a in self.calls), 1)
         self.assertTrue(any(a[:2] == ('release', 'verify-asset') for a in self.calls))
 
+    def counting_hashes(self):
+        hashed = []
+        original = kit.sha256_file
+        def counted(path):
+            hashed.append(Path(path))
+            return original(path)
+        return hashed, patch.multiple('emberbsd_sdk.os_release', sha256_file=counted), \
+            patch('emberbsd_sdk.os_release_github.sha256_file', counted)
+
+    def test_prepared_kit_hashes_each_asset_once(self):
+        hashed, a, b = self.counting_hashes()
+        with a, b:
+            m = kit.prepare(self.build, self.root / 'hashed-once', 'aarch64-sysroot')
+        names = [f['name'] for f in m['files']]
+        # The old code hashed each asset for the record, again for SHA256 and
+        # again in verify, plus the sets and kernel for the build receipt.
+        self.assertEqual(sorted(p.name for p in hashed if p.name in names), sorted(names))
+        self.assertEqual(kit.verify(self.root / 'hashed-once', 'aarch64-sysroot'), m)
+
+    def test_publication_does_not_hash_the_local_kit_again(self):
+        hashed, a, b = self.counting_hashes()
+        with a, b:
+            self.assertEqual(self.p.draft(), self.p.url)
+            self.assertEqual(self.p.publish(), self.p.url)
+        self.assertTrue(hashed)
+        self.assertFalse([p for p in hashed if p.parent == self.directory])
+        self.select(self.directory)
+        notes = self.directory / 'release-notes.md'
+        notes.write_text(notes.read_text() + 'changed\n')
+        with self.assertRaisesRegex(SDKError, 'Local kit changed'):
+            self.p.draft()
+
     def test_kit_without_qualification_publishes_on_request(self):
         self.select(self.root / 'unqualified')
         self.assertIsNone(kit.verify(self.directory, 'aarch64-sysroot')['qualification'])

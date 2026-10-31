@@ -210,6 +210,9 @@ kernel build identity and the exact base/comp output receipts.
 Verification rejects extra files, missing files, symlinks, changed bytes,
 unsafe or duplicate names, mixed source IDs and assets of 2 GiB or more.
 It uses the original file order for SHA256 receipt checks.
+Each asset is hashed once per verification. The `SHA256` file and the
+build-output receipts are compared with those digests. A kit that `prepare`
+has just sealed is not hashed again; only its sizes are checked.
 
 ## Optional qualification receipt
 
@@ -247,6 +250,10 @@ Tags remain `build-FULL_OS_COMMIT-amd64-no-x11` and
 `build-FULL_OS_COMMIT-aarch64-sysroot`. A draft can resume only with identical
 assets and metadata. Published releases forbid asset writes. Foreign tags,
 extra files and different bytes stop publication. The publisher never clobbers.
+The local kit is verified and hashed once, when the publisher starts. Later
+steps compare remote digests and downloads with those digests, and detect a
+changed local kit by its file identity (size, inode and times). They do not
+hash the local kit again.
 It downloads and checks every asset, publishes an immutable prerelease without
 changing `latest`, and verifies release and per-asset attestations.
 If attestation verification fails after publication, retain the published

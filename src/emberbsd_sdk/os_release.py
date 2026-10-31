@@ -126,8 +126,10 @@ def build_version(build, profile):
     return product_version(values[0][0])
 
 
-def checksum_text(directory, names):
-    return ''.join(f'SHA256 ({name}) = {sha256_file(Path(directory) / name)}\n' for name in names)
+def checksum_text(directory, names, digests=None):
+    """SHA256 lines; a digest already computed in this run is not computed again."""
+    digests = digests or {}
+    return ''.join(f'SHA256 ({name}) = {digests.get(name) or sha256_file(Path(directory) / name)}\n' for name in names)
 
 
 def asset(directory, name):
@@ -138,7 +140,8 @@ def asset(directory, name):
 
 def seal(directory, manifest):
     write_json(Path(directory) / 'manifest.json', manifest)
-    (Path(directory) / 'SHA256').write_text(checksum_text(directory, [f['name'] for f in manifest['files']] + ['manifest.json']))
+    digests = {f['name']: f['sha256'] for f in manifest['files']}
+    (Path(directory) / 'SHA256').write_text(checksum_text(directory, list(digests) + ['manifest.json'], digests))
 
 
 def archive_names(path):
@@ -277,7 +280,7 @@ def require_qualification(manifest, profile):
     check(all(q.get('checks', {}).get(n) is True for n in checks), 'Incomplete target qualification')
 
 
-def _verify(directory, profile):
+def _verify(directory, profile, known=None):
     directory = Path(directory)
     real_directory(directory)
     for name in ('manifest.json', 'SHA256'):
@@ -326,8 +329,14 @@ def _verify(directory, profile):
     for f in files:
         regular_file(directory / f['name'])
         check(type(f['size']) is int and 0 < f['size'] < 2**31, 'Invalid GitHub asset size: ' + f['name'])
-        check(asset(directory, f['name']) == f, 'Changed asset: ' + f['name'])
-    check((directory / 'SHA256').read_text() == checksum_text(directory, names + ['manifest.json']), 'Checksum manifest changed')
+        if known is not None and f['name'] in known:
+            # Hashed when this kit was sealed in the same run; only its size is checked.
+            check(known[f['name']] == f and (directory / f['name']).stat().st_size == f['size'], 'Changed asset: ' + f['name'])
+        else:
+            check(asset(directory, f['name']) == f, 'Changed asset: ' + f['name'])
+    # Each asset is hashed once above; the checksum file and build outputs reuse those digests.
+    digests = {f['name']: f['sha256'] for f in files}
+    check((directory / 'SHA256').read_text() == checksum_text(directory, names + ['manifest.json'], digests), 'Checksum manifest changed')
     if profile != 'amd64' or modern:
         p = read_json(directory / 'build-profile.json')
         check(type(p['schema']) is int and p['schema'] in (SOURCE_TREE_SCHEMAS if tree_kit else (4, 5) if llvm else (2, 3) if modern else (1,)), 'Manifest and build profile schema differ')
@@ -339,11 +348,11 @@ def _verify(directory, profile):
             check((directory / SOURCE_EXPORT).read_text() == p['source_sha256'] + '  source.tar.gz\n', 'Source export hash receipt changed')
         if profile != 'amd64':
             for name in SYSROOT_SETS:
-                check(p['output_sha256']['release/evbarm-aarch64/binary/sets/' + name] == sha256_file(directory / name), 'Set belongs to another build: ' + name)
-            check(p['output_sha256'][KERNEL] == sha256_file(directory / KERNEL), 'Kernel belongs to another build')
+                check(p['output_sha256']['release/evbarm-aarch64/binary/sets/' + name] == digests[name], 'Set belongs to another build: ' + name)
+            check(p['output_sha256'][KERNEL] == digests[KERNEL], 'Kernel belongs to another build')
         else:
             for name in images(version):
-                check(p['output_sha256']['release/images/' + name] == sha256_file(directory / name), 'Image belongs to another build: ' + name)
+                check(p['output_sha256']['release/images/' + name] == digests[name], 'Image belongs to another build: ' + name)
     if m['qualification'] is not None:
         check('qualification.json' in names and read_json(directory / 'qualification.json') == m['qualification'], 'Qualification receipt changed')
         require_qualification(m, profile)
@@ -359,10 +368,11 @@ def _verify(directory, profile):
     return m
 
 
-def verify(directory, profile):
+def verify(directory, profile, known=None):
+    """Check a kit. known maps asset names to records hashed earlier in this run."""
     check(profile in ('amd64', 'aarch64-sysroot'), 'Unknown release profile')
     try:
-        return _verify(directory, profile)
+        return _verify(directory, profile, known)
     except (KeyError, TypeError, ValueError, IndexError, AttributeError, OSError, EOFError) as exc:
         raise SDKError(f'Invalid kit: {exc}') from exc
 
@@ -426,7 +436,7 @@ def prepare_sysroot(build, directory, qualification):
              architecture='aarch64', machine='evbarm', product_version=version, base_version='11.0', build_profile=p,
              files=[asset(directory, n) for n in names], qualification=q, hardware_qualification='not-tested')
     seal(directory, m)
-    return verify(directory, 'aarch64-sysroot')
+    return verify(directory, 'aarch64-sysroot', {f['name']: f for f in m['files']})
 
 
 def prepare_amd64(build, directory, qualification, os_source):
@@ -514,7 +524,7 @@ def prepare_amd64(build, directory, qualification, os_source):
     if p:
         m['build_profile'] = p
     seal(directory, m)
-    return verify(directory, 'amd64')
+    return verify(directory, 'amd64', {f['name']: f for f in m['files']})
 
 
 def prepare(build, directory, profile, qualification=None, os_source=None):
