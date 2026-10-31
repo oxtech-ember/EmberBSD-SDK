@@ -1543,6 +1543,48 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.llvm_phase = 'base'
         self.assertFalse(builder.compatible_context(base_record, object_path))
 
+    def test_openssl_header_perl_flag_remains_part_of_context(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        objects = builder.paths['objects']
+        builder.signature['common_sources']['openssl'] = {'tree_sha256': 'b' * 64}
+        builder.signature['common_sources']['openssh'] = {'tree_sha256': 'a' * 64}
+        builder.signature['flags'] += ['HOST_PERL=/native/first-perl']
+        record = {'signature': copy.deepcopy(builder.context_signature(objects)),
+                  'sources': copy.deepcopy(builder.sources)}
+        builder.signature['flags'][-1] = 'HOST_PERL=/native/second-perl'
+        self.assertFalse(builder.compatible_context(record, objects))
+
+    def test_openssh_config_tools_do_not_invalidate_bootstrap_outputs(self):
+        from emberbsd_sdk.native_os_routing import native_path
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        tools, objects = builder.paths['tools'], builder.paths['objects']
+        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+        builder.llvm_phase = 'base'
+        base_record = {'signature': copy.deepcopy(builder.context_signature(objects)),
+                       'sources': copy.deepcopy(builder.sources)}
+        builder.llvm_phase = 'headers'
+        builder.paths['openssh-source'] = '/prepared/openssh'
+        builder.signature['common_sources']['openssh'] = {'tree_sha256': 'a' * 64}
+        builder.signature['flags'] += ['EMBER_OPENSSH_SOURCE=/prepared/openssh',
+                                       'HOST_AUTOCONF=/native/autoconf',
+                                       'HOST_PERL=/native/perl', 'HOST_PYTHON=/native/python',
+                                       'HOST_GMAKE=/native/gmake',
+                                       'EMBER_HOST_GNU_TRIPLE=aarch64-apple-darwin']
+        native_tools = builder.signature['native_toolset']['tools']
+        bindir = Path(native_tools['cc']).parent
+        for role in ('autoconf', 'autom4te', 'gm4', 'gmake'):
+            native_tools[role] = str(bindir / role)
+        builder.signature['environment']['PATH'] = native_path(builder.signature['native_toolset'])
+        for path in (tools, objects):
+            self.assertTrue(builder.compatible_context(records[path], path))
+        builder.llvm_phase = 'base'
+        self.assertFalse(builder.compatible_context(base_record, objects))
+
     def test_rcs_selection_reuses_headers_and_native_tools_with_new_gmake(self):
         from emberbsd_sdk.native_os_routing import native_path
         builder, _ = self.builder()

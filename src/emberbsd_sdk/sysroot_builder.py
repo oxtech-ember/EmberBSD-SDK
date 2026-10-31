@@ -565,6 +565,9 @@ class SysrootBuilder:
                     # TDB includes install tdb.h during the headers phase.
                     if 'openssl' in common_sources:
                         signature['header_openssl_source'] = common_sources['openssl']
+                    elif 'openssh' in common_sources:
+                        signature['flags'] = [flag for flag in signature['flags']
+                                              if not flag.startswith('HOST_PERL=')]
                     if 'libfido2' in common_sources:
                         signature['header_libfido2_source'] = common_sources['libfido2']
                     if 'libcbor' in common_sources:
@@ -596,7 +599,7 @@ class SysrootBuilder:
                                                                   'EMBER_RCS_SOURCE=',
                                                                   'EMBER_DIFFUTILS_SOURCE=',
                                                                   'EMBER_GREP_SOURCE=',
-                                                                  'HOST_PYTHON=',
+                                                                  'HOST_PYTHON=', 'HOST_AUTOCONF=',
                                                                   'EMBER_EKERMIT_SOURCE=',
                                                                   'EMBER_NVI_SOURCE=',
                                                                   'EMBER_TOP_SOURCE=',
@@ -619,8 +622,8 @@ class SysrootBuilder:
                    for role, value in previous['tools'].items()):
                 return False
             added = selected['tools'].keys() - previous['tools'].keys()
-            # Optional target-only GNU make cannot affect host tools or headers.
-            irrelevant = ({'gmake', 'pkg-config', 'od', 'msgfmt', 'msgmerge', 'xgettext', 'msginit', 'msgconv', 'msgfilter'} if path == self.paths['tools'] or
+            # Optional target-only GNU/Autoconf tools cannot affect host tools or headers.
+            irrelevant = ({'gmake', 'autoconf', 'autom4te', 'gm4', 'pkg-config', 'od', 'msgfmt', 'msgmerge', 'xgettext', 'msginit', 'msgconv', 'msgfilter'} if path == self.paths['tools'] or
                           (self.compiler_family() == 'clang' and self.llvm_phase == 'headers')
                           else set())
             added_contract = added - irrelevant
