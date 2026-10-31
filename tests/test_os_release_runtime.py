@@ -5,10 +5,21 @@
 import unittest
 
 from test_core import SDK_SOURCE
-from emberbsd_sdk.os_release_builder import producer_commands
+from emberbsd_sdk.os_release_builder import OSReleaseBuilder, producer_commands
 
 
 class ReleaseRuntimeSequenceTests(unittest.TestCase):
+    def test_release_reuse_normalizes_prepared_source_metadata(self):
+        builder = object.__new__(OSReleaseBuilder)
+        record = {'format': 'emberbsd-prepared-source', 'version': 1,
+                  'package': 'devel/gettext', 'tree_sha256': 'a' * 64,
+                  'identity': {'owner_sha256': 'b' * 64}}
+        result = builder.reuse_signature({'flags': ['EMBER_BUILD_ID=old'],
+                                          'common_sources': {'gettext': record}})
+        self.assertNotIn('identity', result['common_sources']['gettext'])
+        self.assertEqual(result['flags'], [])
+
+
     def test_optional_rcs_source_reaches_release_and_set_checks(self):
         paths = {name: '/sdk/' + name for name in (
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',

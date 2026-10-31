@@ -457,7 +457,7 @@ class OSReleaseBuilder(SysrootBuilder):
         if isinstance(signature.get('flags'), list):
             signature['flags'] = [flag for flag in signature['flags']
                                   if not (isinstance(flag, str) and flag.startswith(self.COMMIT_FLAGS))]
-        return signature
+        return super().reuse_signature(signature)
 
     def configure_signature(self):
         if type(self.options.get('base-cxx', False)) is not bool:
