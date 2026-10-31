@@ -23,8 +23,11 @@ an installed skill package.
 
 Keep build-host tools and target output separate. Clang/LLVM is the default
 compiler family; select GCC only through an explicit platform profile.
-Keep diagnostic fuzz objects out of target packages and sysroots. Reuse compatible shared objects through their producers'
-checks. Record source, ABI, configuration and artifact provenance.
+Keep diagnostic fuzz objects out of target packages and sysroots. Reuse shared
+objects by their [input key](docs/input-keys.md): Git tree hashes and declared
+compiler, configuration, ABI and target. A matching key means reuse without
+rereading or rehashing. Do not add checks that reread or rehash inputs that a
+git hash or input key already identifies.
 
 Treat workspace structure, completed sysroot, installed package closure and
 target execution as separate evidence. Use the

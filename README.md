@@ -40,6 +40,7 @@ Start with its help and the documented preflight:
 python3 scripts/build-sysroot.py --help
 ```
 
+Reuse is decided by the [input key](docs/input-keys.md) alone.
 See the [workspace contract](docs/prebuild-sdk.md),
 [build workflow](docs/build-workflow.md), [host platforms](docs/host-platforms.md),
 [shared host tools](docs/host-tools.md), and [sysroot builder](docs/sysroot.md).

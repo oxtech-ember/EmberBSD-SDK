@@ -83,10 +83,14 @@ producers support relocation. Tools that validate `realpath` can reject aliases.
 
 ## Reuse contract
 
-Before reusing a component, compare its target/triplet, host tools, compiler,
-recipe, configuration, dependency ABI and source state. Preserve the producer's
-receipts and normal incremental rules. Do not accept a previous artifact after
-a failed build merely because its output path still exists.
+Reuse a component by its [input key](input-keys.md). The key covers the Git
+tree hash of each source, the compiler key, the recipe and configuration, the
+dependency ABI and the target/triplet. A matching key means reuse without
+rereading, rehashing or re-archiving sources, stages or outputs. A different key
+or a dirty worktree means a new build. Do not add checks that reread or rehash
+inputs that a git hash or input key already identifies. Keep the producer's
+normal incremental rules. A failed build records no key, so a previous artifact
+at the same output path is not reused.
 
 The builder records all loaded SDK module hashes in its object signature.
 A changed SDK implementation can make an old context incompatible. This
