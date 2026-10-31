@@ -2,9 +2,11 @@
 """Scoped invalidation of prepared-source object consumers."""
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk import prepared_refresh
 from emberbsd_sdk.errors import SDKError
 
@@ -13,7 +15,7 @@ class PreparedRefreshTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        root = Path(self.temp.name)
+        root = Path(self.temp.name).resolve()
         self.os, self.obj = root / 'os', root / 'obj'
         (self.os / 'share/mk').mkdir(parents=True)
         self.obj.mkdir()
@@ -74,7 +76,7 @@ class TransitionTests(unittest.TestCase):
         from unittest.mock import patch
         from emberbsd_sdk.sysroot_builder import SysrootBuilder
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             for name in ('obj/producer', 'tools', 'os/producer', 'dest'):
                 (root / name).mkdir(parents=True)
             context = root / 'obj/.prebuild-sdk-context.json'
