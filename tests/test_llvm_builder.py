@@ -1615,6 +1615,19 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertTrue(builder.compatible_context(records[tools], tools))
         self.assertFalse(builder.compatible_context(records[objects], objects))
 
+    def test_libcbor_selection_changes_headers_but_not_native_tools(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        tools, objects = builder.paths['tools'], builder.paths['objects']
+        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+        builder.paths['libcbor-source'] = '/prepared/libcbor'
+        builder.signature['common_sources']['libcbor'] = {'tree_sha256': 'a' * 64}
+        builder.signature['flags'].append('EMBER_LIBCBOR_SOURCE=/prepared/libcbor')
+        self.assertTrue(builder.compatible_context(records[tools], tools))
+        self.assertFalse(builder.compatible_context(records[objects], objects))
+
     def test_tdb_selection_changes_headers_but_not_native_tools(self):
         builder, _ = self.builder()
         builder.preflight()

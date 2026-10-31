@@ -44,6 +44,10 @@ that consumes the common `security/libfido2` source, prepare it with the Ports
 owner and select it with `--libfido2-source`; this forwards
 `EMBER_LIBFIDO2_SOURCE`.
 
+For OS builds using the common `devel/libcbor` source, prepare it using the
+Ports `scripts/source-inputs/libcbor/source.py` owner and select it with
+`--libcbor-source`; SDK forwards `EMBER_LIBCBOR_SOURCE`.
+
 Select `aarch64-sysroot` for complete base/comp sets and an EMBER64 test kernel.
 Select `amd64` for the reduced UEFI ISO, USB image and installation sets.
 The product version comes from canonical `EMBER_VERSION` in the pinned

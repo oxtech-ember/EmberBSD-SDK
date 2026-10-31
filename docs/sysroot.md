@@ -64,8 +64,12 @@ receipt. This optional selector is forwarded as `EMBER_OPENSSL_SOURCE`;
 older OS producers remain usable without it. For an OS producer using the
 common `security/libfido2` source, prepare it with the Ports
 `scripts/source-inputs/libfido2/source.py` owner and pass `--libfido2-source`;
-the SDK verifies its current recipe identity and forwards `EMBER_LIBFIDO2_SOURCE`. Source preparation needs no
-application sysroot.
+the SDK verifies its current recipe identity and forwards `EMBER_LIBFIDO2_SOURCE`.
+
+For OS builds using the common `devel/libcbor` source, prepare it using the
+Ports `scripts/source-inputs/libcbor/source.py` owner and select it with
+`--libcbor-source`; SDK forwards `EMBER_LIBCBOR_SOURCE`. Source preparation
+needs no application sysroot.
 
 Prepare libarchive with the Ports `scripts/libarchive-source.py prepare` command
 and libevent with `scripts/source-inputs/libevent/source.py prepare`; both use

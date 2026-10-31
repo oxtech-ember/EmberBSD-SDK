@@ -213,7 +213,7 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
     shutil.copytree(SDK_SOURCE / 'src', root / 'sdk-source/src', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     recipe_fixture(ports, root / 'libedit.tar.gz')
     for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'),
-                          ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2')):
+                          ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor')):
         source = root / (name + '-source')
         source.mkdir()
         write(source / 'emberbsd-prepared-source.json', json.dumps(dict(format='emberbsd-prepared-source',
@@ -270,6 +270,19 @@ class BuilderTests(TemporaryCase):
         record['package'] = 'wrong/package'
         receipt.write_text(json.dumps(record))
         with self.assertRaisesRegex(SDKError, 'invalid libfido2'):
+            B(options).preflight()
+
+    def test_optional_libcbor_is_verified_and_forwarded(self):
+        options = self.options | {'libcbor-source': str(self.root / 'libcbor-source')}
+        builder = B(options)
+        builder.preflight()
+        self.assertEqual(builder.common_source_records['libcbor']['package'], 'devel/libcbor')
+        self.assertIn('EMBER_LIBCBOR_SOURCE=' + options['libcbor-source'], builder.flags)
+        receipt = Path(options['libcbor-source']) / 'emberbsd-prepared-source.json'
+        record = json.loads(receipt.read_text())
+        record['package'] = 'wrong/package'
+        receipt.write_text(json.dumps(record))
+        with self.assertRaisesRegex(SDKError, 'invalid libcbor'):
             B(options).preflight()
 
     def test_optional_openssl_is_verified_and_forwarded(self):

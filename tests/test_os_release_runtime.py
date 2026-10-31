@@ -411,7 +411,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
     def test_common_sources_reach_release_and_direct_make_commands(self):
         paths = {name: '/sdk/' + name for name in (
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
-            'libedit-source', 'libarchive-source', 'libevent-source', 'libfido2-source', 'objects', 'tools', 'destination', 'os')}
+            'libedit-source', 'libarchive-source', 'libevent-source', 'libfido2-source', 'libcbor-source', 'objects', 'tools', 'destination', 'os')}
         host = {'cc': {'path': '/sdk/host/bin/clang'}, 'c++': {'path': '/sdk/host/bin/clang++'}}
         _, commands = producer_commands('aarch64', paths, host, 'a' * 40, 1, '2',
                                         '/sdk/host/bin/sh', compiler_family='clang', base_cxx=True)
@@ -419,6 +419,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             self.assertIn('EMBER_LIBARCHIVE_SOURCE=/sdk/libarchive-source', command)
             self.assertIn('EMBER_LIBEVENT_SOURCE=/sdk/libevent-source', command)
             self.assertIn('EMBER_LIBFIDO2_SOURCE=/sdk/libfido2-source', command)
+            self.assertIn('EMBER_LIBCBOR_SOURCE=/sdk/libcbor-source', command)
 
     def test_optional_openssl_source_reaches_release_commands(self):
         paths = {name: '/sdk/' + name for name in (
