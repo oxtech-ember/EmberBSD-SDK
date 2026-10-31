@@ -45,7 +45,8 @@ producer-specific target and compiler identity checks remain the caller’s resp
 Select native and target tools separately through the producer interface.
 Check configuration files and nested commands for external tool selection.
 An exported `HOST_CC` is insufficient if the producer overrides it.
-Fix a concrete selection defect in SDK, Ports, or OS and add its regression.
+Fix a concrete selection defect in SDK, Ports, or OS.
+Add a causal regression test for a logic or behavior defect; a trivial path or typo fix needs none.
 Do not add a qualification pipeline to establish that an installed tool is usable.
 
 Sysroot and release builders read the selected OS `tools/native-tools/contract`.
