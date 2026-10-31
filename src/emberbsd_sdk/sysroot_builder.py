@@ -514,15 +514,23 @@ class SysrootBuilder:
 
     def reuse_signature(self, signature):
         """Compare compiled payload, keeping provenance in the saved context."""
+        def payload(name, record):
+            if (name != 'x11' and isinstance(record, dict) and
+                    record.get('format') == 'emberbsd-prepared-source' and
+                    record.get('version') == 1 and isinstance(record.get('package'), str) and
+                    isinstance(record.get('tree_sha256'), str) and
+                    re.fullmatch('[0-9a-f]{64}', record['tree_sha256'])):
+                return {key: record[key] for key in ('format', 'version', 'package', 'tree_sha256')}
+            return record
         records = signature.get('common_sources')
         if isinstance(records, dict):
             for name, record in records.items():
-                if (name != 'x11' and isinstance(record, dict) and
-                        record.get('format') == 'emberbsd-prepared-source' and
-                        record.get('version') == 1 and isinstance(record.get('package'), str) and
-                        isinstance(record.get('tree_sha256'), str) and
-                        re.fullmatch('[0-9a-f]{64}', record['tree_sha256'])):
-                    records[name] = {key: record[key] for key in ('format', 'version', 'package', 'tree_sha256')}
+                records[name] = payload(name, record)
+        native = signature.get('native_sources')
+        if isinstance(native, dict):
+            for name, value in native.items():
+                if isinstance(value, dict) and 'record' in value:
+                    value['record'] = payload(name, value['record'])
         return signature
 
     def compatible_context(self, record, path):

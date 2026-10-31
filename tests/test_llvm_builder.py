@@ -1738,6 +1738,24 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.llvm_phase = 'base'
         self.assertFalse(builder.compatible_context(records[objects], objects))
 
+    def test_native_source_metadata_does_not_invalidate_same_payload(self):
+        builder, _ = self.builder()
+        record = {'format': 'emberbsd-prepared-source', 'version': 1,
+                  'package': 'security/heimdal', 'tree_sha256': 'a' * 64,
+                  'commit': 'old'}
+        old = {'native_sources': {'heimdal': {'path': '/same', 'record': record}}}
+        new = copy.deepcopy(old)
+        new['native_sources']['heimdal']['record']['commit'] = 'new'
+        self.assertEqual(builder.reuse_signature(copy.deepcopy(old)),
+                         builder.reuse_signature(copy.deepcopy(new)))
+        new['native_sources']['heimdal']['path'] = '/different'
+        self.assertNotEqual(builder.reuse_signature(copy.deepcopy(old)),
+                            builder.reuse_signature(copy.deepcopy(new)))
+        new['native_sources']['heimdal']['path'] = '/same'
+        new['native_sources']['heimdal']['record']['tree_sha256'] = 'b' * 64
+        self.assertNotEqual(builder.reuse_signature(copy.deepcopy(old)),
+                            builder.reuse_signature(copy.deepcopy(new)))
+
     def test_heimdal_selection_changes_headers_and_native_tools(self):
         builder, _ = self.builder()
         builder.preflight()
