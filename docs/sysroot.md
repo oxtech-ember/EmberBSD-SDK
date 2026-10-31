@@ -90,6 +90,9 @@ The SDK forwards `EMBER_WPA_SOURCE`.
 For OS builds using common `security/heimdal`, prepare its source with the
 Ports `scripts/source-inputs/heimdal/source.py` owner and select `--heimdal-source`.
 The SDK forwards `EMBER_HEIMDAL_SOURCE`.
+For OS builds using common `security/openssh`, prepare the source with the
+Ports `scripts/source-inputs/openssh/source.py` owner and select
+`--openssh-source`. The SDK forwards `EMBER_OPENSSH_SOURCE`.
 
 Prepare libarchive with the Ports `scripts/libarchive-source.py prepare` command
 and libevent with `scripts/source-inputs/libevent/source.py prepare`; both use
