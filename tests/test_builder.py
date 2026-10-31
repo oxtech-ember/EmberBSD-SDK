@@ -36,6 +36,10 @@ def fixture_native_selection(builder):
     if builder.options.get('openssl-source'):
         tools['perl'] = str(prefix / 'perl')
         tools['gmake'] = str(prefix / 'gmake')
+    if builder.options.get('openssh-source'):
+        # OpenSSH target configuration runs Autoconf, whose autom4te is Perl.
+        for name in ('autoconf', 'autom4te', 'gm4', 'perl', 'gmake'):
+            tools[name] = str(prefix / name)
     if 'hostname hostname -' in Path(builder.native_contract).read_text():
         tools['hostname'] = str(prefix / 'libexec/gettext/hostname')
     return HostPrefix(str(prefix), MappingProxyType({'os': 'Darwin', 'cpu': 'arm64'}),
@@ -356,6 +360,8 @@ class BuilderTests(TemporaryCase):
         builder.preflight()
         self.assertEqual(builder.common_source_records['openssh']['package'], 'security/openssh')
         self.assertIn('EMBER_OPENSSH_SOURCE=' + options['openssh-source'], builder.flags)
+        self.assertIn('HOST_PERL=' + builder.native.tool('perl'), builder.flags)
+        self.assertIn('HOST_AUTOCONF=' + builder.native.tool('autoconf'), builder.flags)
         receipt = Path(options['openssh-source']) / 'emberbsd-prepared-source.json'
         record = json.loads(receipt.read_text())
         record['package'] = 'wrong/package'
