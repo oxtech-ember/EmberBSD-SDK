@@ -47,6 +47,13 @@ class PreparedRefreshTests(unittest.TestCase):
         self.assertIn('other/consumer', dirs)
         self.assertIn('unknown/generated', dirs)
 
+    def test_binary_alias_to_source_tree_is_refused(self):
+        target = self.os / 'external/cbor/hidden'
+        target.write_bytes(b'\x7fELFbinary')
+        (self.obj / 'external/cbor/alias').symlink_to(target)
+        with self.assertRaisesRegex(SDKError, 'binary alias outside object tree'):
+            prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [])
+
     def test_external_directory_alias_is_refused(self):
         (self.obj / 'escape').symlink_to(Path(self.temp.name))
         with self.assertRaises(SDKError):

@@ -55,6 +55,11 @@ def plan(os_root, objects, names, archive_members=None):
                     resolved = path.resolve()
                     if not (resolved.is_relative_to(obj.resolve()) or resolved.is_relative_to(root.resolve())):
                         raise ValueError('unverified file alias ' + str(path))
+                    if resolved.is_relative_to(root.resolve()) and resolved.is_file():
+                        with resolved.open('rb') as stream:
+                            magic = stream.read(8)
+                        if magic.startswith(b'\x7fELF') or magic in (b'!<arch>\n', b'!<thin>\n'):
+                            raise ValueError('binary alias outside object tree ' + str(path))
                 if name.endswith('.a') and not path.is_symlink():
                     relpath = PurePosixPath(rel)
                     independent = any(len(relpath.parts) == len(PurePosixPath(p).parts) and relpath.match(p) for p in archive_patterns)
