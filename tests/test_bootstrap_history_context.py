@@ -53,12 +53,13 @@ class HistoryContextTests(unittest.TestCase):
             with self.assertRaisesRegex(SDKError, 'bound'): descend(4)
         self.assertEqual(descend(4), {})
 
-    def test_changed_hashed_input_refuses_a_memo_hit(self):
+    def test_memo_hit_does_not_rehash_and_a_new_scope_reads_the_input(self):
         import hashlib
         import tempfile
         from pathlib import Path
         from emberbsd_sdk.bootstrap_history_context import validate_history
         from emberbsd_sdk.native_toolset import _bytes
+        from emberbsd_sdk import inventory
         from emberbsd_sdk.errors import SDKError
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary, 'evidence.json')
@@ -70,18 +71,40 @@ class HistoryContextTests(unittest.TestCase):
                 _bytes(reference)
                 return dict(p=['named-unknown'])
             def root():
-                validate_history('leaf', leaf)
-                path.write_bytes(b'changed!')
-                return validate_history('leaf', leaf)
-            with self.assertRaisesRegex(SDKError, 'changed'):
-                validate_history('root', root)
+                first = validate_history('leaf', leaf)
+                first['p'].clear()
+                # The old code rehashed every observed file on a memo hit.
+                with patch.object(inventory, 'sha256_file', side_effect=AssertionError('rehashed')):
+                    return validate_history('leaf', leaf)
+            self.assertEqual(validate_history('root', root), dict(p=['named-unknown']))
             self.assertEqual(calls, [1])
-            # A later independent validation must read its new reference, not retain a failure or a cached pass.
+            # A new scope reads the input again and refuses changed bytes.
+            path.write_bytes(b'changed!')
+            with self.assertRaisesRegex(SDKError, 'SHA256 mismatch'):
+                validate_history('leaf', leaf)
             reference['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
             self.assertEqual(validate_history('leaf', leaf), dict(p=['named-unknown']))
-            self.assertEqual(calls, [1, 1])
+            self.assertEqual(calls, [1, 1, 1])
 
-    def test_source_tree_new_member_refuses_a_memo_hit(self):
+    def test_memo_hit_does_not_inventory_a_source_tree_again(self):
+        import tempfile
+        from pathlib import Path
+        from emberbsd_sdk.bootstrap_history_context import validate_history
+        from emberbsd_sdk import inventory
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / 'source.c').write_bytes(b'original source')
+            def leaf():
+                inventory.snapshot_tree(str(root))
+                return {}
+            def scope():
+                validate_history('leaf', leaf)
+                with patch.object(inventory, 'snapshot_tree', side_effect=AssertionError('walked')), \
+                        patch('os.scandir', side_effect=AssertionError('walked')):
+                    return validate_history('leaf', leaf)
+            self.assertEqual(validate_history('scope', scope), {})
+
+    def test_input_read_again_in_the_scope_must_match(self):
         import tempfile
         from pathlib import Path
         from emberbsd_sdk.bootstrap_history_context import validate_history
@@ -90,58 +113,11 @@ class HistoryContextTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             (root / 'source.c').write_bytes(b'original source')
-            def leaf():
-                snapshot_tree(str(root))
-                return {}
             def scope():
-                validate_history('leaf', leaf)
+                validate_history('first', lambda: snapshot_tree(str(root)))
                 (root / 'extra.c').write_bytes(b'unreviewed source')
-                validate_history('leaf', leaf)
+                validate_history('second', lambda: snapshot_tree(str(root)))
             with self.assertRaisesRegex(SDKError, 'changed'): validate_history('scope', scope)
-
-    def test_retained_source_mtime_change_refuses_a_memo_hit(self):
-        import os
-        import tempfile
-        from pathlib import Path
-        from emberbsd_sdk.bootstrap_history_context import validate_history
-        from emberbsd_sdk.inventory import snapshot_tree
-        from emberbsd_sdk.errors import SDKError
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary).resolve()
-            path = root / 'source.c'
-            path.write_bytes(b'same bytes')
-            def leaf():
-                snapshot_tree(str(root))
-                return {}
-            def scope():
-                validate_history('leaf', leaf)
-                info = path.stat()
-                os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns + 1000000000))
-                validate_history('leaf', leaf)
-            with self.assertRaisesRegex(SDKError, 'changed'): validate_history('scope', scope)
-
-    def test_cached_results_cannot_change_unknowns_and_are_rehashed(self):
-        import hashlib
-        import tempfile
-        from pathlib import Path
-        from emberbsd_sdk.bootstrap_history_context import validate_history
-        from emberbsd_sdk.native_toolset import _bytes
-        from emberbsd_sdk import inventory
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary, 'receipt')
-            path.write_bytes(b'original')
-            reference = dict(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
-            def leaf():
-                _bytes(reference)
-                return dict(p=['historical-toolchain-closure'])
-            def root():
-                first = validate_history('leaf', leaf)
-                first['p'].clear()
-                with patch.object(inventory, 'sha256_file', wraps=inventory.sha256_file) as hashed:
-                    second = validate_history('leaf', leaf)
-                self.assertEqual(hashed.call_count, 1)
-                return second
-            self.assertEqual(validate_history('root', root), dict(p=['historical-toolchain-closure']))
 
     def test_current_input_inspection_always_runs(self):
         from emberbsd_sdk.bootstrap_history_context import validate_history

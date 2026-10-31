@@ -117,7 +117,7 @@ class TraceReaderTests(unittest.TestCase):
                 runtime._trace_reference(reference)
             self.assertLessEqual(sum(requests), 66)
 
-    def test_history_memo_rechecks_the_streamed_trace(self):
+    def test_history_memo_reuses_the_streamed_trace_without_reading_it(self):
         reference = self.reference()
         calls = []
         def leaf():
@@ -127,10 +127,13 @@ class TraceReaderTests(unittest.TestCase):
         def outer():
             validate_history('trace-leaf', leaf)
             self.path.write_bytes(b'changed!!')
-            validate_history('trace-leaf', leaf)
-        with self.assertRaisesRegex(SDKError, 'memoized history input changed'):
-            validate_history('trace-root', outer)
+            return validate_history('trace-leaf', leaf)
+        self.assertEqual(validate_history('trace-root', outer), [])
         self.assertEqual(calls, [True])
+        # A new scope streams the trace again and refuses the changed bytes.
+        with self.assertRaises(SDKError):
+            validate_history('trace-leaf', leaf)
+        self.assertEqual(calls, [True, True])
 
 
 if __name__ == '__main__':

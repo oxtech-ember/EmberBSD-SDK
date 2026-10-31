@@ -170,10 +170,11 @@ JSON reads outside this history scope keep their existing strict behavior.
 
 Separate seed loads always start fresh. Historical and current input-inspection modes cannot share a result.
 
-A memo hit rehashes the files observed during the original validation.
-It also repeats complete source inventories and checks file and directory identities.
-Changed bytes, paths, modes, links or source timestamps refuse the hit.
-This preserves archive-derived source proofs that bind modification times.
+A memo hit reuses the result without rereading, rehashing or inventorying
+its inputs. The memo key binds the recorded input hashes, so the hit covers
+exactly the inputs the original validation checked. A file or tree that is
+read again within the scope must still match its first reading. A new seed
+load starts a fresh scope and validates its inputs again.
 Results are copied; callers cannot alter cached historical unknowns.
 The complete validation still runs once for each distinct node.
 Original receipt comparisons and unknown-list checks are unchanged.

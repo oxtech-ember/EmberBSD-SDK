@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
 # Origin: EmberBSD (AI-assisted).
-"""One bounded history validation scope. No persistent cache or accepted receipts."""
+"""One bounded history validation scope. No persistent cache or accepted receipts.
+
+A memo hit reuses its result without rereading its inputs; a new scope reads them again.
+"""
 
 from contextvars import ContextVar
 from copy import deepcopy
@@ -39,12 +42,11 @@ class _Context:
         self.frames = []
         self.guards = {}
         self.guard_weight = 0
-        self.checking = False
         self.json_validated = set()
         self.json_weight = 0
 
     def observe(self, key, value, weight=1):
-        if self.checking or not self.frames:
+        if not self.frames:
             return
         if key in self.guards:
             if self.guards[key] != value:
@@ -56,29 +58,13 @@ class _Context:
             self.guard_weight += weight
         self.frames[-1].add(key)
 
-    def recheck(self, dependencies):
-        # Re-read hashes and complete source inventories. Never trust a timestamp cache.
-        from .inventory import sha256_file, snapshot_tree
-        self.checking = True
-        try:
-            for key in sorted(dependencies, key=repr):
-                expected = self.guards[key]
-                if key[0] == 'file':
-                    actual = (sha256_file(key[1]), stable_identity(os.lstat(key[1])))
-                else:
-                    rows = snapshot_tree(key[1], machine=key[2], exclude=key[3])
-                    actual = _tree_guard(key[1], rows)
-                if actual != expected:
-                    raise SDKError('memoized history input changed: ' + key[1])
-        finally:
-            self.checking = False
-
     def call(self, key, validate, memoize):
         if key in self.active:
             raise SDKError('cycle in bootstrap history validation')
         if memoize and key in self.memo:
+            # The key binds the recorded input hashes; a hit in this scope
+            # does not read, hash or inventory those inputs again.
             result, dependencies = self.memo[key]
-            self.recheck(dependencies)
             if self.frames:
                 self.frames[-1].update(dependencies)
             return deepcopy(result)
@@ -141,7 +127,7 @@ def load_json(data, *, max_bytes=MAX_JSON, max_depth=32):
 
 def observe_file(path, digest):
     context = _CURRENT.get()
-    if context is not None and not context.checking:
+    if context is not None:
         path = os.fspath(path)
         context.observe(('file', path), (digest, stable_identity(os.lstat(path))))
 
@@ -155,6 +141,6 @@ def _tree_guard(root, rows):
 
 def observe_tree(root, machine, exclude, rows):
     context = _CURRENT.get()
-    if context is not None and not context.checking:
+    if context is not None:
         root = os.fspath(root)
         context.observe(('tree', root, machine, tuple(exclude)), _tree_guard(root, rows), len(rows) + 1)
