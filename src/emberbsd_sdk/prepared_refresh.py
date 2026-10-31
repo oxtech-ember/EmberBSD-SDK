@@ -63,13 +63,22 @@ def plan_native(os_root, objects, names):
     return sorted(result)
 
 
-def plan(os_root, objects, names, archive_members=None):
+def plan(os_root, objects, names, archive_members=None, nested_outputs=None):
     root, obj = Path(os_root), Path(objects)
     try:
         contract = json.loads((root / CONTRACT).read_text())
-        if set(contract) != {'version', 'sources', 'header_independent_object_patterns', 'header_independent_archive_patterns'} or contract['version'] != 1:
+        required = {'version', 'sources', 'header_independent_object_patterns', 'header_independent_archive_patterns'}
+        if set(contract) not in (required, required | {'nested_object_owners'}) or contract['version'] != 1:
             raise ValueError('unsupported contract')
         sources = contract['sources']
+        nested = contract.get('nested_object_owners', {})
+        if not isinstance(nested, dict):
+            raise ValueError('invalid nested object owners')
+        for subdir, owner in nested.items():
+            relative(subdir)
+            relative(owner)
+            if len(PurePosixPath(owner).parts) < 2 or not subdir.startswith(owner + '/'):
+                raise ValueError('invalid nested object owner')
         patterns = [relative(p, pattern=True) for p in contract['header_independent_object_patterns']]
         archive_patterns = [relative(p, pattern=True) for p in contract['header_independent_archive_patterns']]
         dirs, headers, linked = set(), set(), set()
@@ -142,14 +151,28 @@ def plan(os_root, objects, names, archive_members=None):
             if not source.resolve().is_relative_to(root.resolve()) or not built.resolve().is_relative_to(obj.resolve()):
                 raise ValueError('refresh path escapes its root')
             if not (source / 'Makefile').is_file():
-                missing.append(name)
-                continue
+                owners = [(subdir, owner) for subdir, owner in nested.items()
+                          if name == subdir or name.startswith(subdir + '/')]
+                if len(owners) != 1:
+                    missing.append(name)
+                    continue
+                subdir, owner = owners[0]
+                source, built = root / owner, obj / owner
+                nested_path = obj / subdir
+                if (not source.resolve().is_relative_to(root.resolve()) or
+                        not built.resolve().is_relative_to(obj.resolve()) or
+                        not nested_path.resolve().is_relative_to(built.resolve()) or
+                        not (source / 'Makefile').is_file()):
+                    raise ValueError('invalid nested object owner')
+                if nested_outputs is not None:
+                    nested_outputs.append(str(nested_path))
+                name = owner
             if built.exists():
                 if built.is_symlink() or not built.is_dir():
                     raise ValueError('invalid object directory ' + name)
                 result.append(name)
         if missing:
             raise ValueError('missing OS makefiles for ' + ', '.join(missing))
-        return result
+        return sorted(set(result))
     except (OSError, ValueError, TypeError, KeyError) as exc:
         raise SDKError('cannot safely plan prepared source refresh: ' + str(exc)) from exc

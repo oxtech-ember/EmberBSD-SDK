@@ -419,6 +419,9 @@ class SysrootBuilder:
         if 'pending_native' in record:
             pending = record['pending_native']
             if (path != self.paths['tools'] or not isinstance(pending, dict) or
+                    set(pending) != {'signature', 'sources'} or
+                    not isinstance(pending['signature'], dict) or
+                    not isinstance(pending['sources'], list) or
                     not self.plan_native_refresh(record, path)):
                 raise SDKError(f'cannot safely resume incomplete native source refresh: {path}')
         elif not self.compatible_context(record, path):
@@ -455,7 +458,8 @@ class SysrootBuilder:
                 result = process.capture([self.compiler_record['binaries']['ar']['selected_path'],
                                           't', str(archive)], env=self.environment)
                 return result.stdout.decode('utf-8', 'strict').splitlines()
-            self.refresh_dirs = prepared_refresh.plan(self.paths['os'], path, changed, members)
+            self.refresh_nested_outputs = []
+            self.refresh_dirs = prepared_refresh.plan(self.paths['os'], path, changed, members, self.refresh_nested_outputs)
             return bool(self.refresh_dirs)
         except (KeyError, TypeError, AttributeError):
             return False
@@ -465,7 +469,9 @@ class SysrootBuilder:
         try:
             old = copy.deepcopy(record['signature'])
             new = copy.deepcopy(self.context_signature(path))
-            pending = copy.deepcopy(record.get('pending_native', old))
+            pending_record = record.get('pending_native')
+            pending = copy.deepcopy(pending_record['signature'] if pending_record else old)
+            pending_names = set(pending_record['sources']) if pending_record else set()
             before = old.pop('native_sources', {})
             after = new.pop('native_sources', {})
             interrupted = pending.pop('native_sources', {})
@@ -485,11 +491,12 @@ class SysrootBuilder:
             if not self.compatible_context(dict(record, signature=pending), path):
                 return False
             names = set(before) | set(after) | set(interrupted)
-            changed = {name for name in names if before.get(name) != after.get(name) or
-                       before.get(name) != interrupted.get(name)}
+            changed = pending_names | {name for name in names if before.get(name) != after.get(name) or
+                                       before.get(name) != interrupted.get(name)}
             if not changed:
                 return False
             self.native_refresh_dirs = prepared_refresh.plan_native(self.paths['os'], self.paths['objects'], changed)
+            self.native_refresh_sources = sorted(changed)
             return bool(self.native_refresh_dirs)
         except (KeyError, TypeError, AttributeError):
             return False
@@ -1471,12 +1478,16 @@ class SysrootBuilder:
             # BSD clean normally visits both the object and source directories.
             # A refresh owns only the selected objects, never tracked sources.
             self.dispatch(base + ['MKCLEANSRC=no', 'cleandir'])
+        for nested in getattr(self, 'refresh_nested_outputs', []):
+            if os.path.lexists(nested):
+                raise SDKError('nested object output remains after owner cleanup: ' + nested)
         # Mark the current context before the first install can change a tool.
         # Only the same selected inputs may retry a partially installed set.
         native_dirs = getattr(self, 'native_refresh_dirs', [])
         if native_dirs:
             old = copy.deepcopy(self.contexts['tools'])
-            old['pending_native'] = self.context_signature(self.paths['tools'])
+            old['pending_native'] = {'signature': self.context_signature(self.paths['tools']),
+                                     'sources': self.native_refresh_sources}
             jsonio.write_json(os.path.join(self.paths['tools'], self.CONTEXT), old, exclusive=False)
         for directory in native_dirs:
             wrapper = os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine'])

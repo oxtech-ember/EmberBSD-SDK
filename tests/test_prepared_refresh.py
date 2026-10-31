@@ -78,6 +78,24 @@ class PreparedRefreshTests(unittest.TestCase):
         with self.assertRaises(SDKError):
             prepared_refresh.plan(self.os, self.obj, {'libcbor'})
 
+    def test_nested_outputs_require_explicit_leaf_owner(self):
+        nested = self.obj / 'unknown/generated/waf-build/default'
+        nested.mkdir(parents=True)
+        (nested / 'unit.o').write_bytes(b'object')
+        with self.assertRaisesRegex(SDKError, 'missing OS makefiles'):
+            prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [])
+        self.contract['nested_object_owners'] = {
+            'unknown/generated/waf-build': 'unknown/generated'}
+        self.write_contract()
+        outputs = []
+        dirs = prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [], outputs)
+        self.assertIn('unknown/generated', dirs)
+        self.assertEqual(outputs, [str(self.obj/'unknown/generated/waf-build')])
+        self.contract['nested_object_owners'] = {'unknown/generated/waf-build': 'unknown'}
+        self.write_contract()
+        with self.assertRaises(SDKError):
+            prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [])
+
     def test_source_without_headers_or_libraries_keeps_unrelated_unknown_objects(self):
         self.contract['sources']['EMBER_WPA_SOURCE'] = {
             'producer_dirs': ['external/cbor'], 'consumer_dirs': [],
@@ -101,7 +119,7 @@ class TransitionTests(unittest.TestCase):
         from emberbsd_sdk.sysroot_builder import SysrootBuilder
         original = {'compiler': 'same', 'native_sources': {'demo': {'path': 'old'}}}
         interrupted = {'compiler': 'same', 'native_sources': {'demo': {'path': 'failed'}}}
-        record = {'signature': original, 'pending_native': interrupted}
+        record = {'signature': original, 'pending_native': {'signature': interrupted, 'sources': ['demo']}}
         selected = {'compiler': 'same', 'native_sources': {'demo': {'path': 'old'}}}
         fake = SimpleNamespace(paths={'os': '/os', 'objects': '/obj'},
             context_signature=lambda p: selected,
@@ -110,6 +128,9 @@ class TransitionTests(unittest.TestCase):
                    return_value=['tools/demo']) as plan:
             self.assertTrue(SysrootBuilder.plan_native_refresh(fake, record, '/tools'))
             plan.assert_called_with('/os', '/obj', {'demo'})
+            # A second failure while restoring the old source must remain retryable.
+            record['pending_native'] = {'signature': selected, 'sources': ['demo']}
+            self.assertTrue(SysrootBuilder.plan_native_refresh(fake, record, '/tools'))
             selected = {'compiler': 'same', 'native_sources': {'demo': {'path': 'fixed'}}}
             self.assertTrue(SysrootBuilder.plan_native_refresh(fake, record, '/tools'))
             selected = {'compiler': 'changed', 'native_sources': {'demo': {'path': 'fixed'}}}
@@ -141,7 +162,7 @@ class TransitionTests(unittest.TestCase):
             fake = SimpleNamespace(paths={'objects': str(root/'obj'), 'tools': str(root/'tools'),
                          'os': str(root/'os'), 'destination': str(root/'dest'),
                          'native-routing': str(root/'tools/routing'), 'sdk': str(root)},
-                         contexts={'objects': old, 'tools': old}, native_refresh_dirs=dirs,
+                         contexts={'objects': old, 'tools': old}, native_refresh_dirs=dirs, native_refresh_sources=['demo'],
                          target={'machine': 'evbarm'}, flags=[], environment={},
                          inspect_context=lambda p: old, dispatch=dispatch,
                          context_signature=lambda p: selected, sources={},
@@ -156,18 +177,22 @@ class TransitionTests(unittest.TestCase):
             self.assertEqual((root/'tools/installed').read_text(), 'new')
             pending = json.loads((root/'tools/.prebuild-sdk-context.json').read_text())
             self.assertEqual(pending['signature'], {})
-            self.assertEqual(pending['pending_native'], selected)
+            self.assertEqual(pending['pending_native'], {'signature': selected, 'sources': ['demo']})
             self.assertEqual((root/'obj/.prebuild-sdk-context.json').read_text(), 'old context')
-            fake.plan_native_refresh = lambda record, path: selected.get('toolchain') != 'different'
+            from types import MethodType
+            fake.compatible_context = lambda record, path: record['signature'] == selected
+            fake.plan_native_refresh = MethodType(SysrootBuilder.plan_native_refresh, fake)
             fake.validate_source_ancestry = lambda record, path: None
-            self.assertEqual(SysrootBuilder.inspect_context(fake, str(root/'tools')), pending)
-            selected = {'native_sources': {'demo': 'old'}}
-            self.assertEqual(SysrootBuilder.inspect_context(fake, str(root/'tools')), pending)
-            selected = {'native_sources': {'demo': 'fixed'}}
-            self.assertEqual(SysrootBuilder.inspect_context(fake, str(root/'tools')), pending)
-            selected = {'native_sources': {'demo': 'new'}, 'toolchain': 'different'}
-            with self.assertRaisesRegex(SDKError, 'cannot safely resume'):
-                SysrootBuilder.inspect_context(fake, str(root/'tools'))
+            with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan_native', return_value=dirs):
+                self.assertEqual(SysrootBuilder.inspect_context(fake, str(root/'tools')), pending)
+                selected = {'native_sources': {'demo': 'old'}}
+                self.assertEqual(SysrootBuilder.inspect_context(fake, str(root/'tools')), pending)
+                self.assertEqual(fake.native_refresh_dirs, dirs)
+                selected = {'native_sources': {'demo': 'fixed'}}
+                self.assertEqual(SysrootBuilder.inspect_context(fake, str(root/'tools')), pending)
+                selected = {'native_sources': {'demo': 'new'}, 'toolchain': 'different'}
+                with self.assertRaisesRegex(SDKError, 'cannot safely resume'):
+                    SysrootBuilder.inspect_context(fake, str(root/'tools'))
             selected = {'native_sources': {'demo': 'new'}}
             fake.contexts = {'objects': old, 'tools': pending}
             fake.inspect_context = lambda p: old if p == str(root/'obj') else pending
@@ -180,6 +205,31 @@ class TransitionTests(unittest.TestCase):
             self.assertEqual(final['signature'], selected)
             self.assertEqual([Path(c[c.index('-C')+1]).name for c in calls[-4:]],
                              ['compile_et', 'compile_et', 'slc', 'slc'])
+
+    def test_nested_output_left_after_clean_preserves_context(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from emberbsd_sdk.sysroot_builder import SysrootBuilder
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            for name in ('obj/producer/nested', 'tools', 'os/producer', 'dest'):
+                (root / name).mkdir(parents=True)
+            context = root/'obj/.prebuild-sdk-context.json'
+            context.write_text('old context')
+            old = {'signature': {}}
+            fake = SimpleNamespace(paths={'objects': str(root/'obj'), 'tools': str(root/'tools'),
+                         'os': str(root/'os'), 'destination': str(root/'dest'),
+                         'native-routing': str(root/'tools/routing'), 'sdk': str(root)},
+                         contexts={'objects': old, 'tools': None}, refresh_dirs=['producer'],
+                         refresh_nested_outputs=[str(root/'obj/producer/nested')],
+                         target={'machine': 'evbarm'}, flags=[], environment={},
+                         inspect_context=lambda p: old if p == str(root/'obj') else None,
+                         dispatch=lambda command: None)
+            with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                       return_value=SimpleNamespace(stdout=(str(root/'obj/producer')+'\n').encode())):
+                with self.assertRaisesRegex(SDKError, 'nested object output remains'):
+                    SysrootBuilder.prepare_contexts(fake)
+            self.assertEqual(context.read_text(), 'old context')
 
     def test_failure_before_context_update_preserves_record(self):
         from types import SimpleNamespace
