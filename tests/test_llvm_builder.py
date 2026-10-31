@@ -1602,6 +1602,19 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.signature['common_sources']['openssl']['tree_sha256'] = 'b' * 64
         self.assertFalse(builder.compatible_context(records[objects], objects))
 
+    def test_libfido2_selection_changes_headers_but_not_native_tools(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        tools, objects = builder.paths['tools'], builder.paths['objects']
+        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+        builder.paths['libfido2-source'] = '/prepared/libfido2'
+        builder.signature['common_sources']['libfido2'] = {'tree_sha256': 'a' * 64}
+        builder.signature['flags'].append('EMBER_LIBFIDO2_SOURCE=/prepared/libfido2')
+        self.assertTrue(builder.compatible_context(records[tools], tools))
+        self.assertFalse(builder.compatible_context(records[objects], objects))
+
     def test_tdb_selection_changes_headers_but_not_native_tools(self):
         builder, _ = self.builder()
         builder.preflight()

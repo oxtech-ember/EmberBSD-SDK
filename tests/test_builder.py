@@ -213,7 +213,7 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
     shutil.copytree(SDK_SOURCE / 'src', root / 'sdk-source/src', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     recipe_fixture(ports, root / 'libedit.tar.gz')
     for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'),
-                          ('openssl', 'security/openssl')):
+                          ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2')):
         source = root / (name + '-source')
         source.mkdir()
         write(source / 'emberbsd-prepared-source.json', json.dumps(dict(format='emberbsd-prepared-source',
@@ -258,6 +258,19 @@ class BuilderTests(TemporaryCase):
             B(self.options).preflight()
         self.control()
         B(self.options).preflight()
+
+    def test_optional_libfido2_is_verified_and_forwarded(self):
+        options = self.options | {'libfido2-source': str(self.root / 'libfido2-source')}
+        builder = B(options)
+        builder.preflight()
+        self.assertEqual(builder.common_source_records['libfido2']['package'], 'security/libfido2')
+        self.assertIn('EMBER_LIBFIDO2_SOURCE=' + options['libfido2-source'], builder.flags)
+        receipt = Path(options['libfido2-source']) / 'emberbsd-prepared-source.json'
+        record = json.loads(receipt.read_text())
+        record['package'] = 'wrong/package'
+        receipt.write_text(json.dumps(record))
+        with self.assertRaisesRegex(SDKError, 'invalid libfido2'):
+            B(options).preflight()
 
     def test_optional_openssl_is_verified_and_forwarded(self):
         options = self.options | {'openssl-source': str(self.root / 'openssl-source')}

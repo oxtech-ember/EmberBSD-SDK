@@ -464,6 +464,8 @@ class SysrootBuilder:
                     # TDB includes install tdb.h during the headers phase.
                     if 'openssl' in common_sources:
                         signature['header_openssl_source'] = common_sources['openssl']
+                    if 'libfido2' in common_sources:
+                        signature['header_libfido2_source'] = common_sources['libfido2']
                     if 'tdb' in common_sources:
                         signature['header_tdb_source'] = common_sources['tdb']
                     if 'iscsi' in common_sources:
@@ -618,7 +620,7 @@ class SysrootBuilder:
     # inputs and the digest of the tree it published.
     COMMON_SOURCES = (
         ('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'),
-        ('openssl', 'security/openssl'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'),
+        ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'),
         ('diffutils', 'devel/diffutils'), ('grep', 'textproc/grep'), ('ekermit', 'comms/ekermit'),
         ('nvi', 'editors/nvi'), ('top', 'sysutils/top'), ('iscsi', 'devel/netbsd-iscsi-lib'),
         ('ntp', 'net/ntp4'), ('libopts', 'devel/autogen'), ('libpcap', 'net/libpcap'),
@@ -1153,7 +1155,7 @@ class SysrootBuilder:
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
-        input_names += [name for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'x11-source') if self.options.get(name)]
+        input_names += [name for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'libfido2-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'x11-source') if self.options.get(name)]
         if clang and self.llvm_phase != 'headers' and self.options.get('llvm-runtime-original-source'):
             input_names.append('llvm-runtime-original-source')
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
@@ -1277,7 +1279,7 @@ class SysrootBuilder:
         self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}',
                        f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
         self.flags += [f'EMBER_{name.upper().replace("-", "_")}_SOURCE={self.paths[name + "-source"]}'
-                       for name in ('libarchive', 'libevent', 'openssl', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in self.paths]
+                       for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in self.paths]
         if 'openssl-source' in self.paths:
             self.flags.append('HOST_PERL=' + self.native.tool('perl'))
         if 'openssl-source' in self.paths or 'tdb-source' in self.paths:

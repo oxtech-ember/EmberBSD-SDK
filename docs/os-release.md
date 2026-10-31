@@ -39,7 +39,10 @@ release. An explicitly supplied full stage is checked against these same inputs.
 When the selected OS consumes the common Ports OpenSSL source, pass the
 prepared tree with `--openssl-source`. The optional input is identified by its
 preparation receipt and recorded with the other common source inputs; it is forwarded
-to the OS as `EMBER_OPENSSL_SOURCE`. An older OS build can omit it.
+to the OS as `EMBER_OPENSSL_SOURCE`. An older OS build can omit it. For an OS
+that consumes the common `security/libfido2` source, prepare it with the Ports
+owner and select it with `--libfido2-source`; this forwards
+`EMBER_LIBFIDO2_SOURCE`.
 
 Select `aarch64-sysroot` for complete base/comp sets and an EMBER64 test kernel.
 Select `amd64` for the reduced UEFI ISO, USB image and installation sets.
