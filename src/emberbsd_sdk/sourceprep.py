@@ -224,7 +224,7 @@ def write_prepared_tree_receipt(root, *, package, identity):
     """Record an owner-selected identity and the exact prepared payload."""
     from . import jsonio, paths
     root = paths.canonical_existing(root)
-    if not isinstance(package, str) or re.fullmatch(r'[a-z0-9][a-z0-9+_.-]*/[a-z0-9][a-z0-9+_.-]*', package) is None:
+    if not isinstance(package, str) or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9+_.-]*/[A-Za-z0-9][A-Za-z0-9+_.-]*', package) is None:
         raise SDKError('invalid prepared source package')
     if not isinstance(identity, dict) or not identity:
         raise SDKError('invalid prepared source identity')

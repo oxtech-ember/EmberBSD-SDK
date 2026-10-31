@@ -217,7 +217,7 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
     shutil.copytree(SDK_SOURCE / 'src', root / 'sdk-source/src', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     recipe_fixture(ports, root / 'libedit.tar.gz')
     for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'),
-                          ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('heimdal', 'security/heimdal'), ('openssh', 'security/openssh')):
+                          ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd'), ('heimdal', 'security/heimdal'), ('openssh', 'security/openssh')):
         source = root / (name + '-source')
         source.mkdir()
         write(source / 'emberbsd-prepared-source.json', json.dumps(dict(format='emberbsd-prepared-source',
@@ -340,6 +340,22 @@ class BuilderTests(TemporaryCase):
         receipt.write_text(json.dumps(record))
         with self.assertRaisesRegex(SDKError, 'invalid wpa'):
             B(options).preflight()
+
+    def test_network_sources_are_verified_and_forwarded(self):
+        for name, package in (('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd')):
+            with self.subTest(name=name):
+                option = name + '-source'
+                options = self.options | {option: str(self.root / option)}
+                builder = B(options)
+                builder.preflight()
+                self.assertEqual(builder.common_source_records[name]['package'], package)
+                self.assertIn('EMBER_' + name.upper() + '_SOURCE=' + options[option], builder.flags)
+                receipt = Path(options[option]) / 'emberbsd-prepared-source.json'
+                record = json.loads(receipt.read_text())
+                record['package'] = 'wrong/package'
+                receipt.write_text(json.dumps(record))
+                with self.assertRaisesRegex(SDKError, 'invalid ' + name):
+                    B(options).preflight()
 
     def test_optional_heimdal_is_verified_and_forwarded(self):
         options = self.options | {'heimdal-source': str(self.root / 'heimdal-source')}

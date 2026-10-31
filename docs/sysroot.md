@@ -86,6 +86,7 @@ The SDK forwards `EMBER_UNBOUND_SOURCE`.
 For OS builds using common `net/wpa_supplicant`, prepare its source with the
 Ports `scripts/source-inputs/wpa/source.py` owner and select `--wpa-source`.
 The SDK forwards `EMBER_WPA_SOURCE`.
+Select prepared Ports `scripts/source-inputs/mdns/source.py` and `scripts/source-inputs/dhcpcd/source.py` outputs with `--mdns-source` and `--dhcpcd-source`. The SDK forwards `EMBER_MDNS_SOURCE` and `EMBER_DHCPCD_SOURCE`.
 
 For OS builds using common `security/heimdal`, prepare its source with the
 Ports `scripts/source-inputs/heimdal/source.py` owner and select `--heimdal-source`.

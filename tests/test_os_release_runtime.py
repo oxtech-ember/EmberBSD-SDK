@@ -425,7 +425,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
     def test_common_sources_reach_release_and_direct_make_commands(self):
         paths = {name: '/sdk/' + name for name in (
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
-            'libedit-source', 'libarchive-source', 'libevent-source', 'libfido2-source', 'libcbor-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'heimdal-source', 'openssh-source', 'objects', 'tools', 'destination', 'os')}
+            'libedit-source', 'libarchive-source', 'libevent-source', 'libfido2-source', 'libcbor-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'mdns-source', 'dhcpcd-source', 'heimdal-source', 'openssh-source', 'objects', 'tools', 'destination', 'os')}
         host = {'cc': {'path': '/sdk/host/bin/clang'}, 'c++': {'path': '/sdk/host/bin/clang++'}}
         _, commands = producer_commands('aarch64', paths, host, 'a' * 40, 1, '2',
                                         '/sdk/host/bin/sh', compiler_family='clang', base_cxx=True)
@@ -438,6 +438,8 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             self.assertIn('EMBER_OPENLDAP_SOURCE=/sdk/openldap-source', command)
             self.assertIn('EMBER_UNBOUND_SOURCE=/sdk/unbound-source', command)
             self.assertIn('EMBER_WPA_SOURCE=/sdk/wpa-source', command)
+            self.assertIn('EMBER_MDNS_SOURCE=/sdk/mdns-source', command)
+            self.assertIn('EMBER_DHCPCD_SOURCE=/sdk/dhcpcd-source', command)
             self.assertIn('EMBER_HEIMDAL_SOURCE=/sdk/heimdal-source', command)
             self.assertIn('EMBER_OPENSSH_SOURCE=/sdk/openssh-source', command)
 

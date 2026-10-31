@@ -9,6 +9,12 @@ from emberbsd_sdk.errors import SDKError
 
 
 class PreparedTreeTests(unittest.TestCase):
+    def test_mixed_case_package_identity(self):
+        with tempfile.TemporaryDirectory() as work:
+            identity = {'release': 'example'}
+            record = sourceprep.write_prepared_tree_receipt(work, package='net/mDNSResponder', identity=identity)
+            self.assertEqual(record, sourceprep.validate_prepared_tree(work, package='net/mDNSResponder', identity=identity))
+
     def test_payload_and_owner_identity_are_bound(self):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work) / 'source'

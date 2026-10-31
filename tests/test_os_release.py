@@ -529,6 +529,25 @@ class BuilderReleaseTests(TemporaryCase):
         self.assertGreater(len(profile['commands']), 2)
         kit.profile_check(profile, receipt['sources']['os']['commit'], profile['product_version'])
 
+    def test_network_source_paths_require_matching_receipts(self):
+        options = release_fixture(self.root, 'aarch64')
+        receipt = OSReleaseBuilder(options).run()
+        profile = jsonio.read_json(Path(options['destination']) / 'build-profile.json')
+        saved = profile['sdk_receipt']
+        for name, package in (('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd')):
+            with self.subTest(name=name):
+                saved['paths'][name + '-source'] = '/prepared/' + name
+                with self.assertRaisesRegex(SDKError, 'Mixed ' + name + ' source selection'):
+                    validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
+                saved['signature']['common_sources'][name] = {
+                    'format': 'emberbsd-prepared-source', 'version': 1,
+                    'package': 'wrong/package', 'tree_sha256': 'a' * 64,
+                    'identity': {'fixture': name}}
+                with self.assertRaisesRegex(SDKError, 'Invalid common source receipt'):
+                    validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
+                del saved['signature']['common_sources'][name]
+                del saved['paths'][name + '-source']
+
     def test_profile_rejects_gettext_path_without_source_record(self):
         options = release_fixture(self.root, 'aarch64')
         receipt = OSReleaseBuilder(options).run()

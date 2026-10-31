@@ -1752,6 +1752,24 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertTrue(builder.compatible_context(records[tools], tools))
         self.assertTrue(builder.compatible_context(records[objects], objects))
 
+    def test_network_selection_tracks_exported_headers(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        tools, objects = builder.paths['tools'], builder.paths['objects']
+        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+        builder.paths['dhcpcd-source'] = '/prepared/dhcpcd'
+        builder.signature['common_sources']['dhcpcd'] = {'tree_sha256': 'a' * 64}
+        builder.signature['flags'].append('EMBER_DHCPCD_SOURCE=/prepared/dhcpcd')
+        self.assertTrue(builder.compatible_context(records[tools], tools))
+        self.assertTrue(builder.compatible_context(records[objects], objects))
+        builder.paths['mdns-source'] = '/prepared/mdns'
+        builder.signature['common_sources']['mdns'] = {'tree_sha256': 'b' * 64}
+        builder.signature['flags'].append('EMBER_MDNS_SOURCE=/prepared/mdns')
+        self.assertTrue(builder.compatible_context(records[tools], tools))
+        self.assertFalse(builder.compatible_context(records[objects], objects))
+
     def test_openssh_selection_preserves_headers_and_native_tools(self):
         builder, _ = self.builder()
         builder.preflight()
