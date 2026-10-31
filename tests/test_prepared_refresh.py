@@ -80,13 +80,16 @@ class TransitionTests(unittest.TestCase):
             context = root / 'obj/.prebuild-sdk-context.json'
             context.write_text('old context')
             old = {'signature': {}}
+            def fail_clean(command):
+                self.assertIn('MKCLEANSRC=no', command)
+                raise SDKError('clean failed')
             fake = SimpleNamespace(paths={'objects': str(root/'obj'), 'tools': str(root/'tools'),
                          'os': str(root/'os'), 'destination': str(root/'dest'),
                          'native-routing': str(root/'tools/routing'), 'sdk': str(root)},
                          contexts={'objects': old, 'tools': None}, refresh_dirs=['producer'],
                          target={'machine': 'evbarm'}, flags=[], environment={},
                          inspect_context=lambda p: old if p == str(root/'obj') else None,
-                         dispatch=lambda command: (_ for _ in ()).throw(SDKError('clean failed')))
+                         dispatch=fail_clean)
             with patch('emberbsd_sdk.sysroot_builder.process.capture',
                        return_value=SimpleNamespace(stdout=(str(root/'obj/producer')+'\n').encode())):
                 with self.assertRaisesRegex(SDKError, 'clean failed'):

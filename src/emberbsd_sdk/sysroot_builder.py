@@ -1424,7 +1424,9 @@ class SysrootBuilder:
             expected = os.path.join(self.paths['objects'], directory)
             if selected != expected or os.path.realpath(selected) != expected:
                 raise SDKError('prepared source refresh selected the wrong object directory: ' + directory)
-            self.dispatch(base + ['cleandir'])
+            # BSD clean normally visits both the object and source directories.
+            # A refresh owns only the selected objects, never tracked sources.
+            self.dispatch(base + ['MKCLEANSRC=no', 'cleandir'])
         for name in ('objects', 'tools'):
             path = self.paths[name]
             record = dict(format='emberbsd-sysroot-object-context', version=1,
