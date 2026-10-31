@@ -1362,6 +1362,8 @@ class SysrootBuilder:
         self.loader_command = [os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine']), '-C', os.path.join(self.paths['os'], 'libexec/ld.elf_so'), '-j' + jobs, 'dependall']
         self.install_command = self.loader_command[:-1] + ['install']
         self.receipt = dict(format='emberbsd-sysroot-build', version=3 if clang else 2, scope='sysroot-build', qualification='not-built', execution_acceptance='not-run', workspace=layout, paths=self.paths, sources=self.sources, previous_contexts=self.contexts, signature=self.signature, commands=self.commands, plan=[self.runtime_command, self.build_command, self.loader_command, self.install_command, self.runtime_command, self.runtime_command], working_directory=self.paths['os'], copy=dict(source=prefix, destination=os.path.join(self.paths['destination'], 'usr/pkg/llvm' if clang else 'usr/pkg/gcc16'), verification='exact pre/copy/post inventory'), not_checked=['target execution', 'ABI compatibility', 'SDK release'])
+        if getattr(self, 'refresh_dirs', None):
+            self.receipt['prepared_source_refresh'] = list(self.refresh_dirs)
         return self.receipt
 
     def source_timestamp(self):

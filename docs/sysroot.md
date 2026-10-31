@@ -127,7 +127,10 @@ Keep the active sysroot unchanged while other consumers use it.
 `--objects` and `--tools` can select existing compatible component paths under
 `obj`. Defaults use stable host/target names. Object reuse requires the recorded
 compiler, runtime, host, target and configuration context. The tool does not
-clear an incompatible context to make a build pass.
+clear an incompatible context to make a build pass. When the selected OS provides a prepared-source refresh
+contract, the SDK can selectively clean the affected objects under the existing
+object-tree lock before recording the new source context. Other input changes
+remain subject to the normal compatibility check.
 The context includes the selected native prefix, tool paths, host and target, and flags.
 SDK controller module updates do not by themselves invalidate objects: the
 selected Python and API, computed build flags, compiler, runtime, and native ABI
