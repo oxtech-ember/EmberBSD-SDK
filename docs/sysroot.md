@@ -75,6 +75,10 @@ For OS builds using common `net/libfetch`, prepare its source using the Ports
 `scripts/source-inputs/libfetch/source.py` owner and select `--libfetch-source`.
 The SDK forwards `EMBER_LIBFETCH_SOURCE` to the OS build.
 
+For OS builds using common `databases/openldap`, prepare its source with the
+Ports `scripts/source-inputs/openldap/source.py` owner and select
+`--openldap-source`. The SDK forwards `EMBER_OPENLDAP_SOURCE`.
+
 Prepare libarchive with the Ports `scripts/libarchive-source.py prepare` command
 and libevent with `scripts/source-inputs/libevent/source.py prepare`; both use
 the selected SDK source and canonical Ports export. Pass the resulting trees
