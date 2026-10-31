@@ -173,8 +173,7 @@ Reuse compares the old contract kept in that directory with the selected one.
 Only the former fixed name reads it from the recorded OS commit, using local Git
 objects: a partial OS checkout that lacks it stops with an error instead of
 fetching it.
-It checks the selection again before dispatch and completion.
-A changed selection after output preparation leaves the object contexts quarantined.
+The selected toolset is fixed at preflight for the run.
 New build records bind selected paths and commands. Historical records remain readable.
 
 ### Repeated input checks within one run
@@ -202,7 +201,8 @@ checked every time.
 
 The LLVM or GCC runtime is verified once, at preflight. The build does not
 verify it again before or after the copy into the sysroot or release, and does
-not inventory the copied files again.
+not inventory the copied files again. The headers/base completion path also
+returns its recorded outputs without another inventory.
 
 The OS, Ports and SDK checkouts must be clean Git roots. Each checkout is
 checked with Git (status, index entries and commit) once per run, by the first
@@ -216,9 +216,9 @@ checkouts unchanged while a build runs. Release finalization publishes the
 inspected outputs and does not inspect the checkouts.
 
 Receipts are never written to disk. A new run starts with an empty set and
-checks every input again, so a change between runs is found. The compiler,
-Python and SDK implementation hashes and the native toolset selection are also
-checked after the build, and the outputs are inspected.
+selects its inputs at preflight. Dispatch and completion reuse the selected
+native toolset, target compiler and Python identity. The builder inspects newly
+produced outputs before recording a successful build.
 
 ## Recorded producer sequence
 

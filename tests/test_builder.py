@@ -404,29 +404,6 @@ class BuilderTests(TemporaryCase):
     def run_builder(self, **changes):
         return B(self.options | changes).run()
 
-    def test_native_drift_before_output_keeps_contexts_untouched(self):
-        builder = B(self.options)
-        preflight = builder.preflight
-        def changed_after_plan():
-            preflight()
-            builder.options['host-prefix'] += '-changed'
-        with patch.object(builder, 'preflight', changed_after_plan), self.assertRaisesRegex(SDKError, 'native toolset inputs changed'):
-            builder.run()
-        self.assertFalse(Path(builder.paths['destination'], builder.MARKER).exists())
-        for name in ('objects', 'tools'): self.assertFalse(Path(builder.paths[name]).exists())
-
-    def test_native_drift_after_producer_quarantines_restored_context(self):
-        builder = B(self.options)
-        def drift():
-            write(Path(builder.paths['objects']) / 'partial-object', 'possible changed tool output')
-            builder.options['host-prefix'] += '-changed'
-        with patch.object(builder, 'build_payload', drift), self.assertRaisesRegex(SDKError, 'native toolset inputs changed'):
-            builder.run()
-        for name in ('objects', 'tools'):
-            self.assertTrue(Path(builder.paths[name], builder.QUARANTINE).is_file())
-        with self.assertRaisesRegex(SDKError, 'quarantined'):
-            B(self.options | dict(plan=True, destination=self.options['sdk'] + '/stages/retry')).run()
-
     def refusal_unchanged(self, match=None, **changes):
         before = snapshot(self.root)
         with self.assertRaisesRegex((SDKError, OSError), match or '.'):
@@ -515,8 +492,12 @@ class BuilderTests(TemporaryCase):
         self.assertEqual(snapshot(self.root), before)
 
     def test_actual_subprocess_and_output_inspection(self):
-        with patch.dict(os.environ, CC='clang', CXX='clang++', CFLAGS='bad', MAKEFLAGS='bad'):
+        with patch.dict(os.environ, CC='clang', CXX='clang++', CFLAGS='bad', MAKEFLAGS='bad'), \
+                patch.object(B, 'load_native_toolset', autospec=True, side_effect=B.load_native_toolset) as native, \
+                patch.object(B, 'compiler', autospec=True, side_effect=B.compiler) as compiler, \
+                patch.object(B, 'python_identity', autospec=True, side_effect=B.python_identity) as python:
             record = self.run_builder()
+        self.assertEqual((native.call_count, compiler.call_count, python.call_count), (1, 1, 1))
         self.assertEqual(record['qualification'], 'built-and-inspected')
         commands = [r for r in record['commands'] if r.get('scope') != 'runtime-check']
         self.assertEqual(len(commands), 3); self.assertTrue(all(r['exit_status'] == 0 for r in commands))

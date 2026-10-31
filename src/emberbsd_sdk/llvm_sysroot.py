@@ -131,9 +131,8 @@ class LLVMPhaseBuilder(SysrootBuilder):
         if hasattr(self, 'completed'):
             with process.ContextLocks([self.paths[name] for name in ('objects', 'tools')],
                                       os.path.join(self.paths['sdk'], 'obj')):
-                if (not self.compatible_context(self.completed, self.paths['objects']) or
-                        self.completed['outputs'] != self.inspect_payload()):
-                    raise SDKError('LLVM OS stage inputs or outputs changed; select new stage objects')
+                if not self.compatible_context(self.completed, self.paths['objects']):
+                    raise SDKError('LLVM OS stage inputs changed; select new stage objects')
                 self.validate_source_ancestry(self.completed, self.paths['destination'])
                 # Object reuse permits incremental rebuilding after source changes.
                 # Returning a completed stage does not rebuild, so the OS files

@@ -1076,12 +1076,11 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertEqual((work / 'failed-1/bootstrap.log').read_text(), 'failed build\n')
         self.assertTrue((work / 'bootstrap-stage/runtime.json').exists())
 
-    def test_completed_headers_reject_changed_output_without_dispatch(self):
-        builder, _ = self.completed_headers()
-        write(Path(builder.paths['destination']) / 'usr/include/stdio.h', 'tampered')
-        with patch.object(type(builder), 'build_payload', side_effect=AssertionError('must refuse')):
-            with self.assertRaisesRegex(SDKError, 'inputs or outputs changed'):
-                type(builder)(builder.options).run()
+    def test_completed_headers_reuse_without_inspecting_outputs(self):
+        builder, original = self.completed_headers()
+        with patch.object(type(builder), 'build_payload', side_effect=AssertionError('must reuse')), \
+                patch.object(type(builder), 'inspect_payload', side_effect=AssertionError('must not rescan')):
+            self.assertEqual(type(builder)(builder.options).run(), original)
 
     def test_completed_headers_reject_compiler_and_phase_changes(self):
         builder, _ = self.completed_headers()
