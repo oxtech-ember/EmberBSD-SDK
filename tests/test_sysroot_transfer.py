@@ -25,13 +25,17 @@ from test_builder import B as Builder
 from emberbsd_sdk.targets import TARGETS
 
 
+# Transfer fixtures are complete SDKs; riscv32 currently has only C foundation.
+COMPLETE_SDK_TARGETS = ('aarch64', 'amd64')
+
+
 class SysrootTransferTests(TemporaryCase):
     @classmethod
     def setUpClass(cls):
         cls.fixtures = tempfile.TemporaryDirectory(prefix='sdk-transfer-fixtures-')
         cls.addClassCleanup(cls.fixtures.cleanup)
         cls.accepted = {}
-        for target in TARGETS:
+        for target in COMPLETE_SDK_TARGETS:
             root = Path(cls.fixtures.name).resolve() / target
             root.mkdir()
             options = fixture(root, target)
@@ -118,9 +122,16 @@ class SysrootTransferTests(TemporaryCase):
         self.assertFalse(self.destination.exists())
         self.assertEqual(sorted(path.name for path in self.root.iterdir()), before)
 
+    def test_riscv32_requires_c_foundation_instead_of_a_complete_sdk(self):
+        self.assertEqual(set(self.accepted), set(COMPLETE_SDK_TARGETS))
+        root = self.root / 'riscv32'
+        root.mkdir()
+        with self.assertRaisesRegex(SDKError, 'only the intermediate C foundation'):
+            Builder(fixture(root, 'riscv32')).run()
+
     def test_round_trip_preserves_bytes_modes_and_relative_links_for_both_targets(self):
         self.assertEqual(transfer.SYSROOT_TRANSFER_API, 1)
-        for target in TARGETS:
+        for target in COMPLETE_SDK_TARGETS:
             with self.subTest(target=target):
                 source = self.accepted[target]
                 bundle = self.root / ('bundle-' + target)
