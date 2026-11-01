@@ -135,6 +135,12 @@ class NativeConsumerTests(TemporaryCase):
         mixed['flags'].append('HOST_CPPFLAGS=-Dconflicting-legacy-binding')
         with self.assertRaisesRegex(SDKError, 'flags differ'):
             validate_native_binding(mixed, paths)
+        v1 = copy.deepcopy(signature)
+        v1['flags'] = [flag for flag in v1['flags']
+                       if not flag.startswith('EMBER_HOST_ABI_')]
+        v1['flags'] += ['HOST_CPPFLAGS=', 'HOST_CFLAGS=', 'HOST_CXXFLAGS=', 'HOST_LDFLAGS=']
+        with self.assertRaisesRegex(SDKError, 'v1 native-tools producer receipt cannot be reused'):
+            validate_native_binding(v1, paths)
         legacy = copy.deepcopy(signature)
         legacy_flags = []
         for flag in legacy['flags']:
@@ -144,7 +150,7 @@ class NativeConsumerTests(TemporaryCase):
             else:
                 legacy_flags.append(flag)
         legacy['flags'] = legacy_flags
-        with self.assertRaisesRegex(SDKError, 'flags differ'):
+        with self.assertRaisesRegex(SDKError, 'v1 native-tools producer receipt cannot be reused'):
             validate_native_binding(legacy, paths)
 
     def test_cli_documents_prefix_without_qualification_options(self):
