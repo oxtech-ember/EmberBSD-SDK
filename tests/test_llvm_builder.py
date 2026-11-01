@@ -744,6 +744,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         class Stage:
             def __init__(self, selected, phase, receipts=None, **selection):
                 self.options, self.phase = selected, phase
+                self.tools_built_this_run = False
                 shared.append(receipts)
             def run(self):
                 events.append(self.phase)
@@ -782,6 +783,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         class Stage:
             def __init__(self, selected, phase, **kwargs):
                 self.phase = phase
+                self.tools_built_this_run = False
             def run(self):
                 events.append(self.phase)
                 return {'phase': self.phase}
