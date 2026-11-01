@@ -143,6 +143,17 @@ class PlannerTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'duplicate metadata key'):
             loads_json('{"schema":1,"schema":2}')
 
+    def test_cycle_error_reports_one_kind_labeled_cycle(self):
+        cyclic = graph()
+        nodes = {node['id']: node for node in cyclic['nodes']}
+        nodes['openssl']['dependencies'] = [dict(id='app', kind='build')]
+        nodes['zlib']['dependencies'] = [dict(id='app', kind='runtime')]
+        with self.assertRaises(SDKError) as raised:
+            lock_graph(cyclic)
+        self.assertEqual(str(raised.exception),
+                         'dependency cycle: app -[runtime]-> curl '
+                         '-[runtime]-> openssl -[build]-> app')
+
     def test_lock_and_plan_tampering(self):
         changed = deepcopy(self.old)
         changed['input_keys']['openssl'] = digest('wrong')

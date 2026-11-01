@@ -57,6 +57,9 @@ graphs with embedded baseline and candidate locks. Other SDK readers retain
 their own limits; module callers must select `PORTS_JSON_LIMIT` explicitly when
 reading Ports documents through `read_json`.
 
+Cycle errors show one concrete path with each edge kind, rather than listing
+all nodes downstream of a cycle.
+
 The collector owns target and triplet validation. Node IDs are opaque strings.
 Use distinct IDs for host tools and target packages, such as `host:devel/bmake`
 and `target:devel/bmake`. A cross graph must evaluate each context correctly.

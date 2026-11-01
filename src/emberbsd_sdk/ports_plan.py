@@ -72,8 +72,53 @@ def _waves(nodes, selected=None):
                     next_ready.add(consumer)
         ready = sorted(next_ready)
     if remaining:
-        raise SDKError('dependency cycle: ' + ', '.join(sorted(remaining)))
+        raise SDKError('dependency cycle: ' + _cycle_path(nodes, remaining))
     return waves
+
+
+def _cycle_path(nodes, selected):
+    """Return one deterministic cycle with edge kinds, excluding downstream nodes."""
+    selected = set(selected)
+    edges = {name: sorted((dep['id'], dep['kind']) for dep in nodes[name]['dependencies']
+                          if dep['id'] in selected)
+             for name in selected}
+    color = {}
+    active_index = {}
+    path = []
+    path_edges = []
+    for start in sorted(selected):
+        if color.get(start):
+            continue
+        color[start] = 1
+        active_index[start] = 0
+        path.append(start)
+        stack = [(start, 0)]
+        while stack:
+            name, index = stack[-1]
+            candidates = edges[name]
+            if index == len(candidates):
+                color[name] = 2
+                active_index.pop(name)
+                path.pop()
+                stack.pop()
+                if path_edges:
+                    path_edges.pop()
+                continue
+            child, kind = candidates[index]
+            stack[-1] = (name, index + 1)
+            if color.get(child) == 1:
+                path_cycle = path_edges[active_index[child]:] + [(name, child, kind)]
+                text = path_cycle[0][0]
+                for _, target, edge_kind in path_cycle:
+                    text += f' -[{edge_kind}]-> {target}'
+                return text
+            if not color.get(child):
+                color[child] = 1
+                active_index[child] = len(path)
+                path.append(child)
+                path_edges.append((name, child, kind))
+                stack.append((child, 0))
+    raise SDKError('cycle diagnostic could not find a cycle in the remaining graph')
 
 
 def lock_graph(graph):
