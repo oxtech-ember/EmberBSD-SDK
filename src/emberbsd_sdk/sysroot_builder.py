@@ -37,6 +37,71 @@ _NATIVE_OBJECT_MAGICS = frozenset((b'\x7fELF', b'\xce\xfa\xed\xfe', b'\xfe\xed\x
                                    b'\xca\xfe\xba\xbf', b'\xbf\xba\xfe\xca'))
 
 
+def _normalize_release_to_sysroot(signature, target, effective_defaults, current_flags):
+    """Drop only release artifact bindings outside a sysroot's object payload."""
+    if signature.get('release_profile') != target:
+        return signature
+    signature.pop('release_profile', None)
+    signature.pop('product_version', None)
+    objects = signature.get('objects')
+    target_record = signature.get('target')
+    kernel_bindings = {
+        'KERNOBJDIR': objects + '/kernels' if isinstance(objects, str) else None,
+        'RELEASEMACHINEDIR': (target_record.get('machine') + '-' + target_record.get('arch')
+                              if isinstance(target_record, dict) and
+                              isinstance(target_record.get('machine'), str) and
+                              isinstance(target_record.get('arch'), str) else None),
+        'MKDEBUGKERNEL': 'no',
+    }
+    release_metadata = {'MAKETARSETS', 'USE_XZ_SETS', 'BUILDINFO', 'EMBER_BUILD_ID',
+                        'MKREPRO_TIMESTAMP', 'GNU_TARGET_LIBTOOL', 'EMBER_TARGET_TOOL_DIR'}
+    flags = signature.get('flags')
+    if not isinstance(flags, list):
+        return signature
+    current_assignments = {}
+    if isinstance(current_flags, list):
+        for current_flag in current_flags:
+            if isinstance(current_flag, str) and '=' in current_flag:
+                current_name, current_value = current_flag.split('=', 1)
+                if current_name not in current_assignments:
+                    current_assignments[current_name] = current_value
+                else:
+                    current_assignments[current_name] = None
+    normalized = []
+    for flag in flags:
+        if not isinstance(flag, str) or '=' not in flag:
+            normalized.append(flag)
+            continue
+        name, value = flag.split('=', 1)
+        if name in release_metadata:
+            continue
+        if name in kernel_bindings and kernel_bindings[name] is not None and value == kernel_bindings[name]:
+            continue
+        if (name in effective_defaults and effective_defaults[name] == value and
+                name not in current_assignments):
+            continue
+        normalized.append(flag)
+    signature['flags'] = normalized
+    return signature
+
+
+def _canonicalize_unique_flag_assignments(flags):
+    """Sort unique make assignments for comparison; keep duplicates ordered."""
+    if not isinstance(flags, list):
+        return flags
+    assignments = []
+    names = set()
+    for flag in flags:
+        if not isinstance(flag, str) or '=' not in flag:
+            return flags
+        name, value = flag.split('=', 1)
+        if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name) is None or name in names:
+            return flags
+        names.add(name)
+        assignments.append((name, value))
+    return [name + '=' + value for name, value in sorted(assignments)]
+
+
 def _normalize_legacy_native_abi_flags(old_flags, new_flags, selection):
     """Rename only the selected ABI bindings from legacy producer flags."""
     legacy = [flag for flag in legacy_native_host_flags(selection)
@@ -588,6 +653,8 @@ class SysrootBuilder:
             if normalized_old_flags is not None:
                 old_flags = normalized_old_flags
                 certified_native_abi_refresh = True
+            old_flags = _canonicalize_unique_flag_assignments(old_flags)
+            new_flags = _canonicalize_unique_flag_assignments(new_flags)
             if not changed and runtime is None and not certified_native_abi_refresh:
                 return False
             moved = set()
@@ -655,7 +722,7 @@ class SysrootBuilder:
             self.refresh_dirs = prepared_refresh.plan(self.paths['os'], path, changed, members,
                                                       self.refresh_nested_outputs,
                                                       allowed_source_roots=sorted(source_roots), **extra)
-            return bool(self.refresh_dirs) or runtime is not None or certified_native_abi_refresh
+            return bool(self.refresh_dirs) or runtime is not None or certified_native_abi_refresh or bool(changed)
         except (KeyError, TypeError, AttributeError):
             self.native_abi_refresh = previous_native_abi_refresh
             return False
@@ -736,6 +803,11 @@ class SysrootBuilder:
 
     def reuse_signature(self, signature):
         """Compare compiled payload, keeping provenance in the saved context."""
+        if ('release_profile' in signature and
+                'release_profile' not in getattr(self, 'signature', {})):
+            signature = _normalize_release_to_sysroot(
+                signature, self.options.get('target'), self.release_transition_defaults(),
+                getattr(self, 'signature', {}).get('flags'))
         def payload(name, record):
             if (name != 'x11' and isinstance(record, dict) and
                     record.get('format') == 'emberbsd-prepared-source' and
@@ -755,10 +827,35 @@ class SysrootBuilder:
                     value['record'] = payload(name, value['record'])
         return signature
 
+    def release_transition_defaults(self):
+        """Query effective feature defaults only for a release-to-sysroot reuse."""
+        if hasattr(self, '_release_transition_defaults'):
+            return self._release_transition_defaults
+        variables = ('MKFIRMWARE', 'MKLINKLIB', 'MKSTATICLIB', 'MKPIC',
+                     'MKPICLIB', 'MKDYNAMICROOT')
+        root = self.paths['os']
+        env = dict(self.environment)
+        env.pop('EMBER_NATIVE_TOOLS', None)
+        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
+                   '-C', root, 'MAKECONF=/dev/null', '_SRC_TOP_=', 'NETBSDSRCDIR=' + root,
+                   'NETBSDOBJDIR=' + self.paths['objects'],
+                   'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
+                   'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
+                   'MKREPRO_TIMESTAMP=' + str(self.source_timestamp()), *self.flags]
+        for variable in variables:
+            command.extend(('-V', '${' + variable + '}'))
+        output = process.capture(command, env=env).stdout.decode('utf-8', 'strict').splitlines()
+        if len(output) != len(variables):
+            raise SDKError('cannot compare release feature flags with current OS defaults')
+        self._release_transition_defaults = dict(zip(variables, output))
+        return self._release_transition_defaults
+
     def compatible_context(self, record, path):
         """Compare compiled inputs, allowing controller updates and new utilities."""
         old = self.reuse_signature(copy.deepcopy(record['signature']))
         new = self.reuse_signature(copy.deepcopy(self.context_signature(path)))
+        old['flags'] = _canonicalize_unique_flag_assignments(old.get('flags'))
+        new['flags'] = _canonicalize_unique_flag_assignments(new.get('flags'))
         if old == new:
             return True
         try:
