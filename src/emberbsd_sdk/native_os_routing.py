@@ -24,7 +24,19 @@ _BINDINGS = frozenset(('-', 'HOST_AR', 'HOST_CC', 'HOST_CXX', 'HOST_CPP',
 
 
 def native_host_flags(selection):
-    """Map the selected host ABI arguments only to OS native variables."""
+    """Pass selected host ABI flags separately from source-local HOST_* flags."""
+    flags = selection['abi_flags']
+    result = ['EMBER_HOST_ABI_' + name.upper() + '=' + shlex.join(flags[name])
+              for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')]
+    if selection['format'] != 'emberbsd-host-prefix':
+        result.append('HOST_SH=' + selection['tools']['sh'])
+    elif selection['version'] >= 2:
+        result.append('EMBER_HOST_COMPILER_FAMILY=' + selection['compiler']['family'])
+    return result
+
+
+def legacy_native_host_flags(selection):
+    """Return the old bindings when validating legacy producer receipts."""
     flags = selection['abi_flags']
     result = ['HOST_' + name.upper() + '=' + shlex.join(flags[name])
               for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')]
@@ -95,7 +107,8 @@ def read_native_os_contract(path, *, sha256):
         lines = data.decode('ascii').splitlines()
     except UnicodeError as exc:
         raise SDKError('OS native-tool contract must be ASCII') from exc
-    if not data.endswith(b'\n') or not lines or lines[0] != 'EmberBSD-native-tools 1':
+    if not data.endswith(b'\n') or not lines or lines[0] not in (
+            'EmberBSD-native-tools 1', 'EmberBSD-native-tools 2'):
         raise SDKError('unsupported OS native-tool contract')
     commands, roles, bindings = set(), set(), set()
     rows = []
@@ -115,6 +128,12 @@ def read_native_os_contract(path, *, sha256):
     if not rows or not {'cmp', 'readlink', 'make', 'sh'} <= commands:
         raise SDKError('OS native-tool control members are missing')
     return data, tuple(rows), frozenset(roles)
+
+
+def require_native_abi_contract(data):
+    """Reject OS sources that cannot consume the selected ABI flag bindings."""
+    if not isinstance(data, bytes) or not data.startswith(b'EmberBSD-native-tools 2\n'):
+        raise SDKError('OS native-tool contract lacks separate host ABI flag support')
 
 
 def publish_native_os_routing(toolset, *, contract_path, contract_sha256,

@@ -16,7 +16,8 @@ def _contract(source):
     paths.real_directory(source)
     contract = os.path.join(source, 'tools/native-tools/contract')
     digest = inventory.sha256_file(contract)
-    _, _, roles = native_os_routing.read_native_os_contract(contract, sha256=digest)
+    data, _, roles = native_os_routing.read_native_os_contract(contract, sha256=digest)
+    native_os_routing.require_native_abi_contract(data)
     return source, contract, digest, roles
 
 
@@ -28,7 +29,7 @@ def select_native_os_tools(host_prefix, source, *, compiler_family='clang'):
 
 
 def native_os_environment(native, routing, *, environment=None):
-    """Expose HOST_* only; target compiler variables belong to the OS caller."""
+    """Expose selected host tools and ABI flags, separate from target variables."""
     result = process.sanitized_environment(environment)
     result.update(PATH=os.fspath(routing) + os.pathsep + native.path,
                   EMBER_NATIVE_TOOLS=os.fspath(routing), HOST_SH=native.tool('sh'),
@@ -43,7 +44,8 @@ def _check_build_arguments(arguments):
     for index, word in enumerate(arguments):
         value = (arguments[index+1] if index+1 < len(arguments) else '') if word == '-V' else word[2:] if word.startswith('-V') else ''
         name = value.split('=', 1)[0]
-        if name.startswith('HOST_') or name in ('EMBER_NATIVE_TOOLS', 'EMBER_HOST_COMPILER_FAMILY', 'PATH'):
+        if (name.startswith('HOST_') or name.startswith('EMBER_HOST_ABI_') or
+                name in ('EMBER_NATIVE_TOOLS', 'EMBER_HOST_COMPILER_FAMILY', 'PATH')):
             raise SDKError('build.sh arguments cannot override the selected native tools or ABI')
 
 

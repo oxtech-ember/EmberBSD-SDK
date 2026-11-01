@@ -1,7 +1,10 @@
 # Route native tools to the OS build
 
 `emberbsd_sdk.native_os_routing` implements routing API version 1.
-It publishes the selected OS `tools/native-tools/contract` as a command mapping.
+It reads OS native-tool contract versions 1 and 2 and publishes them as command
+mappings. Contract version 2 declares support for separate `EMBER_HOST_ABI_*`
+make variables; native OS producers refuse version 1 rather than silently
+discarding selected ABI flags.
 Read that source tree's `tools/native-tools/README.md` for the OS interface.
 
 Sysroot and release builders use this sequence:

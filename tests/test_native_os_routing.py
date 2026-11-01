@@ -109,8 +109,7 @@ class NativeOSRoutingTests(unittest.TestCase):
             self.publish(contract_path=str(alias))
 
     def test_malformed_contracts_are_refused(self):
-        for data in (CONTRACT.replace(b'tools 1', b'tools 2'),
-                     CONTRACT + b'cc cc -\n', CONTRACT + b'evil cc HOST_CC\n',
+        for data in (CONTRACT + b'cc cc -\n', CONTRACT + b'evil cc HOST_CC\n',
                      CONTRACT + b'../cc cc -\n', CONTRACT.replace(b'sh sh', b'sh  sh'),
                      CONTRACT.replace(b'make make MAKE\n', b'')):
             with self.subTest(data=data):
@@ -118,6 +117,12 @@ class NativeOSRoutingTests(unittest.TestCase):
                 with self.assertRaises(SDKError):
                     read_native_os_contract(self.contract,
                         sha256=hashlib.sha256(data).hexdigest())
+
+    def test_contract_version_two_is_supported(self):
+        data = CONTRACT.replace(b'tools 1', b'tools 2')
+        self.contract.write_bytes(data)
+        self.assertEqual(read_native_os_contract(self.contract,
+            sha256=hashlib.sha256(data).hexdigest())[0], data)
 
     def test_host_yacc_requires_the_exact_selected_generator(self):
         data = CONTRACT + b'yacc yacc HOST_YACC\n'

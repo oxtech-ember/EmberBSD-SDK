@@ -19,7 +19,9 @@ import time
 from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, prepared_sources, prepared_refresh, process, provenance, runtime_refresh, sourceprep, workspace
 from .verification_receipts import RunReceipts
 from .errors import CommandError, SDKError, ProcessOwnershipError
-from .native_os_routing import gettext_target_host_flags, gnu_target_host_flags, native_host_flags, native_path, read_native_os_contract
+from .native_os_routing import (gettext_target_host_flags, gnu_target_host_flags,
+                                legacy_native_host_flags, native_host_flags,
+                                native_path, read_native_os_contract)
 from .targets import TARGETS, target_definition
 
 NATIVE_INPUTS = ('native-toolset', 'native-toolset-sha256',
@@ -89,13 +91,24 @@ def validate_native_binding(signature, selected_paths, shell=None):
             record = signature['host_tools'][name]
             if record['alias'] != inputs[option] or not os.path.isabs(record['path']):
                 raise SDKError('Mixed checked native alias')
-        expected = ([] if prefix else ['HOST_CC=' + native['tools']['cc'], 'HOST_CXX=' + native['tools']['cxx']]) + native_host_flags(native)
+        expected = ([] if prefix else ['HOST_CC=' + native['tools']['cc'], 'HOST_CXX=' + native['tools']['cxx']])
+        current_flags = expected + native_host_flags(native)
+        legacy_flags = expected + legacy_native_host_flags(native)
         if prefix and any(flag.split('=', 1)[0] in ('HOST_CC', 'HOST_CXX', 'HOST_SH') for flag in signature['flags']):
             raise SDKError('Producer overrides OS native routing')
-        for flag in expected:
-            prefix = flag.split('=', 1)[0] + '='
-            if [word for word in signature['flags'] if word.startswith(prefix)] != [flag]:
-                raise SDKError('Producer flags differ from native selection')
+        def flags_match(expected_flags, forbidden_names):
+            for flag in expected_flags:
+                binding = flag.split('=', 1)[0] + '='
+                if [word for word in signature['flags'] if word.startswith(binding)] != [flag]:
+                    return False
+            return not any(word.split('=', 1)[0] in forbidden_names
+                           for word in signature['flags'])
+        current_abi_names = {'EMBER_HOST_ABI_CPPFLAGS', 'EMBER_HOST_ABI_CFLAGS',
+                             'EMBER_HOST_ABI_CXXFLAGS', 'EMBER_HOST_ABI_LDFLAGS'}
+        legacy_abi_names = {'HOST_CPPFLAGS', 'HOST_CFLAGS', 'HOST_CXXFLAGS', 'HOST_LDFLAGS'}
+        if (not flags_match(current_flags, legacy_abi_names) and
+                not flags_match(legacy_flags, current_abi_names)):
+            raise SDKError('Producer flags differ from native selection')
         if signature['environment']['PATH'] != native_path(native):
             raise SDKError('Producer PATH differs from native selection')
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
@@ -163,7 +176,8 @@ class SysrootBuilder:
             raise SDKError('--host-prefix is required: select the native Ports tools')
         contract = os.path.join(self.options['os'], 'tools/native-tools/contract')
         self.native_contract_sha256 = inventory.sha256_file(contract)
-        _, _, roles = native_os_routing.read_native_os_contract(contract, sha256=self.native_contract_sha256)
+        data, _, roles = native_os_routing.read_native_os_contract(contract, sha256=self.native_contract_sha256)
+        native_os_routing.require_native_abi_contract(data)
         self.native_contract = contract
         if self.options.get('texinfo-source') or self.options.get('rcs-source') or self.options.get('diffutils-source') or self.options.get('grep-source'):
             roles = roles | {'gmake'}

@@ -16,7 +16,7 @@ from emberbsd_sdk.os_release_builder import OSReleaseBuilder, producer_commands
 from emberbsd_sdk.sysroot_builder import (SysrootBuilder, native_host_flags,
                                           native_path, validate_native_binding)
 
-CONTRACT = ('EmberBSD-native-tools 1\ncc cc HOST_CC\nc++ cxx HOST_CXX\n'
+CONTRACT = ('EmberBSD-native-tools 2\ncc cc HOST_CC\nc++ cxx HOST_CXX\n'
             'cmp cmp -\nmake make MAKE\nreadlink readlink -\nsh sh HOST_SH\n')
 
 
@@ -55,6 +55,13 @@ class NativeConsumerTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, '--host-prefix is required'):
             SysrootBuilder({'os': str(self.os)}).select_native_toolset()
         self.assertEqual(self.fixture.queries, [])
+
+    def test_sysroot_builder_rejects_contract_without_host_abi_support(self):
+        contract = self.os / 'tools/native-tools/contract'
+        contract.write_text(CONTRACT.replace('tools 2', 'tools 1'))
+        builder = SysrootBuilder(self.options())
+        with self.assertRaisesRegex(SDKError, 'lacks separate host ABI'):
+            builder.load_native_toolset()
 
     def test_alias_cannot_override_selected_role(self):
         for option in ('host-cc', 'host-cxx', 'python'):
@@ -104,7 +111,7 @@ class NativeConsumerTests(TemporaryCase):
         self.assertEqual(commands[0][0], builder.native.tool('sh'))
         self.assertFalse(any(word.startswith(('HOST_CC=', 'HOST_CXX=', 'HOST_SH=')) for word in flags))
         self.assertIn('EMBER_HOST_COMPILER_FAMILY=clang', flags)
-        self.assertTrue(all(word.startswith(('HOST_', 'EMBER_HOST_COMPILER_FAMILY='))
+        self.assertTrue(all(word.startswith(('HOST_', 'EMBER_HOST_ABI_', 'EMBER_HOST_COMPILER_FAMILY='))
                             for word in native_host_flags(builder.native_selection)))
 
     def test_saved_native_binding_uses_prefix_and_os_route(self):
@@ -124,6 +131,10 @@ class NativeConsumerTests(TemporaryCase):
         changed = copy.deepcopy(signature); changed['environment']['PATH'] += ':/usr/bin'
         with self.assertRaisesRegex(SDKError, 'PATH differs'):
             validate_native_binding(changed, paths)
+        mixed = copy.deepcopy(signature)
+        mixed['flags'].append('HOST_CPPFLAGS=-Dconflicting-legacy-binding')
+        with self.assertRaisesRegex(SDKError, 'flags differ'):
+            validate_native_binding(mixed, paths)
 
     def test_cli_documents_prefix_without_qualification_options(self):
         for script in ('build-sysroot.py', 'build-os-release.py'):

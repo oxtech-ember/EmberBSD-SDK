@@ -14,7 +14,7 @@ from test_host_clang import ClangFixture
 from emberbsd_sdk import native_os, native_os_routing
 from emberbsd_sdk.errors import SDKError, CommandError
 
-CONTRACT = (b'EmberBSD-native-tools 1\ncc cc HOST_CC\nc++ cxx HOST_CXX\n'
+CONTRACT = (b'EmberBSD-native-tools 2\ncc cc HOST_CC\nc++ cxx HOST_CXX\n'
             b'cmp cmp -\nmake make MAKE\nreadlink readlink -\nsh sh HOST_SH\n')
 
 
@@ -36,6 +36,26 @@ class NativeOSRunnerTests(TemporaryCase):
     def run_os(self, *arguments, **kwargs):
         return native_os.run_native_os(self.native, source=self.source,
             routing=self.routing, cwd=self.root, arguments=arguments, **kwargs)
+
+    def test_native_abi_flags_use_separate_make_variables(self):
+        flags = native_os_routing.native_host_flags(self.native.as_dict())
+        names = {flag.split('=', 1)[0] for flag in flags}
+        self.assertTrue(names <= {
+            'EMBER_HOST_ABI_CPPFLAGS', 'EMBER_HOST_ABI_CFLAGS',
+            'EMBER_HOST_ABI_CXXFLAGS', 'EMBER_HOST_ABI_LDFLAGS',
+            'EMBER_HOST_COMPILER_FAMILY', 'HOST_SH'})
+        self.assertTrue({
+            'EMBER_HOST_ABI_CPPFLAGS', 'EMBER_HOST_ABI_CFLAGS',
+            'EMBER_HOST_ABI_CXXFLAGS', 'EMBER_HOST_ABI_LDFLAGS'} <= names)
+        env = native_os.native_os_environment(self.native, self.routing)
+        self.assertTrue(all(flag.split('=', 1)[0] in env for flag in flags))
+        self.assertFalse(any(name in env for name in (
+            'HOST_CPPFLAGS', 'HOST_CFLAGS', 'HOST_CXXFLAGS', 'HOST_LDFLAGS')))
+
+    def test_old_contract_cannot_silently_drop_native_abi_flags(self):
+        self.contract.write_bytes(CONTRACT.replace(b'tools 2', b'tools 1'))
+        with self.assertRaisesRegex(SDKError, 'lacks separate host ABI'):
+            self.run_os(self.native.tool('cpp'), capture=True)
 
     def test_environment_clears_target_flags_and_preserves_native_host_binding(self):
         with patch('emberbsd_sdk.native_os.process.run_logged') as run:
@@ -82,6 +102,7 @@ class NativeOSRunnerTests(TemporaryCase):
     def test_build_sh_cannot_override_selected_host_variables(self):
         for args in (('-V','HOST_CC=/foreign'), ('-VHOST_CFLAGS=-bad',),
                      ('-V', 'HOST_SH=/foreign/sh'),
+                     ('-V','EMBER_HOST_ABI_CPPFLAGS=-bad'),
                      ('-V','EMBER_HOST_COMPILER_FAMILY=gcc'), ('-V','PATH=/usr/bin')):
             with self.subTest(args=args), self.assertRaisesRegex(SDKError, 'selected native'):
                 self.run_os(*args, 'tools', build_sh=True, log=self.root/'build.log')
