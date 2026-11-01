@@ -24,6 +24,13 @@ class CPUCapacityTests(unittest.TestCase):
                                   capture_output=True, text=True)
         self.assertEqual(explicit.returncode, 0, explicit.stderr)
         self.assertEqual(explicit.stdout.strip(), '7')
+        normalized = subprocess.run([sys.executable, '-B', str(script), '--jobs', '08'],
+                                    capture_output=True, text=True)
+        self.assertEqual(normalized.returncode, 0, normalized.stderr)
+        self.assertEqual(normalized.stdout.strip(), '8')
+        zero = subprocess.run([sys.executable, '-B', str(script), '--jobs', '00'],
+                              capture_output=True, text=True)
+        self.assertEqual(zero.returncode, 2)
 
     def test_process_cpu_count_is_preferred(self):
         with patch('emberbsd_sdk.cpu_capacity.os.process_cpu_count', create=True, return_value=6), \
