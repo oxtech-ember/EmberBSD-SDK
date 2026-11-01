@@ -12,7 +12,8 @@ from unittest.mock import patch
 import test_core  # Adds the SDK source to sys.path.
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.native_os_routing import (publish_native_os_routing,
-                                            read_native_os_contract)
+                                            read_native_os_contract,
+                                            require_native_abi_contract)
 from emberbsd_sdk.native_toolset import NativeToolset
 
 
@@ -123,6 +124,15 @@ class NativeOSRoutingTests(unittest.TestCase):
         self.contract.write_bytes(data)
         self.assertEqual(read_native_os_contract(self.contract,
             sha256=hashlib.sha256(data).hexdigest())[0], data)
+
+    def test_host_abi_validator_accepts_only_version_two(self):
+        require_native_abi_contract(CONTRACT.replace(b'tools 1', b'tools 2'))
+        for data in (CONTRACT, None, b'', b'EmberBSD-native-tools 2',
+                     CONTRACT.decode('ascii').replace('tools 1', 'tools 2'),
+                     CONTRACT.replace(b'tools 1', b'tools 3')):
+            with self.subTest(data=data), \
+                    self.assertRaisesRegex(SDKError, 'lacks separate host ABI'):
+                require_native_abi_contract(data)
 
     def test_host_yacc_requires_the_exact_selected_generator(self):
         data = CONTRACT + b'yacc yacc HOST_YACC\n'
