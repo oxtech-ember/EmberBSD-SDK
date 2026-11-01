@@ -18,6 +18,7 @@ import sysconfig
 import time
 from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, prepared_sources, prepared_refresh, process, provenance, runtime_refresh, sourceprep, workspace
 from .verification_receipts import RunReceipts
+from .cpu_capacity import resolve_jobs
 from .errors import CommandError, SDKError, ProcessOwnershipError
 from .native_os_routing import (gettext_target_host_flags, gnu_target_host_flags,
                                 native_host_flags,
@@ -1356,9 +1357,8 @@ class SysrootBuilder:
         if self.options.get('base-cxx', False) and not clang:
             raise SDKError('base C++ aliases require the selected Clang runtime')
         self.target = target_definition(self.options.get('target'))
-        jobs = self.options.get('jobs')
-        if not isinstance(jobs, str) or re.fullmatch('[1-9][0-9]*', jobs) is None:
-            raise SDKError('jobs must be a positive integer')
+        jobs = str(resolve_jobs(self.options.get('jobs')))
+        self.options['jobs'] = jobs
         # Check the workspace target before querying any host tools.
         layout = workspace.inspect_layout(self.options['sdk'])
         workspace.require_target(layout, self.options['target'])

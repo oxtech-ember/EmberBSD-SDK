@@ -40,7 +40,7 @@ class ParallelRecipeTests(unittest.TestCase):
         guard = patch.object(producer, 'PARALLEL_PROFILE_SHA256', self.parallel_sha)
         guard.start()
         self.addCleanup(guard.stop)
-        self.host = patch.object(recipe.os, 'cpu_count', return_value=18)
+        self.host = patch('emberbsd_sdk.bootstrap_pilot.available_cpu_count', return_value=18)
         self.host.start()
         self.addCleanup(self.host.stop)
         metadata = case.plan['metadata']
@@ -288,7 +288,7 @@ class ParallelRecipeTests(unittest.TestCase):
                 with self.assertRaises(SDKError):
                     case.validate()
                 case.plan['resources'][key] = original
-        with patch.object(recipe.os, 'cpu_count', return_value=None):
+        with patch('emberbsd_sdk.bootstrap_pilot.available_cpu_count', return_value=None):
             with self.assertRaisesRegex(SDKError, 'CPU budget is unavailable'):
                 case.validate()
 
@@ -341,7 +341,7 @@ class ParallelRecipeTests(unittest.TestCase):
         case.refresh()
         with patch.object(recipe, '_file', side_effect=AssertionError('no retired control read')), \
                 patch.object(recipe, 'canonical_existing', side_effect=AssertionError('no retired control resolve')), \
-                patch.object(recipe.os, 'cpu_count', side_effect=AssertionError('no current host CPU query')):
+                patch('emberbsd_sdk.bootstrap_pilot.available_cpu_count', side_effect=AssertionError('no current host CPU query')):
             self.assertEqual(case.validate(inspect_inputs=False), case.plan)
 
     def test_legacy_makeconf_remains_byte_identical(self):

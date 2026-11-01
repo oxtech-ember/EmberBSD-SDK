@@ -111,11 +111,13 @@ Canonical version behavior follows OS commit
   --compiler /absolute/host-pkg-llvm \
   --llvm-source /absolute/prepared-llvm \
   --runtime-work /absolute/prebuild-sdk-aarch64/obj/llvm-runtime \
-  --destination /absolute/prebuild-sdk-aarch64/stages/release-candidate \
-  --jobs 4 --plan
+  --destination /absolute/prebuild-sdk-aarch64/stages/release-candidate --plan
 ```
 
-Remove `--plan` to run the build. The workspace target must match the
+Remove `--plan` to run the build. If `--jobs` is omitted, the builder uses the
+CPUs available to its process, respecting process affinity when the host
+exposes it. An explicit `--jobs` overrides that count; no CPU-load or free-memory
+sampling is used. The workspace target must match the
 profile. The destination must be new or empty and must be outside the active
 sysroot. Use paths without whitespace. `--objects` and `--tools` select shared
 workspace object paths; reuse requires an identical compatible context.

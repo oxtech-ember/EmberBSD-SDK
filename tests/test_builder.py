@@ -509,6 +509,39 @@ class BuilderTests(TemporaryCase):
         builder.run()
         self.assertEqual(builder.process_inspector.empty_snapshot_timeout, 120)
 
+    def test_jobs_default_to_available_cpu_count_and_keep_explicit_override(self):
+        options = self.options.copy()
+        options.pop('jobs')
+        with patch('emberbsd_sdk.cpu_capacity.available_cpu_count', return_value=12):
+            builder = B(options | {'plan': True})
+            receipt = builder.preflight()
+        self.assertEqual(builder.options['jobs'], '12')
+        self.assertIn('-j12', builder.build_command)
+        self.assertIn('-j12', builder.loader_command)
+        self.assertIn('-j12', receipt['plan'][1])
+        self.assertNotIn('jobs', receipt['signature'])
+
+        with patch('emberbsd_sdk.cpu_capacity.available_cpu_count',
+                   side_effect=AssertionError('explicit jobs must not query capacity')):
+            explicit = B(self.options | {'jobs': '48', 'plan': True})
+            explicit.preflight()
+        self.assertEqual(explicit.options['jobs'], '48')
+        self.assertIn('-j48', explicit.build_command)
+        self.assertEqual(explicit.signature, builder.signature)
+
+    def test_default_jobs_fail_closed_without_available_cpu_count(self):
+        options = self.options.copy()
+        options.pop('jobs')
+        with patch('emberbsd_sdk.cpu_capacity.available_cpu_count', return_value=None), \
+                self.assertRaisesRegex(SDKError, 'CPU count is unavailable'):
+            B(options).preflight()
+
+    def test_explicit_jobs_still_require_a_positive_integer(self):
+        for value in ('0', '-1', 'four', True):
+            with self.subTest(value=value), \
+                    self.assertRaisesRegex(SDKError, 'jobs must be a positive integer'):
+                B(self.options | {'jobs': value}).preflight()
+
     def test_host_binutils_input_is_required_before_build_writes(self):
         self.refusal_unchanged('--host-binutils', **{'host-binutils': ''})
         (Path(self.options['host-binutils']) / 'host-bfd.mk').unlink()

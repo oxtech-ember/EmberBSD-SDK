@@ -143,7 +143,7 @@ class PkgInstallTests(unittest.TestCase):
     def test_parallel_build_budget_does_not_parallelize_cases(self):
         self.plan['resources']['cpu_jobs'] = 18
         self.plan['commands'] = program.program_steps(self.plan, self.descriptor, self.commands, self.flags)
-        with patch('os.cpu_count', return_value=24):
+        with patch('emberbsd_sdk.bootstrap_pilot.available_cpu_count', return_value=24):
             self.assertIs(self.validate(), self.plan)
         self.assertIn('-j18', self.plan['commands'][1]['argv'])
         self.assertTrue(all('-j18' not in row['argv'] for row in self.plan['commands'][4:]))

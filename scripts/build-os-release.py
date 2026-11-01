@@ -42,8 +42,10 @@ def main():
             print(f'OS release finalization: {exc}', file=sys.stderr)
             return 1
     parser = argparse.ArgumentParser(description='Build an EmberBSD OS release with a native Ports prefix.')
-    for name in ('sdk', 'os-source', 'ports', 'compiler', 'jobs', 'sdk-source', 'libedit-source', 'libarchive-source', 'libevent-source', 'host-prefix', 'host-binutils'):
+    for name in ('sdk', 'os-source', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'libarchive-source', 'libevent-source', 'host-prefix', 'host-binutils'):
         parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix'}.get(name))
+    parser.add_argument('--jobs', type=int, action=UniqueOption,
+                        help='positive build parallelism; default: CPUs available to this process')
     parser.add_argument('--runtime-work', action=UniqueOption,
                         help='required for GCC or to build an LLVM runtime; not needed with a selected LLVM stage')
     parser.add_argument('--openssl-source', action=UniqueOption, help='prepared common Ports OpenSSL source')

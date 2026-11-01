@@ -62,7 +62,8 @@ def _parser():
                  'compiler-seed', 'compiler-seed-sha256', 'host-tools',
                  'work-root', 'lock-root', 'output'):
         provider_plan.add_argument('--' + name, required=True)
-    provider_plan.add_argument('--cpu-jobs', type=int, default=1)
+    provider_plan.add_argument('--cpu-jobs', type=int,
+                               help='inner package-build parallelism; default: CPUs available to this process')
     provider_plan.add_argument('--runtime-seconds', type=int, default=3600)
     provider = subparsers.add_parser('run-provider')
     provider.add_argument('--plan', required=True)

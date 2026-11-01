@@ -73,10 +73,13 @@ set -- --tool cc=/absolute/initial/llvm/bin/clang \
   --work-root /absolute/bootstrap-work \
   --distfiles /absolute/distfiles --packages /absolute/packages \
   --output /absolute/bootstrap-work/mk.conf \
-  --utility-bin /absolute/bootstrap-work/tools --jobs 1 "$@"
+  --utility-bin /absolute/bootstrap-work/tools \
+  --link-python /absolute/initial/bin/python3.15 \
+  --lock-root /absolute/bootstrap-work/locks \
+  --heavy-link-context /absolute/bootstrap-work/heavy-link "$@"
 ```
 
-Create the work directory and output parents first. Paths must exclude whitespace and make metacharacters.
+Create the work directory, lock directory, and output parents first. Paths must exclude whitespace and make metacharacters.
 The MAKECONF and utility mapping stay inside the explicit work directory.
 The prefix, package database, distfiles, and packages retain their separately selected paths.
 The renderer writes only the configuration and utility mapping.
@@ -116,16 +119,18 @@ Then build the remaining closure:
 
 Retain the returned utility PATH and selected environment for this command.
 The Ports profile owns the later make, shell, and gzip transitions.
-`--jobs` sets positive package build parallelism.
-Its default is the host CPU count from `os.cpu_count()`. `--jobs 1` selects a serial build.
+`--jobs` sets positive package build parallelism. Its default is the CPU count
+available to the process (`os.process_cpu_count()` when available, otherwise
+Linux affinity or `os.cpu_count()`). `--jobs 1` selects a serial build. The
+resolver does not sample current load or free memory.
 `--cpu-budget` defaults to that job count and must be at least `--jobs`.
 For parallel builds, including the default, also select `--link-python`, `--lock-root` and
 `--heavy-link-context`. The Python executable must belong to a declared tool
 root. The lock directory must already exist; use the same lock root and
-resource context for builds sharing a heavy-link slot. For example:
+resource context for builds sharing a heavy-link slot. For example, provide
+the link controls and let the SDK choose jobs:
 
 ```sh
---jobs 18 --cpu-budget 18 \
 --link-python /absolute/host-pkg-llvm/bin/python3.15 \
 --lock-root /absolute/shared-objects/coordination \
 --heavy-link-context /absolute/shared-objects/coordination/heavy-link

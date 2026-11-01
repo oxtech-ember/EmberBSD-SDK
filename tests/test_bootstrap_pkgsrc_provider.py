@@ -404,13 +404,36 @@ class PkgsrcProviderPlanTests(ProviderFixture):
                 *common, str(self.export), str(self.root / 'locks'), self.host_tools,
                 plan_path=str(self.root / 'inputs/provider-plan.json'), cpu_jobs=2,
             )
-        for jobs in (0, -1, True, 65):
+        for jobs in (0, -1, True):
             with self.subTest(jobs=jobs), self.assertRaisesRegex(SDKError, 'jobs|resource|CPU'):
                 create_bootstrap_plan(
                     *common, str(self.root / 'provider-work'), str(self.root / 'locks'),
                     self.host_tools, plan_path=str(self.root / 'inputs/provider-plan.json'),
                     cpu_jobs=jobs,
                 )
+
+    def test_default_jobs_use_available_cpu_count_without_parallelizing_outer_pkgsrc(self):
+        with patch('emberbsd_sdk.cpu_capacity.available_cpu_count', return_value=128):
+            plan = create_bootstrap_plan(
+                self.transfer_ref, self.export_acceptance_ref, self.compiler_seed_ref,
+                str(self.root / 'provider-work'), str(self.root / 'locks'), self.host_tools,
+                plan_path=str(self.root / 'inputs/provider-plan.json'),
+            )
+        self.assertEqual(plan['resources']['cpu_jobs'], 128)
+        self.assertEqual(plan['commands'][0]['argv'][-2:], ['--make-jobs', '128'])
+        for command in plan['commands'][1:]:
+            self.assertFalse(any(arg.startswith('-j') for arg in command['argv']))
+            self.assertIn('MAKE_JOBS=128', command['argv'])
+
+    def test_explicit_pkgsrc_jobs_above_64_are_preserved(self):
+        with patch('emberbsd_sdk.cpu_capacity.available_cpu_count',
+                   side_effect=AssertionError('explicit jobs must not query capacity')):
+            plan = create_bootstrap_plan(
+                self.transfer_ref, self.export_acceptance_ref, self.compiler_seed_ref,
+                str(self.root / 'provider-work'), str(self.root / 'locks'), self.host_tools,
+                plan_path=str(self.root / 'inputs/provider-plan.json'), cpu_jobs=96,
+            )
+        self.assertEqual(plan['resources']['cpu_jobs'], 96)
 
     def test_plan_rejects_preexisting_work_root(self):
         work_root = self.root / 'provider-work'
@@ -521,6 +544,16 @@ class PkgsrcProviderCliExitTests(unittest.TestCase):
         cls.cli = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = cls.cli
         spec.loader.exec_module(cls.cli)
+
+    def test_cpu_jobs_cli_is_optional_and_explicit(self):
+        base = ['make-provider-plan', '--transfer-acceptance', '/a',
+                '--transfer-acceptance-sha256', 'a' * 64,
+                '--export-acceptance', '/b', '--export-acceptance-sha256', 'b' * 64,
+                '--compiler-seed', '/c', '--compiler-seed-sha256', 'c' * 64,
+                '--host-tools', '/tools', '--work-root', '/work',
+                '--lock-root', '/locks', '--output', '/plan.json']
+        self.assertIsNone(self.cli._parser().parse_args(base).cpu_jobs)
+        self.assertEqual(self.cli._parser().parse_args(base + ['--cpu-jobs', '96']).cpu_jobs, 96)
 
     def _run_provider(self, status):
         output = type('StdoutCapture', (), {'buffer': io.BytesIO()})()

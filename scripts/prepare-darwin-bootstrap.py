@@ -31,7 +31,8 @@ def main(argv=None):
                             help='append one compiler argument; use --' + role + '-arg=-OPTION')
     parser.add_argument('--ldflag', action='append', default=[])
     parser.add_argument('--source-tool', action='append', default=[])
-    parser.add_argument('--jobs', type=int, action=UniqueOption, help='positive package build parallelism; default: host CPU count')
+    parser.add_argument('--jobs', type=int, action=UniqueOption,
+                        help='positive package build parallelism; default: CPUs available to this process')
     parser.add_argument('--cpu-budget', type=int, action=UniqueOption, help='available CPU budget; defaults to jobs')
     parser.add_argument('--link-python', action=UniqueOption, help='explicit native Python for the shared SDK linker launcher')
     parser.add_argument('--lock-root', action=UniqueOption, help='existing shared linker lock directory')

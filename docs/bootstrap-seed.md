@@ -477,9 +477,9 @@ launcher arguments fail before execution.
 This route requires the fixed Ports parallel profile SHA256
 `6adbb69112056a867b463fd825a0842294b1eb7e67331433184c1f31d5de518a`.
 It keeps the original profile available for serial and historical plans.
-`cpu_jobs` is a positive integer no greater than the current `os.cpu_count()`.
-An unavailable host CPU count fails closed. The deadline and `link_jobs: 1`
-requirements remain.
+`cpu_jobs` defaults to the CPUs available to the current process, resolved by
+the SDK CPU-capacity helper; `--cpu-jobs` is an explicit override. An unavailable
+CPU count fails closed. The deadline and `link_jobs: 1` requirements remain.
 The outer pkgsrc `make` build and install commands stay serial. They have no
 `-j` option, including `-j1`. pkgsrc rejects parallel infrastructure commands.
 The direct GNU GCC comparison keeps `-jN`. The common Ports `MAKE_JOBS` policy

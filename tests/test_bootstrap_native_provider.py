@@ -239,7 +239,7 @@ class NativeProviderTests(unittest.TestCase):
             with patch.object(producer, profile_constant, digest), \
                     patch.object(producer, 'PROFILE_SHA256', '0' * 64):
                 case.refresh()
-                with patch.object(recipe.os, 'cpu_count', return_value=18), \
+                with patch('emberbsd_sdk.bootstrap_pilot.available_cpu_count', return_value=18), \
                     patch('subprocess.Popen', side_effect=AssertionError('no native process')):
                     self.assertEqual(case.validate(), case.plan)
                 values = producer.metadata_assignments(case.plan, case.descriptor, case.commands,

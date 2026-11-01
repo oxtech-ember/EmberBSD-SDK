@@ -21,6 +21,7 @@ from .paths import (
     verify_stable,
 )
 from .process import ContextLocks, run_logged
+from .cpu_capacity import resolve_jobs
 
 BOOTSTRAP_PKGSRC_PROVIDER_API = 1
 PLAN_FORMAT = 'emberbsd-bootstrap-pkgsrc-provider-plan'
@@ -435,7 +436,7 @@ def _validate_plan(plan, *, inspect_inputs=True, allow_claimed_work=False):
         'lock_root', 'runtime_seconds', 'cpu_jobs'} and
         type(resources['runtime_seconds']) is int and
         0 < resources['runtime_seconds'] <= _MAX_RUNTIME and
-        type(resources['cpu_jobs']) is int and 0 < resources['cpu_jobs'] <= 64,
+        type(resources['cpu_jobs']) is int and resources['cpu_jobs'] > 0,
         'pkgsrc bootstrap resource bounds are invalid')
     paths = _provider_paths(work, source_root, seed['compiler']['path'],
                             resources['cpu_jobs'], utility_bin)
@@ -467,7 +468,7 @@ def _validate_plan(plan, *, inspect_inputs=True, allow_claimed_work=False):
 
 def create_bootstrap_plan(transfer_acceptance_ref, export_acceptance_ref,
                           compiler_seed_ref, work_root, lock_root, host_tools, *,
-                          plan_path, cpu_jobs=1, runtime_seconds=3600):
+                          plan_path, cpu_jobs=None, runtime_seconds=3600):
     transfer_ref, export_ref, _, _, source_root = _accepted_source(
         transfer_acceptance_ref, export_acceptance_ref)
     compiler_ref = _file_hash_ref(compiler_seed_ref, 'accepted GCC16 compiler seed')
@@ -477,8 +478,7 @@ def create_bootstrap_plan(transfer_acceptance_ref, export_acceptance_ref,
     _validate_mkconf_path_chars(work)
     _require(canonical_new(work) == work and entry(work) is None,
              'pkgsrc bootstrap work root must be a fresh canonical path')
-    _require(type(cpu_jobs) is int and 0 < cpu_jobs <= 64,
-             'pkgsrc bootstrap CPU jobs must be an integer from 1 through 64')
+    cpu_jobs = resolve_jobs(cpu_jobs, option='--cpu-jobs')
     _require(type(runtime_seconds) is int and 0 < runtime_seconds <= _MAX_RUNTIME,
              'pkgsrc bootstrap runtime must be an integer within its fixed budget')
     sdk = _sdk_source_identity()

@@ -12,6 +12,7 @@ import shutil
 import tempfile
 
 from .bootstrap_make import _safe_path
+from .cpu_capacity import resolve_jobs
 from .bootstrap_producer import _current_host_facts, _word
 from . import process
 from .errors import SDKError
@@ -224,10 +225,7 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
     Initial tools can use several declared roots before the final Ports prefix
     exists. Compiler argument order is retained; this is not a compiler probe.
     """
-    if jobs is None:
-        jobs = os.cpu_count()
-        _require(jobs is not None, 'host CPU count is unavailable; select jobs explicitly')
-    _require(type(jobs) is int and jobs > 0, 'jobs must be a positive integer')
+    jobs = resolve_jobs(jobs)
     cpu_budget = jobs if cpu_budget is None else cpu_budget
     _require(type(cpu_budget) is int and cpu_budget > 0 and jobs <= cpu_budget,
              'CPU budget must be positive and at least jobs')

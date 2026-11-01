@@ -18,6 +18,7 @@ from .native_toolset import (NATIVE_C_PROBE, NATIVE_CXX_PROBE, _absolute,
                              _envelope, _json, _native_image, _require, _sha, _source)
 from .paths import canonical_existing, canonical_new, entry, inside, reject_overlap
 from .process import ContextLocks, run_logged
+from .cpu_capacity import available_cpu_count
 
 BOOTSTRAP_PILOT_API = 1
 PILOT_FORMAT = 'emberbsd-native-gcc16-pilot-plan'
@@ -190,7 +191,7 @@ def _validate_resources(resources, *, metadata=False, recipe=False, parallel=Fal
     _require(not parallel or recipe, 'parallel resource control requires the full recipe route')
     limit = 4 if metadata else 1
     if parallel:
-        limit = os.cpu_count() if inspect_inputs else None
+        limit = available_cpu_count() if inspect_inputs else None
     _require(not (parallel and inspect_inputs) or type(limit) is int and limit > 0,
              'the current host CPU budget is unavailable')
     _require(type(resources['cpu_jobs']) is int and resources['cpu_jobs'] > 0 and

@@ -451,7 +451,7 @@ class LLVMBuilderTests(TemporaryCase):
 
     def test_base_cxx_cli_defaults_and_boolean_opt_out(self):
         base = dict(sdk='/unused/sdk', ports='/unused/ports', compiler='/unused/compiler',
-                    runtime_work='/unused/runtime', jobs='2',
+                    runtime_work='/unused/runtime',
                     sdk_source=str(SDK_SOURCE), libedit_source='/unused/libedit',
                     libarchive_source='/unused/libarchive', libevent_source='/unused/libevent',
                     host_prefix='/unused/host', host_binutils='/unused/host-binutils',
@@ -483,7 +483,10 @@ class LLVMBuilderTests(TemporaryCase):
              '--destination', '/unused/destination'], args)
         for cli in (sysroot, release):
             with self.subTest(cli=cli.__name__):
-                self.assertIs(cli()['base-cxx'], True)
+                defaults = cli()
+                self.assertIs(defaults['base-cxx'], True)
+                self.assertNotIn('jobs', defaults)
+                self.assertEqual(cli('--jobs', '3')['jobs'], 3)
                 self.assertIs(cli('--no-base-cxx')['base-cxx'], False)
                 self.assertIs(cli('--base-cxx')['base-cxx'], True)
                 self.assertIs(cli('--compiler-family', 'gcc')['base-cxx'], False)

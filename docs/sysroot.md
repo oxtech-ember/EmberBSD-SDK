@@ -128,13 +128,15 @@ Use the implemented script's help for the exact options:
   --llvm-source /absolute/prepared-llvm \
   --runtime-work /absolute/prebuild-sdk-aarch64/obj/llvm-runtime \
   --destination /absolute/prebuild-sdk-aarch64/stages/sysroot-next \
-  --target aarch64 --jobs "$(getconf _NPROCESSORS_ONLN)" --plan
+  --target aarch64 --plan
 ```
 
 The plan checks inputs and lists the build commands without creating outputs.
 Remove `--plan` to run those commands.
-`--jobs` is required. Use the host CPU count for a parallel build;
-`--jobs 1` selects a serial build.
+By default, the builder uses the CPUs available to its process, respecting
+process affinity when the host exposes it. Set `--jobs` to override that count;
+`--jobs 1` selects a serial build. This choice does not sample CPU load or free
+memory.
 
 The final Clang build enables the common libc++ base layout by default. Use
 `--no-base-cxx` to retain the historical build-only layout and `MKLIBCXX=no`;
