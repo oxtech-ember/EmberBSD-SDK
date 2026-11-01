@@ -13,7 +13,7 @@ class OpenSSHNativeToolsTests(unittest.TestCase):
         builder.options = {'host-prefix': '/native', 'os': '/os'}
         with mock.patch('emberbsd_sdk.sysroot_builder.inventory.sha256_file', return_value='a' * 64), \
              mock.patch('emberbsd_sdk.sysroot_builder.native_os_routing.read_native_os_contract',
-                        return_value=(None, None, {'make'})), \
+                        return_value=(b'EmberBSD-native-tools 2\n', None, {'make'})), \
              mock.patch('emberbsd_sdk.sysroot_builder.native_toolset.load_host_prefix') as load:
             builder.load_native_toolset()
             self.assertTrue({'autoconf', 'autom4te', 'gm4'}.isdisjoint(load.call_args.kwargs['required_roles']))
