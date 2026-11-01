@@ -80,18 +80,15 @@ def ensure_native_os_routing(toolset, *, contract_path, contract_sha256, destina
                 members={command:toolset.tool(role) for command,role,_ in rows})
 
 
-def parse_native_os_contract(data, *, allow_recorded_v1=False):
-    """Parse contract bytes; v1 is only for historical compatibility records."""
+def parse_native_os_contract(data):
+    """Parse the current OS native-tool contract (version 2 only)."""
     if not isinstance(data, bytes) or len(data) > 65536:
         raise SDKError('OS native-tool contract changed or is too large')
     try:
         lines = data.decode('ascii').splitlines()
     except UnicodeError as exc:
         raise SDKError('OS native-tool contract must be ASCII') from exc
-    headers = ('EmberBSD-native-tools 2',)
-    if allow_recorded_v1:
-        headers += ('EmberBSD-native-tools 1',)
-    if not data.endswith(b'\n') or not lines or lines[0] not in headers:
+    if not data.endswith(b'\n') or not lines or lines[0] != 'EmberBSD-native-tools 2':
         raise SDKError('unsupported OS native-tool contract')
     commands, roles, bindings = set(), set(), set()
     rows = []
@@ -113,7 +110,7 @@ def parse_native_os_contract(data, *, allow_recorded_v1=False):
     return data, tuple(rows), frozenset(roles)
 
 
-def _read_native_os_contract(path, *, sha256, allow_recorded_v1):
+def _read_native_os_contract(path, *, sha256):
     if not isinstance(sha256, str) or re.fullmatch(r'[0-9a-f]{64}', sha256) is None:
         raise SDKError('expected the explicit OS contract SHA256')
     path = path_string(path)
@@ -123,17 +120,12 @@ def _read_native_os_contract(path, *, sha256, allow_recorded_v1):
     verify_stable(path, before)
     if hashlib.sha256(data).hexdigest() != sha256:
         raise SDKError('OS native-tool contract changed or is too large')
-    return parse_native_os_contract(data, allow_recorded_v1=allow_recorded_v1)
+    return parse_native_os_contract(data)
 
 
 def read_native_os_contract(path, *, sha256):
     """Read current OS routing input; only contract v2 is accepted."""
-    return _read_native_os_contract(path, sha256=sha256, allow_recorded_v1=False)
-
-
-def read_recorded_native_os_contract(path, *, sha256):
-    """Read a saved object contract for compatibility inspection only."""
-    return _read_native_os_contract(path, sha256=sha256, allow_recorded_v1=True)
+    return _read_native_os_contract(path, sha256=sha256)
 
 
 def publish_native_os_routing(toolset, *, contract_path, contract_sha256,
