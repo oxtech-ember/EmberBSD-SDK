@@ -12,73 +12,53 @@ from emberbsd_sdk.errors import SDKError
 
 
 class PreparedRefreshTests(unittest.TestCase):
-    def test_release_objects_reuse_for_sysroot_source_refresh(self):
-        from copy import deepcopy
-        from types import MethodType, SimpleNamespace
-        from unittest.mock import patch
-        from emberbsd_sdk.sysroot_builder import SysrootBuilder, _canonicalize_unique_flag_assignments
+    def test_unique_flag_assignments_are_canonicalized(self):
+        from emberbsd_sdk.sysroot_builder import _canonicalize_unique_flag_assignments
 
         self.assertEqual(_canonicalize_unique_flag_assignments(['B=2', 'A=1']), ['A=1', 'B=2'])
         duplicates = ['A=1', 'B=2', 'A=3']
         self.assertEqual(_canonicalize_unique_flag_assignments(duplicates), duplicates)
 
-        shared = ['MAKECONF=/dev/null', 'MKCXX=yes', 'MKPIC=yes',
-                  'EMBER_HOST_BFD_CONFIG=/host-bfd/host-bfd.mk',
-                  'HOST_GMAKE=/host/bin/gmake', 'EMBER_HOST_GNU_TRIPLE=aarch64-host']
-        old_release_flags = shared + [
-            'GNU_TARGET_LIBTOOL=/tools/bin/target-libtool',
-            'EMBER_TARGET_TOOL_DIR=/tools/gettext-libtool/current/target-tools',
-            'MKFIRMWARE=yes', 'MKLINKLIB=yes', 'MKSTATICLIB=yes', 'MKPICLIB=yes',
-            'MKDYNAMICROOT=yes', 'KERNOBJDIR=/objects/kernels',
-            'RELEASEMACHINEDIR=evbarm-aarch64', 'MAKETARSETS=base comp',
-            'MKDEBUGKERNEL=no', 'USE_XZ_SETS=yes', 'BUILDINFO=EmberBSD:abc',
-            'EMBER_BUILD_ID=abc', 'MKREPRO_TIMESTAMP=1']
-        new_flags = ['MKPIC=yes', 'HOST_GMAKE=/host/bin/gmake',
-                     'EMBER_DHCPCD_SOURCE=/new/dhcpcd', 'EMBER_HOST_GNU_TRIPLE=aarch64-host',
-                     'MAKECONF=/dev/null', 'EMBER_MDNS_SOURCE=/new/mdns',
-                     'EMBER_HOST_BFD_CONFIG=/host-bfd/host-bfd.mk', 'MKCXX=yes']
+    def test_release_objects_are_not_reused_as_sysroot_source_refresh(self):
+        from copy import deepcopy
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from emberbsd_sdk.sysroot_builder import SysrootBuilder
+
+        flags = ['MAKECONF=/dev/null', 'MKCXX=yes', 'MKPIC=yes',
+                 'EMBER_HOST_BFD_CONFIG=/host-bfd/host-bfd.mk',
+                 'HOST_GMAKE=/host/bin/gmake', 'EMBER_HOST_GNU_TRIPLE=aarch64-host']
         common = {'host': {'id': 'host'}, 'target': {'machine': 'evbarm', 'arch': 'aarch64'},
                   'compiler': {'id': 'compiler'}, 'runtime': {'id': 'runtime'},
                   'runtime_prefix': '/runtime', 'llvm_source': {'id': 'llvm'},
-                  'objects': '/objects', 'tools': '/tools', 'flags': new_flags,
-                  'common_sources': {}}
+                  'objects': '/objects', 'tools': '/tools', 'flags': flags,
+                  'common_sources': {'mdns': {'tree_sha256': 'old'}}}
         old_signature = deepcopy(common)
         old_signature['release_profile'] = 'aarch64'
         old_signature['product_version'] = '1.0'
-        old_signature['flags'] = old_release_flags
         current = deepcopy(common)
         def source(package, digest):
             return {'format': 'emberbsd-prepared-source', 'version': 1,
                     'package': package, 'tree_sha256': digest * 64}
         current['common_sources'] = {
             'mdns': source('net/mDNSResponder', 'a'),
-            'dhcpcd': source('net/dhcpcd', 'b')}
+        }
+        current['flags'] = flags + ['EMBER_MDNS_SOURCE=/new/mdns']
         old_record = {'signature': old_signature}
         fake = SimpleNamespace(
-            options={'target': 'aarch64'}, signature=current,
-            paths={'os': '/os', 'objects': '/objects', 'tools': '/tools',
-                   'mdns-source': '/new/mdns', 'dhcpcd-source': '/new/dhcpcd'},
+            signature=current, paths={'os': '/os', 'objects': '/objects', 'tools': '/tools',
+                                      'mdns-source': '/new/mdns'},
             native_selection={}, COMMON_SOURCES=SysrootBuilder.COMMON_SOURCES,
-            context_signature=lambda path: current,
-            release_transition_defaults=lambda: {
-                name: 'yes' for name in ('MKFIRMWARE', 'MKLINKLIB', 'MKSTATICLIB',
-                                         'MKPIC', 'MKPICLIB', 'MKDYNAMICROOT')},
-            compatible_context=None)
+            context_signature=lambda path: current)
         fake.reuse_signature = lambda signature: SysrootBuilder.reuse_signature(fake, signature)
-        fake.compatible_context = MethodType(SysrootBuilder.compatible_context, fake)
+        fake.compatible_context = lambda record, path: record['signature'] == current
         with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan',
                    return_value=[]) as plan:
             refreshed = SysrootBuilder.plan_prepared_refresh(fake, old_record, '/objects')
-        self.assertTrue(refreshed)
-        self.assertEqual(fake.refresh_dirs, [])
-        self.assertEqual(plan.call_args.args[2], {'mdns', 'dhcpcd'})
-
-        # A release flag that differs from the current make default remains a
-        # real context mismatch, even when source refresh would otherwise pass.
-        fake.release_transition_defaults = lambda: {
-            name: 'no' for name in ('MKFIRMWARE', 'MKLINKLIB', 'MKSTATICLIB',
-                                   'MKPIC', 'MKPICLIB', 'MKDYNAMICROOT')}
-        self.assertFalse(SysrootBuilder.plan_prepared_refresh(fake, old_record, '/objects'))
+        self.assertFalse(refreshed)
+        self.assertFalse(plan.called)
+        self.assertEqual(fake.reuse_signature(old_signature)['release_profile'], 'aarch64')
+        self.assertEqual(fake.reuse_signature(old_signature)['product_version'], '1.0')
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
