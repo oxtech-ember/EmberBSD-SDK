@@ -184,6 +184,25 @@ class InstalledInventory(unittest.TestCase):
         with patch.object(inventory.os, 'scandir', change), self.assertRaisesRegex(SDKError, 'changed'):
             inventory.snapshot_installed_tree(self.root)
 
+    def test_digest_provider_receives_regular_file_metadata(self):
+        path = self.file('nested/data', b'payload')
+        calls = []
+
+        def provider(value, relative, info):
+            calls.append((value, relative, info.st_size))
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+
+        rows = inventory.snapshot_tree(self.root, digest_provider=provider)
+        self.assertEqual(calls, [(str(path), 'nested/data', len(b'payload'))])
+        self.assertEqual(rows['nested/data']['sha256'], hashlib.sha256(b'payload').hexdigest())
+
+    def test_digest_provider_rejects_invalid_or_competing_digest_inputs(self):
+        self.file()
+        with self.assertRaisesRegex(SDKError, 'invalid SHA-256 from digest provider'):
+            inventory.snapshot_tree(self.root, digest_provider=lambda *_: 'not-a-sha256')
+        with self.assertRaisesRegex(SDKError, 'mutually exclusive'):
+            inventory.snapshot_tree(self.root, digests={}, digest_provider=lambda *_: '0' * 64)
+
 
 if __name__ == '__main__':
     unittest.main()

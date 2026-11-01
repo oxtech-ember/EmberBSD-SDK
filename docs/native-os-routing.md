@@ -64,6 +64,20 @@ hashes the tree. The receipts are read once, at preflight, and become part
 of the build's input key. Prepare a source again with its Ports owner when its
 recipe changes; its new receipt changes the key.
 
+A source owner that explicitly validates a prepared payload with
+`sourceprep.validate_prepared_tree` may provide an external `cache_path` to
+avoid rehashing unchanged file bytes. The helper still walks every path and
+checks metadata and links, then compares the complete inventory digest with
+the receipt. `PREPARED_TREE_CACHE_API` identifies this optional API. Setting
+`EMBER_PREPARED_SOURCE_CACHE` opts in without changing an owner script; an
+explicit `cache_path` takes precedence. The helper creates that cache directory
+as mode 0700, and cache files are mode 0600. The cache is only a local
+trusted acceleration hint; missing, untrusted, stale or malformed entries are
+rehashed. File timestamps must be at least one second older than the start of
+the previous validation, to avoid reusing hashes near a timestamp race window;
+an aggregate mismatch with cache hits triggers one full-hash retry. This does
+not change checksums required for downloaded archives or distributed packages.
+
 The optional `--rcs-source` selects the common Ports RCS source for the OS
 producer, with the same checked GNU make and native compiler triplet. The SDK
 queries the producer's effective source and passes `EMBER_RCS_SOURCE` to the

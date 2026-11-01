@@ -37,14 +37,19 @@ def sha256_file(path):
 INSTALLED_TREE_INVENTORY_API = 1
 
 
-def snapshot_tree(root, machine=None, exclude=(), digests=None):
+def snapshot_tree(root, machine=None, exclude=(), digests=None, digest_provider=None):
     """Inspect a strict payload. Links must resolve within the payload root.
 
     digests maps relative file names to SHA-256 values already recorded by
     an input key, such as a reused stage manifest; those files are not read
-    again. The rows have the same shape either way."""
+    again. digest_provider(path, relative, lstat_result) may provide a digest
+    for a stable regular file. It is mutually exclusive with digests. The
+    rows have the same shape either way."""
     exclude = tuple(exclude)
-    rows = _snapshot_tree(root, machine, exclude, installed_links=False, digests=digests)
+    if digests is not None and digest_provider is not None:
+        raise SDKError('digests and digest_provider are mutually exclusive')
+    rows = _snapshot_tree(root, machine, exclude, installed_links=False,
+                          digests=digests, digest_provider=digest_provider)
     from .bootstrap_history_context import observe_tree
     observe_tree(root, machine, exclude, rows)
     return rows
@@ -105,7 +110,8 @@ def transfer_inventory_equal(source, target):
     return True
 
 
-def _snapshot_tree(root, machine, exclude, *, installed_links, digests=None):
+def _snapshot_tree(root, machine, exclude, *, installed_links, digests=None,
+                   digest_provider=None):
     root = path_string(root)
     real_directory(root)
     if canonical_existing(root) != root:
@@ -146,7 +152,12 @@ def _snapshot_tree(root, machine, exclude, *, installed_links, digests=None):
                 row['kind'] = 'directory'
                 visit(path, relative + '/')
             elif stat.S_ISREG(info.st_mode):
-                known = digests.get(relative) if digests else None
+                known = digests.get(relative) if digests is not None else None
+                if known is None and digest_provider is not None:
+                    known = digest_provider(path, relative, info)
+                    if known is not None and (not isinstance(known, str) or
+                                              re.fullmatch('[0-9a-f]{64}', known) is None):
+                        raise SDKError(f'invalid SHA-256 from digest provider: {relative}')
                 row.update(kind='file', size=info.st_size,
                            sha256=known if known is not None else sha256_file(path))
                 if machine is not None:

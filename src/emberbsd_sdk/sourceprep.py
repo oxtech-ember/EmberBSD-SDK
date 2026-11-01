@@ -7,8 +7,11 @@ import os
 import posixpath
 from pathlib import Path
 import re
+import secrets
 import shutil
+import stat
 import tarfile
+import time
 import unicodedata
 
 from . import process
@@ -209,6 +212,8 @@ def apply_patch(patch_tool, patch_path, patch_bytes, cwd, label, *,
 # These helpers bind that identity to a measured prepared tree; they do not
 # decide which inputs constitute a package's complete source contract.
 PREPARED_TREE_API = 1
+PREPARED_TREE_CACHE_API = 1
+PREPARED_TREE_CACHE_MAX_JSON = 64 * 1024 * 1024
 PREPARED_TREE_RECEIPT = 'emberbsd-prepared-source.json'
 
 
@@ -256,9 +261,16 @@ def read_prepared_tree_receipt(root, *, package):
     return record
 
 
-def validate_prepared_tree(root, *, package, identity):
-    """Refuse changed package inputs, receipt or prepared payload."""
-    from . import jsonio, paths
+def validate_prepared_tree(root, *, package, identity, cache_path=None):
+    """Refuse changed inputs or payload; optional external cache avoids old-file rehashes.
+
+    The cache is a local acceleration hint only. It never replaces the complete
+    namespace and metadata walk or the aggregate comparison with the receipt.
+    Set EMBER_PREPARED_SOURCE_CACHE to a private cache directory to opt in;
+    an explicit cache_path takes precedence. No environment setting preserves
+    the original full-hash behavior.
+    """
+    from . import inventory, jsonio, paths
     root = paths.canonical_existing(root)
     record = jsonio.read_json(os.path.join(root, PREPARED_TREE_RECEIPT))
     if (not isinstance(record, dict) or
@@ -268,7 +280,213 @@ def validate_prepared_tree(root, *, package, identity):
             record['package'] != package or record['identity'] != identity or
             not isinstance(identity, dict) or not identity or
             not isinstance(record['tree_sha256'], str) or
-            re.fullmatch('[0-9a-f]{64}', record['tree_sha256']) is None or
-            record['tree_sha256'] != _prepared_tree_digest(root)):
+            re.fullmatch('[0-9a-f]{64}', record['tree_sha256']) is None):
         raise SDKError('prepared source identity or payload changed')
+
+    if cache_path is None:
+        cache_directory = os.environ.get('EMBER_PREPARED_SOURCE_CACHE')
+        if cache_directory is not None:
+            root_info = paths.real_directory(root)
+            cache_path = _prepared_tree_cache_from_environment(
+                cache_directory, root, package, record['tree_sha256'],
+                root_info, jsonio, paths)
+    if cache_path is None:
+        if record['tree_sha256'] != _prepared_tree_digest(root):
+            raise SDKError('prepared source identity or payload changed')
+        return record
+
+    cache_path = _prepared_tree_cache_path(cache_path, root, paths)
+    started_at_ns = time.time_ns()
+    root_info = paths.real_directory(root)
+    previous = _read_prepared_tree_cache(cache_path, root, package, identity,
+                                         record['tree_sha256'], root_info,
+                                         jsonio, paths)
+    cached_files = previous['files'] if previous is not None else {}
+    previous_started = previous['started_at_ns'] if previous is not None else 0
+    observed = {}
+    cache_hits = 0
+    force_hash = False
+
+    def digest_provider(path, relative, info):
+        nonlocal cache_hits
+        stable = paths.stable_identity(info)
+        cached = cached_files.get(relative)
+        if (not force_hash and cached is not None and list(stable) == cached['stable'] and
+                previous_started > 0 and started_at_ns > previous_started and
+                info.st_mtime_ns < previous_started - 1_000_000_000 and
+                info.st_ctime_ns < previous_started - 1_000_000_000):
+            digest = cached['sha256']
+            cache_hits += 1
+        else:
+            digest = inventory.sha256_file(path)
+        observed[relative] = {'stable': list(stable), 'sha256': digest}
+        return digest
+
+    rows = inventory.snapshot_tree(root, exclude=(PREPARED_TREE_RECEIPT,),
+                                   digest_provider=digest_provider)
+    aggregate = hashlib.sha256(jsonio.json_bytes(rows)).hexdigest()
+    if record['tree_sha256'] != aggregate and cache_hits:
+        # A local cache hint may be damaged while remaining well-formed. Retry
+        # once from bytes before treating the prepared payload as changed.
+        observed.clear()
+        force_hash = True
+        rows = inventory.snapshot_tree(root, exclude=(PREPARED_TREE_RECEIPT,),
+                                       digest_provider=digest_provider)
+        aggregate = hashlib.sha256(jsonio.json_bytes(rows)).hexdigest()
+    if record['tree_sha256'] != aggregate:
+        raise SDKError('prepared source identity or payload changed')
+    _write_prepared_tree_cache(cache_path, dict(
+        format='emberbsd-prepared-tree-cache', version=1,
+        root={'path': root, 'dev': root_info.st_dev, 'ino': root_info.st_ino},
+        package=package, identity=identity, tree_sha256=record['tree_sha256'],
+        started_at_ns=started_at_ns, files=observed), jsonio)
     return record
+
+
+def _prepared_tree_cache_from_environment(value, root, package, tree_sha256,
+                                           root_info, jsonio, paths):
+    """Create/select an owner-private external cache directory for opt-in use."""
+    if not hasattr(os, 'geteuid'):
+        raise SDKError('prepared source cache requires POSIX ownership checks')
+    requested = os.path.normpath(paths.path_string(value))
+    original = paths.entry(requested)
+    if original is not None and stat.S_ISLNK(original.st_mode):
+        raise SDKError('prepared source cache directory must not be a symlink')
+    canonical = paths.canonical_new(requested)
+    if canonical == root or canonical.startswith(root + os.sep):
+        raise SDKError('prepared source cache must be outside the payload')
+    requested = canonical
+    current = paths.entry(requested)
+    created = False
+    if current is None:
+        try:
+            os.mkdir(requested, 0o700)
+            created = True
+        except FileExistsError:
+            pass
+    info = paths.entry(requested)
+    if info is None or not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        raise SDKError('prepared source cache directory must be a real directory')
+    if paths.canonical_existing(requested) != requested:
+        raise SDKError('prepared source cache directory has aliased ancestors')
+    flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    fd = os.open(requested, flags)
+    try:
+        opened = os.fstat(fd)
+        if paths.stable_identity(opened) != paths.stable_identity(info):
+            raise SDKError('prepared source cache directory changed during inspection')
+        if created:
+            os.fchmod(fd, 0o700)
+            opened = os.fstat(fd)
+    finally:
+        os.close(fd)
+    info = opened
+    if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise SDKError('prepared source cache directory must be owned mode 0700')
+    key = hashlib.sha256(jsonio.json_bytes(dict(
+        root=root, dev=root_info.st_dev, ino=root_info.st_ino,
+        package=package, tree_sha256=tree_sha256))).hexdigest()
+    return os.path.join(requested, key + '.json')
+
+
+def _prepared_tree_cache_path(value, root, paths):
+    value = paths.path_string(value)
+    parent = paths.canonical_existing(os.path.dirname(value))
+    paths.real_directory(parent)
+    name = os.path.basename(value)
+    if name in ('', '.', '..'):
+        raise SDKError('invalid prepared source cache path')
+    path = os.path.join(parent, name)
+    if path == root or path.startswith(root + os.sep):
+        raise SDKError('prepared source cache must be outside the payload')
+    return path
+
+
+def _read_prepared_tree_cache(path, root, package, identity, tree_sha256,
+                              root_info, jsonio, paths):
+    """Return a well-formed trusted local cache, or treat it as a cold miss."""
+    if not hasattr(os, 'geteuid'):
+        return None
+    try:
+        before = paths.regular_file(path)
+        if stat.S_IMODE(before.st_mode) != 0o600 or before.st_uid != os.geteuid():
+            return None
+        handle, opened = paths.open_regular(path)
+        with handle:
+            if paths.stable_identity(opened) != paths.stable_identity(before):
+                return None
+            data = handle.read(PREPARED_TREE_CACHE_MAX_JSON + 1)
+        paths.verify_stable(path, opened)
+        cache = jsonio.loads_json(data, max_bytes=PREPARED_TREE_CACHE_MAX_JSON)
+        if (not isinstance(cache, dict) or
+                set(cache) != {'format', 'version', 'root', 'package', 'identity',
+                               'tree_sha256', 'started_at_ns', 'files'} or
+                cache['format'] != 'emberbsd-prepared-tree-cache' or
+                type(cache['version']) is not int or cache['version'] != 1):
+            return None
+    except (OSError, SDKError, ValueError, TypeError):
+        return None
+
+    cache_root = cache['root']
+    if (not isinstance(cache_root, dict) or
+            set(cache_root) != {'path', 'dev', 'ino'} or
+            cache_root['path'] != root or
+            type(cache_root['dev']) is not int or cache_root['dev'] != root_info.st_dev or
+            type(cache_root['ino']) is not int or cache_root['ino'] != root_info.st_ino or
+            cache['package'] != package or cache['identity'] != identity or
+            cache['tree_sha256'] != tree_sha256 or
+            type(cache['started_at_ns']) is not int or cache['started_at_ns'] <= 0 or
+            not isinstance(cache['files'], dict)):
+        return None
+    for relative, row in cache['files'].items():
+        if (not isinstance(relative, str) or not isinstance(row, dict) or
+                set(row) != {'stable', 'sha256'} or
+                not isinstance(row['stable'], list) or len(row['stable']) != 6 or
+                any(type(item) is not int for item in row['stable']) or
+                not isinstance(row['sha256'], str) or
+                re.fullmatch('[0-9a-f]{64}', row['sha256']) is None):
+            return None
+    return cache
+
+
+def _write_prepared_tree_cache(path, cache, jsonio):
+    """Best-effort atomic mode-0600 cache publication after successful validation."""
+    parent = os.path.dirname(path)
+    temporary = None
+    try:
+        data = jsonio.json_bytes(cache)
+        if len(data) > PREPARED_TREE_CACHE_MAX_JSON:
+            return
+        for _ in range(128):
+            candidate = os.path.join(parent, '.' + os.path.basename(path) + '.' + secrets.token_hex(16))
+            try:
+                fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                             getattr(os, 'O_NOFOLLOW', 0), 0o600)
+                temporary = candidate
+                break
+            except FileExistsError:
+                continue
+        if temporary is None:
+            return
+        with os.fdopen(fd, 'wb') as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+        if os.name == 'posix':
+            directory = os.open(parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    except (OSError, SDKError):
+        # Cache write failures do not turn a verified payload into a failure.
+        pass
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
