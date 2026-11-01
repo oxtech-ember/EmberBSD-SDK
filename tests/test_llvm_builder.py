@@ -422,7 +422,7 @@ class LLVMBuilderTests(TemporaryCase):
         root = self.root / 'os'
         contract = root / 'tools/native-tools/contract'
         contract.parent.mkdir(parents=True)
-        contract.write_text('EmberBSD-native-tools 1\ncmp cmp -\nmake make MAKE\nreadlink readlink -\nsh sh HOST_SH\n')
+        contract.write_text('EmberBSD-native-tools 2\ncmp cmp -\nmake make MAKE\nreadlink readlink -\nsh sh HOST_SH\n')
         builder = SysrootBuilder({'os': str(root), 'host-prefix': '/host'})
         with patch('emberbsd_sdk.sysroot_builder.native_toolset.load_host_prefix') as load:
             builder.load_native_toolset()

@@ -107,7 +107,7 @@ def fixture(root, target='aarch64'):
     for name in ('include', 'lib', 'libexec/ld.elf_so', 'tools', 'share/mk', 'sys', 'distrib', 'etc'):
         (os_source / name).mkdir(parents=True, exist_ok=True)
     write(os_source / 'tools/native-tools/contract',
-          'EmberBSD-native-tools 1\ncc cc HOST_CC\ncmp cmp -\nmake make MAKE\n'
+          'EmberBSD-native-tools 2\ncc cc HOST_CC\ncmp cmp -\nmake make MAKE\n'
           'readlink readlink -\nsh sh HOST_SH\n')
     for name in ('Makefile', 'libexec/ld.elf_so/Makefile', 'share/mk/bsd.own.mk'):
         write(os_source / name, '# Fixture\n')
