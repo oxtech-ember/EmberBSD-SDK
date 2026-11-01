@@ -214,6 +214,12 @@ class RuntimeRefreshTests(unittest.TestCase):
         old['compiler'] = new['compiler'] = {'family': 'clang', 'version': '23.1.4'}
         old['llvm_source'] = {'llvm_version': '23.1.4', 'tree_sha256': 'a' * 64}
         new['llvm_source'] = {'llvm_version': '23.1.4', 'tree_sha256': 'b' * 64}
+        old['native_toolset'] = {'tools': {'cc': '/native/bin/clang', 'cxx': '/native/bin/clang++'}}
+        new['native_toolset'] = copy.deepcopy(old['native_toolset'])
+        new['native_toolset']['tools'].update({
+            'autoconf': '/native/bin/autoconf', 'autom4te': '/native/bin/autom4te',
+            'gm4': '/native/bin/gm4',
+        })
         old['common_sources'] = {
             'openssh': source('security/openssh', '1' * 64),
             'openssl': source('security/openssl', '2' * 64),
@@ -254,7 +260,9 @@ class RuntimeRefreshTests(unittest.TestCase):
             compatible_context=lambda candidate, path:
                 checks.append(copy.deepcopy(candidate['signature'])) or
                 candidate['signature']['compiler'] == fake.context_signature(path)['compiler'] and
-                candidate['signature']['flags'] == fake.context_signature(path)['flags'],
+                candidate['signature']['flags'] == fake.context_signature(path)['flags'] and
+                candidate['signature']['native_toolset']['tools'] ==
+                fake.context_signature(path)['native_toolset']['tools'],
             compiler_record={'binaries': {'ar': {'selected_path': '/tool/ar'}}},
             environment={}, native=SimpleNamespace(tool=lambda role: '/native/bin/' + role),
         )
@@ -264,6 +272,7 @@ class RuntimeRefreshTests(unittest.TestCase):
         self.assertEqual(fake.refresh_dirs, ['other/cxx'])
         self.assertEqual(len(checks), 1)
         self.assertEqual(checks[0]['flags'], new['flags'])
+        self.assertEqual(checks[0]['native_toolset']['tools'], new['native_toolset']['tools'])
         plan.assert_called_once()
 
         for label, mutate in (
@@ -283,6 +292,21 @@ class RuntimeRefreshTests(unittest.TestCase):
         fake.context_signature = lambda path: new
         self.assertFalse(SysrootBuilder.plan_prepared_refresh(
             fake, {'signature': wrong_existing_host}, '/obj'))
+
+        old_role = copy.deepcopy(old)
+        old_role['native_toolset']['tools']['autoconf'] = '/old/autoconf'
+        self.assertFalse(SysrootBuilder.plan_prepared_refresh(fake, {'signature': old_role}, '/obj'))
+
+        unrelated_role = copy.deepcopy(new)
+        unrelated_role['native_toolset']['tools']['ninja'] = '/native/bin/ninja'
+        fake.context_signature = lambda path: unrelated_role
+        self.assertFalse(SysrootBuilder.plan_prepared_refresh(fake, record, '/obj'))
+
+        no_openssh_refresh = copy.deepcopy(new)
+        no_openssh_refresh['common_sources']['openssh'] = copy.deepcopy(old['common_sources']['openssh'])
+        no_openssh_refresh['common_sources']['openldap']['tree_sha256'] = '5' * 64
+        fake.context_signature = lambda path: no_openssh_refresh
+        self.assertFalse(SysrootBuilder.plan_prepared_refresh(fake, record, '/obj'))
 
         path_only_old, path_only_new = copy.deepcopy(old), copy.deepcopy(old)
         path_only_new['flags'] = [flag.replace('/prepared/openssl-old', '/tmp/openssl-current')

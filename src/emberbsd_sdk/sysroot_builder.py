@@ -25,6 +25,7 @@ from .targets import TARGETS, target_definition
 NATIVE_INPUTS = ('native-toolset', 'native-toolset-sha256',
                  'native-producer-receipt', 'native-producer-receipt-sha256')
 NATIVE_ALIASES = (('host-cc', 'cc'), ('host-cxx', 'cxx'), ('python', 'python'))
+OPENSSH_LOCAL_GENERATOR_ROLES = ('autoconf', 'autom4te', 'gm4')
 
 
 class BuildInterrupted(KeyboardInterrupt):
@@ -169,7 +170,7 @@ class SysrootBuilder:
         if self.options.get('openssl-source'):
             roles |= {'perl', 'gmake'}
         if self.options.get('openssh-source'):
-            roles |= {'autoconf', 'autom4te', 'gm4', 'perl', 'gmake'}
+            roles |= set(OPENSSH_LOCAL_GENERATOR_ROLES) | {'perl', 'gmake'}
         if self.options.get('gettext-source'):
             roles |= {'gmake', 'pkg-config', 'od', 'msgfmt', 'msgmerge', 'xgettext', 'msginit', 'msgconv', 'msgfilter', 'sed'}
         return native_toolset.load_host_prefix(self.options['host-prefix'], required_roles=roles | {'python'},
@@ -484,11 +485,13 @@ class SysrootBuilder:
             if runtime is not None:
                 prefixes += ('EMBER_EXTERNAL_LLVM_RUNTIME=', 'EMBER_LLVM_RESOURCE_DIR=', 'EMBER_LLVM_SOURCE=')
             comparable_new_flags = new_flags
+            openssh_autoconf_added = False
             if 'openssh' in changed and not any(flag.startswith('HOST_AUTOCONF=') for flag in old_flags):
                 autoconf = 'HOST_AUTOCONF=' + self.native.tool('autoconf')
                 selected_autoconf = [flag for flag in new_flags if flag.startswith('HOST_AUTOCONF=')]
                 if selected_autoconf == [autoconf]:
                     comparable_new_flags = [flag for flag in new_flags if flag != autoconf]
+                    openssh_autoconf_added = True
             if ([f for f in old_flags if not f.startswith(prefixes)] !=
                     [f for f in comparable_new_flags if not f.startswith(prefixes)]):
                 return False
@@ -496,6 +499,14 @@ class SysrootBuilder:
                 before[name] = copy.deepcopy(after[name])
             old['flags'] = copy.deepcopy(new['flags'])
             candidate = dict(record, signature=old)
+            if openssh_autoconf_added:
+                previous_tools = candidate['signature']['native_toolset']['tools']
+                selected_tools = new['native_toolset']['tools']
+                for role in OPENSSH_LOCAL_GENERATOR_ROLES:
+                    if role not in previous_tools:
+                        if role not in selected_tools:
+                            return False
+                        previous_tools[role] = copy.deepcopy(selected_tools[role])
             if not self.compatible_context(candidate, path):
                 return False
             def members(archive):
