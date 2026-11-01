@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
 
+import sys
 import unittest
+from pathlib import Path
 from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 from emberbsd_sdk.cpu_capacity import available_cpu_count
 from emberbsd_sdk.errors import SDKError
