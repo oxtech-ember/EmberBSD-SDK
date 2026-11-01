@@ -12,13 +12,16 @@ output directory with an existing parent:
 python3 scripts/prepare-libedit.py \
   --ports /absolute/EmberBSD-Ports \
   --archive /absolute/libedit-20260512-3.1.tar.gz \
+  --patch /absolute/host-prefix/bin/gpatch \
   --output /absolute/prepared-libedit
 python3 scripts/prepare-libedit.py \
   --ports /absolute/EmberBSD-Ports --validate /absolute/prepared-libedit
 ```
 
-Preparation requires Git and `patch` on PATH. Python uses only its standard
-library. The command verifies archive BLAKE2s, SHA512 and size against distinfo.
+Preparation requires Git and Python from the selected source-preparation
+environment. Pass the selected GNU patch executable explicitly with `--patch`;
+the command validates that it is an absolute executable file. Python uses only
+its standard library. The command verifies archive BLAKE2s, SHA512 and size against distinfo.
 It verifies every patch SHA1 with the pkgsrc RCS-line filtering rule. Archive
 extraction accepts only regular files and directories below one source root.
 It applies every patch with `patch -p0 -F0 --posix --no-backup-if-mismatch`, without reverse or
@@ -59,7 +62,7 @@ The OS retains its native libedit ABI and installs `ports.distinfo` as
 selecting the base library. Source preparation does not qualify that ABI or
 prove a target build.
 
-Python callers use `emberbsd_sdk.libedit.prepare_source(ports, archive, output)`
+Python callers use `emberbsd_sdk.libedit.prepare_source(ports, archive, output, patch_tool=...)`
 and `validate_source(root, ports=ports)`. Both return the portable receipt.
 `LIBEDIT_SOURCE_API` is 1. `validate_identity(receipt)` checks the portable
 schema without reading the original host paths.

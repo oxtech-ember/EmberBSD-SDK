@@ -177,7 +177,7 @@ def validate_source(root, *, ports=None, git='git', content=True, ports_source=N
     return record
 
 
-def prepare_source(ports, archive, output):
+def prepare_source(ports, archive, output, *, patch_tool=None):
     """Validate, unpack, patch and publish a new prepared root. Never replace it."""
     require_directory_publication()
     source, metadata, entries, distinfo = _recipe(ports)
@@ -191,8 +191,22 @@ def prepare_source(ports, archive, output):
     output = Path(paths.canonical_existing(output.parent), output.name)
     _require(not os.path.lexists(output), 'libedit output already exists')
     paths.reject_overlap(str(output), source['path'])
-    patch_tool = shutil.which('patch')
-    _require(patch_tool is not None, 'libedit preparation requires patch')
+    if patch_tool is None:
+        patch_tool = shutil.which('patch')
+        _require(patch_tool is not None, 'libedit preparation requires patch')
+    else:
+        try:
+            selected = os.fspath(patch_tool)
+        except TypeError as exc:
+            raise SDKError('libedit patch tool must be an absolute executable path') from exc
+        _require(isinstance(selected, str) and os.path.isabs(selected),
+                 'libedit patch tool must be an absolute executable path')
+        try:
+            patch_tool = paths.canonical_existing(selected)
+            paths.regular_file(patch_tool)
+        except SDKError as exc:
+            raise SDKError(f'invalid libedit patch tool: {exc}') from exc
+        _require(os.access(patch_tool, os.X_OK), 'libedit patch tool is not executable')
     with tempfile.TemporaryDirectory(prefix='.libedit-', dir=output.parent) as temporary:
         temporary = Path(temporary)
         # Extract the verified bytes, not a reopened mutable input archive.

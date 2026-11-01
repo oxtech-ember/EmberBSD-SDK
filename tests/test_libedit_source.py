@@ -28,8 +28,8 @@ class LibeditTests(TemporaryCase):
         subprocess.run(['git', '-C', str(self.ports), 'add', '-f', '.'], check=True, env=git_environment())
         subprocess.run(['git', '-C', str(self.ports), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Fixture'], check=True, env=git_environment())
 
-    def prepare(self):
-        return prepare_source(self.ports, self.archive, self.output)
+    def prepare(self, patch_tool=None):
+        return prepare_source(self.ports, self.archive, self.output, patch_tool=patch_tool)
 
     def test_prepare_validate_and_all_patches(self):
         record = self.prepare()
@@ -117,6 +117,33 @@ class LibeditTests(TemporaryCase):
         self.assertEqual(len(calls), 7)
         for argv in calls:
             self.assertEqual(argv[:8], expected)
+
+    def test_explicit_patch_tool_is_used_for_every_patch(self):
+        from emberbsd_sdk import libedit
+        selected = shutil.which('patch')
+        self.assertTrue(selected and selected.startswith('/'))
+        original = libedit.process.capture
+        calls = []
+        def record(argv, **kwargs):
+            if Path(argv[0]).name == 'patch':
+                calls.append(list(argv))
+            return original(argv, **kwargs)
+        with patch.object(libedit.process, 'capture', side_effect=record):
+            self.prepare(patch_tool=selected)
+        self.assertEqual(len(calls), 7)
+        self.assertTrue(all(argv[0] == selected for argv in calls))
+
+    def test_prepare_cli_accepts_explicit_patch_tool(self):
+        import sys
+        selected = shutil.which('patch')
+        result = subprocess.run([
+            sys.executable, str(SDK_SOURCE / 'scripts/prepare-libedit.py'),
+            '--ports', str(self.ports), '--archive', str(self.archive),
+            '--patch', selected, '--output', str(self.output)],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(validate_source(self.output, ports=self.ports)['format'],
+                         'emberbsd-libedit-source')
 
     def test_patch_backup_and_reject_files_are_still_refused(self):
         from emberbsd_sdk import libedit
