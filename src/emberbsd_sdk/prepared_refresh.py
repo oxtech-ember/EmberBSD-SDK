@@ -64,9 +64,17 @@ def plan_native(os_root, objects, names):
 
 
 def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
-         extra_headers=(), extra_linked=()):
+         extra_headers=(), extra_linked=(), allowed_source_roots=()):
     root, obj = Path(os_root), Path(objects)
     try:
+        root_resolved, obj_resolved = root.resolve(), obj.resolve()
+        source_roots = []
+        for source in allowed_source_roots:
+            source = Path(source)
+            if not source.is_absolute():
+                raise ValueError('nonabsolute prepared source root')
+            source_roots.append(source.resolve())
+        source_roots = tuple(dict.fromkeys(source_roots))
         contract = json.loads((root / CONTRACT).read_text())
         required = {'version', 'sources', 'header_independent_object_patterns', 'header_independent_archive_patterns'}
         if set(contract) not in (required, required | {'nested_object_owners'}) or contract['version'] != 1:
@@ -99,11 +107,12 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
                 continue
             source, built = root / owner, obj / owner
             nested_path = obj / subdir
-            if (not source.resolve().is_relative_to(root.resolve()) or
+            built_resolved = built.resolve()
+            if (not source.resolve().is_relative_to(root_resolved) or
                     not (source / 'Makefile').is_file() or
-                    not built.resolve().is_relative_to(obj.resolve()) or
+                    not built_resolved.is_relative_to(obj_resolved) or
                     built.is_symlink() or (built.exists() and not built.is_dir()) or
-                    not nested_path.resolve().is_relative_to(built.resolve()) or
+                    not nested_path.resolve().is_relative_to(built_resolved) or
                     (nested_path.is_symlink() or
                      (nested_path.exists() and not nested_path.is_dir()))):
                 raise ValueError('invalid nested object output: ' + subdir)
@@ -122,16 +131,21 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
                 alias = base / name
                 if alias.is_symlink():
                     resolved = alias.resolve()
-                    if not (resolved.is_relative_to(obj.resolve()) or resolved.is_relative_to(root.resolve())):
+                    if not (resolved.is_relative_to(obj_resolved) or
+                            resolved.is_relative_to(root_resolved) or
+                            any(resolved.is_relative_to(source) for source in source_roots)):
                         raise ValueError('unverified directory alias ' + str(alias))
             for name in files:
                 path = base / name
                 rel = path.relative_to(obj).as_posix()
                 if path.is_symlink():
                     resolved = path.resolve()
-                    if not (resolved.is_relative_to(obj.resolve()) or resolved.is_relative_to(root.resolve())):
+                    in_object = resolved.is_relative_to(obj_resolved)
+                    in_os_source = resolved.is_relative_to(root_resolved)
+                    in_prepared_source = any(resolved.is_relative_to(source) for source in source_roots)
+                    if not (in_object or in_os_source or in_prepared_source):
                         raise ValueError('unverified file alias ' + str(path))
-                    if resolved.is_relative_to(root.resolve()) and resolved.is_file():
+                    if not in_object and resolved.is_file():
                         with resolved.open('rb') as stream:
                             magic = stream.read(8)
                         if magic.startswith(b'\x7fELF') or magic in (b'!<arch>\n', b'!<thin>\n'):

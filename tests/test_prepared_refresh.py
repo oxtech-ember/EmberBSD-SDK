@@ -122,6 +122,54 @@ class PreparedRefreshTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'unverified directory alias'):
             prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [])
 
+    def test_selected_prepared_source_directory_alias_is_allowed_without_following(self):
+        selected = Path(self.temp.name) / 'prepared-libcbor'
+        (selected / 'generated').mkdir(parents=True)
+        (selected / 'generated/ignored.o').write_bytes(b'object')
+        (self.obj / 'other/consumer/source-view').symlink_to(selected, target_is_directory=True)
+        result = prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [],
+                                      allowed_source_roots=[selected])
+        self.assertIn('external/cbor', result)
+
+    def test_selected_prepared_source_header_alias_is_allowed(self):
+        selected = Path(self.temp.name) / 'prepared-libcbor'
+        (selected / 'include').mkdir(parents=True)
+        header = selected / 'include/cbor.h'
+        header.write_text('/* selected prepared header */\n')
+        (self.obj / 'other/consumer/source-header.h').symlink_to(header)
+        result = prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [],
+                                      allowed_source_roots=[selected])
+        self.assertIn('external/cbor', result)
+
+    def test_arbitrary_external_file_alias_is_still_refused(self):
+        outside = Path(self.temp.name) / 'unselected/include'
+        outside.mkdir(parents=True)
+        header = outside / 'cbor.h'
+        header.write_text('/* not selected */\n')
+        (self.obj / 'other/consumer/source-header.h').symlink_to(header)
+        with self.assertRaisesRegex(SDKError, 'unverified file alias'):
+            prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [])
+
+    def test_selected_prepared_source_binary_alias_is_refused(self):
+        selected = Path(self.temp.name) / 'prepared-libcbor'
+        selected.mkdir()
+        binary = selected / 'libcbor.so'
+        binary.write_bytes(b'\x7fELFselected binary')
+        (self.obj / 'other/consumer/libcbor.so').symlink_to(binary)
+        with self.assertRaisesRegex(SDKError, 'binary alias outside object tree'):
+            prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [],
+                                  allowed_source_roots=[selected])
+
+    def test_selected_prepared_source_dependency_alias_is_refused(self):
+        selected = Path(self.temp.name) / 'prepared-libcbor'
+        selected.mkdir()
+        depfile = selected / 'consumer.d'
+        depfile.write_text('consumer.o: /old/usr/include/cbor.h\n')
+        (self.obj / 'other/consumer/consumer.d').symlink_to(depfile)
+        with self.assertRaisesRegex(SDKError, 'symlink dependency file'):
+            prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [],
+                                  allowed_source_roots=[selected])
+
     def test_selected_nested_symlink_root_is_refused(self):
         nested = self.obj / 'external/cbor/generated'
         outside = Path(self.temp.name) / 'outside'
@@ -455,7 +503,8 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(fake.refresh_dirs, ['lib/libcxx'])
         self.assertEqual(plan.call_args.args[2], {'openssl'})
         self.assertEqual(plan.call_args.kwargs,
-                         {'extra_headers': ['usr/include/c++/v1'],
+                         {'allowed_source_roots': ['/new/openssl', '/old/openssl'],
+                          'extra_headers': ['usr/include/c++/v1'],
                           'extra_linked': ['libc++.so.1']})
         for flag in ('EMBER_HOST_ABI_CFLAGS=-mabi=other', 'UNRELATED_FLAG=yes'):
             with self.subTest(flag=flag):

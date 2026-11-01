@@ -274,6 +274,9 @@ class RuntimeRefreshTests(unittest.TestCase):
         self.assertEqual(checks[0]['flags'], new['flags'])
         self.assertEqual(checks[0]['native_toolset']['tools'], new['native_toolset']['tools'])
         plan.assert_called_once()
+        source_roots = set(plan.call_args.kwargs['allowed_source_roots'])
+        self.assertTrue({'/prepared/openssl-old', '/tmp/openssl-current',
+                         '/prepared/openldap-old', '/tmp/openldap-current'} <= source_roots)
 
         for label, mutate in (
                 ('compiler', lambda candidate: candidate.update(compiler={'family': 'clang', 'version': '24'})),

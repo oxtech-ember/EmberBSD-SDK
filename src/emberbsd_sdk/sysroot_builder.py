@@ -643,8 +643,18 @@ class SysrootBuilder:
                 return result.stdout.decode('utf-8', 'strict').splitlines()
             self.refresh_nested_outputs = []
             extra = dict(extra_headers=runtime['headers'], extra_linked=runtime['linked']) if runtime is not None else {}
+            source_roots = set()
+            for name in before.keys() | after.keys():
+                if name not in common_packages:
+                    continue
+                prefix = 'EMBER_' + name.upper().replace('-', '_') + '_SOURCE='
+                for flags in (old_flags, new_flags):
+                    bindings = [flag[len(prefix):] for flag in flags if flag.startswith(prefix)]
+                    if len(bindings) == 1 and os.path.isabs(bindings[0]):
+                        source_roots.add(bindings[0])
             self.refresh_dirs = prepared_refresh.plan(self.paths['os'], path, changed, members,
-                                                      self.refresh_nested_outputs, **extra)
+                                                      self.refresh_nested_outputs,
+                                                      allowed_source_roots=sorted(source_roots), **extra)
             return bool(self.refresh_dirs) or runtime is not None or certified_native_abi_refresh
         except (KeyError, TypeError, AttributeError):
             self.native_abi_refresh = previous_native_abi_refresh
