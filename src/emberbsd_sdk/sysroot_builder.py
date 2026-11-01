@@ -1600,6 +1600,12 @@ class SysrootBuilder:
                 raise SDKError('object context changed after preflight')
         # Hold the existing object-tree lease throughout cleanup and context update.
         native_dirs = getattr(self, 'native_refresh_dirs', [])
+        if getattr(self, 'refresh_dirs', []) or native_dirs:
+            # TOOLDIR has one nbmake wrapper, and each build.sh invocation
+            # replaces it with the current phase's -O/-T/-D and flags. Refresh
+            # queries run before the next tools/libs build, so select this
+            # phase's wrapper explicitly without rebuilding tools or libraries.
+            self.dispatch(self.native_makewrapper_command())
         pending_written = False
         for directory in getattr(self, 'refresh_dirs', []):
             wrapper = os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine'])
@@ -1644,6 +1650,14 @@ class SysrootBuilder:
                           signature=self.context_signature(path), sources=self.sources)
             self.mkdirs(path, os.path.join(self.paths['sdk'], 'obj'))
             jsonio.write_json(os.path.join(path, self.CONTEXT), record, exclusive=self.contexts[name] is None)
+
+    def native_makewrapper_command(self):
+        operations = list(self.os_build_operations)
+        build = list(self.build_command)
+        if (not operations or len(build) <= len(operations) or
+                build[-len(operations):] != operations):
+            raise SDKError('cannot select the current OS make wrapper for source refresh')
+        return build[:-len(operations)] + ['makewrapper']
 
     def interrupted(self):
         if self.interrupted_signal:

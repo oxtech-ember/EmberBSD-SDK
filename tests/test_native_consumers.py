@@ -113,6 +113,14 @@ class NativeConsumerTests(TemporaryCase):
         self.assertIn('EMBER_HOST_COMPILER_FAMILY=clang', flags)
         self.assertTrue(all(word.startswith(('HOST_', 'EMBER_HOST_ABI_', 'EMBER_HOST_COMPILER_FAMILY='))
                             for word in native_host_flags(builder.native_selection)))
+        release = OSReleaseBuilder(self.options() | {'target': 'aarch64'})
+        release.flags, release.release_commands = flags, commands
+        release.paths = {'os': paths['os']}
+        wrapper = release.native_makewrapper_command()
+        first = commands[0]
+        boundary = first.index('-R') + 2 + 2 * len(flags)
+        self.assertEqual(wrapper, first[:boundary] + ['makewrapper'])
+        self.assertEqual(wrapper[-1], 'makewrapper')
 
     def test_saved_native_binding_uses_prefix_and_os_route(self):
         builder = self.select()

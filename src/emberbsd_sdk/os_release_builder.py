@@ -494,6 +494,20 @@ class OSReleaseBuilder(SysrootBuilder):
         self.signature['flags'] = self.flags
         self.signature['release_profile'] = self.options['target']
 
+    def native_makewrapper_command(self):
+        command = self.release_commands[0]
+        if len(command) < 3 or command[1] != os.path.join(self.paths['os'], 'build.sh'):
+            raise SDKError('cannot derive native makewrapper command from the OS release producer')
+        try:
+            position = command.index('-R') + 2
+        except ValueError as exc:
+            raise SDKError('OS release producer is missing its release destination') from exc
+        for flag in self.flags:
+            if command[position:position + 2] != ['-V', flag]:
+                raise SDKError('OS release producer flags changed before native refresh')
+            position += 2
+        return command[:position] + ['makewrapper']
+
     def pkgsrc_export_command(self, action, *args):
         patch = native_toolset.load_host_prefix(self.native.bundle_root, required_roles={'gpatch'}).tool('gpatch')
         return [self.paths['python'], '-B', os.path.join(self.paths['ports'], self.PKGSRC_EXPORT_STAGE),

@@ -356,11 +356,16 @@ class TransitionTests(unittest.TestCase):
                    'signature': {}, 'sources': {}}
             selected = {'native_sources': {'demo': 'new'}}
             calls = []
+            wrapper = {'ready': False}
+            fail_slc = {'enabled': True}
             def dispatch(command):
                 calls.append(command)
+                if command[-1:] == ['makewrapper']:
+                    wrapper['ready'] = True
                 if command[-2:] == ['dependall', 'install']:
                     name = Path(command[command.index('-C') + 1]).name
-                    if name == 'slc':
+                    if name == 'slc' and fail_slc['enabled']:
+                        fail_slc['enabled'] = False
                         raise SDKError('install failed')
                     (root/'tools/installed').write_text('new')
             fake = SimpleNamespace(paths={'objects': str(root/'obj'), 'tools': str(root/'tools'),
@@ -368,16 +373,27 @@ class TransitionTests(unittest.TestCase):
                          'native-routing': str(root/'tools/routing'), 'sdk': str(root)},
                          contexts={'objects': old, 'tools': old}, native_refresh_dirs=dirs, native_refresh_sources=['demo'],
                          target={'machine': 'evbarm'}, flags=[], environment={},
+                         build_command=['/bin/sh', str(root/'os/build.sh'), '-O', str(root/'obj'),
+                                        '-T', str(root/'tools'), '-D', str(root/'dest'),
+                                        '-V', 'FLAG=current', 'tools', 'libs'],
+                         os_build_operations=['tools', 'libs'],
                          inspect_context=lambda p: old, dispatch=dispatch,
                          context_signature=lambda p: selected, sources={},
                          options={'jobs': '4'}, CONTEXT='.prebuild-sdk-context.json',
                          QUARANTINE='.quarantine')
+            fake.native_makewrapper_command = lambda: SysrootBuilder.native_makewrapper_command(fake)
             def capture(command, **kwargs):
+                self.assertTrue(wrapper['ready'], 'current wrapper must precede refresh queries')
                 name = Path(command[command.index('-C') + 1]).name
                 return SimpleNamespace(stdout=(str(root/'obj/tools'/name)+'\n').encode())
             with patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=capture):
                 with self.assertRaisesRegex(SDKError, 'install failed'):
                     SysrootBuilder.prepare_contexts(fake)
+            self.assertEqual(calls[0], ['/bin/sh', str(root/'os/build.sh'), '-O', str(root/'obj'),
+                                        '-T', str(root/'tools'), '-D', str(root/'dest'),
+                                        '-V', 'FLAG=current', 'makewrapper'])
+            self.assertNotIn('tools', calls[0])
+            self.assertNotIn('libs', calls[0])
             self.assertEqual((root/'tools/installed').read_text(), 'new')
             pending = json.loads((root/'tools/.prebuild-sdk-context.json').read_text())
             self.assertEqual(pending['signature'], {})
@@ -400,10 +416,14 @@ class TransitionTests(unittest.TestCase):
             selected = {'native_sources': {'demo': 'new'}}
             fake.contexts = {'objects': old, 'tools': pending}
             fake.inspect_context = lambda p: old if p == str(root/'obj') else pending
-            fake.dispatch = lambda command: calls.append(command)
+            wrapper['ready'] = False
+            fake.dispatch = dispatch
             fake.mkdirs = lambda *args: None
             with patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=capture):
                 SysrootBuilder.prepare_contexts(fake)
+            self.assertEqual(calls[-5], ['/bin/sh', str(root/'os/build.sh'), '-O', str(root/'obj'),
+                                         '-T', str(root/'tools'), '-D', str(root/'dest'),
+                                         '-V', 'FLAG=current', 'makewrapper'])
             final = json.loads((root/'tools/.prebuild-sdk-context.json').read_text())
             self.assertNotIn('pending_native', final)
             self.assertEqual(final['signature'], selected)
@@ -427,8 +447,12 @@ class TransitionTests(unittest.TestCase):
                          contexts={'objects': old, 'tools': None}, refresh_dirs=['producer'],
                          refresh_nested_outputs=[str(root/'obj/producer/nested')],
                          target={'machine': 'evbarm'}, flags=[], environment={},
+                         build_command=['/bin/sh', str(root/'os/build.sh'), '-O', str(root/'obj'),
+                                        '-T', str(root/'tools'), '-D', str(root/'dest'), 'libs'],
+                         os_build_operations=['libs'],
                          inspect_context=lambda p: old if p == str(root/'obj') else None,
                          dispatch=lambda command: None)
+            fake.native_makewrapper_command = lambda: SysrootBuilder.native_makewrapper_command(fake)
             with patch('emberbsd_sdk.sysroot_builder.process.capture',
                        return_value=SimpleNamespace(stdout=(str(root/'obj/producer')+'\n').encode())):
                 with self.assertRaisesRegex(SDKError, 'nested object output remains'):
@@ -447,6 +471,8 @@ class TransitionTests(unittest.TestCase):
             context.write_text('old context')
             old = {'signature': {}}
             def fail_clean(command):
+                if command[-1:] == ['makewrapper']:
+                    return
                 self.assertIn('MKCLEANSRC=no', command)
                 raise SDKError('clean failed')
             fake = SimpleNamespace(paths={'objects': str(root/'obj'), 'tools': str(root/'tools'),
@@ -454,8 +480,12 @@ class TransitionTests(unittest.TestCase):
                          'native-routing': str(root/'tools/routing'), 'sdk': str(root)},
                          contexts={'objects': old, 'tools': None}, refresh_dirs=['producer'],
                          target={'machine': 'evbarm'}, flags=[], environment={},
+                         build_command=['/bin/sh', str(root/'os/build.sh'), '-O', str(root/'obj'),
+                                        '-T', str(root/'tools'), '-D', str(root/'dest'), 'libs'],
+                         os_build_operations=['libs'],
                          inspect_context=lambda p: old if p == str(root/'obj') else None,
                          dispatch=fail_clean)
+            fake.native_makewrapper_command = lambda: SysrootBuilder.native_makewrapper_command(fake)
             with patch('emberbsd_sdk.sysroot_builder.process.capture',
                        return_value=SimpleNamespace(stdout=(str(root/'obj/producer')+'\n').encode())):
                 with self.assertRaisesRegex(SDKError, 'clean failed'):
