@@ -281,7 +281,16 @@ class SessionInspector:
         # vanished process must not turn an owned fork into false emptiness.
         uncertain = bool(pending)
         self.known = observed
-        self.uncertainty = failures[-1] if uncertain and failures else None
+        if uncertain:
+            details = [failures[-1]] if failures else []
+            sample = sorted(pending.items())[:8]
+            rows = ', '.join(
+                f'pid={pid} ppid={ppid} state={state.decode("ascii")}'
+                for pid, (ppid, state) in sample)
+            details.append(f'unclassified PID rows ({len(pending)}), showing {len(sample)}: {rows}')
+            self.uncertainty = '; '.join(details)
+        else:
+            self.uncertainty = None
         return members, uncertain
 
     def members(self, sid):

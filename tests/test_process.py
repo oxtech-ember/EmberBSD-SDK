@@ -92,6 +92,29 @@ while not Path({str(child)!r}).is_file(): time.sleep(.01)
         writer = self.root / 'writer'; before = writer.read_bytes(); time.sleep(.15)
         self.assertEqual(writer.read_bytes(), before)
 
+    def test_incomplete_darwin_snapshot_reports_bounded_pending_rows(self):
+        inspector = process.SessionInspector.__new__(process.SessionInspector)
+        inspector.empty_snapshot_timeout = .1
+        inspector.uid = os.geteuid()
+        inspector.controller_sid = 500
+        inspector.known = {}
+
+        class Identity:
+            def now(self): return 100
+            def birth(self, pid): return 50
+
+        inspector.identity = Identity()
+        inspector._rows = lambda: {pid: (1, inspector.uid, b'S') for pid in range(321, 331)}
+        with patch.object(process.os, 'getsid', side_effect=ProcessLookupError), \
+                patch.object(process.time, 'monotonic', side_effect=(0.0, 1.0)), \
+                self.assertRaisesRegex(SDKError, 'complete empty snapshot') as raised:
+            inspector.members(600)
+        message = str(raised.exception)
+        self.assertIn('unclassified PID rows (10), showing 8', message)
+        self.assertIn('pid=321 ppid=1 state=S', message)
+        self.assertIn('pid=328 ppid=1 state=S', message)
+        self.assertNotIn('pid=329', message)
+
     @skipUnless(sys.platform in ('darwin', 'linux'), 'qualified session backend')
     def test_foreign_uid_controller_session_peer_is_not_a_build(self):
         # A CI runner, sudo or systemd process of another user may share the
