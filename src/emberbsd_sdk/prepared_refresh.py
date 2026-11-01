@@ -93,6 +93,23 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
             dirs.update(relative(p) for p in entry['producer_dirs'] + entry['consumer_dirs'])
             headers.update(relative(p) for p in entry['header_prefixes'])
             linked.update(relative(p) for p in entry['linked_names'])
+        nested_prune = {}
+        for subdir, owner in nested.items():
+            if owner not in dirs:
+                continue
+            source, built = root / owner, obj / owner
+            nested_path = obj / subdir
+            if (not source.resolve().is_relative_to(root.resolve()) or
+                    not (source / 'Makefile').is_file() or
+                    not built.resolve().is_relative_to(obj.resolve()) or
+                    built.is_symlink() or (built.exists() and not built.is_dir()) or
+                    not nested_path.resolve().is_relative_to(built.resolve()) or
+                    (nested_path.is_symlink() or
+                     (nested_path.exists() and not nested_path.is_dir()))):
+                raise ValueError('invalid nested object output: ' + subdir)
+            nested_prune[nested_path] = subdir
+            if nested_outputs is not None and str(nested_path) not in nested_outputs:
+                nested_outputs.append(str(nested_path))
         def walk_error(error):
             raise error
         # A source with no installed headers or linked libraries affects only
@@ -100,6 +117,7 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
         walk = os.walk(obj, followlinks=False, onerror=walk_error) if headers or linked else ()
         for directory, subdirs, files in walk:
             base = Path(directory)
+            subdirs[:] = [name for name in subdirs if base / name not in nested_prune]
             for name in subdirs:
                 alias = base / name
                 if alias.is_symlink():
@@ -167,7 +185,7 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
                         not nested_path.resolve().is_relative_to(built.resolve()) or
                         not (source / 'Makefile').is_file()):
                     raise ValueError('invalid nested object owner')
-                if nested_outputs is not None:
+                if nested_outputs is not None and str(nested_path) not in nested_outputs:
                     nested_outputs.append(str(nested_path))
                 name = owner
             if built.exists():

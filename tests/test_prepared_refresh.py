@@ -96,6 +96,43 @@ class PreparedRefreshTests(unittest.TestCase):
         with self.assertRaises(SDKError):
             prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [])
 
+    def test_selected_nested_owner_prunes_old_alias_contents(self):
+        nested = self.obj / 'external/cbor/generated'
+        nested.mkdir(parents=True)
+        outside = Path(self.temp.name) / 'outside'
+        outside.mkdir()
+        (nested / 'source-view').symlink_to(outside, target_is_directory=True)
+        self.contract['nested_object_owners'] = {
+            'external/cbor/generated': 'external/cbor'}
+        self.write_contract()
+        outputs = []
+        dirs = prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [], outputs)
+        self.assertIn('external/cbor', dirs)
+        self.assertEqual(outputs, [str(nested)])
+
+    def test_unselected_nested_alias_is_still_refused(self):
+        nested = self.obj / 'other/consumer/generated'
+        nested.mkdir(parents=True)
+        outside = Path(self.temp.name) / 'outside'
+        outside.mkdir()
+        (nested / 'source-view').symlink_to(outside, target_is_directory=True)
+        self.contract['nested_object_owners'] = {
+            'other/consumer/generated': 'other/consumer'}
+        self.write_contract()
+        with self.assertRaisesRegex(SDKError, 'unverified directory alias'):
+            prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [])
+
+    def test_selected_nested_symlink_root_is_refused(self):
+        nested = self.obj / 'external/cbor/generated'
+        outside = Path(self.temp.name) / 'outside'
+        outside.mkdir()
+        nested.symlink_to(outside, target_is_directory=True)
+        self.contract['nested_object_owners'] = {
+            'external/cbor/generated': 'external/cbor'}
+        self.write_contract()
+        with self.assertRaisesRegex(SDKError, 'invalid nested object output'):
+            prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [], [])
+
     def test_source_without_headers_or_libraries_keeps_unrelated_unknown_objects(self):
         self.contract['sources']['EMBER_WPA_SOURCE'] = {
             'producer_dirs': ['external/cbor'], 'consumer_dirs': [],
