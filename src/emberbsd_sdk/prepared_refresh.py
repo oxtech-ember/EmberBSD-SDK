@@ -63,7 +63,8 @@ def plan_native(os_root, objects, names):
     return sorted(result)
 
 
-def plan(os_root, objects, names, archive_members=None, nested_outputs=None):
+def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
+         extra_headers=(), extra_linked=()):
     root, obj = Path(os_root), Path(objects)
     try:
         contract = json.loads((root / CONTRACT).read_text())
@@ -81,7 +82,9 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None):
                 raise ValueError('invalid nested object owner')
         patterns = [relative(p, pattern=True) for p in contract['header_independent_object_patterns']]
         archive_patterns = [relative(p, pattern=True) for p in contract['header_independent_archive_patterns']]
-        dirs, headers, linked = set(), set(), set()
+        dirs = set()
+        headers = {relative(p) for p in extra_headers}
+        linked = {relative(p) for p in extra_linked}
         for name in names:
             entry = sources['EMBER_' + name.upper().replace('-', '_') + '_SOURCE']
             if set(entry) not in ({'producer_dirs', 'consumer_dirs', 'header_prefixes', 'linked_names'},

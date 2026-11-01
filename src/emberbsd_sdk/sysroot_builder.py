@@ -16,7 +16,7 @@ import signal
 import stat
 import sysconfig
 import time
-from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, prepared_sources, prepared_refresh, process, provenance, sourceprep, workspace
+from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, prepared_sources, prepared_refresh, process, provenance, runtime_refresh, sourceprep, workspace
 from .verification_receipts import RunReceipts
 from .errors import CommandError, SDKError, ProcessOwnershipError
 from .native_os_routing import gettext_target_host_flags, gnu_target_host_flags, native_host_flags, native_path, read_native_os_contract
@@ -434,7 +434,7 @@ class SysrootBuilder:
         return record
 
     def plan_prepared_refresh(self, record, path):
-        """Allow only OS-declared prepared-source changes with scoped cleaning."""
+        """Refresh declared source consumers and compatible C++ runtime users."""
         try:
             old = copy.deepcopy(record['signature'])
             new = copy.deepcopy(self.context_signature(path))
@@ -443,9 +443,17 @@ class SysrootBuilder:
                 return False
             changed = {name for name in after if name not in before or
                        before[name].get('tree_sha256') != after[name].get('tree_sha256')}
-            if not changed:
+            runtime = None
+            if any(old.get(key) != new.get(key) for key in ('runtime', 'runtime_prefix', 'llvm_source')):
+                runtime = runtime_refresh.cpp_update(old, new)
+                if runtime is not None:
+                    for key in ('runtime', 'runtime_prefix', 'llvm_source'):
+                        old[key] = copy.deepcopy(new[key])
+            if not changed and runtime is None:
                 return False
             prefixes = tuple('EMBER_' + name.upper().replace('-', '_') + '_SOURCE=' for name in changed)
+            if runtime is not None:
+                prefixes += ('EMBER_EXTERNAL_LLVM_RUNTIME=', 'EMBER_LLVM_RESOURCE_DIR=')
             old_flags = self.reuse_signature(copy.deepcopy(old))['flags']
             new_flags = self.reuse_signature(copy.deepcopy(new))['flags']
             if [f for f in old_flags if not f.startswith(prefixes)] != [f for f in new_flags if not f.startswith(prefixes)]:
@@ -461,8 +469,10 @@ class SysrootBuilder:
                                           't', str(archive)], env=self.environment)
                 return result.stdout.decode('utf-8', 'strict').splitlines()
             self.refresh_nested_outputs = []
-            self.refresh_dirs = prepared_refresh.plan(self.paths['os'], path, changed, members, self.refresh_nested_outputs)
-            return bool(self.refresh_dirs)
+            extra = dict(extra_headers=runtime['headers'], extra_linked=runtime['linked']) if runtime is not None else {}
+            self.refresh_dirs = prepared_refresh.plan(self.paths['os'], path, changed, members,
+                                                      self.refresh_nested_outputs, **extra)
+            return bool(self.refresh_dirs) or runtime is not None
         except (KeyError, TypeError, AttributeError):
             return False
 

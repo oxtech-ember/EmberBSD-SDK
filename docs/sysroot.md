@@ -155,6 +155,16 @@ clear an incompatible context to make a build pass. When the selected OS provide
 contract, the SDK can selectively clean the affected objects under the existing
 object-tree lock before recording the new source context. Other input changes
 remain subject to the normal compatibility check.
+
+For a Clang runtime update confined to C++ headers and the shared libc++ and
+libc++abi libraries, the same planner refreshes their header and link consumers.
+The LLVM release, target C ABI, artifact names, symlinks, builtins, unwinder and
+static runtime archives must stay unchanged. A relocated runtime prefix also
+refreshes these consumers so their dependency files use the new paths. Source
+and runtime changes share one planning pass; unrelated C objects and native
+tools remain available. Runtime differences are read from existing manifests,
+without hashing the installed trees again.
+
 The context includes the selected native prefix, tool paths, host and target, and flags.
 SDK controller module updates do not by themselves invalidate objects: the
 selected Python and API, computed build flags, compiler, runtime, and native ABI
