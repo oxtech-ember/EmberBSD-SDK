@@ -636,6 +636,20 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
             with self.assertRaisesRegex(SDKError, '--llvm-bootstrap-stage is required'):
                 builder_type(options).preflight()
 
+    def test_runtime_path_discovery_uses_identity_then_keeps_full_validation(self):
+        builder, _ = self.builder()
+        from emberbsd_sdk import llvm_runtime
+        with patch.object(llvm_runtime, 'validate_stage', wraps=llvm_runtime.validate_stage) as stage_check, \
+                patch.object(llvm_runtime, 'validate_bootstrap_pair',
+                             wraps=llvm_runtime.validate_bootstrap_pair) as pair_check:
+            builder.preflight()
+        # One check validates the selected stage; the other is the pair check's bootstrap walk.
+        self.assertEqual(stage_check.call_count, 2)
+        self.assertEqual(pair_check.call_count, 1)
+        self.assertEqual(builder.paths['llvm-resource'],
+                         str(Path(builder.options['llvm-runtime-stage']) /
+                             'usr/pkg/llvm/lib/clang/23'))
+
     def test_resource_location_comes_from_measured_builtins(self):
         stage = str(self.root / 'stage')
         selected = runtime_paths(stage, self.manifest())

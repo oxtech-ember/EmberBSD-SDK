@@ -1391,12 +1391,17 @@ class SysrootBuilder:
             if self.llvm_phase != 'headers':
                 from . import llvm_runtime
                 stage = self.paths['llvm-runtime-stage']
-                record = llvm_runtime.validate_stage(stage, target=self.options['target'],
-                    required_components=('builtins', 'libunwind-static'), content=False)
+                record = llvm_runtime.validate_identity(
+                    jsonio.read_json(os.path.join(stage, llvm_runtime.MANIFEST)),
+                    target=self.options['target'],
+                    required_components=('builtins', 'libunwind-static'))
                 self.paths.update(runtime_paths(stage, record))
                 if self.llvm_phase == 'final':
-                    boot = llvm_runtime.validate_bootstrap_pair(self.paths['llvm-bootstrap-stage'], record,
-                                                                target=self.options['target'], content=False)
+                    bootstrap_stage = self.paths['llvm-bootstrap-stage']
+                    boot = llvm_runtime.validate_identity(
+                        jsonio.read_json(os.path.join(bootstrap_stage, llvm_runtime.MANIFEST)),
+                        target=self.options['target'],
+                        required_components=('builtins', 'libunwind-static'))
                     self.paths['llvm-libc-unwind'] = runtime_paths(self.paths['llvm-bootstrap-stage'], boot)['llvm-unwind']
                 prefix = self.paths['runtime-prefix']
                 self.runtime_command = producer + ['verify', '--stage', stage, '--target', self.options['target'],
