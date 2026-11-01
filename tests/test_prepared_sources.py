@@ -265,7 +265,7 @@ class PreparedSourceTests(TemporaryCase):
         builder = self.builder(('byacc',))
         import hashlib
         contract = self.os / 'contract'
-        contract.write_text('EmberBSD-native-tools 1\ncmp cmp -\nreadlink readlink -\nmake make MAKE\nsh sh HOST_SH\nyacc yacc HOST_YACC\ncp cp HOST_MV_CP\nrm rm HOST_MV_RM\n')
+        contract.write_text('EmberBSD-native-tools 2\ncmp cmp -\nreadlink readlink -\nmake make MAKE\nsh sh HOST_SH\nyacc yacc HOST_YACC\ncp cp HOST_MV_CP\nrm rm HOST_MV_RM\n')
         builder.native_contract = str(contract)
         builder.native_contract_sha256 = hashlib.sha256(contract.read_bytes()).hexdigest()
         with patch('emberbsd_sdk.prepared_sources.process.capture', side_effect=self.fake_make) as run:

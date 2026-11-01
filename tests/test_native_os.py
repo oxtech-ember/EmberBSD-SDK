@@ -54,7 +54,7 @@ class NativeOSRunnerTests(TemporaryCase):
 
     def test_old_contract_cannot_silently_drop_native_abi_flags(self):
         self.contract.write_bytes(CONTRACT.replace(b'tools 2', b'tools 1'))
-        with self.assertRaisesRegex(SDKError, 'lacks separate host ABI'):
+        with self.assertRaisesRegex(SDKError, 'unsupported OS native-tool contract'):
             self.run_os(self.native.tool('cpp'), capture=True)
 
     def test_environment_clears_target_flags_and_preserves_native_host_binding(self):

@@ -19,34 +19,6 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
         self.assertNotIn('identity', result['common_sources']['gettext'])
         self.assertEqual(result['flags'], [])
 
-    def test_native_abi_transition_uses_release_command_without_changing_plan(self):
-        import copy
-        selection = {'native_selection': {
-            'format': 'emberbsd-host-prefix', 'version': 2,
-            'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
-            'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin'},
-            'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}}
-        commands = self.commands('aarch64', False, **selection)
-        original = [list(command) for command in commands]
-        builder = object.__new__(OSReleaseBuilder)
-        builder.release_commands = commands
-        builder.receipt = {'plan': [None, *[list(command) for command in commands]]}
-        plan = copy.deepcopy(builder.receipt['plan'])
-
-        transition = builder.native_tools_transition_command()
-
-        target = original[0].index('tools')
-        expected = original[0][:target]
-        expected.remove('-u')
-        expected += ['-V', 'MKCLEANSRC=no', 'tools']
-        self.assertEqual(transition, expected)
-        self.assertEqual(transition[transition.index('-D') + 1], '/sdk/destination/dest')
-        self.assertEqual(transition[transition.index('-R') + 1], '/sdk/destination/release')
-        self.assertIn('EMBER_HOST_ABI_CFLAGS=', transition)
-        self.assertEqual(commands, original)
-        self.assertEqual(builder.receipt['plan'], plan)
-
-
     def test_optional_rcs_source_reaches_release_and_set_checks(self):
         paths = {name: '/sdk/' + name for name in (
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',

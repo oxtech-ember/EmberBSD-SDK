@@ -16,8 +16,7 @@ def _contract(source):
     paths.real_directory(source)
     contract = os.path.join(source, 'tools/native-tools/contract')
     digest = inventory.sha256_file(contract)
-    data, _, roles = native_os_routing.read_native_os_contract(contract, sha256=digest)
-    native_os_routing.require_native_abi_contract(data)
+    _, _, roles = native_os_routing.read_native_os_contract(contract, sha256=digest)
     return source, contract, digest, roles
 
 

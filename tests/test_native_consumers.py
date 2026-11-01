@@ -56,11 +56,11 @@ class NativeConsumerTests(TemporaryCase):
             SysrootBuilder({'os': str(self.os)}).select_native_toolset()
         self.assertEqual(self.fixture.queries, [])
 
-    def test_sysroot_builder_rejects_contract_without_host_abi_support(self):
+    def test_sysroot_builder_rejects_v1_contract(self):
         contract = self.os / 'tools/native-tools/contract'
         contract.write_text(CONTRACT.replace('tools 2', 'tools 1'))
         builder = SysrootBuilder(self.options())
-        with self.assertRaisesRegex(SDKError, 'lacks separate host ABI'):
+        with self.assertRaisesRegex(SDKError, 'unsupported OS native-tool contract'):
             builder.load_native_toolset()
 
     def test_alias_cannot_override_selected_role(self):
@@ -135,6 +135,17 @@ class NativeConsumerTests(TemporaryCase):
         mixed['flags'].append('HOST_CPPFLAGS=-Dconflicting-legacy-binding')
         with self.assertRaisesRegex(SDKError, 'flags differ'):
             validate_native_binding(mixed, paths)
+        legacy = copy.deepcopy(signature)
+        legacy_flags = []
+        for flag in legacy['flags']:
+            if flag.startswith('EMBER_HOST_ABI_'):
+                name, value = flag.split('=', 1)
+                legacy_flags.append('HOST_' + name[len('EMBER_HOST_ABI_'):] + '=' + value)
+            else:
+                legacy_flags.append(flag)
+        legacy['flags'] = legacy_flags
+        with self.assertRaisesRegex(SDKError, 'flags differ'):
+            validate_native_binding(legacy, paths)
 
     def test_cli_documents_prefix_without_qualification_options(self):
         for script in ('build-sysroot.py', 'build-os-release.py'):

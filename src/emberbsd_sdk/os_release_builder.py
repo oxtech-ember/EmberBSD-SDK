@@ -14,7 +14,7 @@ import shutil
 from .errors import SDKError
 from . import inventory, jsonio, libedit, llvm_runtime, llvm_runtime_install, native_toolset, process
 from .target_toolchain import validate_clang_identity
-from .sysroot_builder import (SysrootBuilder, _native_tools_transition_command, native_host_flags,
+from .sysroot_builder import (SysrootBuilder, native_host_flags,
                               gettext_target_host_flags, gnu_target_host_flags,
                               check_native_command_identity, validate_native_binding)
 from .targets import target_definition
@@ -493,11 +493,6 @@ class OSReleaseBuilder(SysrootBuilder):
             self.compiler_family(), base_cxx=self.options.get('base-cxx', False))
         self.signature['flags'] = self.flags
         self.signature['release_profile'] = self.options['target']
-
-    def native_tools_transition_command(self):
-        if not self.release_commands:
-            raise SDKError('cannot derive native tools transition without release commands')
-        return _native_tools_transition_command(self.release_commands[0])
 
     def pkgsrc_export_command(self, action, *args):
         patch = native_toolset.load_host_prefix(self.native.bundle_root, required_roles={'gpatch'}).tool('gpatch')

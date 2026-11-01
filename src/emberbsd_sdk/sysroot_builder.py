@@ -20,7 +20,7 @@ from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native
 from .verification_receipts import RunReceipts
 from .errors import CommandError, SDKError, ProcessOwnershipError
 from .native_os_routing import (gettext_target_host_flags, gnu_target_host_flags,
-                                legacy_native_host_flags, native_host_flags,
+                                native_host_flags,
                                 native_path, read_native_os_contract)
 from .targets import TARGETS, target_definition
 
@@ -28,13 +28,6 @@ NATIVE_INPUTS = ('native-toolset', 'native-toolset-sha256',
                  'native-producer-receipt', 'native-producer-receipt-sha256')
 NATIVE_ALIASES = (('host-cc', 'cc'), ('host-cxx', 'cxx'), ('python', 'python'))
 OPENSSH_LOCAL_GENERATOR_ROLES = ('autoconf', 'autom4te', 'gm4')
-_LEGACY_HOST_ABI_NAMES = ('HOST_CPPFLAGS', 'HOST_CFLAGS', 'HOST_CXXFLAGS', 'HOST_LDFLAGS')
-_SELECTED_HOST_ABI_NAMES = ('EMBER_HOST_ABI_CPPFLAGS', 'EMBER_HOST_ABI_CFLAGS',
-                            'EMBER_HOST_ABI_CXXFLAGS', 'EMBER_HOST_ABI_LDFLAGS')
-_NATIVE_OBJECT_MAGICS = frozenset((b'\x7fELF', b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xce',
-                                   b'\xcf\xfa\xed\xfe', b'\xfe\xed\xfa\xcf',
-                                   b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca',
-                                   b'\xca\xfe\xba\xbf', b'\xbf\xba\xfe\xca'))
 
 
 def _normalize_release_to_sysroot(signature, target, effective_defaults, current_flags):
@@ -102,100 +95,6 @@ def _canonicalize_unique_flag_assignments(flags):
     return [name + '=' + value for name, value in sorted(assignments)]
 
 
-def _normalize_legacy_native_abi_flags(old_flags, new_flags, selection):
-    """Rename only the selected ABI bindings from legacy producer flags."""
-    legacy = [flag for flag in legacy_native_host_flags(selection)
-              if flag.split('=', 1)[0] in _LEGACY_HOST_ABI_NAMES]
-    selected = [flag for flag in native_host_flags(selection)
-                if flag.split('=', 1)[0] in _SELECTED_HOST_ABI_NAMES]
-    old_abi = [flag for flag in old_flags
-               if flag.split('=', 1)[0] in _LEGACY_HOST_ABI_NAMES]
-    new_abi = [flag for flag in new_flags
-               if flag.split('=', 1)[0] in _SELECTED_HOST_ABI_NAMES]
-    if old_abi != legacy or new_abi != selected or len(legacy) != len(selected):
-        return None
-    mapping = {}
-    for before, after in zip(legacy, selected):
-        before_name, before_value = before.split('=', 1)
-        after_name, after_value = after.split('=', 1)
-        if before_value != after_value:
-            return None
-        mapping[before] = after
-    return [mapping.get(flag, flag) for flag in old_flags]
-
-
-def _native_abi_contract_transition(old_contract, selected_contract):
-    """Recognize only the v1-to-v2 native ABI routing header transition."""
-    if not isinstance(old_contract, str) or not isinstance(selected_contract, str):
-        return False
-    if not old_contract.endswith('\n') or not selected_contract.endswith('\n'):
-        return False
-    old_rows, new_rows = old_contract.splitlines(), selected_contract.splitlines()
-    return (len(old_rows) > 1 and old_rows[0] == 'EmberBSD-native-tools 1' and
-            new_rows[0] == 'EmberBSD-native-tools 2' and old_rows[1:] == new_rows[1:])
-
-
-def _native_tools_transition_command(build_command, expected_targets=None):
-    """Derive build.sh's normal tools cleandir/build_install command."""
-    command = list(build_command)
-    script = next((i for i, value in enumerate(command)
-                   if isinstance(value, str) and value.endswith('/build.sh')), None)
-    target = command.index('tools', script + 1) if script is not None and 'tools' in command[script + 1:] else None
-    if (target is None or (expected_targets is not None and command[target:] != expected_targets) or
-            command.count('-u') != 1 or '-u' in command[target:]):
-        raise SDKError('cannot derive the native tools transition command')
-    prefix = command[:target]
-    prefix.remove('-u')
-    return prefix + ['-V', 'MKCLEANSRC=no', 'tools']
-
-
-def _remove_native_host_objects(objects_root):
-    """Remove stale native `.lo` objects outside the freshly built tools tree."""
-    root = Path(objects_root)
-    if not root.is_absolute() or root.is_symlink() or not root.is_dir():
-        raise SDKError('native object root must be a real directory')
-    resolved_root = root.resolve(strict=True)
-    if resolved_root != root:
-        raise SDKError('native object root is not canonical')
-    tools_objects = root / 'tools'
-    if tools_objects.is_symlink() or (tools_objects.exists() and not tools_objects.is_dir()):
-        raise SDKError('native tools object subtree is not a real directory')
-    removed = 0
-    for directory, subdirs, files in os.walk(root, followlinks=False):
-        base = Path(directory)
-        if base.is_symlink() or not base.resolve(strict=True).is_relative_to(resolved_root):
-            raise SDKError('native object walk escaped its root')
-        # Source/object layouts may contain unrelated directory aliases. Do not
-        # follow them; candidate `.lo` symlinks are still rejected below.
-        subdirs[:] = [name for name in subdirs if not (base / name).is_symlink()]
-        if base == root:
-            subdirs[:] = [name for name in subdirs if name != 'tools']
-        for name in files:
-            if not (name.endswith('.lo') or name.endswith('.lo.o')):
-                continue
-            path = base / name
-            info = path.lstat()
-            if stat.S_ISLNK(info.st_mode):
-                raise SDKError('symlinked native object candidate')
-            if not stat.S_ISREG(info.st_mode):
-                raise SDKError('non-regular native object candidate')
-            descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
-            try:
-                with os.fdopen(descriptor, 'rb', closefd=False) as stream:
-                    header = stream.read(8)
-            finally:
-                os.close(descriptor)
-            if header[:4] in _NATIVE_OBJECT_MAGICS:
-                os.unlink(path)
-                removed += 1
-            elif not header or all(byte in b'\t\n\r\v\f' or 0x20 <= byte <= 0x7e for byte in header):
-                # Libtool `.lo` metadata and other text files are not objects.
-                continue
-            else:
-                raise SDKError('unsupported binary native object candidate: ' + str(path))
-    return removed
-
-
 class BuildInterrupted(KeyboardInterrupt):
     pass
 
@@ -259,7 +158,6 @@ def validate_native_binding(signature, selected_paths, shell=None):
                 raise SDKError('Mixed checked native alias')
         expected = ([] if prefix else ['HOST_CC=' + native['tools']['cc'], 'HOST_CXX=' + native['tools']['cxx']])
         current_flags = expected + native_host_flags(native)
-        legacy_flags = expected + legacy_native_host_flags(native)
         if prefix and any(flag.split('=', 1)[0] in ('HOST_CC', 'HOST_CXX', 'HOST_SH') for flag in signature['flags']):
             raise SDKError('Producer overrides OS native routing')
         def flags_match(expected_flags, forbidden_names):
@@ -269,11 +167,8 @@ def validate_native_binding(signature, selected_paths, shell=None):
                     return False
             return not any(word.split('=', 1)[0] in forbidden_names
                            for word in signature['flags'])
-        current_abi_names = {'EMBER_HOST_ABI_CPPFLAGS', 'EMBER_HOST_ABI_CFLAGS',
-                             'EMBER_HOST_ABI_CXXFLAGS', 'EMBER_HOST_ABI_LDFLAGS'}
         legacy_abi_names = {'HOST_CPPFLAGS', 'HOST_CFLAGS', 'HOST_CXXFLAGS', 'HOST_LDFLAGS'}
-        if (not flags_match(current_flags, legacy_abi_names) and
-                not flags_match(legacy_flags, current_abi_names)):
+        if not flags_match(current_flags, legacy_abi_names):
             raise SDKError('Producer flags differ from native selection')
         if signature['environment']['PATH'] != native_path(native):
             raise SDKError('Producer PATH differs from native selection')
@@ -342,8 +237,7 @@ class SysrootBuilder:
             raise SDKError('--host-prefix is required: select the native Ports tools')
         contract = os.path.join(self.options['os'], 'tools/native-tools/contract')
         self.native_contract_sha256 = inventory.sha256_file(contract)
-        data, _, roles = native_os_routing.read_native_os_contract(contract, sha256=self.native_contract_sha256)
-        native_os_routing.require_native_abi_contract(data)
+        _, _, roles = native_os_routing.read_native_os_contract(contract, sha256=self.native_contract_sha256)
         self.native_contract = contract
         if self.options.get('texinfo-source') or self.options.get('rcs-source') or self.options.get('diffutils-source') or self.options.get('grep-source'):
             roles = roles | {'gmake'}
@@ -616,8 +510,6 @@ class SysrootBuilder:
 
     def plan_prepared_refresh(self, record, path):
         """Refresh declared source consumers and compatible C++ runtime users."""
-        previous_native_abi_refresh = getattr(self, 'native_abi_refresh', False)
-        certified_native_abi_refresh = False
         try:
             old = copy.deepcopy(record['signature'])
             new = copy.deepcopy(self.context_signature(path))
@@ -644,18 +536,9 @@ class SysrootBuilder:
 
             old_flags = self.reuse_signature(copy.deepcopy(old))['flags']
             new_flags = self.reuse_signature(copy.deepcopy(new))['flags']
-            has_native_abi_bindings = any(
-                flag.split('=', 1)[0] in _LEGACY_HOST_ABI_NAMES + _SELECTED_HOST_ABI_NAMES
-                for flag in old_flags + new_flags)
-            selection = getattr(self, 'native_selection', None) if has_native_abi_bindings else None
-            normalized_old_flags = (_normalize_legacy_native_abi_flags(old_flags, new_flags, selection)
-                                    if selection is not None else None)
-            if normalized_old_flags is not None:
-                old_flags = normalized_old_flags
-                certified_native_abi_refresh = True
             old_flags = _canonicalize_unique_flag_assignments(old_flags)
             new_flags = _canonicalize_unique_flag_assignments(new_flags)
-            if not changed and runtime is None and not certified_native_abi_refresh:
+            if not changed and runtime is None:
                 return False
             moved = set()
             if changed or runtime is not None:
@@ -700,9 +583,7 @@ class SysrootBuilder:
                         if role not in selected_tools:
                             return False
                         previous_tools[role] = copy.deepcopy(selected_tools[role])
-            self.native_abi_refresh = previous_native_abi_refresh or certified_native_abi_refresh
             if not self.compatible_context(candidate, path):
-                self.native_abi_refresh = previous_native_abi_refresh
                 return False
             def members(archive):
                 result = process.capture([self.compiler_record['binaries']['ar']['selected_path'],
@@ -722,72 +603,43 @@ class SysrootBuilder:
             self.refresh_dirs = prepared_refresh.plan(self.paths['os'], path, changed, members,
                                                       self.refresh_nested_outputs,
                                                       allowed_source_roots=sorted(source_roots), **extra)
-            return bool(self.refresh_dirs) or runtime is not None or certified_native_abi_refresh or bool(changed)
+            return bool(self.refresh_dirs) or runtime is not None or bool(changed)
         except (KeyError, TypeError, AttributeError):
-            self.native_abi_refresh = previous_native_abi_refresh
             return False
 
     def plan_native_refresh(self, record, path):
         """Rebuild OS-declared tools whenever their prepared source changes."""
-        previous_native_abi_refresh = getattr(self, 'native_abi_refresh', False)
         try:
             old = copy.deepcopy(record['signature'])
             new = copy.deepcopy(self.context_signature(path))
             pending_record = record.get('pending_native')
             pending = copy.deepcopy(pending_record['signature'] if pending_record else old)
             pending_names = set(pending_record['sources']) if pending_record else set()
-            old_native_route = old.get('environment', {}).get('EMBER_NATIVE_TOOLS')
-            new_native_route = new.get('environment', {}).get('EMBER_NATIVE_TOOLS')
-            if (pending_record is not None and pending_record['signature'] == new and
-                    old_native_route != new_native_route and
-                    self.native_abi_route_transition(record, old, new)):
-                self.native_abi_refresh = True
             before = old.pop('native_sources', {})
             after = new.pop('native_sources', {})
             interrupted = pending.pop('native_sources', {})
             if not all(isinstance(value, dict) for value in (before, after, interrupted)):
-                self.native_abi_refresh = previous_native_abi_refresh
                 return False
-            # A pending transition may be repaired with another source only;
-            # compiler, routing and all other tools must still match.
             if not self.compatible_context(dict(record, signature=old), path):
                 candidate = dict(record, signature=copy.deepcopy(old))
                 if after:
                     candidate['signature']['native_sources'] = copy.deepcopy(after)
                 if not self.compatible_context(candidate, path):
-                    self.native_abi_refresh = previous_native_abi_refresh
                     return False
             pending['native_sources'] = copy.deepcopy(after)
             if not after:
                 pending.pop('native_sources')
             if not self.compatible_context(dict(record, signature=pending), path):
-                self.native_abi_refresh = previous_native_abi_refresh
                 return False
             names = set(before) | set(after) | set(interrupted)
             changed = pending_names | {name for name in names if before.get(name) != after.get(name) or
                                        before.get(name) != interrupted.get(name)}
             if not changed:
-                return bool(getattr(self, 'native_abi_refresh', False))
+                return False
             self.native_refresh_dirs = prepared_refresh.plan_native(self.paths['os'], self.paths['objects'], changed)
             self.native_refresh_sources = sorted(changed)
-            return bool(self.native_refresh_dirs) or bool(getattr(self, 'native_abi_refresh', False))
+            return bool(self.native_refresh_dirs)
         except (KeyError, TypeError, AttributeError):
-            self.native_abi_refresh = previous_native_abi_refresh
-            return False
-
-    def native_abi_route_transition(self, record, old, new):
-        """Check a recorded v1 routing map against the selected v2 map."""
-        try:
-            data = self.recorded_native_contract(record, old)
-            selected = Path(self.native_contract).read_text(encoding='ascii')
-            old_digest = hashlib.sha256(data.encode('ascii')).hexdigest()
-            old_route = old['environment']['EMBER_NATIVE_TOOLS']
-            allowed = (os.path.join(old['tools'], 'native-routing'),
-                       os.path.join(old['tools'], 'native-routing-' + old_digest))
-            return (_native_abi_contract_transition(data, selected) and
-                    old_route in allowed and
-                    new['environment']['EMBER_NATIVE_TOOLS'] == self.paths['native-routing'])
-        except (KeyError, TypeError, AttributeError, OSError):
             return False
 
     def validate_source_ancestry(self, record, path):
@@ -959,20 +811,13 @@ class SysrootBuilder:
                 old_rows = data.splitlines()
                 selected_contract = Path(self.native_contract).read_text(encoding='ascii')
                 new_rows = selected_contract.splitlines()
-                native_abi_contract_change = (
-                    getattr(self, 'native_abi_refresh', False) and
-                    _native_abi_contract_transition(data, selected_contract))
-                if native_abi_contract_change:
-                    if added_contract:
-                        return False
-                else:
-                    if (old_rows[:1] != new_rows[:1] or
-                            not set(old_rows[1:]) <= set(new_rows[1:])):
-                        return False
-                    extra = [row.split(' ') for row in new_rows[1:] if row not in old_rows[1:]]
-                    if (any(len(row) != 3 or row[2] != '-' for row in extra) or
-                            not added_contract <= {row[1] for row in extra}):
-                        return False
+                if (old_rows[:1] != new_rows[:1] or
+                        not set(old_rows[1:]) <= set(new_rows[1:])):
+                    return False
+                extra = [row.split(' ') for row in new_rows[1:] if row not in old_rows[1:]]
+                if (any(len(row) != 3 or row[2] != '-' for row in extra) or
+                        not added_contract <= {row[1] for row in extra}):
+                    return False
                 old_digest = hashlib.sha256(data.encode('ascii')).hexdigest()
                 allowed = (os.path.join(old['tools'], 'native-routing'),
                            os.path.join(old['tools'], 'native-routing-' + old_digest))
@@ -1771,7 +1616,6 @@ class SysrootBuilder:
         # reject any reached, unselected prepared source.
         self.prepared_source_needs = (self.require_prepared_sources(
             self.flags, self.prepared_source_traversals()) if self.options.get('plan') else {})
-        self.native_abi_refresh = False
         self.contexts = {name: self.inspect_context(self.paths[name]) for name in ('objects', 'tools')}
         self.build_command = [self.shell, os.path.join(self.paths['os'], 'build.sh'), '-U', '-u', '-j' + jobs, '-m', self.target['machine'], '-a', self.target['arch'], '-O', self.paths['objects'], '-T', self.paths['tools'], '-D', self.paths['destination']]
         # Commit metadata stays out of the signature: the same OS tree at a new
@@ -1818,19 +1662,7 @@ class SysrootBuilder:
                 raise SDKError('object context changed after preflight')
         # Hold the existing object-tree lease throughout cleanup and context update.
         native_dirs = getattr(self, 'native_refresh_dirs', [])
-        native_abi_refresh = getattr(self, 'native_abi_refresh', False)
-        native_tools_transition = native_abi_refresh and self.contexts['tools'] is not None
         pending_written = False
-        if native_tools_transition:
-            old = copy.deepcopy(self.contexts['tools'])
-            pending = {
-                'signature': self.context_signature(self.paths['tools']),
-                'sources': list(getattr(self, 'native_refresh_sources', []))}
-            if old.get('pending_native') != pending:
-                old['pending_native'] = pending
-                jsonio.write_json(os.path.join(self.paths['tools'], self.CONTEXT), old,
-                                  exclusive=False)
-            pending_written = True
         for directory in getattr(self, 'refresh_dirs', []):
             wrapper = os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine'])
             base = [wrapper, '-C', os.path.join(self.paths['os'], directory),
@@ -1858,9 +1690,6 @@ class SysrootBuilder:
             jsonio.write_json(os.path.join(self.paths['tools'], self.CONTEXT), old, exclusive=False)
             pending_written = True
         for directory in native_dirs:
-            if native_tools_transition and Path(directory).parts[:1] == ('tools',):
-                # build.sh tools below cleans/rebuilds this whole subtree.
-                continue
             wrapper = os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine'])
             base = [wrapper, '-C', os.path.join(self.paths['os'], directory),
                     'DESTDIR=' + self.paths['destination'],
@@ -1871,10 +1700,6 @@ class SysrootBuilder:
                 raise SDKError('native source refresh selected the wrong object directory: ' + directory)
             self.dispatch(base + ['MKCLEANSRC=no', 'cleandir'])
             self.dispatch(base + ['-j' + self.options['jobs'], 'dependall', 'install'])
-        if native_abi_refresh:
-            if native_tools_transition:
-                self.dispatch(self.native_tools_transition_command())
-            _remove_native_host_objects(self.paths['objects'])
         for name in ('objects', 'tools'):
             path = self.paths[name]
             record = dict(format='emberbsd-sysroot-object-context', version=1,
@@ -2028,9 +1853,6 @@ class SysrootBuilder:
     def configure_signature(self):
         """Allow a producer profile to bind its flags before object reuse checks."""
 
-    def native_tools_transition_command(self):
-        return _native_tools_transition_command(self.build_command, ['tools', 'libs'])
-
     def build_payload(self):
         """Run the producer sequence under the shared ownership contract."""
         for command in (self.build_command, self.loader_command, self.install_command):
@@ -2078,8 +1900,7 @@ class SysrootBuilder:
             self.receipt['qualification'] = 'incomplete'
             self.save_receipt()
             refresh = bool(getattr(self, 'refresh_dirs', None) or
-                           getattr(self, 'native_refresh_dirs', None) or
-                           getattr(self, 'native_abi_refresh', False))
+                           getattr(self, 'native_refresh_dirs', None))
             if refresh:
                 # Prepared-source cleanup runs nbmake through the routing
                 # in the existing tools tree.

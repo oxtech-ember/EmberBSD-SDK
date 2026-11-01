@@ -197,7 +197,8 @@ Compiler identities, selected command routes and ABI inputs still must match.
 Base/final object contexts retain the strict target linker comparison; linked
 target outputs cannot silently bypass a required relink. Fingerprints remain
 in each original record, including records for reused headers.
-Native ABI flags map only to `HOST_CPPFLAGS`, `HOST_CFLAGS`, `HOST_CXXFLAGS`, and `HOST_LDFLAGS`.
+Native ABI flags use `EMBER_HOST_ABI_CPPFLAGS`, `EMBER_HOST_ABI_CFLAGS`,
+`EMBER_HOST_ABI_CXXFLAGS`, and `EMBER_HOST_ABI_LDFLAGS`, separate from target flags.
 The build environment uses prefix directories in `PATH`; Git source inspection remains separate.
 Git is selected before narrowing that path. Repeated phase preflight checks use
 the same executable and keep the build environment restricted to the native prefix.
