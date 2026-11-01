@@ -12,26 +12,6 @@ from emberbsd_sdk.errors import SDKError
 
 
 class PreparedRefreshTests(unittest.TestCase):
-    def test_v1_native_abi_object_context_requires_fresh_paths(self):
-        from emberbsd_sdk import jsonio
-        from emberbsd_sdk.sysroot_builder import SysrootBuilder
-
-        with tempfile.TemporaryDirectory() as tmp:
-            objects = Path(tmp).resolve() / 'obj'
-            objects.mkdir()
-            record = {'format': 'emberbsd-sysroot-object-context', 'version': 1,
-                      'signature': {'flags': ['HOST_CPPFLAGS=', 'HOST_CFLAGS=',
-                                              'HOST_CXXFLAGS=', 'HOST_LDFLAGS=']},
-                      'sources': {}}
-            jsonio.write_json(objects / '.prebuild-sdk-context.json', record)
-            fake = type('Builder', (), {
-                'QUARANTINE': '.prebuild-sdk-quarantine.json',
-                'CONTEXT': '.prebuild-sdk-context.json',
-                'paths': {'objects': str(objects), 'tools': str(objects.parent / 'tools')},
-            })()
-            with self.assertRaisesRegex(SDKError, 'v1 native-tools object context cannot be migrated; select fresh object paths'):
-                SysrootBuilder.inspect_context(fake, str(objects))
-
     def test_unique_flag_assignments_are_canonicalized(self):
         from emberbsd_sdk.sysroot_builder import _canonicalize_unique_flag_assignments
 

@@ -47,13 +47,6 @@ def _canonicalize_unique_flag_assignments(flags):
     return [name + '=' + value for name, value in sorted(assignments)]
 
 
-def _has_legacy_native_abi_flags(signature):
-    flags = signature.get('flags') if isinstance(signature, dict) else None
-    legacy = {'HOST_CPPFLAGS', 'HOST_CFLAGS', 'HOST_CXXFLAGS', 'HOST_LDFLAGS'}
-    return isinstance(flags, list) and legacy <= {
-        flag.partition('=')[0] for flag in flags if isinstance(flag, str)}
-
-
 class BuildInterrupted(KeyboardInterrupt):
     pass
 
@@ -89,8 +82,6 @@ def check_native_command_identity(signature, shell):
 def validate_native_binding(signature, selected_paths, shell=None):
     """Bind saved native selections to producer inputs, flags, and environment."""
     try:
-        if _has_legacy_native_abi_flags(signature):
-            raise SDKError('v1 native-tools producer receipt cannot be reused; rebuild with fresh object paths')
         native = signature['native_toolset']
         check_native_command_identity(signature, shell or native['tools']['sh'])
         inputs = signature['native_inputs']
@@ -128,8 +119,8 @@ def validate_native_binding(signature, selected_paths, shell=None):
                     return False
             return not any(word.split('=', 1)[0] in forbidden_names
                            for word in signature['flags'])
-        legacy_abi_names = {'HOST_CPPFLAGS', 'HOST_CFLAGS', 'HOST_CXXFLAGS', 'HOST_LDFLAGS'}
-        if not flags_match(current_flags, legacy_abi_names):
+        forbidden_abi_aliases = {'HOST_CPPFLAGS', 'HOST_CFLAGS', 'HOST_CXXFLAGS', 'HOST_LDFLAGS'}
+        if not flags_match(current_flags, forbidden_abi_aliases):
             raise SDKError('Producer flags differ from native selection')
         if signature['environment']['PATH'] != native_path(native):
             raise SDKError('Producer PATH differs from native selection')
@@ -462,8 +453,6 @@ class SysrootBuilder:
                     not isinstance(pending['sources'], list) or
                     not self.plan_native_refresh(record, path)):
                 raise SDKError(f'cannot safely resume incomplete native source refresh: {path}')
-        elif _has_legacy_native_abi_flags(record['signature']):
-            raise SDKError('v1 native-tools object context cannot be migrated; select fresh object paths')
         elif not self.compatible_context(record, path):
             if not ((path == self.paths['objects'] and self.plan_prepared_refresh(record, path)) or
                     (path == self.paths['tools'] and self.plan_native_refresh(record, path))):

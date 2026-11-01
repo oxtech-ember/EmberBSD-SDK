@@ -4,8 +4,8 @@
 native-tool contract version 2. Contract version 2 declares support for separate
 `EMBER_HOST_ABI_*` make variables; older native-tool contract versions are
 unsupported.
-Object trees recorded with contract version 1 need a fresh rebuild under
-version 2; the SDK does not migrate their native ABI flags automatically.
+Saved object contexts must match the selected native ABI flags. An incompatible
+context is refused without changing its objects or metadata.
 Read that source tree's `tools/native-tools/README.md` for the OS interface.
 
 Sysroot and release builders use this sequence:
