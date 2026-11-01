@@ -4,6 +4,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from test_core import TemporaryCase
 from test_builder import write, git, commit
@@ -124,6 +125,77 @@ class StageInputTests(TemporaryCase):
                 self.change(name)
                 self.assertNotEqual(self.digest(record), before)
 
+    def test_selected_inputs_changed_skips_git_for_same_commit(self):
+        commit_id = git(self.os, 'rev-parse', 'HEAD')
+        with patch.object(inputs, 'selected_path', side_effect=AssertionError('unexpected filter')):
+            self.assertFalse(inputs.selected_inputs_changed(
+                lambda *args: self.fail('same commit must not invoke git'), str(self.os),
+                commit_id, commit_id, ['lib/libc/gen']))
+
+    def test_selected_inputs_changed_filters_added_deleted_and_unrelated_paths(self):
+        built = git(self.os, 'rev-parse', 'HEAD')
+        self.change('sys/arch/evbarm/conf/NEW', 'options Y\n')
+        unrelated = git(self.os, 'rev-parse', 'HEAD')
+        self.assertFalse(inputs.selected_inputs_changed(git, str(self.os), built, unrelated,
+                                                        ['lib/libc/gen', 'include']))
+        self.change('lib/libc/gen/new.c', 'int new;\n')
+        added = git(self.os, 'rev-parse', 'HEAD')
+        self.assertTrue(inputs.selected_inputs_changed(git, str(self.os), unrelated, added,
+                                                       ['lib/libc/gen']))
+        (self.os / 'lib/libc/gen/new.c').unlink()
+        commit(self.os)
+        deleted = git(self.os, 'rev-parse', 'HEAD')
+        self.assertTrue(inputs.selected_inputs_changed(git, str(self.os), added, deleted,
+                                                       ['lib/libc/gen']))
+
+    def test_selected_inputs_changed_covers_mode_rename_and_shared_roots(self):
+        built = git(self.os, 'rev-parse', 'HEAD')
+        path = self.os / 'lib/libc/gen/a.c'
+        path.chmod(0o755)
+        commit(self.os)
+        mode_changed = git(self.os, 'rev-parse', 'HEAD')
+        self.assertTrue(inputs.selected_inputs_changed(git, str(self.os), built, mode_changed,
+                                                       ['lib/libc/gen']))
+
+        write(self.os / 'usr.bin/config/config.mk', 'X=1\n')
+        commit(self.os)
+        makefile = git(self.os, 'rev-parse', 'HEAD')
+        self.assertTrue(inputs.selected_inputs_changed(git, str(self.os), mode_changed, makefile,
+                                                       ['lib/libc/gen']))
+        write(self.os / 'include/new.h', '/* new */\n')
+        commit(self.os)
+        header = git(self.os, 'rev-parse', 'HEAD')
+        self.assertTrue(inputs.selected_inputs_changed(git, str(self.os), makefile, header,
+                                                       ['lib/libc/gen']))
+        write(self.os / 'lib/libc/ancestor.mk', 'X=1\n')
+        commit(self.os)
+        ancestor_file = git(self.os, 'rev-parse', 'HEAD')
+        self.assertTrue(inputs.selected_inputs_changed(git, str(self.os), header, ancestor_file,
+                                                       ['lib/libc/gen']))
+
+    def test_selected_inputs_changed_handles_nonancestor_endpoints_and_renames(self):
+        base = git(self.os, 'rev-parse', 'HEAD')
+        self.change('lib/libc/gen/branch.c', 'int branch;\n')
+        relevant = git(self.os, 'rev-parse', 'HEAD')
+        git(self.os, 'checkout', '-q', base, '-b', 'other')
+        self.change('sys/arch/evbarm/conf/OTHER', 'options Z\n')
+        unrelated = git(self.os, 'rev-parse', 'HEAD')
+        self.assertTrue(inputs.selected_inputs_changed(git, str(self.os), relevant, unrelated,
+                                                       ['lib/libc/gen']))
+
+        git(self.os, 'checkout', '-q', relevant, '-b', 'rename-test')
+        git(self.os, 'mv', 'lib/libc/gen/branch.c', 'usr.bin/moved.c')
+        commit(self.os)
+        renamed_out = git(self.os, 'rev-parse', 'HEAD')
+        self.assertTrue(inputs.selected_inputs_changed(git, str(self.os), relevant, renamed_out,
+                                                       ['lib/libc/gen']))
+        git(self.os, 'checkout', '-q', unrelated, '-b', 'rename-in')
+        git(self.os, 'mv', 'sys/arch/evbarm/conf/OTHER', 'lib/libc/gen/arrived.c')
+        commit(self.os)
+        renamed_in = git(self.os, 'rev-parse', 'HEAD')
+        self.assertTrue(inputs.selected_inputs_changed(git, str(self.os), unrelated, renamed_in,
+                                                       ['lib/libc/gen']))
+
     def test_key_covers_llvm_source_and_compiler(self):
         record = self.record()
         key = inputs.stage_key('aarch64', dict(tree='1' * 64), dict(version='23.1.4'), record['inputs'])
@@ -165,7 +237,7 @@ class StageInputTests(TemporaryCase):
         record = self.record()
         path = self.root / 'bad.json'
         for bad in (record | {'directories': ['../outside']}, record | {'key': 'short'},
-                    record | {'version': 2}):
+                    record | {'inputs': 'not-a-digest'}, record | {'version': 2}):
             path.write_text(json.dumps(bad))
             with self.assertRaisesRegex(SDKError, 'invalid LLVM stage input record'):
                 inputs.read_record(str(path))

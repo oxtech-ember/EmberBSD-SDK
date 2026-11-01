@@ -225,21 +225,37 @@ def tree_rows(git, root, commit):
 
 
 def selected_rows(rows, directories):
+    selected = selected_directories(directories)
+    return [row for row in rows if selected_path(row[3], selected)]
+
+
+def selected_directories(directories):
+    """Return selected directories and their ancestors once per comparison."""
     selected = set(directories)
     for directory in directories:
         while directory:
             directory = os.path.dirname(directory)
             selected.add(directory)
-    result = []
-    for row in rows:
-        path = row[3]
-        parent, name = os.path.split(path)
-        top = path.split('/', 1)[0]
-        if (parent in selected or path in FIXED_FILES or
-                any(path.startswith(tree + '/') for tree in FIXED_TREES) or shared_makefile(name) or
-                (top in HEADER_ROOTS and (name.endswith('.h') or name.startswith('Makefile')))):
-            result.append(row)
-    return result
+    return selected
+
+
+def selected_path(path, selected):
+    """Whether a path contributes to the stage input digest."""
+    parent, name = os.path.split(path)
+    top = path.split('/', 1)[0]
+    return (parent in selected or path in FIXED_FILES or
+            any(path.startswith(tree + '/') for tree in FIXED_TREES) or shared_makefile(name) or
+            (top in HEADER_ROOTS and (name.endswith('.h') or name.startswith('Makefile'))))
+
+
+def selected_inputs_changed(git, root, built, current, directories):
+    """Return whether selected source paths differ between two commit trees."""
+    if built == current:
+        return False
+    selected = selected_directories(directories)
+    output = git(root, 'diff-tree', '--no-commit-id', '--no-ext-diff', '--no-renames', '-r',
+                 '--name-only', '-z', built, current, '--')
+    return any(selected_path(path, selected) for path in output.split('\0') if path)
 
 
 def inputs_digest(rows, directories):
@@ -293,6 +309,8 @@ def read_record(path):
             not all(isinstance(value, str) and value and not value.startswith('/') and
                     '..' not in value.split('/') for value in record['directories']) or
             not isinstance(record.get('key'), str) or re.fullmatch('[0-9a-f]{64}', record['key']) is None or
+            not isinstance(record.get('inputs'), str) or
+            re.fullmatch('[0-9a-f]{64}', record['inputs']) is None or
             not isinstance(record.get('os_commit'), str) or
             re.fullmatch('[0-9a-f]{40}', record['os_commit']) is None):
         raise SDKError(f'invalid LLVM stage input record: {path}')

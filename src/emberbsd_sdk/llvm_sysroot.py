@@ -156,8 +156,7 @@ class LLVMPhaseBuilder(SysrootBuilder):
             return
         directories = self.stage_inputs['directories']
         if (self.stage_inputs['os_commit'] != built or
-                llvm_stage_inputs.inputs_digest(llvm_stage_inputs.tree_rows(self.git, root, built), directories) !=
-                llvm_stage_inputs.inputs_digest(llvm_stage_inputs.tree_rows(self.git, root, current), directories)):
+                llvm_stage_inputs.selected_inputs_changed(self.git, root, built, current, directories)):
             raise SDKError('LLVM stage OS inputs changed; build a new stage with compatible objects')
 
 
@@ -291,7 +290,6 @@ class LLVMCoordinator:
         if paths.entry(self.stage_root) is None:
             return None
         source = selected.sources['os']
-        rows = None
         for name in sorted(os.listdir(self.stage_root)):
             record = os.path.join(self.stage_root, name, llvm_stage_inputs.RECORD)
             if paths.entry(record) is None:
@@ -299,11 +297,11 @@ class LLVMCoordinator:
             record = llvm_stage_inputs.read_record(record)
             if record['target'] != self.options['target']:
                 continue
-            if rows is None:
-                rows = llvm_stage_inputs.tree_rows(selected.git, source['path'], source['commit'])
-            digest = llvm_stage_inputs.inputs_digest(rows, record['directories'])
+            if llvm_stage_inputs.selected_inputs_changed(
+                    selected.git, source['path'], record['os_commit'], source['commit'], record['directories']):
+                continue
             if llvm_stage_inputs.stage_key(self.options['target'], selected.llvm_source_record,
-                                           selected.compiler_record, digest) == record['key']:
+                                           selected.compiler_record, record['inputs']) == record['key']:
                 return name
         return None
 

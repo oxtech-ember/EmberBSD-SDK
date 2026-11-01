@@ -912,7 +912,10 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         write(Path(source) / 'include/new-header.h', '/* new OS input */\n')
         commit(source)
         # The changed tree builds a new stage, reusing the shared objects.
-        second = headers_stage()
+        # Reuse compares changed paths against the recorded commit and does
+        # not materialize another complete ls-tree listing.
+        with patch.object(llvm_stage_inputs, 'tree_rows', side_effect=AssertionError('unexpected tree listing')):
+            second = headers_stage()
         self.assertNotEqual(second.stage_root, first.stage_root)
         self.assertEqual(built[-1], second.stage_root + '/headers')
         self.assertTrue((Path(first.stage_root) / 'headers' / LLVMPhaseBuilder.RECEIPT).exists())
@@ -965,7 +968,10 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         # config(1) is not read by the stage: the completed stage is returned.
         write(Path(source) / 'usr.bin/config/main.c', 'int config_changed;\n')
         commit(source)
-        second = headers_stage()
+        # Resume uses the recorded input key and changed-path check; it must
+        # not materialize another complete tree listing.
+        with patch.object(llvm_stage_inputs, 'tree_rows', side_effect=AssertionError('unexpected tree listing')):
+            second = headers_stage()
         self.assertEqual(second.stage_root, first.stage_root)
         self.assertEqual(second.stage_inputs, record)
         self.assertEqual(len(built), 1)
@@ -982,6 +988,33 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
              patch.object(coordinator, 'runtime', side_effect=Stop):
             with self.assertRaisesRegex(SDKError, 'LLVM stage OS inputs changed'):
                 coordinator.run()
+
+    def test_matching_stage_returns_the_name_of_the_matching_manifest(self):
+        source = self.root / 'matching-os'
+        write(source / 'include/a.h', '/* header */\n')
+        git(source, 'init', '-q')
+        commit(source)
+        commit_id = git(source, 'rev-parse', 'HEAD')
+        rows = llvm_stage_inputs.tree_rows(git, str(source), commit_id)
+        directories = ['include']
+        digest = llvm_stage_inputs.inputs_digest(rows, directories)
+        llvm_source = {'tree': 'a' * 64}
+        compiler = {'version': '1'}
+        good = dict(format=llvm_stage_inputs.FORMAT, version=llvm_stage_inputs.VERSION,
+                    target='aarch64', os_commit=commit_id, directories=directories, phases={},
+                    inputs=digest, key=llvm_stage_inputs.stage_key('aarch64', llvm_source, compiler, digest))
+        bad = good | {'key': llvm_stage_inputs.stage_key('aarch64', llvm_source, {'version': 'old'}, digest)}
+        stages = self.root / 'stages'
+        write(stages / 'a-match' / llvm_stage_inputs.RECORD, json.dumps(good))
+        write(stages / 'z-other' / llvm_stage_inputs.RECORD, json.dumps(bad))
+        coordinator = LLVMCoordinator.__new__(LLVMCoordinator)
+        coordinator.stage_root = str(stages)
+        coordinator.options = {'target': 'aarch64'}
+        selected = type('Selected', (), {
+            'sources': {'os': {'path': str(source), 'commit': commit_id}}, 'git': git,
+            'llvm_source_record': llvm_source, 'compiler_record': compiler,
+        })()
+        self.assertEqual(coordinator.matching_stage(selected), 'a-match')
 
     def test_fresh_object_mode_refuses_kept_tools_before_the_first_phase(self):
         headers, _ = self.completed_headers()
