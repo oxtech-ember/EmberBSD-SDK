@@ -8,11 +8,14 @@ libraries and CRT, asks Ports for the full C++ runtime, and then builds the
 final sysroot. This path does not require a previous application SDK.
 
 The headers, C base and final target objects have separate configurations.
-They share the selected native tools tree; subsequent `tools` operations are
-incremental. Completed bootstrap stages are checked against their inputs and
-payload before reuse. Failed or incompatible stages are left intact for
-diagnosis. `--plan` describes the dependency order without creating outputs;
-later commands depend on the artifacts measured by their producers.
+They share the selected native tools tree. The first phase that actually runs
+in a coordinator invocation builds native tools; later phases omit that
+operation. Reusing a completed earlier stage does not count as building tools
+in the current invocation, so the first phase that runs still builds them.
+Completed bootstrap stages are checked against their inputs and payload before
+reuse. Failed or incompatible stages are left intact for diagnosis. `--plan`
+describes the dependency order without creating outputs; later commands
+depend on the artifacts measured by their producers.
 
 The OS bootstrap-headers operation does not enter libc or consume the common
 LLVM runtime source. Its object and completed-stage compatibility therefore

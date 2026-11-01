@@ -47,6 +47,8 @@ class LLVMPhaseBuilder(SysrootBuilder):
         self.resume = resume
         # The stage set's recorded OS inputs, when it has an inputs.json.
         self.stage_inputs = stage_inputs
+        self.coordinator_tools_ready = False
+        self.tools_built_this_run = False
 
     def empty_destination(self):
         if self.select_only:
@@ -88,14 +90,19 @@ class LLVMPhaseBuilder(SysrootBuilder):
         result.update(format='emberbsd-llvm-os-stage', phase=self.llvm_phase,
                       scope='llvm-' + self.llvm_phase)
         result.pop('copy', None)
+        operations = list(self.os_build_operations)
         if self.llvm_phase == 'headers':
-            self.build_command = self.build_command[:-2] + ['tools', 'bootstrap-headers']
+            operations = (['tools'] if not self.coordinator_tools_ready else []) + ['bootstrap-headers']
+            self.build_command = self.build_command[:-len(self.os_build_operations)] + operations
             self.phase_commands = [self.build_command]
         elif self.options.get('c-foundation'):
-            self.build_command = self.build_command[:-2] + ['tools', 'bootstrap-c']
+            operations = (['tools'] if not self.coordinator_tools_ready else []) + ['bootstrap-c']
+            self.build_command = self.build_command[:-len(self.os_build_operations)] + operations
             self.phase_commands = [self.build_command]
         else:
             self.phase_commands = [self.build_command, self.loader_command, self.install_command]
+        self.os_build_operations = operations
+        self.builds_native_tools = 'tools' in operations
         result['plan'] = self.phase_commands
         return result
 
@@ -125,6 +132,7 @@ class LLVMPhaseBuilder(SysrootBuilder):
             exclude=(self.RECEIPT, self.MARKER, self.LOG))
 
     def run(self):
+        self.tools_built_this_run = False
         self.preflight()
         if self.options.get('plan'):
             return self.receipt
@@ -141,7 +149,9 @@ class LLVMPhaseBuilder(SysrootBuilder):
                 self.require_unchanged_inputs()
                 return self.completed
         self.require_runtime_work()
-        return self._run_preflighted()
+        result = self._run_preflighted()
+        self.tools_built_this_run = self.builds_native_tools
+        return result
 
     def require_unchanged_inputs(self):
         root = self.sources['os']['path']
@@ -380,11 +390,18 @@ class LLVMCoordinator:
                 {'phase': 'final', 'inputs': ['full'], 'destination': self.options.get('destination')}]
             return dict(format='emberbsd-llvm-build-plan', version=1, phases=phases)
         with self.lock():
-            headers = LLVMPhaseBuilder(self.stage_options('headers'), 'headers', receipts=self.receipts,
-                                       resume=self.resume, stage_inputs=self.stage_inputs).run()
+            tools_ready = False
+            headers_builder = LLVMPhaseBuilder(self.stage_options('headers'), 'headers', receipts=self.receipts,
+                                               resume=self.resume, stage_inputs=self.stage_inputs)
+            headers_builder.coordinator_tools_ready = tools_ready
+            headers = headers_builder.run()
+            tools_ready = tools_ready or headers_builder.tools_built_this_run
             self.runtime('bootstrap', os.path.join(self.stage_root, 'headers'))
-            base = LLVMPhaseBuilder(self.stage_options('base'), 'base', receipts=self.receipts,
-                                    resume=self.resume, stage_inputs=self.stage_inputs).run()
+            base_builder = LLVMPhaseBuilder(self.stage_options('base'), 'base', receipts=self.receipts,
+                                            resume=self.resume, stage_inputs=self.stage_inputs)
+            base_builder.coordinator_tools_ready = tools_ready
+            base = base_builder.run()
+            tools_ready = tools_ready or base_builder.tools_built_this_run
             self.record_inputs(dict(headers=headers, base=base))
             if self.options.get('c-foundation'):
                 return dict(format='emberbsd-llvm-c-foundation', version=1,
@@ -397,6 +414,7 @@ class LLVMCoordinator:
                                             'llvm-bootstrap-stage': os.path.join(self.runtime_root, 'bootstrap-stage'),
                                             'tools': self.tools}
             final = self.builder_type(final_options, receipts=self.receipts)
+            final.coordinator_tools_ready = tools_ready
             if self.tools_new:
                 final.tools_new_in_run = True
             return final.run()

@@ -1559,7 +1559,10 @@ class SysrootBuilder:
         for flag in self.flags + ['MKREPRO_TIMESTAMP=' + str(self.source_timestamp()),
                                   'BUILDINFO=EmberBSD:' + self.sources['os']['commit']]:
             self.build_command.extend(('-V', flag))
-        self.build_command.extend(('tools', 'libs'))
+        self.os_build_operations = (['libs'] if getattr(self, 'coordinator_tools_ready', False)
+                                    else ['tools', 'libs'])
+        self.builds_native_tools = 'tools' in self.os_build_operations
+        self.build_command.extend(self.os_build_operations)
         self.loader_command = [os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine']), '-C', os.path.join(self.paths['os'], 'libexec/ld.elf_so'), '-j' + jobs, 'dependall']
         self.install_command = self.loader_command[:-1] + ['install']
         self.receipt = dict(format='emberbsd-sysroot-build', version=3 if clang else 2, scope='sysroot-build', qualification='not-built', execution_acceptance='not-run', workspace=layout, paths=self.paths, sources=self.sources, previous_contexts=self.contexts, signature=self.signature, commands=self.commands, plan=[self.runtime_command, self.build_command, self.loader_command, self.install_command, self.runtime_command, self.runtime_command], working_directory=self.paths['os'], copy=dict(source=prefix, destination=os.path.join(self.paths['destination'], 'usr/pkg/llvm' if clang else 'usr/pkg/gcc16'), verification='exact pre/copy/post inventory'), not_checked=['target execution', 'ABI compatibility', 'SDK release'])

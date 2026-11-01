@@ -520,6 +520,48 @@ class LLVMBuilderTests(TemporaryCase):
         self.assertEqual(headers['destination'], '/sdk/stages/alternate/headers')
         self.assertEqual(headers['tools'], '/sdk/obj/alternate/tools')
 
+    def test_coordinator_tracks_tools_built_by_first_executed_phase(self):
+        options = {'sdk': str(self.root / 'sdk'), 'runtime-work': str(self.root / 'sdk/obj/runtime'),
+                   'target': 'aarch64', 'destination': str(self.root / 'sdk/stages/final'),
+                   'jobs': '2', 'host-prefix': '/host', 'compiler': '/compiler',
+                   'llvm-source': '/source', 'sdk-source': '/sdk-source', 'os': '/os', 'ports': '/ports'}
+        for producer_phase in ('headers', 'base', None):
+            with self.subTest(producer_phase=producer_phase):
+                coordinator = LLVMCoordinator(options, SysrootBuilder)
+                phase_states = []
+                final_state = []
+
+                class Stage:
+                    def __init__(self, selected, phase, tools_ready=False, **selection):
+                        self.phase = phase
+                        self.tools_ready = tools_ready
+                        self.tools_built_this_run = False
+
+                    def run(self):
+                        self.tools_ready = getattr(self, 'coordinator_tools_ready', self.tools_ready)
+                        phase_states.append((self.phase, self.tools_ready))
+                        self.tools_built_this_run = (self.phase == producer_phase and
+                                                     not self.tools_ready)
+                        return {'phase': self.phase}
+
+                class Final:
+                    def __init__(self, selected, receipts=None):
+                        self.options = selected
+
+                    def run(self):
+                        final_state.append(getattr(self, 'coordinator_tools_ready', False))
+                        return {'phase': 'final'}
+
+                coordinator.builder_type = Final
+                with patch.object(coordinator, 'prepare'), patch.object(coordinator, 'lock'), \
+                     patch.object(coordinator, 'record_inputs'), \
+                     patch('emberbsd_sdk.llvm_sysroot.LLVMPhaseBuilder', Stage), \
+                     patch.object(coordinator, 'runtime'):
+                    coordinator.run()
+                self.assertEqual(phase_states,
+                    [('headers', False), ('base', producer_phase == 'headers')])
+                self.assertEqual(final_state, [producer_phase in ('headers', 'base')])
+
     def test_coordinator_forwards_original_source_to_runtime_verify(self):
         options = {'sdk': '/sdk', 'runtime-work': '/sdk/obj/runtime', 'target': 'aarch64',
                    'llvm-runtime-original-source': '/old-source'}
@@ -823,6 +865,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
             coordinator.options['plan'] = True
             plan = coordinator.run()
         self.assertEqual([p['phase'] for p in plan['phases']], ['headers', 'bootstrap', 'base'])
+        self.assertTrue(all('tools_built_this_run' not in phase for phase in plan['phases']))
 
     def test_headers_use_the_limited_os_operation_without_runtime_headers(self):
         class Headers(LLVMPhaseBuilder, ClangBuilder):
@@ -842,6 +885,21 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
             write(Path(builder.paths['destination'])/'usr/include'/name, '/* base header */\n')
         builder.inspect_payload()
         self.assertFalse((Path(builder.paths['destination'])/'usr/include/unwind.h').exists())
+
+        ready = Headers(builder.options, 'headers', select_only=True)
+        ready.coordinator_tools_ready = True
+        self.assertNotIn('tools', ready.preflight()['plan'][0][-2:])
+
+    def test_coordinated_builder_omits_tools_only_after_earlier_phase_success(self):
+        base, _, _ = self.bootstrap_base()
+        base.coordinator_tools_ready = True
+        base_record = base.preflight()
+        self.assertNotIn('tools', base_record['plan'][0][-2:])
+
+        final = ClangBuilder(base.options)
+        final.coordinator_tools_ready = True
+        final_record = final.preflight()
+        self.assertNotIn('tools', final_record['plan'][1][-2:])
 
     def test_fresh_headers_preflight_once_per_run(self):
         original = LLVMPhaseBuilder.preflight
@@ -1068,9 +1126,11 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
                    if name not in ('destination', 'objects', 'tools', 'llvm-runtime-stage', 'llvm-bootstrap-stage')}
         options['runtime-work'] = str(Path(options['sdk']) / 'obj/llvm-runtime')
         attempts = []
+        builders = []
         class Headers(type(headers)):
             def __init__(self, selected, phase, **selection):
                 LLVMPhaseBuilder.__init__(self, selected, phase, **selection)
+                builders.append(self)
             def build_payload(self):
                 attempts.append(self.paths['destination'])
                 if len(attempts) == 1:
@@ -1085,6 +1145,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
                 coordinator.run()
         with self.assertRaisesRegex(SDKError, 'fixture build failure'):
             headers_stage()
+        self.assertFalse(getattr(builders[-1], 'tools_built_this_run', False))
         stage = Path(attempts[0])
         self.assertTrue((stage / LLVMPhaseBuilder.MARKER).exists())
         # A release, an explicitly selected directory, or other objects, which
@@ -1099,6 +1160,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertEqual(len(attempts), 1)
         with self.assertRaises(Stop):
             headers_stage()
+        self.assertTrue(getattr(builders[-1], 'tools_built_this_run', False))
         self.assertEqual(attempts, [str(stage), str(stage)])
         self.assertFalse((stage / LLVMPhaseBuilder.MARKER).exists())
         failed = stage.parent / 'failed-1/headers'
@@ -1137,7 +1199,9 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder, original = self.completed_headers()
         with patch.object(type(builder), 'build_payload', side_effect=AssertionError('must reuse')), \
                 patch.object(type(builder), 'inspect_payload', side_effect=AssertionError('must not rescan')):
-            self.assertEqual(type(builder)(builder.options).run(), original)
+            reused = type(builder)(builder.options)
+            self.assertEqual(reused.run(), original)
+        self.assertFalse(getattr(reused, 'tools_built_this_run', False))
 
     def test_completed_headers_reject_compiler_and_phase_changes(self):
         builder, _ = self.completed_headers()
