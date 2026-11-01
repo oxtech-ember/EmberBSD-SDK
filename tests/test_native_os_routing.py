@@ -12,7 +12,8 @@ from unittest.mock import patch
 import test_core  # Adds the SDK source to sys.path.
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.native_os_routing import (publish_native_os_routing,
-                                            read_native_os_contract)
+                                            read_native_os_contract,
+                                            read_recorded_native_os_contract)
 from emberbsd_sdk.native_toolset import NativeToolset
 
 
@@ -126,6 +127,15 @@ class NativeOSRoutingTests(unittest.TestCase):
 
     def test_contract_version_one_is_unsupported(self):
         data = CONTRACT.replace(b'tools 2', b'tools 1')
+        self.contract.write_bytes(data)
+        with self.assertRaisesRegex(SDKError, 'unsupported OS native-tool contract'):
+            read_native_os_contract(self.contract,
+                sha256=hashlib.sha256(data).hexdigest())
+        self.assertEqual(read_recorded_native_os_contract(self.contract,
+            sha256=hashlib.sha256(data).hexdigest())[0], data)
+
+    def test_current_contract_rejects_unrelated_version_jump(self):
+        data = CONTRACT.replace(b'tools 2', b'tools 3')
         self.contract.write_bytes(data)
         with self.assertRaisesRegex(SDKError, 'unsupported OS native-tool contract'):
             read_native_os_contract(self.contract,

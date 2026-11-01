@@ -18,7 +18,7 @@ from unittest.mock import patch
 from unittest import skipUnless
 
 from test_core import TemporaryCase, SDK_SOURCE, header, archive, git_environment
-from emberbsd_sdk import inventory, jsonio, process
+from emberbsd_sdk import inventory, jsonio, native_os_routing, process
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.sysroot_builder import SysrootBuilder as ProductionBuilder
 from emberbsd_sdk.host_prefix import HostPrefix
@@ -42,6 +42,10 @@ def fixture_native_selection(builder):
             tools[name] = str(prefix / name)
     if 'hostname hostname -' in Path(builder.native_contract).read_text():
         tools['hostname'] = str(prefix / 'libexec/gettext/hostname')
+    contract = Path(builder.native_contract).read_text()
+    for role in ('dirname', 'echo', 'dtc'):
+        if f'{role} {role} -' in contract:
+            tools[role] = str(prefix / role)
     return HostPrefix(str(prefix), MappingProxyType({'os': 'Darwin', 'cpu': 'arm64'}),
         MappingProxyType({'family': 'gcc', 'version': '16.2.0', 'triplet': 'aarch64-apple-darwin27'}),
         MappingProxyType(tools), MappingProxyType({name: () for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}), MappingProxyType({}))
@@ -844,6 +848,57 @@ class BuilderTests(TemporaryCase):
         legacy['sources']['os']['path'] = '/former/source-checkout'
         legacy['signature']['environment']['EMBER_NATIVE_TOOLS'] = str(Path(builder.paths['tools']) / 'native-routing')
         self.assertTrue(builder.compatible_context(legacy, path))
+
+    def test_historical_native_contract_migrates_only_with_dtc_addition(self):
+        contract = Path(self.options['os']) / 'tools/native-tools/contract'
+        original = contract.read_text() + 'dirname dirname -\necho echo -\n'
+        write(contract, original)
+        for role in ('dirname', 'echo'):
+            write(Path(self.options['host-prefix']) / role, '#!/bin/sh\nexit 0\n', 0o755)
+        commit(self.options['os'])
+        builder = B(self.options)
+        builder.run()
+        path = builder.paths['objects']
+        record = jsonio.read_json(Path(path) / builder.CONTEXT)
+        historical = original.replace('EmberBSD-native-tools 2', 'EmberBSD-native-tools 1', 1)
+        write(contract, historical)
+        commit(self.options['os'])
+        legacy = copy.deepcopy(record)
+        legacy['sources']['os']['commit'] = git(self.options['os'], 'rev-parse', 'HEAD')
+        write(Path(self.options['host-prefix']) / 'dtc', '#!/bin/sh\nexit 0\n', 0o755)
+        digest = hashlib.sha256(historical.encode('ascii')).hexdigest()
+        legacy_route = Path(record['signature']['tools']) / ('native-routing-' + digest)
+        legacy_route.mkdir()
+        write(legacy_route / 'contract', historical)
+        for command, role, _ in native_os_routing.parse_native_os_contract(
+                historical.encode('ascii'), allow_recorded_v1=True)[1]:
+            (legacy_route / command).symlink_to(builder.native.tool(role))
+        legacy['signature']['environment']['EMBER_NATIVE_TOOLS'] = str(legacy_route)
+        current = original.replace('dirname dirname -\necho echo -\n',
+                                   'dirname dirname -\ndtc dtc -\necho echo -\n')
+        write(contract, current)
+        commit(self.options['os'])
+        next_destination = self.options['sdk'] + '/stages/next'
+        selected = B(self.options | {'destination': next_destination})
+        selected.preflight()
+        self.assertTrue(selected.compatible_context(legacy, path))
+        changed_tool = copy.deepcopy(legacy)
+        changed_tool['signature']['native_toolset']['tools']['cc'] = '/different/cc'
+        self.assertFalse(selected.compatible_context(changed_tool, path))
+
+        invalid_contracts = (
+            current.replace('cmp cmp -\n', 'cmp cmp HOST_AR\n'),
+            current.replace('cc cc HOST_CC\n', ''),
+            current + 'hostname hostname -\n',
+        )
+        for invalid in invalid_contracts:
+            with self.subTest(contract=invalid):
+                write(contract, invalid)
+                self.assertFalse(selected.compatible_context(legacy, path))
+
+        version_jump = current.replace('EmberBSD-native-tools 2', 'EmberBSD-native-tools 3', 1)
+        write(contract, version_jump)
+        self.assertFalse(selected.compatible_context(legacy, path))
 
     def test_context_from_os_revision_without_native_contract_is_incompatible(self):
         builder = B(self.options)

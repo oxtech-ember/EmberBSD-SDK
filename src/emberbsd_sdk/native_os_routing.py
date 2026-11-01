@@ -80,22 +80,18 @@ def ensure_native_os_routing(toolset, *, contract_path, contract_sha256, destina
                 members={command:toolset.tool(role) for command,role,_ in rows})
 
 
-def read_native_os_contract(path, *, sha256):
-    """Read pinned OS data without executing tools or emitted shell code."""
-    if not isinstance(sha256, str) or re.fullmatch(r'[0-9a-f]{64}', sha256) is None:
-        raise SDKError('expected the explicit OS contract SHA256')
-    path = path_string(path)
-    stream, before = open_regular(path)
-    with stream:
-        data = stream.read(65537)
-    verify_stable(path, before)
-    if len(data) > 65536 or hashlib.sha256(data).hexdigest() != sha256:
+def parse_native_os_contract(data, *, allow_recorded_v1=False):
+    """Parse contract bytes; v1 is only for historical compatibility records."""
+    if not isinstance(data, bytes) or len(data) > 65536:
         raise SDKError('OS native-tool contract changed or is too large')
     try:
         lines = data.decode('ascii').splitlines()
     except UnicodeError as exc:
         raise SDKError('OS native-tool contract must be ASCII') from exc
-    if not data.endswith(b'\n') or not lines or lines[0] != 'EmberBSD-native-tools 2':
+    headers = ('EmberBSD-native-tools 2',)
+    if allow_recorded_v1:
+        headers += ('EmberBSD-native-tools 1',)
+    if not data.endswith(b'\n') or not lines or lines[0] not in headers:
         raise SDKError('unsupported OS native-tool contract')
     commands, roles, bindings = set(), set(), set()
     rows = []
@@ -115,6 +111,29 @@ def read_native_os_contract(path, *, sha256):
     if not rows or not {'cmp', 'readlink', 'make', 'sh'} <= commands:
         raise SDKError('OS native-tool control members are missing')
     return data, tuple(rows), frozenset(roles)
+
+
+def _read_native_os_contract(path, *, sha256, allow_recorded_v1):
+    if not isinstance(sha256, str) or re.fullmatch(r'[0-9a-f]{64}', sha256) is None:
+        raise SDKError('expected the explicit OS contract SHA256')
+    path = path_string(path)
+    stream, before = open_regular(path)
+    with stream:
+        data = stream.read(65537)
+    verify_stable(path, before)
+    if hashlib.sha256(data).hexdigest() != sha256:
+        raise SDKError('OS native-tool contract changed or is too large')
+    return parse_native_os_contract(data, allow_recorded_v1=allow_recorded_v1)
+
+
+def read_native_os_contract(path, *, sha256):
+    """Read current OS routing input; only contract v2 is accepted."""
+    return _read_native_os_contract(path, sha256=sha256, allow_recorded_v1=False)
+
+
+def read_recorded_native_os_contract(path, *, sha256):
+    """Read a saved object contract for compatibility inspection only."""
+    return _read_native_os_contract(path, sha256=sha256, allow_recorded_v1=True)
 
 
 def publish_native_os_routing(toolset, *, contract_path, contract_sha256,

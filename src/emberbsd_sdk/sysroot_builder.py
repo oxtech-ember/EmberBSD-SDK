@@ -735,10 +735,23 @@ class SysrootBuilder:
                 old_rows = data.splitlines()
                 selected_contract = Path(self.native_contract).read_text(encoding='ascii')
                 new_rows = selected_contract.splitlines()
-                if (old_rows[:1] != new_rows[:1] or
-                        not set(old_rows[1:]) <= set(new_rows[1:])):
+                migration = (old_rows[:1] == ['EmberBSD-native-tools 1'] and
+                             new_rows[:1] == ['EmberBSD-native-tools 2'])
+                if migration:
+                    old_body = old_rows[1:]
+                    new_body = new_rows[1:]
+                    if (new_body.count('dtc dtc -') != 1 or
+                            [row for row in new_body if row != 'dtc dtc -'] != old_body):
+                        return False
+                    extra = [['dtc', 'dtc', '-']]
+                elif old_rows[:1] == new_rows[:1]:
+                    if not set(old_rows[1:]) <= set(new_rows[1:]):
+                        return False
+                    extra = [row.split(' ') for row in new_rows[1:] if row not in old_rows[1:]]
+                else:
                     return False
-                extra = [row.split(' ') for row in new_rows[1:] if row not in old_rows[1:]]
+                if migration and added_contract != {'dtc'}:
+                    return False
                 if (any(len(row) != 3 or row[2] != '-' for row in extra) or
                         not added_contract <= {row[1] for row in extra}):
                     return False
@@ -776,7 +789,7 @@ class SysrootBuilder:
         digest = routing[len(prefix):] if routing.startswith(prefix) else ''
         recorded = os.path.join(routing, 'contract')
         if re.fullmatch(r'[0-9a-f]{64}', digest) and paths.entry(recorded) is not None:
-            data, _, _ = native_os_routing.read_native_os_contract(recorded, sha256=digest)
+            data, _, _ = native_os_routing.read_recorded_native_os_contract(recorded, sha256=digest)
             return data.decode('ascii')
         source = record['sources']['os']
         contract = 'tools/native-tools/contract'
@@ -786,11 +799,13 @@ class SysrootBuilder:
             if self.git(self.sources['os']['path'], 'ls-tree', '--name-only',
                         source['commit'], '--', contract) != contract:
                 return None
-            return self.git(self.sources['os']['path'], 'show', source['commit'] + ':' + contract) + '\n'
+            data = self.git(self.sources['os']['path'], 'show', source['commit'] + ':' + contract) + '\n'
         except SDKError as exc:
             raise SDKError('the OS checkout lacks the native-tool contract of the reused objects at '
                            f'{source["commit"]}; fetch that commit into the checkout or select new '
                            'objects') from exc
+        native_os_routing.parse_native_os_contract(data.encode('ascii'), allow_recorded_v1=True)
+        return data
 
     def context_signature(self, path):
         if self.compiler_family() != 'clang' or path != self.paths['tools']:
