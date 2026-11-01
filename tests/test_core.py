@@ -7,7 +7,6 @@ import io
 import json
 import os
 from pathlib import Path
-import stat
 import struct
 import subprocess
 import sys
@@ -383,45 +382,59 @@ class GitEnvironmentTests(TemporaryCase):
 
 
 
-class GitSourceAncestorTests(TemporaryCase):
-    """Each tracked ancestor directory is checked once per git_source call."""
+class GitSourceMaterializationTests(TemporaryCase):
+    """Git status rejects missing and symlink-shadowed tracked paths."""
 
-    def test_each_ancestor_directory_is_inspected_once(self):
+    def repository(self, files, *, ignore=None):
         repository = self.root / 'repository'
-        names = [f'a/b/c/file{index}' for index in range(4)] + ['a/b/other', 'a/top', 'd/e/file', 'root-file']
-        for name in names:
-            self.write('repository/' + name, name + '\n')
+        for name, contents in files.items():
+            self.write('repository/' + name, contents)
+        if ignore is not None:
+            self.write('repository/.gitignore', ignore)
         for args in (['init', '-q'], ['add', '.'], ['commit', '-qm', 'Fixture']):
             subprocess.run(['git', '-C', str(repository), *args], check=True, env=git_environment())
-        calls = []
-        real = provenance.entry
-        def counted(path):
-            calls.append(path)
-            return real(path)
-        with patch.object(provenance, 'entry', side_effect=counted):
-            record = provenance.git_source(str(repository))
-        root = record['path']
-        directories = [path for path in calls if os.path.isdir(path)]
-        self.assertEqual(sorted(directories), sorted(os.path.join(root, name)
-                         for name in ('a', 'a/b', 'a/b/c', 'd', 'd/e')))
-        self.assertEqual(sorted(path for path in calls if not os.path.isdir(path)),
-                         sorted(os.path.join(root, name) for name in names))
+        return repository
 
-    def test_an_ancestor_that_is_not_a_directory_is_still_refused(self):
-        repository = self.root / 'repository'
-        for name in ('a/b/one', 'a/b/two'):
-            self.write('repository/' + name, name + '\n')
-        for args in (['init', '-q'], ['add', '.'], ['commit', '-qm', 'Fixture']):
-            subprocess.run(['git', '-C', str(repository), *args], check=True, env=git_environment())
-        real = provenance.entry
-        def aliased(path):
-            # Report the second ancestor as a symbolic link, as an ignored alias would be.
-            if path.endswith(os.path.join('a', 'b')):
-                return os.lstat(__file__).__class__((stat.S_IFLNK | 0o755,) + tuple(os.lstat(path))[1:])
-            return real(path)
-        with patch.object(provenance, 'entry', side_effect=aliased), \
-                self.assertRaisesRegex(SDKError, 'ancestor is not a real directory'):
+    def test_git_status_covers_tracked_deletion_and_file_type_change(self):
+        repository = self.repository({'deleted': 'gone\n', 'regular': 'same\n', 'target': 'same\n'})
+        (repository / 'deleted').unlink()
+        with self.assertRaisesRegex(SDKError, 'clean Git root'):
             provenance.git_source(str(repository))
+
+        (repository / 'deleted').write_text('gone\n')
+        (repository / 'regular').unlink()
+        (repository / 'regular').symlink_to('target')
+        with self.assertRaisesRegex(SDKError, 'clean Git root'):
+            provenance.git_source(str(repository))
+
+    def test_git_status_covers_ignored_directory_alias_over_tracked_parent(self):
+        repository = self.repository({'a/b/file': 'same\n'}, ignore='/alias/\n')
+        alias = repository / 'alias/b'
+        alias.mkdir(parents=True)
+        (alias / 'file').write_text('same\n')
+        tracked = repository / 'a/b/file'
+        tracked.unlink()
+        tracked.parent.rmdir()
+        tracked.parent.parent.rmdir()
+        (repository / 'a').symlink_to('alias')
+        with self.assertRaisesRegex(SDKError, 'clean Git root'):
+            provenance.git_source(str(repository))
+
+    def test_git_source_does_not_lstat_every_tracked_path_after_clean_status(self):
+        names = [f'a/b/c/file{index}' for index in range(4)] + ['a/b/other', 'a/top', 'd/e/file', 'root-file']
+        repository = self.repository({name: name + '\n' for name in names})
+        tracked_paths = {str(repository / name) for name in names}
+        tracked_paths.update(str(parent) for name in names
+                             for parent in (repository / name).parents
+                             if parent != repository and parent.is_relative_to(repository))
+        calls = []
+        real_lstat = os.lstat
+        def counted(path, *args, **kwargs):
+            calls.append(os.fspath(path))
+            return real_lstat(path, *args, **kwargs)
+        with patch('os.lstat', side_effect=counted):
+            provenance.git_source(str(repository))
+        self.assertFalse(tracked_paths.intersection(calls))
 
 
 class GitSourceMachineConfigTests(TemporaryCase):
