@@ -636,6 +636,16 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
             with self.assertRaisesRegex(SDKError, '--llvm-bootstrap-stage is required'):
                 builder_type(options).preflight()
 
+    def test_full_prepared_source_walk_is_plan_only(self):
+        builder, _ = self.builder()
+        with patch.object(builder, 'require_prepared_sources', return_value={}) as walk:
+            builder.options['plan'] = False
+            builder.preflight()
+            self.assertEqual(walk.call_count, 0)
+            builder.options['plan'] = True
+            builder.preflight()
+            self.assertEqual(walk.call_count, 1)
+
     def test_runtime_path_discovery_uses_identity_then_keeps_full_validation(self):
         builder, _ = self.builder()
         from emberbsd_sdk import llvm_runtime

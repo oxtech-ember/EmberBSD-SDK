@@ -11,6 +11,13 @@ The recorded producer sequence covers target headers, OS CRT and libraries,
 the dynamic loader, and the selected compiler's developer runtime. It does not install
 a system on a board.
 
+`--plan` also runs an optional prepared-source graph diagnostic before listing
+commands. A normal build skips that additional graph walk; the selected source
+identities, target ABI, tools and build contexts are still checked, and the
+actual OS makefiles retain their `.error` guards for sources the build reaches.
+The graph diagnostic is not a guarantee that a build will succeed or that it
+will discover every conditional source guard.
+
 ## Required inputs
 
 Use a qualified host process adapter with CPython 3.15 and the prerequisites of

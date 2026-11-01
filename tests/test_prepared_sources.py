@@ -1,20 +1,22 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
 # Origin: EmberBSD (AI-assisted).
-"""Plan-time refusal of OS builds that reach an unselected prepared source.
+"""Plan diagnostics and native make guards for prepared-source selection.
 
 A synthetic OS tree and a bmake stand-in answer ${SUBDIR} and
 ${.MAKE.MAKEFILES}; the makefiles carry the OS guard forms. The b504c-style
-case selects only the sources a sysroot needs and must be refused at
---plan, not hours into the release when iscsi/lib reaches "includes".
+case exercises the optional --plan graph diagnostic. Ordinary build dispatch
+still propagates a real makefile .error when it reaches an unselected source.
 """
 import os
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from test_core import TemporaryCase
 from emberbsd_sdk import prepared_sources
+from emberbsd_sdk import process
 from emberbsd_sdk.errors import CommandError, SDKError
 from emberbsd_sdk.llvm_sysroot import LLVMCoordinator
 from emberbsd_sdk.os_release_builder import OSReleaseBuilder, flags_for
@@ -190,7 +192,7 @@ class PreparedSourceTests(TemporaryCase):
                                          'EMBER_BYACC_SOURCE=/prepared/byacc'],
                                   require_prepared_sources=lambda flags, traversals: calls.append((flags, traversals)))
         coordinator = LLVMCoordinator.__new__(LLVMCoordinator)
-        coordinator.options = {'target': 'aarch64', 'x11-source': '/x', 'base-cxx': True}
+        coordinator.options = {'target': 'aarch64', 'x11-source': '/x', 'base-cxx': True, 'plan': True}
         coordinator.builder_type = OSReleaseBuilder
         coordinator.headers = headers
         coordinator.require_prepared_sources()
@@ -201,6 +203,44 @@ class PreparedSourceTests(TemporaryCase):
             self.assertEqual(final_flags.count(flag), 1, flag)
         self.assertNotIn('MKX11=no', final_flags)
         self.assertNotIn('MKCXX=no', final_flags)
+
+    def test_normal_coordinator_skips_extra_graph_walk(self):
+        headers = SimpleNamespace(flags=[], require_prepared_sources=lambda *_: self.fail(
+            'normal build must leave prepared-source refusal to the OS make guards'))
+        coordinator = LLVMCoordinator.__new__(LLVMCoordinator)
+        coordinator.options = {'target': 'aarch64', 'plan': False}
+        coordinator.builder_type = OSReleaseBuilder
+        coordinator.headers = headers
+        coordinator.require_prepared_sources()
+
+    def test_normal_run_dispatch_propagates_native_os_source_guard(self):
+        bmake = shutil.which('bmake')
+        if not bmake:
+            self.skipTest('native bmake is not on PATH')
+        guard = self.os / 'guard'
+        guard.mkdir()
+        (guard / 'Makefile').write_text(
+            '.if !defined(EMBER_MDNS_SOURCE) && make(all)\n'
+            '.error Set EMBER_MDNS_SOURCE to the prepared common Ports source\n'
+            '.endif\n')
+        builder = self.builder(())
+        builder.options['plan'] = False
+        builder.options['runtime-work'] = '/unused/runtime-work'
+        builder.options['compiler-family'] = 'gcc'
+        builder.paths['destination'] = str(self.root / 'destination')
+        builder.commands = []
+        builder.receipt = {}
+        builder.log = open(self.root / 'build.log', 'wb')
+        self.addCleanup(builder.log.close)
+        builder.environment = os.environ.copy()
+        builder.process_inspector = process.SessionInspector(env=builder.environment)
+        builder.save_receipt = lambda: None
+        builder.interrupted = lambda: None
+        command = [bmake, '-C', str(guard), 'all']
+        builder.preflight = lambda: None
+        builder._run_preflighted = lambda: builder.dispatch(command)
+        with self.assertRaisesRegex(SDKError, 'build command failed'):
+            builder.run()
 
     def test_c_foundation_preflight_includes_host_tool_sources(self):
         from emberbsd_sdk.llvm_sysroot import LLVMPhaseBuilder

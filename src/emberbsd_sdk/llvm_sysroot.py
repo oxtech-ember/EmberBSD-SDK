@@ -255,6 +255,8 @@ class LLVMCoordinator:
 
         The base phase builds "tools libs" with the headers phase's flags;
         the final builder uses its own profile with the final LLVM knobs."""
+        if not self.options.get('plan'):
+            return
         headers = self.headers
         if self.options.get('c-foundation'):
             headers.require_prepared_sources(headers.flags, prepared_sources.TOOLS_TRAVERSALS)

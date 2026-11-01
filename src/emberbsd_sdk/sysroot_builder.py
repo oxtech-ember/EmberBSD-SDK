@@ -1669,7 +1669,11 @@ class SysrootBuilder:
             self.signature['llvm_phase'] = self.llvm_phase
         self.configure_signature()
         # After the final flags are known and before any output is claimed.
-        self.prepared_source_needs = self.require_prepared_sources(self.flags, self.prepared_source_traversals())
+        # The graph walk is a plan-time diagnostic. A normal build keeps the
+        # selected inputs validated here and lets the actual OS make guards
+        # reject any reached, unselected prepared source.
+        self.prepared_source_needs = (self.require_prepared_sources(
+            self.flags, self.prepared_source_traversals()) if self.options.get('plan') else {})
         self.native_abi_refresh = False
         self.contexts = {name: self.inspect_context(self.paths[name]) for name in ('objects', 'tools')}
         self.build_command = [self.shell, os.path.join(self.paths['os'], 'build.sh'), '-U', '-u', '-j' + jobs, '-m', self.target['machine'], '-a', self.target['arch'], '-O', self.paths['objects'], '-T', self.paths['tools'], '-D', self.paths['destination']]
