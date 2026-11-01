@@ -19,6 +19,7 @@ from pathlib import Path
 import re
 
 from . import process
+from .cpu_capacity import resolve_jobs
 from .errors import CommandError, SDKError
 
 VARIABLES = r'EMBER_[A-Z0-9_]+_SOURCE(?:[ \t]+and[ \t]+EMBER_[A-Z0-9_]+_SOURCE)*'
@@ -123,8 +124,9 @@ def bmake_query(make, os_root, flags, *, env):
     return query
 
 
-def required_sources(os_root, query, traversals, *, jobs=8):
+def required_sources(os_root, query, traversals, *, jobs=None):
     """Map each EMBER_*_SOURCE that TRAVERSALS reach to the first directory needing it."""
+    jobs = resolve_jobs(jobs)
     root = os.path.realpath(os_root)
     separate = {os.path.join(root, name) for name in SEPARATE}
     stubs = top_stubs(root)

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
 
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -14,6 +15,16 @@ from emberbsd_sdk.cpu_capacity import resolve_jobs
 
 
 class CPUCapacityTests(unittest.TestCase):
+    def test_jobs_cli_uses_shared_resolver_for_default_and_override(self):
+        script = Path(__file__).resolve().parents[1] / 'scripts/resolve-jobs.py'
+        automatic = subprocess.run([sys.executable, '-B', str(script)], capture_output=True, text=True)
+        self.assertEqual(automatic.returncode, 0, automatic.stderr)
+        self.assertGreater(int(automatic.stdout), 0)
+        explicit = subprocess.run([sys.executable, '-B', str(script), '--jobs', '7'],
+                                  capture_output=True, text=True)
+        self.assertEqual(explicit.returncode, 0, explicit.stderr)
+        self.assertEqual(explicit.stdout.strip(), '7')
+
     def test_process_cpu_count_is_preferred(self):
         with patch('emberbsd_sdk.cpu_capacity.os.process_cpu_count', create=True, return_value=6), \
              patch('emberbsd_sdk.cpu_capacity.os.sched_getaffinity', create=True, side_effect=AssertionError), \

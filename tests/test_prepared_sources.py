@@ -133,6 +133,13 @@ class PreparedSourceTests(TemporaryCase):
                          [(('EMBER_BYACC_SOURCE',), None)])
         self.assertEqual(prepared_sources.source_option('EMBER_TCP_WRAPPERS_SOURCE'), 'tcp-wrappers-source')
 
+    def test_required_sources_uses_shared_job_resolution(self):
+        with patch('emberbsd_sdk.prepared_sources.resolve_jobs', return_value=3) as resolve:
+            result = prepared_sources.required_sources(str(self.os), lambda _directory: ([], []),
+                                                       [('.', ('obj',))])
+        self.assertEqual(result, {})
+        resolve.assert_called_once_with(None)
+
     def test_release_needs_follow_reached_directories_and_targets(self):
         needed = self.walk(['MKX11=no'], prepared_sources.RELEASE_TRAVERSALS)
         self.assertEqual(needed, {'EMBER_ISCSI_SOURCE': 'external/iscsi/lib', 'EMBER_TOP_SOURCE': 'external/top/bin',
