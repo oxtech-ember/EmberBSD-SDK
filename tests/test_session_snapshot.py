@@ -216,6 +216,12 @@ class SnapshotTests(TemporaryCase):
                 result = original()
                 self.assertEqual(result[child][0], parent.pid)
                 chains.append((parent.pid, child))
+                # Unrelated same-UID host processes, such as new PPID 1 rows,
+                # have no proof and legitimately make members() take another
+                # snapshot. Keep only the real rows of the controller and this
+                # chain, so any repeat snapshot can only come from the chain.
+                keep = (os.getpid(), parent.pid, child)
+                result = {pid: row for pid, row in result.items() if pid in keep}
                 os.write(go_write, b'xx')
                 parent.wait(timeout=5)
                 return result
