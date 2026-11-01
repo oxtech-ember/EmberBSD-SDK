@@ -251,6 +251,22 @@ class PreparedSourceTests(TemporaryCase):
         self.assertEqual(needed.get('EMBER_BYACC_SOURCE'), 'tools/host')
         self.assertIn('--byacc-source', prepared_sources.missing_sources(needed, {})[0])
 
+    def test_c_foundation_requires_heimdal_before_plan_or_build(self):
+        coordinator = LLVMCoordinator.__new__(LLVMCoordinator)
+        coordinator.headers = SimpleNamespace(flags=[], require_prepared_sources=lambda *_: None)
+        for plan in (True, False):
+            with self.subTest(plan=plan):
+                coordinator.options = {'c-foundation': True, 'plan': plan}
+                with self.assertRaisesRegex(SDKError, r'C foundation requires --heimdal-source'):
+                    coordinator.require_prepared_sources()
+
+        calls = []
+        coordinator.options = {'c-foundation': True, 'plan': True,
+                                'heimdal-source': '/prepared/heimdal'}
+        coordinator.headers = SimpleNamespace(flags=[], require_prepared_sources=lambda *args: calls.append(args))
+        coordinator.require_prepared_sources()
+        self.assertEqual(calls, [([], prepared_sources.TOOLS_TRAVERSALS)])
+
     def test_ordinary_headers_preflight_includes_host_tool_sources(self):
         from emberbsd_sdk.llvm_sysroot import LLVMPhaseBuilder
         (self.os / 'tools/host/Makefile').write_text(BYACC)

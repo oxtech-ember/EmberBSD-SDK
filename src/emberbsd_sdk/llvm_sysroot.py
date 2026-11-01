@@ -255,6 +255,8 @@ class LLVMCoordinator:
 
         The base phase builds "tools libs" with the headers phase's flags;
         the final builder uses its own profile with the final LLVM knobs."""
+        if self.options.get('c-foundation') and not self.options.get('heimdal-source'):
+            raise SDKError('C foundation requires --heimdal-source for tools/asn1_compile and tools/compile_et')
         if not self.options.get('plan'):
             return
         headers = self.headers
