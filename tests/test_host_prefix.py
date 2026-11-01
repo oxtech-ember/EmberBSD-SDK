@@ -172,13 +172,13 @@ class HostPrefixTests(TemporaryCase):
         self.assertIn(str(self.fixture.root / 'sbin'), selected.path.split(os.pathsep))
         self.assertEqual(self.fixture.queries, [])
 
-    def test_gnu_patch_is_preferred_to_nbpatch_when_both_are_installed(self):
-        gpatch = self.fixture.write('gpatch', header(62, 2))
-        self.fixture.write('nbpatch', header(62, 2))
+    def test_nbpatch_remains_selected_over_optional_gnu_patch_alias(self):
+        self.fixture.write('gpatch', header(62, 2))
+        nbpatch = self.fixture.write('nbpatch', header(62, 2))
         gnu = self.fixture.root / 'gnu/bin'; gnu.mkdir(parents=True)
         (gnu / 'patch').write_bytes(header(62, 2)); (gnu / 'patch').chmod(0o755)
         selected = self.fixture.load(roles=('patch',))
-        self.assertEqual(selected.tool('patch'), str(gpatch))
+        self.assertEqual(selected.tool('patch'), str(nbpatch))
 
     def test_hostname_accepts_the_installed_gettext_tool_and_preserves_priority(self):
         names = ('bin/hostname', 'gnu/bin/hostname', 'libexec/gettext/hostname')
@@ -218,7 +218,7 @@ class HostPrefixTests(TemporaryCase):
 
     def test_pkgsrc_alias_cannot_escape_or_fall_back(self):
         external = self.write('outside-patch', header(62, 2), 0o755)
-        (self.fixture.root / 'bin/gpatch').symlink_to(external)
+        (self.fixture.root / 'bin/nbpatch').symlink_to(external)
         gnu = self.fixture.root / 'gnu/bin'; gnu.mkdir(parents=True)
         fallback = gnu / 'patch'; fallback.write_bytes(header(62, 2)); fallback.chmod(0o755)
         with self.assertRaisesRegex(SDKError, 'escapes host prefix'):
