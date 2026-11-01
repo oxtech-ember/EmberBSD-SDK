@@ -91,6 +91,7 @@ class RuntimeRefreshTests(unittest.TestCase):
         new['runtime']['manifest']['base']['os_revision'] = '9' * 40
         fake = SimpleNamespace(
             paths={'os': '/os', 'objects': '/obj'}, context_signature=lambda path: new,
+            COMMON_SOURCES=SysrootBuilder.COMMON_SOURCES,
             reuse_signature=SysrootBuilder.reuse_signature,
             compatible_context=lambda candidate, path: True,
             compiler_record={'binaries': {'ar': {'selected_path': '/tool/ar'}}}, environment={},
@@ -187,6 +188,7 @@ class RuntimeRefreshTests(unittest.TestCase):
         fake = SimpleNamespace(
             paths={'os': '/os', 'objects': '/obj'},
             context_signature=lambda path: new,
+            COMMON_SOURCES=SysrootBuilder.COMMON_SOURCES,
             reuse_signature=SysrootBuilder.reuse_signature,
             compatible_context=lambda candidate, path: checks.append(copy.deepcopy(candidate['signature'])) or
                 candidate['signature']['compiler'] == old['compiler'] and
@@ -202,6 +204,100 @@ class RuntimeRefreshTests(unittest.TestCase):
         self.assertEqual(checks[0]['compiler'], old['compiler'])
         self.assertEqual(checks[0]['flags'], new['flags'])
         plan.assert_called_once()
+
+    def test_combined_source_and_runtime_refresh_normalizes_only_declared_flags(self):
+        def source(package, tree):
+            return {'format': 'emberbsd-prepared-source', 'version': 1,
+                    'package': package, 'tree_sha256': tree}
+
+        old, new = copy.deepcopy(self.before), copy.deepcopy(self.after)
+        old['compiler'] = new['compiler'] = {'family': 'clang', 'version': '23.1.4'}
+        old['llvm_source'] = {'llvm_version': '23.1.4', 'tree_sha256': 'a' * 64}
+        new['llvm_source'] = {'llvm_version': '23.1.4', 'tree_sha256': 'b' * 64}
+        old['common_sources'] = {
+            'openssh': source('security/openssh', '1' * 64),
+            'openssl': source('security/openssl', '2' * 64),
+            'openldap': source('databases/openldap', '3' * 64),
+        }
+        new['common_sources'] = {
+            'openssh': source('security/openssh', '4' * 64),
+            'openssl': source('security/openssl', '2' * 64),
+            'openldap': source('databases/openldap', '3' * 64),
+        }
+        old['flags'] = [
+            'CC=clang', 'CFLAGS=-O2', 'LDFLAGS=-Wl,keep',
+            'EMBER_EXTERNAL_LLVM_RUNTIME=/previous/runtime',
+            'EMBER_LLVM_RESOURCE_DIR=/previous/resource',
+            'EMBER_LLVM_SOURCE=/prepared/llvm-old',
+            'EMBER_OPENSSH_SOURCE=/prepared/openssh-old',
+            'EMBER_OPENSSL_SOURCE=/prepared/openssl-old',
+            'EMBER_OPENLDAP_SOURCE=/prepared/openldap-old',
+        ]
+        new['flags'] = [
+            'CC=clang', 'CFLAGS=-O2', 'LDFLAGS=-Wl,keep',
+            'EMBER_EXTERNAL_LLVM_RUNTIME=/candidate/runtime',
+            'EMBER_LLVM_RESOURCE_DIR=/candidate/resource',
+            'EMBER_LLVM_SOURCE=/tmp/llvm-current',
+            'EMBER_OPENSSH_SOURCE=/tmp/openssh-current',
+            'EMBER_OPENSSL_SOURCE=/tmp/openssl-current',
+            'EMBER_OPENLDAP_SOURCE=/tmp/openldap-current',
+            'HOST_AUTOCONF=/native/bin/autoconf',
+        ]
+        record = {'signature': old}
+        checks = []
+        fake = SimpleNamespace(
+            paths={'os': '/os', 'objects': '/obj', 'openssl-source': '/tmp/openssl-current',
+                   'openldap-source': '/tmp/openldap-current'},
+            context_signature=lambda path: new,
+            COMMON_SOURCES=SysrootBuilder.COMMON_SOURCES,
+            reuse_signature=SysrootBuilder.reuse_signature,
+            compatible_context=lambda candidate, path:
+                checks.append(copy.deepcopy(candidate['signature'])) or
+                candidate['signature']['compiler'] == fake.context_signature(path)['compiler'] and
+                candidate['signature']['flags'] == fake.context_signature(path)['flags'],
+            compiler_record={'binaries': {'ar': {'selected_path': '/tool/ar'}}},
+            environment={}, native=SimpleNamespace(tool=lambda role: '/native/bin/' + role),
+        )
+        fake.reuse_signature = fake.reuse_signature.__get__(fake)
+        with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=['other/cxx']) as plan:
+            self.assertTrue(SysrootBuilder.plan_prepared_refresh(fake, record, '/obj'), repr(checks))
+        self.assertEqual(fake.refresh_dirs, ['other/cxx'])
+        self.assertEqual(len(checks), 1)
+        self.assertEqual(checks[0]['flags'], new['flags'])
+        plan.assert_called_once()
+
+        for label, mutate in (
+                ('compiler', lambda candidate: candidate.update(compiler={'family': 'clang', 'version': '24'})),
+                ('unrelated flag', lambda candidate: candidate['flags'].append('LDFLAGS=-Wl,changed')),
+                ('wrong autoconf', lambda candidate: candidate['flags'].__setitem__(
+                    candidate['flags'].index('HOST_AUTOCONF=/native/bin/autoconf'),
+                    'HOST_AUTOCONF=/wrong/autoconf'))):
+            with self.subTest(label=label):
+                candidate = copy.deepcopy(new)
+                mutate(candidate)
+                fake.context_signature = lambda path, candidate=candidate: candidate
+                self.assertFalse(SysrootBuilder.plan_prepared_refresh(fake, record, '/obj'))
+
+        wrong_existing_host = copy.deepcopy(old)
+        wrong_existing_host['flags'].append('HOST_AUTOCONF=/old/other-autoconf')
+        fake.context_signature = lambda path: new
+        self.assertFalse(SysrootBuilder.plan_prepared_refresh(
+            fake, {'signature': wrong_existing_host}, '/obj'))
+
+        path_only_old, path_only_new = copy.deepcopy(old), copy.deepcopy(old)
+        path_only_new['flags'] = [flag.replace('/prepared/openssl-old', '/tmp/openssl-current')
+                                  for flag in path_only_new['flags']]
+        fake.context_signature = lambda path: path_only_new
+        self.assertFalse(SysrootBuilder.plan_prepared_refresh(
+            fake, {'signature': path_only_old}, '/obj'))
+
+        no_refresh_old = copy.deepcopy(old)
+        no_refresh_new = copy.deepcopy(old)
+        no_refresh_new['llvm_source']['tree_sha256'] = 'c' * 64
+        no_refresh_new['runtime']['manifest']['source']['sha512'] = '9' * 128
+        no_refresh_new['flags'] = list(no_refresh_old['flags']) + ['EMBER_LLVM_SOURCE=/tmp/other-llvm']
+        fake.context_signature = lambda path: no_refresh_new
+        self.assertFalse(SysrootBuilder.plan_prepared_refresh(fake, {'signature': no_refresh_old}, '/obj'))
 
 
 if __name__ == '__main__':

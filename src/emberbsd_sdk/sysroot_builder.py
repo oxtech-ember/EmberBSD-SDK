@@ -451,12 +451,46 @@ class SysrootBuilder:
                         old[key] = copy.deepcopy(new[key])
             if not changed and runtime is None:
                 return False
-            prefixes = tuple('EMBER_' + name.upper().replace('-', '_') + '_SOURCE=' for name in changed)
-            if runtime is not None:
-                prefixes += ('EMBER_EXTERNAL_LLVM_RUNTIME=', 'EMBER_LLVM_RESOURCE_DIR=')
+            common_packages = dict(self.COMMON_SOURCES)
+
+            def prepared_identity(record, package):
+                if (not isinstance(record, dict) or record.get('format') != 'emberbsd-prepared-source' or
+                        type(record.get('version')) is not int or record['version'] != 1 or
+                        record.get('package') != package or not isinstance(record.get('tree_sha256'), str) or
+                        re.fullmatch('[0-9a-f]{64}', record['tree_sha256']) is None):
+                    return None
+                return tuple(record[key] for key in ('format', 'version', 'package', 'tree_sha256'))
+
             old_flags = self.reuse_signature(copy.deepcopy(old))['flags']
             new_flags = self.reuse_signature(copy.deepcopy(new))['flags']
-            if [f for f in old_flags if not f.startswith(prefixes)] != [f for f in new_flags if not f.startswith(prefixes)]:
+            moved = set()
+            if changed or runtime is not None:
+                for name in before.keys() & after.keys() & common_packages.keys():
+                    package = common_packages[name]
+                    identity = prepared_identity(before[name], package)
+                    if identity is None or identity != prepared_identity(after[name], package):
+                        continue
+                    prefix = 'EMBER_' + name.upper().replace('-', '_') + '_SOURCE='
+                    old_binding = [flag for flag in old_flags if flag.startswith(prefix)]
+                    new_binding = [flag for flag in new_flags if flag.startswith(prefix)]
+                    selected_path = self.paths.get(name + '-source')
+                    if (len(old_binding) == len(new_binding) == 1 and old_binding[0] != new_binding[0] and
+                            selected_path is not None and new_binding[0] == prefix + selected_path and
+                            os.path.isabs(old_binding[0][len(prefix):])):
+                        moved.add(name)
+
+            prefixes = tuple('EMBER_' + name.upper().replace('-', '_') + '_SOURCE='
+                             for name in changed | moved if name in common_packages)
+            if runtime is not None:
+                prefixes += ('EMBER_EXTERNAL_LLVM_RUNTIME=', 'EMBER_LLVM_RESOURCE_DIR=', 'EMBER_LLVM_SOURCE=')
+            comparable_new_flags = new_flags
+            if 'openssh' in changed and not any(flag.startswith('HOST_AUTOCONF=') for flag in old_flags):
+                autoconf = 'HOST_AUTOCONF=' + self.native.tool('autoconf')
+                selected_autoconf = [flag for flag in new_flags if flag.startswith('HOST_AUTOCONF=')]
+                if selected_autoconf == [autoconf]:
+                    comparable_new_flags = [flag for flag in new_flags if flag != autoconf]
+            if ([f for f in old_flags if not f.startswith(prefixes)] !=
+                    [f for f in comparable_new_flags if not f.startswith(prefixes)]):
                 return False
             for name in changed:
                 before[name] = copy.deepcopy(after[name])
