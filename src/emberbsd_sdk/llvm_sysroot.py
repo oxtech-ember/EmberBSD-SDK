@@ -358,10 +358,11 @@ class LLVMCoordinator:
         selected = self.headers
         stage = os.path.join(self.runtime_root, phase + '-stage')
         # The producer writes runtime.json last and removes it on failure.
-        if (self.resume and paths.entry(stage) is not None and
-                paths.entry(os.path.join(stage, 'runtime.json')) is None):
-            set_aside(self.runtime_root, [os.path.join(self.runtime_root, phase + suffix)
-                                          for suffix in ('-stage', '-work', '.json', '.log')])
+        outputs = [os.path.join(self.runtime_root, phase + suffix)
+                   for suffix in ('-stage', '-work', '.json', '.log')]
+        if (self.resume and paths.entry(os.path.join(stage, 'runtime.json')) is None and
+                any(paths.entry(output) is not None for output in outputs)):
+            set_aside(self.runtime_root, outputs)
         if paths.entry(stage) is None:
             selected.mkdirs(self.runtime_root, os.path.join(selected.paths['sdk'], 'obj'))
             selected.execute_external(self.runtime_command(phase, base),

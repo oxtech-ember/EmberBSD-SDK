@@ -1265,6 +1265,135 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertEqual((work / 'failed-1/bootstrap.log').read_text(), 'failed build\n')
         self.assertTrue((work / 'bootstrap-stage/runtime.json').exists())
 
+    def test_keyed_runtime_resume_sets_aside_pre_stage_attempt_outputs(self):
+        record = {'recipe': {'ports_revision': 'a' * 40}}
+        sdk = self.root / 'sdk'
+        (sdk / 'obj').mkdir(parents=True)
+
+        def make_coordinator(work, *, resume):
+            header = SysrootBuilder({'sdk': str(sdk)})
+            header.paths = {'sdk': str(sdk), 'ports': '/ports', 'os': '/os'}
+            options = {'sdk': str(sdk), 'target': 'aarch64',
+                       'runtime-work': str(sdk / 'obj/runtime')}
+            if not resume:
+                options['llvm-stages'] = str(sdk / 'stages/explicit')
+            coordinator = LLVMCoordinator(options, SysrootBuilder)
+            coordinator.runtime_root = str(work)
+            self.assertEqual(coordinator.resume, resume)
+            coordinator.headers = header
+            return coordinator, header
+
+        def successful_dispatch(header, command):
+            header.commands.append({'argv': command, 'status': 'running'})
+            header.save_receipt()
+            stage = Path(header.paths['runtime-stage'])
+            stage.mkdir(parents=True)
+            write(stage / 'runtime.json', '{}')
+            header.commands[-1]['status'] = 'passed'
+            header.save_receipt()
+
+        for case in ('failed-producer', 'receipt-only', 'log-only', 'orphan-work'):
+            with self.subTest(case=case):
+                work = sdk / 'obj/runtime' / ('os-key-' + case)
+                work.mkdir(parents=True)
+                coordinator, header = make_coordinator(work, resume=True)
+                receipt, log = work / 'bootstrap.json', work / 'bootstrap.log'
+                stage, orphan_work = work / 'bootstrap-stage', work / 'bootstrap-work'
+                if case == 'failed-producer':
+                    def fail_before_work(command):
+                        header.commands.append({'argv': command, 'status': 'running'})
+                        header.save_receipt()
+                        raise SDKError('simulated producer failure before stage creation')
+                    with patch.object(header, 'dispatch', side_effect=fail_before_work):
+                        with self.assertRaisesRegex(SDKError, 'before stage creation'):
+                            header.execute_external(['producer'], str(receipt), str(log))
+                    self.assertEqual(jsonio.read_json(receipt)['status'], 'running')
+                    self.assertTrue(log.is_file())
+                    self.assertFalse(stage.exists())
+                    self.assertFalse(orphan_work.exists())
+                elif case == 'receipt-only':
+                    write(receipt, 'old receipt\n')
+                elif case == 'log-only':
+                    write(log, 'old log\n')
+                else:
+                    orphan_work.mkdir()
+
+                header.paths['runtime-stage'] = str(stage)
+                def dispatch(command):
+                    successful_dispatch(header, command)
+                with patch.object(header, 'dispatch', side_effect=dispatch), \
+                     patch.object(coordinator, 'runtime_command', return_value=['producer']), \
+                     patch('emberbsd_sdk.llvm_sysroot.process.capture',
+                           return_value=type('Result', (), {'stdout': b'{}'})()), \
+                     patch('emberbsd_sdk.llvm_sysroot.jsonio.loads_json', return_value=record), \
+                     patch('emberbsd_sdk.llvm_sysroot.llvm_runtime.validate_identity'), \
+                     patch('emberbsd_sdk.llvm_sysroot.llvm_runtime.validate_stage', return_value=record):
+                    coordinator.runtime('bootstrap', '/base')
+
+                saved = work / 'failed-1'
+                self.assertTrue(saved.is_dir())
+                self.assertFalse((saved / 'bootstrap-stage').exists())
+                self.assertTrue(stage.joinpath('runtime.json').is_file())
+                self.assertTrue(receipt.is_file())
+                self.assertTrue(log.is_file())
+                if case == 'orphan-work':
+                    self.assertTrue((saved / 'bootstrap-work').is_dir())
+                if case == 'failed-producer':
+                    self.assertEqual(jsonio.read_json(saved / 'bootstrap.json')['status'], 'running')
+                    self.assertTrue((saved / 'bootstrap.log').is_file())
+                if case == 'receipt-only':
+                    self.assertEqual((saved / 'bootstrap.json').read_text(), 'old receipt\n')
+                if case == 'log-only':
+                    self.assertEqual((saved / 'bootstrap.log').read_text(), 'old log\n')
+
+    def test_runtime_resume_preserves_completed_and_nonresume_outputs(self):
+        record = {'recipe': {'ports_revision': 'a' * 40}}
+        sdk = self.root / 'sdk'
+        (sdk / 'obj').mkdir(parents=True)
+
+        def coordinator_for(work, resume):
+            options = {'sdk': str(sdk), 'target': 'aarch64',
+                       'runtime-work': str(sdk / 'obj/runtime')}
+            if not resume:
+                options['llvm-stages'] = str(sdk / 'stages/explicit')
+            coordinator = LLVMCoordinator(options, SysrootBuilder)
+            coordinator.runtime_root = str(work)
+            self.assertEqual(coordinator.resume, resume)
+            header = SysrootBuilder({'sdk': str(sdk)})
+            header.paths = {'sdk': str(sdk), 'ports': '/ports', 'os': '/os'}
+            coordinator.headers = header
+            return coordinator, header
+
+        work = sdk / 'obj/runtime/nonresume'
+        work.mkdir(parents=True)
+        receipt, log = work / 'bootstrap.json', work / 'bootstrap.log'
+        write(receipt, 'existing receipt\n'); write(log, 'existing log\n')
+        coordinator, header = coordinator_for(work, resume=False)
+        with patch.object(coordinator, 'runtime_command', return_value=['producer']):
+            with self.assertRaises(FileExistsError):
+                coordinator.runtime('bootstrap', '/base')
+        self.assertFalse((work / 'failed-1').exists())
+        self.assertEqual(receipt.read_text(), 'existing receipt\n')
+        self.assertEqual(log.read_text(), 'existing log\n')
+
+        work = sdk / 'obj/runtime/completed'
+        (work / 'bootstrap-stage').mkdir(parents=True)
+        write(work / 'bootstrap-stage/runtime.json', '{}')
+        write(work / 'bootstrap.json', 'completed receipt\n')
+        write(work / 'bootstrap.log', 'completed log\n')
+        coordinator, header = coordinator_for(work, resume=True)
+        with patch.object(header, 'execute_external', side_effect=AssertionError('completed stage must be reused')), \
+             patch.object(coordinator, 'runtime_command', return_value=['verify']), \
+             patch('emberbsd_sdk.llvm_sysroot.process.capture',
+                   return_value=type('Result', (), {'stdout': b'{}'})()), \
+             patch('emberbsd_sdk.llvm_sysroot.jsonio.loads_json', return_value=record), \
+             patch('emberbsd_sdk.llvm_sysroot.llvm_runtime.validate_identity'), \
+             patch('emberbsd_sdk.llvm_sysroot.llvm_runtime.validate_stage', return_value=record):
+            coordinator.runtime('bootstrap', '/base')
+        self.assertFalse((work / 'failed-1').exists())
+        self.assertEqual((work / 'bootstrap.json').read_text(), 'completed receipt\n')
+        self.assertEqual((work / 'bootstrap.log').read_text(), 'completed log\n')
+
     def test_completed_headers_reuse_without_inspecting_outputs(self):
         builder, original = self.completed_headers()
         with patch.object(type(builder), 'build_payload', side_effect=AssertionError('must reuse')), \
