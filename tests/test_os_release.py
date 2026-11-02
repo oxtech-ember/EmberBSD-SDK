@@ -181,6 +181,18 @@ class HistoricalKitTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, 'build-success'):
             kit.prepare(self.build, self.root / 'missing-success', 'aarch64-sysroot')
 
+    def test_schema1_kit_cannot_carry_boot_sets(self):
+        # Schema 1 outputs are not bound to its commands; an etc set is foreign.
+        path = self.root / 'with-etc'
+        shutil.copytree(self.directory, path)
+        (path / 'etc.tar.xz').write_bytes(tar_bytes({'./etc/rc.conf': b'rc_configured=YES\n'}))
+        profile = jsonio.read_json(path / 'build-profile.json')
+        profile['output_sha256']['release/evbarm-aarch64/binary/sets/etc.tar.xz'] = kit.sha256_file(path / 'etc.tar.xz')
+        jsonio.write_json(path / 'build-profile.json', profile, exclusive=False)
+        reseal(path, lambda m: (m['files'].append({'name': 'etc.tar.xz'}), m.update(build_profile=profile)))
+        with self.assertRaisesRegex(SDKError, 'boot sets differ'):
+            kit.verify(path, 'aarch64-sysroot')
+
     def test_malformed_and_mixed_manifests(self):
         changes = {
             'unsafe': lambda m: m['files'][0].update(name='../base.tar.xz'),
@@ -750,9 +762,12 @@ class BuilderReleaseTests(TemporaryCase):
             del historical['sdk_receipt']['paths'][key]
         signature['host_tools'] = {name: dict(path='/usr/bin/' + name, sha256='0' * 64,
                                              version='historical system compiler') for name in ('cc', 'c++')}
+        # Historical profiles built base and comp only.
         signature['flags'], historical['commands'] = producer_commands(
             'aarch64', historical['sdk_receipt']['paths'], signature['host_tools'], sha,
-            historical['source_timestamp'], historical['jobs'], historical['shell'])
+            historical['source_timestamp'], historical['jobs'], historical['shell'], boot_sets=False)
+        for outputs in (historical['output_sha256'], historical['sdk_receipt']['outputs']):
+            del outputs['release/evbarm-aarch64/binary/sets/etc.tar.xz']
         historical['sdk_receipt']['commands'] = [dict(argv=argv, status='passed', exit_status=0)
                                                  for argv in historical['commands']]
         with patch('emberbsd_sdk.native_toolset.canonical_existing', side_effect=AssertionError('offline filesystem read')):
@@ -763,6 +778,7 @@ class BuilderReleaseTests(TemporaryCase):
         result = kit.verify(self.root / 'historical-kit', 'aarch64-sysroot')
         self.assertEqual(result['build_profile']['schema'], 2)
         self.assertNotIn('native_toolset', result['build_profile']['sdk_receipt']['signature'])
+        self.assertNotIn('etc.tar.xz', [f['name'] for f in result['files']])
 
     def test_saved_profile_preserves_accepted_native_version_suffix(self):
         options = release_fixture(self.root, 'aarch64')

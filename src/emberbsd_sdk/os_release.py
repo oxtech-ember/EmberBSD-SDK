@@ -194,6 +194,14 @@ def set_content_check(directory):
     check(libc and any(elf_aarch64(extract_bytes(base, n)) for n in libc), 'Base lacks an AArch64 libc provider')
 
 
+def boot_sets(profile):
+    """The boot sets a build profile records. Schema 1 predates them; its
+    outputs are not bound to its commands, so it can record none."""
+    if profile.get('schema') not in GCC_SCHEMAS + CLANG_SCHEMAS:
+        return []
+    return [n for n in BOOT_SETS if 'release/evbarm-aarch64/binary/sets/' + n in profile['output_sha256']]
+
+
 def kernel_check(path, sha):
     with gzip.open(path, 'rb') as handle:
         data = handle.read()
@@ -350,7 +358,7 @@ def _verify(directory, profile, known=None):
             check(m['source_archive_sha256'] == p['source_sha256'] and m['build_profile'] == p, 'Source/build receipt changed')
             check((directory / SOURCE_EXPORT).read_text() == p['source_sha256'] + '  source.tar.gz\n', 'Source export hash receipt changed')
         if profile != 'amd64':
-            boot = [n for n in BOOT_SETS if 'release/evbarm-aarch64/binary/sets/' + n in p['output_sha256']]
+            boot = boot_sets(p)
             check(set(BOOT_SETS).intersection(names) == set(boot), 'Kit and build boot sets differ')
             for name in SYSROOT_SETS + boot:
                 check(p['output_sha256']['release/evbarm-aarch64/binary/sets/' + name] == digests[name], 'Set belongs to another build: ' + name)
@@ -404,7 +412,7 @@ def prepare_sysroot(build, directory, qualification):
               sha256_file(evidence) == expected_evidence,
               'Target evidence is missing or differs from its qualification receipt')
     directory.mkdir(mode=0o700)
-    boot = [n for n in BOOT_SETS if 'release/evbarm-aarch64/binary/sets/' + n in p['output_sha256']]
+    boot = boot_sets(p)
     for name in SYSROOT_SETS + boot:
         shutil.copyfile(build / 'release/evbarm-aarch64/binary/sets' / name, directory / name)
     for name in (KERNEL, 'build-profile.json'):
