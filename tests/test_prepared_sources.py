@@ -9,6 +9,7 @@ case exercises the optional --plan graph diagnostic. Ordinary build dispatch
 still propagates a real makefile .error when it reaches an unselected source.
 """
 import os
+import hashlib
 import shutil
 import subprocess
 from pathlib import Path
@@ -118,7 +119,14 @@ class PreparedSourceTests(TemporaryCase):
         builder.environment = {'EMBER_NATIVE_TOOLS': '/routing'}
         builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
         builder.source_timestamp = lambda: 1700000000
+        self.set_contract(builder, 'sed sed SED\n')
         return builder
+
+    def set_contract(self, builder, extra):
+        contract = self.os / 'contract'
+        contract.write_text('EmberBSD-native-tools 2\ncmp cmp -\nreadlink readlink -\nmake make MAKE\nsh sh HOST_SH\n' + extra)
+        builder.native_contract = str(contract)
+        builder.native_contract_sha256 = hashlib.sha256(contract.read_bytes()).hexdigest()
 
     @staticmethod
     def source_flags(names):
@@ -224,6 +232,36 @@ class PreparedSourceTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, 'cannot inspect OS directory'):
             builder.require_prepared_sources([], traversals)
         self.assertFalse(Path(builder.paths['tools']).exists())
+
+    def test_graph_sed_follows_declared_contract(self):
+        builder = self.builder(RELEASE_SOURCES)
+        self.set_contract(builder, 'sed editor SED\n')
+        seen = []
+        def tool(role):
+            seen.append(role)
+            return '/host/' + role
+        builder.native = SimpleNamespace(tool=tool)
+        with patch('emberbsd_sdk.prepared_sources.process.capture', side_effect=self.fake_make) as run:
+            builder.require_prepared_sources(self.source_flags(RELEASE_SOURCES),
+                                             (('.', prepared_sources.BUILD_TARGETS),))
+        self.assertIn('editor', seen)
+        self.assertTrue(all('TOOL_SED=/host/editor' in call.args[0] for call in run.call_args_list))
+        self.set_contract(builder, '')
+        seen.clear()
+        with patch('emberbsd_sdk.prepared_sources.process.capture', side_effect=self.fake_make) as run:
+            builder.require_prepared_sources(self.source_flags(RELEASE_SOURCES),
+                                             (('.', prepared_sources.BUILD_TARGETS),))
+        self.assertNotIn('editor', seen)
+        self.assertTrue(all(not any(arg.startswith('TOOL_SED=') for arg in call.args[0])
+                            for call in run.call_args_list))
+        self.set_contract(builder, 'sed editor SED\n')
+        def unavailable(role):
+            if role == 'editor':
+                raise SDKError('native tool role is not selected: editor')
+            return '/host/' + role
+        builder.native = SimpleNamespace(tool=unavailable)
+        with self.assertRaisesRegex(SDKError, 'native tool role is not selected: editor'):
+            builder.require_prepared_sources([], (('.', prepared_sources.BUILD_TARGETS),))
 
     def test_mdns_else_guard_is_causally_required_by_make_targets(self):
         bmake = shutil.which('bmake')
