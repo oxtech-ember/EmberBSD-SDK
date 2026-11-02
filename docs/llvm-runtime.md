@@ -304,3 +304,13 @@ stages distinct from the complete SDK. `riscv32` currently selects only this
 intermediate route; its ABI is little-endian RV32 soft-float `ilp32`. Inspect
 `--plan`, the actual compiler commands, and the produced artifacts before use.
 The target's startup, filesystem and physical execution remain separate work.
+
+The additive `application_toolchain.clang_c_foundation_commands` and
+`bind_clang_c_foundation_commands` API binds C target commands to this explicit
+result. `FOUNDATION_TOOLCHAIN_API` identifies the interface version. The
+result selects one concrete base sysroot and runtime stage; callers must pass
+that same base sysroot, and the binding rejects a different path or mismatched
+runtime manifest. This is a C-only package-tool input, without C++ headers or
+runtime, and is not a portable full application SDK. The ordinary
+`clang_application_commands` path continues to select a complete application
+runtime.

@@ -3,12 +3,14 @@
 """Portable application runtime selection after build and sysroot transfer."""
 
 import copy
+import hashlib
+import os
 import sys
 from pathlib import Path
 
-from test_core import TemporaryCase
+from test_core import TemporaryCase, archive
 import test_llvm_builder as llvm_tests
-from emberbsd_sdk import application_toolchain, compiler_bindings, jsonio, sysroot_transfer
+from emberbsd_sdk import application_toolchain, compiler_bindings, inventory, jsonio, sysroot_transfer
 from emberbsd_sdk.errors import SDKError
 
 
@@ -20,6 +22,134 @@ class ApplicationToolchainTests(TemporaryCase):
         self.sysroot = Path(self.builder.paths['destination'])
         self.runtime = self.receipt['signature']['runtime']['manifest']
         self.compiler = self.receipt['signature']['compiler']
+
+    def _c_foundation_fixture(self, *, target='riscv32'):
+        """Build a small real-shaped C-foundation receipt and RV32 runtime."""
+        import struct
+        stage, root = self.root/'c-foundation-stage', self.root/'c-foundation-sysroot'
+        stage.mkdir(); root.mkdir()
+        triplet = target + '--netbsd'
+        if target != 'riscv32':
+            raise AssertionError('fixture target helper only constructs RV32 ELF input')
+        elf = bytearray(52)
+        elf[:7] = b'\x7fELF\x01\x01\x01'
+        struct.pack_into('<HHI', elf, 16, 1, 243, 1)
+        struct.pack_into('<I', elf, 36, 1)  # RISC-V soft-float ABI.
+        struct.pack_into('<H', elf, 40, 52)
+        builtins = 'usr/pkg/llvm/lib/clang/23/lib/netbsd/libclang_rt.builtins-riscv32.a'
+        unwind = 'usr/pkg/llvm/lib/libunwind.a'
+        for name in (builtins, unwind):
+            path = stage/name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(archive(bytes(elf)))
+        base_header = b'/* target C foundation fixture */\n'
+        (root/'usr/include').mkdir(parents=True)
+        (root/'usr/include/stdint.h').write_bytes(base_header)
+        manifest = dict(format='emberbsd-llvm-runtime', version=1, compiler_family='clang',
+            llvm_version='23.1.4', components=['builtins', 'libunwind-static'], target=target,
+            triplet=triplet, machine_arch='riscv32', elf_machine=243, prefix='usr/pkg/llvm',
+            source=dict(archive='llvm-project-23.1.4.src.tar.xz', sha512='a'*128),
+            recipe=dict(ports_revision='b'*40, files={'pkgsrc/lang/llvm-runtimes/Makefile':'c'*64}),
+            base=dict(os_revision='d'*40, files={'usr/include/stdint.h':hashlib.sha256(base_header).hexdigest()}, symlinks={}),
+            artifacts=dict(builtins=builtins, libunwind=dict(static=unwind)), files={}, symlinks={})
+        rows = inventory.snapshot_tree(stage, exclude=('runtime.json',))
+        manifest['files'] = {name:row['sha256'] for name,row in rows.items() if row['kind']=='file'}
+        manifest['symlinks'] = {name:row['target'] for name,row in rows.items() if row['kind']=='link'}
+        jsonio.write_json(stage/'runtime.json', manifest)
+
+        compiler = copy.deepcopy(self.compiler)
+        compiler['triplet'] = triplet
+        compiler['reported_triplet'] = 'riscv32-unknown-netbsd'
+        compiler['commands']['cc'] = [compiler['binaries']['cc']['selected_path'],
+            '--target='+triplet, '--ld-path='+compiler['binaries']['ld']['selected_path']]
+        compiler['commands']['cxx'] = [compiler['binaries']['cxx']['selected_path'],
+            '--target='+triplet, '--ld-path='+compiler['binaries']['ld']['selected_path']]
+        compiler['commands']['cpp'] = [compiler['binaries']['cpp']['selected_path'], '-E', '--target='+triplet]
+        compiler['commands']['as'] = [compiler['binaries']['as']['selected_path'], '--target='+triplet,
+            '-c', '-x', 'assembler']
+        target_definition = dict(machine='riscv', arch='riscv32', triplet=triplet, elf=243)
+        result = dict(format='emberbsd-llvm-c-foundation', version=1, target=target,
+            base=dict(format='emberbsd-llvm-os-stage', phase='base', qualification='built-and-inspected',
+                paths={'destination':str(root), 'llvm-runtime-stage':str(stage)},
+                signature=dict(compiler_family='clang', target=target_definition, compiler=compiler,
+                    runtime=dict(manifest=manifest))))
+        result_path = self.root/'c-foundation-result.json'
+        jsonio.write_json(result_path, result)
+        return root, stage, result_path, manifest, compiler
+
+    def test_c_foundation_binding_selects_manifest_runtime_without_cxx_runtime(self):
+        root, stage, result, manifest, compiler = self._c_foundation_fixture()
+        commands = application_toolchain.clang_c_foundation_commands(
+            compiler, result, root, target='riscv32')
+        for role in ('cc', 'cxx', 'cpp'):
+            self.assertIn('--target=riscv32--netbsd', commands['commands'][role])
+            self.assertIn('-nostdinc', commands['commands'][role])
+            self.assertIn(str(root/'usr/include'), commands['commands'][role])
+            self.assertIn('-march=rv32imac_zicsr', commands['commands'][role])
+            self.assertIn('-mabi=ilp32', commands['commands'][role])
+            self.assertNotIn('-mabi=ilp32f', commands['commands'][role])
+        self.assertIn('-march=rv32imac_zicsr', commands['commands']['as'])
+        self.assertIn('-mabi=ilp32', commands['commands']['as'])
+        for role in ('cc', 'cxx'):
+            self.assertIn('--rtlib=compiler-rt', commands['link_flags'][role])
+            self.assertIn('--unwindlib=libunwind', commands['link_flags'][role])
+            self.assertIn('-L'+str(stage/'usr/pkg/llvm/lib'), commands['link_flags'][role])
+        self.assertNotIn('cxx_headers', manifest['artifacts'])
+        destination = self.root/'bound-c-foundation-tools'
+        application_toolchain.bind_clang_c_foundation_commands(destination, compiler, result,
+            root, target='riscv32', python=sys.executable)
+        record = jsonio.read_json(destination/'commands.json')
+        self.assertIn('--rtlib=compiler-rt',
+            compiler_bindings.compiler_argv(record, 'cc', ['input.o', '-o', 'output']))
+
+    def test_c_foundation_binding_rejects_mismatched_or_modified_inputs(self):
+        root, stage, result_path, manifest, compiler = self._c_foundation_fixture()
+        with self.assertRaisesRegex(SDKError, 'matching LLVM C-foundation'):
+            application_toolchain.load_clang_c_foundation_runtime(result_path, root, target='aarch64')
+        result = jsonio.read_json(result_path)
+        result['base']['signature']['runtime']['manifest']['components'].append('libcxx')
+        expanded = self.root/'expanded-runtime-result.json'
+        jsonio.write_json(expanded, result)
+        with self.assertRaisesRegex(SDKError, 'unsupported LLVM runtime component profile'):
+            application_toolchain.load_clang_c_foundation_runtime(expanded, root, target='riscv32')
+        for field, bad_value in (('components', None), ('triplet', 'wrong--netbsd')):
+            malformed = copy.deepcopy(jsonio.read_json(result_path))
+            malformed['base']['signature']['runtime']['manifest'][field] = bad_value
+            malformed_path = self.root/('malformed-runtime-' + field + '.json')
+            jsonio.write_json(malformed_path, malformed)
+            with self.subTest(field=field), self.assertRaises(SDKError):
+                application_toolchain.load_clang_c_foundation_runtime(
+                    malformed_path, root, target='riscv32')
+        changed = copy.deepcopy(compiler)
+        changed['version'] = '22.1.0'
+        with self.assertRaisesRegex(SDKError, 'compiler and C-foundation runtime versions differ'):
+            application_toolchain.clang_c_foundation_commands(changed, result_path, root, target='riscv32')
+        relocated = copy.deepcopy(compiler)
+        relocated_prefix = '/selected/native-ports-prefix'
+        for role, entry in relocated['binaries'].items():
+            name = os.path.basename(entry['selected_path'])
+            entry['selected_path'] = relocated_prefix + '/bin/' + name
+            entry['path'] = entry['selected_path']
+        relocated['resource_dir'] = relocated_prefix + '/lib/clang/23'
+        relocated['commands'] = {
+            'cc':[relocated['binaries']['cc']['selected_path'], '--target=riscv32--netbsd',
+                  '--ld-path=' + relocated['binaries']['ld']['selected_path']],
+            'cxx':[relocated['binaries']['cxx']['selected_path'], '--target=riscv32--netbsd',
+                   '--ld-path=' + relocated['binaries']['ld']['selected_path']],
+            'cpp':[relocated['binaries']['cpp']['selected_path'], '-E', '--target=riscv32--netbsd'],
+            'as':[relocated['binaries']['as']['selected_path'], '--target=riscv32--netbsd',
+                  '-c', '-x', 'assembler'],
+            'ld':[relocated['binaries']['ld']['selected_path']],
+        }
+        for role in ('ar', 'ranlib', 'nm', 'strip', 'objcopy', 'objdump', 'readelf', 'size', 'strings'):
+            relocated['commands'][role] = [relocated['binaries'][role]['selected_path']]
+        commands = application_toolchain.clang_c_foundation_commands(
+            relocated, result_path, root, target='riscv32')['commands']
+        self.assertEqual(commands['cc'][0], relocated_prefix + '/bin/clang')
+        self.assertIn('-mabi=ilp32', commands['cc'])
+        (stage/manifest['artifacts']['libunwind']['static']).write_bytes(b'tampered')
+        with self.assertRaises(SDKError):
+            application_toolchain.load_clang_c_foundation_runtime(result_path, root, target='riscv32')
 
     def test_final_and_imported_sysroots_retain_the_existing_runtime_record(self):
         self.assertEqual(application_toolchain.load_clang_runtime(self.sysroot, target='aarch64'), self.runtime)

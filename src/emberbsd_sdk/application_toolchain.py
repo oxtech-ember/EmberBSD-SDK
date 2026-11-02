@@ -4,13 +4,106 @@
 
 import os
 
-from . import compiler_bindings, jsonio, llvm_runtime, llvm_runtime_install, paths, sysroot_transfer, target_toolchain
+from . import compiler_bindings, jsonio, llvm_runtime, llvm_runtime_install, paths, sysroot_transfer, target_toolchain, targets
 from .errors import SDKError
 
 APPLICATION_TOOLCHAIN_API = 2
+FOUNDATION_TOOLCHAIN_API = 1
 # Additive in API 2: the sysroot_alias keyword of the command functions.
 SYSROOT_ALIAS = 1
 IMPORT_RECORD = '.prebuild-sdk-import.json'
+
+
+def load_clang_c_foundation_runtime(foundation_result, sysroot, *, target):
+    """Select the C compiler runtime from a completed C-foundation result."""
+    expected = targets.target_definition(target)
+    result_path = paths.canonical_existing(foundation_result)
+    root = paths.canonical_existing(sysroot)
+    result = jsonio.read_json(result_path)
+    if (not isinstance(result, dict) or result.get('format') != 'emberbsd-llvm-c-foundation' or
+            result.get('version') != 1 or result.get('target') != target):
+        raise SDKError('C-only target tools require a matching LLVM C-foundation result')
+    base = result.get('base')
+    if (not isinstance(base, dict) or base.get('format') != 'emberbsd-llvm-os-stage' or
+            base.get('phase') != 'base' or base.get('qualification') != 'built-and-inspected'):
+        raise SDKError('C-foundation result has no completed base stage')
+    signature = base.get('signature')
+    if not isinstance(signature, dict):
+        raise SDKError('C-foundation signature is malformed')
+    selected_paths = base.get('paths')
+    selected_runtime = signature.get('runtime')
+    if not isinstance(selected_paths, dict) or not isinstance(selected_runtime, dict):
+        raise SDKError('C-foundation paths or runtime selection is malformed')
+    if signature.get('compiler_family') != 'clang' or signature.get('target') != expected:
+        raise SDKError('C-foundation target compiler does not match selection')
+    stage = selected_paths.get('llvm-runtime-stage')
+    selected_base = selected_paths.get('destination')
+    runtime = selected_runtime.get('manifest')
+    if (not isinstance(stage, str) or not isinstance(selected_base, str) or
+            paths.canonical_existing(selected_base) != root or not isinstance(runtime, dict)):
+        raise SDKError('C-foundation runtime inputs do not match the selected sysroot')
+    runtime = llvm_runtime.validate_identity(runtime, target=target,
+        required_components=('builtins', 'libunwind-static'))
+    if set(runtime['components']) != {'builtins', 'libunwind-static'}:
+        raise SDKError('C-foundation result must select only the C runtime components')
+    recorded_compiler = signature.get('compiler')
+    target_toolchain.validate_clang_identity(recorded_compiler, runtime['triplet'])
+    measured = llvm_runtime.validate_stage(stage, target=target,
+        required_components=('builtins', 'libunwind-static'), base=root)
+    if measured != runtime:
+        raise SDKError('C-foundation runtime manifest differs from its selected stage')
+    return dict(root=root, stage=paths.canonical_existing(stage), runtime=measured)
+
+
+def clang_c_foundation_commands(compiler, foundation_result, sysroot, *, target):
+    """Bind ordinary C target commands to C headers and compiler-rt only.
+
+    This contract deliberately has no C++ standard library. The selected
+    C-foundation manifest supplies compiler-rt and static libunwind inputs.
+    """
+    selection = load_clang_c_foundation_runtime(foundation_result, sysroot, target=target)
+    runtime = selection['runtime']
+    target_toolchain.validate_clang_identity(compiler, runtime['triplet'])
+    if compiler['version'] != runtime['llvm_version']:
+        raise SDKError('selected compiler and C-foundation runtime versions differ')
+    root, stage = selection['root'], selection['stage']
+    selected = llvm_runtime.runtime_paths(stage, runtime)
+    resource_includes = ['-isystem', root + '/usr/include', '-isystem',
+                         compiler['resource_dir'] + '/include']
+    common = ['--sysroot=' + root, '-resource-dir=' + selected['llvm-resource'],
+              '-nostdinc']
+    abi_flags = list(targets.target_compiler_flags(target))
+    common += abi_flags
+    commands = {role:list(words) for role, words in compiler['commands'].items()}
+    for role in ('cc', 'cxx'):
+        commands[role] = [word for word in commands[role]
+                           if not word.startswith('--ld-path=')] + common + resource_includes
+    commands['cpp'] += common + resource_includes
+    commands['as'] += abi_flags
+    linker = compiler['binaries']['ld']['selected_path']
+    link_flags = {role:['--ld-path=' + linker, '--rtlib=compiler-rt',
+        '--unwindlib=libunwind', '-L' + selected['runtime-prefix'] + '/lib',
+        '-Wl,-rpath-link,' + root + '/usr/lib',
+        '-Wl,-rpath-link,' + root + '/usr/pkg/lib'] for role in ('cc', 'cxx')}
+    return dict(commands=commands, link_flags=link_flags, selection=selection)
+
+
+def bind_clang_c_foundation_commands(destination, compiler, foundation_result, sysroot, *,
+                                     target, python, include_auxiliary=False):
+    """Bind C-only target drivers without selecting a C++ runtime."""
+    if type(include_auxiliary) is not bool:
+        raise SDKError('auxiliary command selection must be boolean')
+    selected = clang_c_foundation_commands(compiler, foundation_result, sysroot, target=target)
+    roles = ['cc', 'cxx', 'cpp']
+    commands = dict(selected['commands'])
+    if include_auxiliary:
+        roles += ['as', 'ld']
+        commands['ld'] = commands['ld'] + ['--sysroot=' + selected['selection']['root']]
+    bound = compiler_bindings.bind_compilers(destination,
+        commands={role:commands[role] for role in roles},
+        flags={name:[] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')},
+        python=python, link_flags=selected['link_flags'])
+    return dict(commands=bound, selection=selected['selection'])
 
 
 def load_clang_runtime(sysroot, *, target):
@@ -98,11 +191,14 @@ def clang_application_commands(compiler, sysroot, runtime_record, *, runtime_roo
     # resource-dir has only compiler-rt. For C++ they must follow libc++ so
     # <cstddef> finds libc++'s <stddef.h> before the C resource header.
     common = ['--sysroot='+root, '-resource-dir='+selected['llvm-resource'], '-nobuiltininc']
+    abi_flags = list(targets.target_compiler_flags(record['target']))
+    common += abi_flags
     resource_includes = ['-isystem', compiler['resource_dir']+'/include']
     for role in ('cc','cxx'):
         # --ld-path is a link operation flag. Clang diagnoses it under -c -Werror.
         commands[role] = [word for word in commands[role] if not word.startswith('--ld-path=')] + common
     commands['cpp'] += common + resource_includes
+    commands['as'] += abi_flags
     commands['cc'] += resource_includes
     commands['cxx'] += ['-nostdinc++','-isystem',
                         os.path.join(runtime_root,record['artifacts']['cxx_headers'])]
