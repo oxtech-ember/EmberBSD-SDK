@@ -212,6 +212,7 @@ def apply_patch(patch_tool, patch_path, patch_bytes, cwd, label, *,
 # These helpers bind that identity to a measured prepared tree; they do not
 # decide which inputs constitute a package's complete source contract.
 PREPARED_TREE_API = 1
+PREPARED_TREE_REUSE_API = 1
 PREPARED_TREE_CACHE_API = 1
 PREPARED_TREE_CACHE_MAX_JSON = 64 * 1024 * 1024
 PREPARED_TREE_RECEIPT = 'emberbsd-prepared-source.json'
@@ -225,17 +226,71 @@ def _prepared_tree_digest(root):
     return hashlib.sha256(jsonio.json_bytes(rows)).hexdigest()
 
 
-def write_prepared_tree_receipt(root, *, package, identity):
-    """Record an owner-selected identity and the exact prepared payload."""
-    from . import jsonio, paths
+def write_prepared_tree_receipt(root, *, package, identity, previous_root=None):
+    """Record a prepared payload; caller owns both trees exclusively during reuse."""
+    from . import inventory, jsonio, paths
     root = paths.canonical_existing(root)
     if not isinstance(package, str) or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9+_.-]*/[A-Za-z0-9][A-Za-z0-9+_.-]*', package) is None:
         raise SDKError('invalid prepared source package')
     if not isinstance(identity, dict) or not identity:
         raise SDKError('invalid prepared source identity')
+    if previous_root is not None and os.path.lexists(os.path.join(root, PREPARED_TREE_RECEIPT)):
+        raise SDKError('prepared source receipt already exists')
+    if previous_root is None:
+        digest = _prepared_tree_digest(root)
+    else:
+        previous_root = paths.canonical_existing(previous_root)
+        paths.reject_overlap(root, previous_root)
+        old_record = read_prepared_tree_receipt(previous_root, package=package)
+        _, old_rows, old_stats = _validate_prepared_tree(
+            previous_root, package=package, identity=old_record['identity'])
+        new_stats = {}
+        def measure(path, relative, info):
+            new_stats[relative] = paths.stable_identity(info)
+            return inventory.sha256_file(path)
+        new_rows = inventory.snapshot_tree(root, exclude=(PREPARED_TREE_RECEIPT,),
+                                           digest_provider=measure)
+        digest = hashlib.sha256(jsonio.json_bytes(new_rows)).hexdigest()
+        fresh_ns = time.time_ns()
+        planned = []
+        for relative, row in new_rows.items():
+            if row['kind'] != 'file':
+                continue
+            path = os.path.join(root, relative)
+            info = os.lstat(path)
+            if paths.stable_identity(info) != new_stats[relative]:
+                raise SDKError('prepared source changed before reuse: ' + path)
+            if info.st_nlink != 1:
+                raise SDKError('hardlinked prepared source cannot be retimed: ' + path)
+            target_ns = fresh_ns
+            old_checked = None
+            if old_rows.get(relative) == row:
+                old_path = os.path.join(previous_root, relative)
+                old_info = os.lstat(old_path)
+                if paths.stable_identity(old_info) != tuple(old_stats[relative]):
+                    raise SDKError('previous prepared source changed before reuse: ' + old_path)
+                target_ns = old_info.st_mtime_ns
+                old_checked = (old_path, old_info)
+            planned.append((path, info, target_ns, old_checked))
+        # Validate the complete write set before changing the first timestamp.
+        for path, info, _, old_checked in planned:
+            paths.verify_stable(path, info)
+            if old_checked is not None:
+                paths.verify_stable(*old_checked)
+            if os.lstat(path).st_nlink != 1:
+                raise SDKError('hardlinked prepared source cannot be retimed: ' + path)
+        for path, info, target_ns, old_checked in planned:
+            if old_checked is not None:
+                paths.verify_stable(*old_checked)
+            if target_ns == info.st_mtime_ns:
+                continue
+            handle, opened = paths.open_regular(path)
+            with handle:
+                if paths.stable_identity(opened) != paths.stable_identity(info) or os.fstat(handle.fileno()).st_nlink != 1:
+                    raise SDKError('prepared source changed during reuse: ' + path)
+                os.utime(handle.fileno(), ns=(info.st_atime_ns, target_ns))
     record = dict(format='emberbsd-prepared-source', version=1,
-                  package=package, identity=identity,
-                  tree_sha256=_prepared_tree_digest(root))
+                  package=package, identity=identity, tree_sha256=digest)
     jsonio.write_json(os.path.join(root, PREPARED_TREE_RECEIPT), record, exclusive=True)
     return record
 
@@ -270,6 +325,10 @@ def validate_prepared_tree(root, *, package, identity, cache_path=None):
     an explicit cache_path takes precedence. No environment setting preserves
     the original full-hash behavior.
     """
+    return _validate_prepared_tree(root, package=package, identity=identity, cache_path=cache_path)[0]
+
+
+def _validate_prepared_tree(root, *, package, identity, cache_path=None):
     from . import inventory, jsonio, paths
     root = paths.canonical_existing(root)
     record = jsonio.read_json(os.path.join(root, PREPARED_TREE_RECEIPT))
@@ -291,9 +350,14 @@ def validate_prepared_tree(root, *, package, identity, cache_path=None):
                 cache_directory, root, package, record['tree_sha256'],
                 root_info, jsonio, paths)
     if cache_path is None:
-        if record['tree_sha256'] != _prepared_tree_digest(root):
+        observed = {}
+        def measure(path, relative, info):
+            observed[relative] = list(paths.stable_identity(info))
+            return inventory.sha256_file(path)
+        rows = inventory.snapshot_tree(root, exclude=(PREPARED_TREE_RECEIPT,), digest_provider=measure)
+        if record['tree_sha256'] != hashlib.sha256(jsonio.json_bytes(rows)).hexdigest():
             raise SDKError('prepared source identity or payload changed')
-        return record
+        return record, rows, observed
 
     cache_path = _prepared_tree_cache_path(cache_path, root, paths)
     started_at_ns = time.time_ns()
@@ -340,7 +404,7 @@ def validate_prepared_tree(root, *, package, identity, cache_path=None):
         root={'path': root, 'dev': root_info.st_dev, 'ino': root_info.st_ino},
         package=package, identity=identity, tree_sha256=record['tree_sha256'],
         started_at_ns=started_at_ns, files=observed), jsonio)
-    return record
+    return record, rows, {name: value['stable'] for name, value in observed.items()}
 
 
 def _prepared_tree_cache_from_environment(value, root, package, tree_sha256,

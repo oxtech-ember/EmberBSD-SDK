@@ -64,6 +64,14 @@ hashes the tree. The receipts are read once, at preflight, and become part
 of the build's input key. Prepare a source again with its Ports owner when its
 recipe changes; its new receipt changes the key.
 
+A source owner may pass `previous_root` to `sourceprep.write_prepared_tree_receipt`
+when `PREPARED_TREE_REUSE_API` is available. The helper validates the previous
+payload for the same package, preserves modification times only for matching regular
+files, and gives changed or new files fresh modification times before writing the new
+identity and inventory receipt. The caller must exclusively own both disjoint
+trees throughout the operation; hardlinked new files are refused. Previous
+identity may differ, but neither tree may change concurrently.
+
 A source owner that explicitly validates a prepared payload with
 `sourceprep.validate_prepared_tree` may provide an external `cache_path` to
 avoid rehashing unchanged file bytes. The helper still walks every path and
