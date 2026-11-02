@@ -72,7 +72,9 @@ For OS builds using common `security/openssh`, prepare the source with the
 Ports `scripts/source-inputs/openssh/source.py` owner and select
 `--openssh-source`. The SDK forwards `EMBER_OPENSSH_SOURCE`.
 
-Select `aarch64-sysroot` for complete base/comp sets and an EMBER64 test kernel.
+Select `aarch64-sysroot` for complete base/comp sets, the etc set and an EMBER64
+test kernel. A VM or a board boots from the sets only with etc. Profiles built
+before the etc set record base and comp only; they stay verifiable without it.
 Select `amd64` for the reduced UEFI ISO, USB image and installation sets.
 The product version comes from canonical `EMBER_VERSION` in the pinned
 `share/mk/bsd.own.mk`. Release tags set this source value before a build.
@@ -223,7 +225,8 @@ It compares the boot and installed kernel bytes and checks USB gzip integrity.
 It includes the ISO, compressed USB image, required sets, release notes and
 hash manifests. Optional omitted sets are named in the manifest.
 The AArch64 kit checks required headers, CRT, libraries, loader architecture,
-kernel build identity and the exact base/comp output receipts.
+kernel build identity and the exact base/comp output receipts. It carries the
+etc set exactly when the build profile records it.
 
 Verification rejects extra files, missing files, symlinks, changed bytes,
 unsafe or duplicate names, mixed source IDs and assets of 2 GiB or more.

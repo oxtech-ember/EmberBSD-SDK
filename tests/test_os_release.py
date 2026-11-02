@@ -433,6 +433,8 @@ elif args[-1] == 'sets':
     path = release/'evbarm-aarch64/binary/sets'; path.mkdir(parents=True)
     (path/'base.tar.xz').write_bytes(BASE)
     if not control.get('omit_comp'): (path/'comp.tar.xz').write_bytes(COMP)
+    tarsets = next((a.split('=', 1)[1] for a in args if a.startswith('MAKETARSETS=')), '').split()
+    if 'etc' in tarsets: (path/'etc.tar.xz').write_bytes(ETC)
 elif args[-1] == 'release':
     if sets_source is not None and not (output/'fixture-etc-release-complete').is_file(): raise SystemExit('release media ran before etc release')
     path = release/'images'; path.mkdir(parents=True, exist_ok=True)
@@ -468,7 +470,8 @@ elif args[-1] == 'iso-image':
 else: raise SystemExit('unexpected operation')
 '''
     producer = ('CONTROL=' + repr(str(root / 'control.json')) + '\nELF=' + repr(header(183 if target == 'aarch64' else 62)) +
-                '\nSETS=' + repr(kit.SETS) + '\nBASE=' + repr(tar_bytes(base)) + '\nCOMP=' + repr(tar_bytes(comp)) + '\n') + producer
+                '\nSETS=' + repr(kit.SETS) + '\nBASE=' + repr(tar_bytes(base)) + '\nCOMP=' + repr(tar_bytes(comp)) +
+                '\nETC=' + repr(tar_bytes({'./etc/rc.conf': b'rc_configured=YES\n'})) + '\n') + producer
     producer += "dest = Path(value('-D'))\n" + installation_source(183 if target == 'aarch64' else 62, arguments='args', control='control')
     write(source / 'fixture-producer.py', producer)
     commit(source)
@@ -988,6 +991,14 @@ class BuilderReleaseTests(TemporaryCase):
         self.assertEqual(manifest['schema'], 'emberbsd.aarch64.sysroot.v4')
         self.assertIsNone(manifest['qualification'])
         self.assertEqual(manifest['product_version'], '2.7+fixture')
+        # A VM or a board boots from the sets only with etc; old profiles lack it.
+        self.assertTrue(all('MAKETARSETS=base comp etc' in c for c in p['commands'] if '-V' in c))
+        self.assertIn('etc.tar.xz', [f['name'] for f in manifest['files']])
+        self.assertIn('The etc set holds', (self.root / 'kit/release-notes.md').read_text())
+        without_etc = json.loads(json.dumps(p))
+        del without_etc['output_sha256']['release/evbarm-aarch64/binary/sets/etc.tar.xz']
+        with self.assertRaisesRegex(SDKError, 'exact required profile'):
+            validate_profile(without_etc, receipt['sources']['os']['commit'], 'aarch64')
         self.assertIn('EmberBSD 2.7+fixture', GitHub(self.root / 'kit', 'aarch64-sysroot').title)
         self.assertIn('EmberBSD 2.7+fixture', (self.root / 'kit/release-notes.md').read_text())
         reseal(self.root / 'kit', lambda m: m.update(product_version='9.9'))

@@ -26,6 +26,9 @@ VM_CHECKS = ('local_install https_install first_boot_without_media reboot_persis
              'tls_reject_unknown_ca tls_reject_wrong_name tls_reject_missing_anchors '
              'http_404_rejected github_redirect').split()
 SYSROOT_SETS = ['base.tar.xz', 'comp.tar.xz']
+# The configuration set lets a VM or a board boot from the sysroot sets.
+# A kit carries it when its build produced it; older builds did not.
+BOOT_SETS = ['etc.tar.xz']
 KERNEL = 'netbsd-EMBER64.gz'
 EVIDENCE = 'target-acceptance.log'
 SYSROOT_REQUIRED = SYSROOT_SETS + [KERNEL, 'build-profile.json', 'release-notes.md']
@@ -318,7 +321,7 @@ def _verify(directory, profile, known=None):
                               'emberbsd.aarch64.sysroot.v4') and
               m['architecture'] == 'aarch64' and m['machine'] == 'evbarm', 'Wrong sysroot identity')
         required = SYSROOT_REQUIRED + ([] if tree_kit else [SOURCE_EXPORT])
-        allowed = required + ['qualification.json', 'build-run.json', EVIDENCE]
+        allowed = required + BOOT_SETS + ['qualification.json', 'build-run.json', EVIDENCE]
     files = m['files']
     check(isinstance(files, list) and all(isinstance(f, dict) for f in files), 'Invalid asset list')
     names = [f['name'] for f in files]
@@ -347,7 +350,9 @@ def _verify(directory, profile, known=None):
             check(m['source_archive_sha256'] == p['source_sha256'] and m['build_profile'] == p, 'Source/build receipt changed')
             check((directory / SOURCE_EXPORT).read_text() == p['source_sha256'] + '  source.tar.gz\n', 'Source export hash receipt changed')
         if profile != 'amd64':
-            for name in SYSROOT_SETS:
+            boot = [n for n in BOOT_SETS if 'release/evbarm-aarch64/binary/sets/' + n in p['output_sha256']]
+            check(set(BOOT_SETS).intersection(names) == set(boot), 'Kit and build boot sets differ')
+            for name in SYSROOT_SETS + boot:
                 check(p['output_sha256']['release/evbarm-aarch64/binary/sets/' + name] == digests[name], 'Set belongs to another build: ' + name)
             check(p['output_sha256'][KERNEL] == digests[KERNEL], 'Kernel belongs to another build')
         else:
@@ -399,12 +404,13 @@ def prepare_sysroot(build, directory, qualification):
               sha256_file(evidence) == expected_evidence,
               'Target evidence is missing or differs from its qualification receipt')
     directory.mkdir(mode=0o700)
-    for name in SYSROOT_SETS:
+    boot = [n for n in BOOT_SETS if 'release/evbarm-aarch64/binary/sets/' + n in p['output_sha256']]
+    for name in SYSROOT_SETS + boot:
         shutil.copyfile(build / 'release/evbarm-aarch64/binary/sets' / name, directory / name)
     for name in (KERNEL, 'build-profile.json'):
         shutil.copyfile(build / name, directory / name)
     tree_kit = p.get('schema') in SOURCE_TREE_SCHEMAS
-    names = list(SYSROOT_REQUIRED)
+    names = list(SYSROOT_REQUIRED) + boot
     if not tree_kit:
         (directory / SOURCE_EXPORT).write_text(p['source_sha256'] + '  source.tar.gz\n')
         names.append(SOURCE_EXPORT)
@@ -422,7 +428,8 @@ def prepare_sysroot(build, directory, qualification):
     (directory / 'release-notes.md').write_text(
         f'# EmberBSD {version} AArch64 development sysroot\n\nSource: `{sha}`. Compatibility base: NetBSD 11.0.\n'
         f'The complete base and comp sets use {compiler}.\n'
-        'Native bootstrap compiler commands are excluded. Build commands and hashes are in build-profile.json.\n'
+        + ('The etc set holds the default configuration to boot a VM or a board.\n' if boot else '')
+        + 'Native bootstrap compiler commands are excluded. Build commands and hashes are in build-profile.json.\n'
         + ('build-profile.json names the OS source by its Git commit and tree hash.\n' if tree_kit else
            'source-export.sha256 identifies the git archive, not the GitHub generated source archive.\n')
         + f'Source: https://github.com/{REPOSITORY}/tree/{sha}.\n\n'

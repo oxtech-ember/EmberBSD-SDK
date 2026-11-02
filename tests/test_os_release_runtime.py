@@ -385,7 +385,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
         self.assertIn('MKX11=yes', flags)
         self.assertNotIn('MKX11=no', flags)
         self.assertIn('X11SRCDIR=/sdk/xsrc', flags)
-        self.assertIn('MAKETARSETS=base comp xbase xcomp xetc xfont xserver', flags)
+        self.assertIn('MAKETARSETS=base comp etc xbase xcomp xetc xfont xserver', flags)
         for command in commands:
             if command[0] == '/sdk/host/bin/sh':
                 self.assertIn('MKX11=yes', command)
@@ -396,7 +396,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
         self.assertIn('MKX11=no', flags)
         self.assertNotIn('MKX11=yes', flags)
         self.assertFalse(any(flag.startswith('X11SRCDIR=') for flag in flags))
-        self.assertIn('MAKETARSETS=base comp', flags)
+        self.assertIn('MAKETARSETS=base comp etc', flags)
 
     def test_x11_profile_requires_clang_aarch64(self):
         from emberbsd_sdk.errors import SDKError

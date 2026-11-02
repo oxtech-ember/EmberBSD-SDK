@@ -18,7 +18,7 @@ from .sysroot_builder import (SysrootBuilder, native_host_flags,
                               gettext_target_host_flags, gnu_target_host_flags,
                               check_native_command_identity, validate_native_binding)
 from .targets import target_definition
-from .os_release import (check, full_hash, tag, images, product_version, git_source_identity, release_schema, KERNEL, SYSROOT_SETS,
+from .os_release import (check, full_hash, tag, images, product_version, git_source_identity, release_schema, KERNEL, SYSROOT_SETS, BOOT_SETS,
                          GCC_SCHEMAS, CLANG_SCHEMAS, BASE_CXX_SCHEMAS, SOURCE_TREE_SCHEMAS)
 
 # Optional Clang-only aarch64 X11 sets built from the prepared xsrc input.
@@ -26,8 +26,17 @@ X11_SETS = ['xbase.tar.xz', 'xcomp.tar.xz', 'xetc.tar.xz', 'xfont.tar.xz', 'xser
 X11_PACKAGE = 'netbsd/xsrc'
 
 
-def release_sets(x11=False):
-    return SYSROOT_SETS + (X11_SETS if x11 else [])
+def release_sets(x11=False, boot=True):
+    # Historical profiles built base and comp only; they omit the boot sets.
+    return SYSROOT_SETS + (BOOT_SETS if boot else []) + (X11_SETS if x11 else [])
+
+
+def profile_boot_sets(profile):
+    """Whether a recorded aarch64 build profile produced the boot sets."""
+    names = {'release/evbarm-aarch64/binary/sets/' + name for name in BOOT_SETS}
+    recorded = names.intersection(profile['output_sha256'])
+    check(recorded in (set(), names), 'Incomplete boot set outputs')
+    return bool(recorded)
 
 
 def require_x11_profile(target, compiler_family):
@@ -88,7 +97,7 @@ def gettext_libtool_command(paths, git, target, jobs, compiler_family, host_fami
 
 
 def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_selection=None,
-                      compiler_family=None, base_cxx=False, install_base_cxx=None):
+                      compiler_family=None, base_cxx=False, install_base_cxx=None, boot_sets=True):
     if type(base_cxx) is not bool:
         raise SDKError('base C++ selection must be boolean')
     if base_cxx and compiler_family != 'clang':
@@ -145,7 +154,7 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
         position = flags.index(f'MKREPRO_TIMESTAMP={timestamp}')
         flags[position:position] = [f'HOST_CC={cc}', f'HOST_CXX={cxx}']
     if target == 'aarch64':
-        sets = ' '.join(name.split('.', 1)[0] for name in release_sets(x11))
+        sets = ' '.join(name.split('.', 1)[0] for name in release_sets(x11, boot_sets))
         flags += ['RELEASEMACHINEDIR=evbarm-aarch64', 'MAKETARSETS=' + sets, 'MKDEBUGKERNEL=no']
     else:
         flags += ['KERNEL_SETS=GENERIC', 'BUILD_KERNELS=INSTALL',
@@ -319,7 +328,8 @@ def validate_profile(profile, sha, target):
         native = signature['native_toolset']
     flags, commands = producer_commands(target, paths, signature['host_tools'], sha, profile['source_timestamp'], profile['jobs'], profile['shell'], native,
                                        signature.get('compiler_family'), base_cxx=base_cxx,
-                                       install_base_cxx=profile['schema'] in BASE_CXX_SCHEMAS)
+                                       install_base_cxx=profile['schema'] in BASE_CXX_SCHEMAS,
+                                       boot_sets=target == 'aarch64' and profile_boot_sets(profile))
     check(signature['flags'] == flags and profile['commands'] == commands, 'Build command does not select the exact required profile')
     executed = [r for r in receipt['commands'] if r.get('scope') != 'runtime-check']
     check([r['argv'] for r in executed] == commands and all(r['status'] == 'passed' and r['exit_status'] == 0 for r in executed),
@@ -331,7 +341,8 @@ def validate_profile(profile, sha, target):
     x11 = 'x11-source' in paths
     if x11:
         require_x11_profile(target, signature.get('compiler_family'))
-    outputs = ([KERNEL] + ['release/evbarm-aarch64/binary/sets/' + n for n in release_sets(x11)] if target == 'aarch64'
+    outputs = ([KERNEL] + ['release/evbarm-aarch64/binary/sets/' + n
+                           for n in release_sets(x11, profile_boot_sets(profile))] if target == 'aarch64'
                else ['release/images/' + n for n in images(version)])
     check(set(profile['output_sha256']) == set(outputs) and all(full_hash(h) for h in profile['output_sha256'].values()), 'Incomplete output hashes')
     check(receipt['outputs'] == profile['output_sha256'], 'Mixed output receipts')
