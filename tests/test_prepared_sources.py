@@ -42,7 +42,8 @@ TOPDIR= ${EMBER_TOP_SOURCE}
 .error Set EMBER_TOP_SOURCE to the prepared common Ports top source
 .endif
 """
-GETTEXT = """.elif empty(.MAKEFLAGS:M-V*) && (make(all) || make(install))
+GETTEXT = """.if defined(EMBER_GETTEXT_SOURCE)
+.elif empty(.MAKEFLAGS:M-V*) && (make(all) || make(install))
 .error Set EMBER_GETTEXT_SOURCE and EMBER_LIBXML2_SOURCE to the prepared common Ports sources
 .endif
 """
@@ -139,6 +140,123 @@ class PreparedSourceTests(TemporaryCase):
         self.assertEqual(prepared_sources.guards(self.os / 'external/byacc/Makefile.inc'),
                          [(('EMBER_BYACC_SOURCE',), None)])
         self.assertEqual(prepared_sources.source_option('EMBER_TCP_WRAPPERS_SOURCE'), 'tcp-wrappers-source')
+
+    def test_guard_context_tracks_nested_elif_else_and_unknown_conditions(self):
+        source = self.os / 'external/context/Makefile'
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(
+            '.if make(obj)\n'
+            '.if defined(UNRELATED)\n'
+            '.endif\n'
+            '.elif make(clean)\n'
+            '.if defined(ANOTHER_UNRELATED)\n'
+            '.endif\n'
+            '.elif make(all)\n'
+            '.else\n'
+            '.error Set EMBER_CONTEXT_SOURCE to the prepared common Ports source\n'
+            '.endif\n')
+        variable, guard = prepared_sources.guards(source)[0]
+        self.assertEqual(variable, ('EMBER_CONTEXT_SOURCE',))
+        self.assertFalse(guard.applies({'obj'}))
+        self.assertFalse(guard.applies({'clean'}))
+        self.assertTrue(guard.applies({'includes'}))
+        self.assertFalse(guard.applies({'all'}))
+
+        nested = self.os / 'external/context/nested.mk'
+        nested.write_text(
+            '.if make(all)\n'
+            '.if defined(INNER_CONDITION)\n'
+            '.else\n'
+            '.error Set EMBER_NESTED_SOURCE to the prepared common Ports source\n'
+            '.endif\n'
+            '.endif\n')
+        nested_guard = prepared_sources.guards(nested)[0][1]
+        self.assertTrue(nested_guard.applies({'all'}))
+        self.assertFalse(nested_guard.applies({'includes'}))
+
+        unsupported = self.os / 'external/context/unsupported.mk'
+        unsupported.write_text(
+            '.if ${HOST_PLATFORM} == "Darwin"\n'
+            '.else\n'
+            '.error Set EMBER_CONTEXT_SOURCE to the prepared common Ports source\n'
+            '.endif\n')
+        self.assertIsNone(prepared_sources.guards(unsupported)[0][1])
+
+        unbalanced = self.os / 'external/context/unbalanced.mk'
+        unbalanced.write_text(
+            '.if make(obj)\n'
+            '.error Set EMBER_CONTEXT_SOURCE to the prepared common Ports source\n')
+        self.assertIsNone(prepared_sources.guards(unbalanced)[0][1])
+
+    def test_mdns_else_guard_is_causally_required_by_make_targets(self):
+        bmake = shutil.which('bmake')
+        if not bmake:
+            self.skipTest('selected bmake is not on PATH')
+        shell = shutil.which('mksh')
+        if not shell:
+            self.skipTest('selected shell is not on PATH')
+        root = self.root / 'mdns-os'
+        (root / 'share/mk').mkdir(parents=True)
+        (root / 'Makefile').write_text(
+            f'.SHELL: name=sh path={shell}\n'
+            'DIST= mDNSResponder-1.0\n'
+            'SUBDIR=\n'
+            '.include "Makefile.inc"\n'
+            '.PHONY: obj clean cleandir all dependall install includes\n'
+            'obj clean cleandir all dependall install includes:\n\t@:\n')
+        (root / 'Makefile.inc').write_text(
+            '.if defined(EMBER_MDNS_SOURCE)\n'
+            '.if ${DIST} != "mDNSResponder-1.0"\n'
+            'MDNS_DIST_MISMATCH=yes\n'
+            '.endif\n'
+            '.elif make(obj) && empty(.TARGETS:Nobj)\n'
+            '.else\n'
+            '.error Set EMBER_MDNS_SOURCE to the prepared common Ports mDNSResponder source\n'
+            '.endif\n')
+        query = prepared_sources.bmake_query(bmake, str(root), ['-r'], env=os.environ.copy())
+        self.assertFalse(isinstance(query(str(root)), prepared_sources.Refused))
+        for target in ('includes', 'all'):
+            result = subprocess.run([bmake, '-r', '-C', str(root), target],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('Set EMBER_MDNS_SOURCE', result.stderr)
+        obj_needed = prepared_sources.required_sources(str(root), query, (('.', frozenset(('obj',))),), jobs=1)
+        self.assertEqual(obj_needed, {})
+        build_needed = prepared_sources.required_sources(
+            str(root), query, (('.', frozenset(('includes',))),), jobs=1)
+        self.assertEqual(build_needed, {'EMBER_MDNS_SOURCE': '.'})
+        accepted = subprocess.run([bmake, '-r', '-C', str(root),
+                                   'EMBER_MDNS_SOURCE=/prepared/mdns', 'all'],
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+    def test_guard_parser_ignores_recipe_indented_directives(self):
+        bmake = shutil.which('bmake')
+        if not bmake:
+            self.skipTest('selected bmake is not on PATH')
+        shell = shutil.which('mksh')
+        if not shell:
+            self.skipTest('selected shell is not on PATH')
+        root = self.root / 'recipe-guard'
+        root.mkdir()
+        makefile = root / 'Makefile'
+        makefile.write_text(
+            f'.SHELL: name=sh path={shell}\n'
+            '.PHONY: obj includes\n'
+            'obj:\n'
+            '\t@:\n'
+            '\t.if make(obj)\n'
+            '.error Set EMBER_RECIPE_SOURCE to the prepared common Ports source\n'
+            '\t.endif\n'
+            'includes:\n'
+            '\t@:\n')
+        result = subprocess.run([bmake, '-r', '-C', str(root), '-V', 'X', 'includes'],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Set EMBER_RECIPE_SOURCE', result.stderr)
+        variables, condition = prepared_sources.guards(makefile)[0]
+        self.assertEqual(variables, ('EMBER_RECIPE_SOURCE',))
+        self.assertIsNone(condition)
 
     def test_target_projection_handles_negated_guards_and_multi_target_calls(self):
         conditions = (

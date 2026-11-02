@@ -25,7 +25,7 @@ from .errors import CommandError, SDKError
 VARIABLES = r'EMBER_[A-Z0-9_]+_SOURCE(?:[ \t]+and[ \t]+EMBER_[A-Z0-9_]+_SOURCE)*'
 GUARD = re.compile(r'^\.[ \t]*error[ \t]+"?Set[ \t]+(' + VARIABLES + r')\b')
 REFUSAL = re.compile(r': "?Set[ \t]+(' + VARIABLES + r')\b')
-CONDITIONAL = re.compile(r'^\.[ \t]*(?:el)?if(?:n?def|n?make)?\b')
+CONDITIONAL = re.compile(r'^\.[ \t]*(elifn?def|elifn?make|elif|ifn?def|ifn?make|if|else|endif)\b(.*)$')
 MAKE_PREDICATE = re.compile(r'make\(\s*([A-Za-z0-9_.+-]+)\s*\)\Z')
 TARGETS_EMPTY = re.compile(r'empty\(\s*\.TARGETS((?::N[^:()\s]+)*)\s*\)\Z')
 TARGET_FILTER = re.compile(r':N([A-Za-z0-9_.+-]+)')
@@ -58,10 +58,11 @@ class TargetCondition:
     Non-target predicates are unknown: they may enable a source guard, but
     only an evaluated target predicate may rule a requested target out.
     """
-    def __init__(self, expression):
+    def __init__(self, expression, *, tree=None):
         self.expression = _strip_make_comment(expression).strip()
-        self.tree = _parse_target_expression(self.expression)
-        self.has_target_predicate = bool(re.search(r'\bmake\s*\(|\.TARGETS\b', self.expression))
+        self.tree = _parse_target_expression(self.expression) if tree is None else tree
+        self.has_target_predicate = (_tree_has_target_predicate(self.tree) or
+                                     bool(re.search(r'\bmake\s*\(|\.TARGETS\b', self.expression)))
 
     def applies(self, requested):
         if not self.has_target_predicate or self.tree is None:
@@ -207,9 +208,68 @@ def _parse_target_expression(expression):
     return ('unknown', text)
 
 
+def _tree_has_target_predicate(tree):
+    if tree is None:
+        return False
+    kind = tree[0]
+    if kind in ('make', 'targets-empty'):
+        return True
+    if kind == 'unknown':
+        return bool(re.search(r'\bmake\s*\(|\.TARGETS\b', tree[1]))
+    if kind == 'not':
+        return _tree_has_target_predicate(tree[1])
+    if kind in ('and', 'or'):
+        return any(_tree_has_target_predicate(child) for child in tree[1])
+    return False
+
+
+def _and_condition(*trees):
+    children = []
+    for tree in trees:
+        if tree[0] == 'constant':
+            if not tree[1]:
+                return ('constant', False)
+            continue
+        children.extend(tree[1] if tree[0] == 'and' else (tree,))
+    if not children:
+        return ('constant', True)
+    return children[0] if len(children) == 1 else ('and', tuple(children))
+
+
+def _or_condition(*trees):
+    children = []
+    for tree in trees:
+        if tree[0] == 'constant':
+            if tree[1]:
+                return ('constant', True)
+            continue
+        children.extend(tree[1] if tree[0] == 'or' else (tree,))
+    if not children:
+        return ('constant', False)
+    return children[0] if len(children) == 1 else ('or', tuple(children))
+
+
+def _not_condition(tree):
+    if tree[0] == 'constant':
+        return ('constant', not tree[1])
+    if tree[0] == 'not':
+        return tree[1]
+    return ('not', tree)
+
+
+def _branch_condition(directive, expression):
+    expression = _strip_make_comment(expression).strip()
+    if directive in ('if', 'elif'):
+        tree = _parse_target_expression(expression)
+        return tree if tree is not None else ('unknown', expression)
+    return ('unknown', '.' + directive + ' ' + expression)
+
+
 def _condition_value(tree, targets):
     """Return True, False, or None when an atom is not target-specific."""
     kind = tree[0]
+    if kind == 'constant':
+        return tree[1]
     if kind == 'make':
         return tree[1] in targets
     if kind == 'targets-empty':
@@ -247,15 +307,52 @@ def guards(path):
         raise SDKError(f'cannot read OS makefile {path}') from exc
     lines = re.sub(r'\\\n', ' ', text).split('\n')
     found = []
-    for index, line in enumerate(lines):
-        match = GUARD.match(line)
-        if not match:
+    stack = []
+    current = ('constant', True)
+    invalid_context = False
+    for line in lines:
+        stripped = _strip_make_comment(line).rstrip()
+        directive = CONDITIONAL.match(stripped)
+        if directive:
+            name, expression = directive.groups()
+            if name in ('if', 'ifdef', 'ifndef', 'ifmake', 'ifnmake'):
+                branch = _branch_condition(name, expression)
+                stack.append({'parent': current, 'branches': [branch], 'else_seen': False})
+                current = _and_condition(current, branch)
+            elif name in ('elif', 'elifdef', 'elifndef', 'elifmake', 'elifnmake'):
+                if not stack or stack[-1]['else_seen']:
+                    invalid_context = True
+                    current = ('unknown', 'unmatched ' + name)
+                else:
+                    frame = stack[-1]
+                    branch = _branch_condition(name, expression)
+                    previous = _or_condition(*frame['branches'])
+                    current = _and_condition(frame['parent'], _not_condition(previous), branch)
+                    frame['branches'].append(branch)
+            elif name == 'else':
+                if not stack or stack[-1]['else_seen']:
+                    invalid_context = True
+                    current = ('unknown', 'unmatched else')
+                else:
+                    frame = stack[-1]
+                    current = _and_condition(frame['parent'],
+                                             _not_condition(_or_condition(*frame['branches'])))
+                    frame['else_seen'] = True
+            elif name == 'endif':
+                if not stack:
+                    invalid_context = True
+                    current = ('unknown', 'unmatched endif')
+                else:
+                    current = stack.pop()['parent']
             continue
-        condition = next((lines[i] for i in range(index - 1, -1, -1) if CONDITIONAL.match(lines[i])), '')
-        condition_match = re.match(r'^\.[ \t]*(?:(?:el)?if)(?:n?def|n?make)?\b(.*)$', condition)
-        expression = condition_match.group(1).strip() if condition_match else ''
-        target_condition = TargetCondition(expression) if re.search(r'\bmake\s*\(|\.TARGETS\b', expression) else None
-        found.append((tuple(re.findall(r'EMBER_[A-Z0-9_]+_SOURCE', match.group(1))), target_condition))
+        match = GUARD.match(stripped)
+        if match:
+            condition = ('unknown', 'invalid conditional context') if invalid_context else current
+            target_condition = (TargetCondition('', tree=condition)
+                                if _tree_has_target_predicate(condition) else None)
+            found.append((tuple(re.findall(r'EMBER_[A-Z0-9_]+_SOURCE', match.group(1))), target_condition))
+    if invalid_context or stack:
+        found = [(variables, None) for variables, _ in found]
     return found
 
 
