@@ -310,7 +310,13 @@ The additive `application_toolchain.clang_c_foundation_commands` and
 result. `FOUNDATION_TOOLCHAIN_API` identifies the interface version. The
 result selects one concrete base sysroot and runtime stage; callers must pass
 that same base sysroot, and the binding rejects a different path or mismatched
-runtime manifest. This is a C-only package-tool input, without C++ headers or
-runtime, and is not a portable full application SDK. The ordinary
+runtime manifest. A producer that installs ABI-compatible base libraries into
+a separate root can pass that root as the compiler sysroot and name the
+original base with the optional `runtime_base` argument to the C-foundation
+binding. The runtime base must still match the selected result; compiler-rt and
+libunwind come from its original runtime stage. This does not impose a second
+inventory or archive-receipt gate on ordinary OS installation and package
+outputs. It remains a C-only package-tool input, without C++ headers or runtime,
+and is not a portable full application SDK. The ordinary
 `clang_application_commands` path continues to select a complete application
 runtime.

@@ -9,16 +9,17 @@ from .errors import SDKError
 
 APPLICATION_TOOLCHAIN_API = 2
 FOUNDATION_TOOLCHAIN_API = 1
+# Additive C-foundation binding support for separately installed target roots.
+FOUNDATION_RUNTIME_BASE_API = 1
 # Additive in API 2: the sysroot_alias keyword of the command functions.
 SYSROOT_ALIAS = 1
 IMPORT_RECORD = '.prebuild-sdk-import.json'
 
 
-def load_clang_c_foundation_runtime(foundation_result, sysroot, *, target):
-    """Select the C compiler runtime from a completed C-foundation result."""
+def _load_c_foundation_base(foundation_result, *, target):
+    """Validate the immutable C-foundation result without selecting its root."""
     expected = targets.target_definition(target)
     result_path = paths.canonical_existing(foundation_result)
-    root = paths.canonical_existing(sysroot)
     result = jsonio.read_json(result_path)
     if (not isinstance(result, dict) or result.get('format') != 'emberbsd-llvm-c-foundation' or
             result.get('version') != 1 or result.get('target') != target):
@@ -39,9 +40,9 @@ def load_clang_c_foundation_runtime(foundation_result, sysroot, *, target):
     stage = selected_paths.get('llvm-runtime-stage')
     selected_base = selected_paths.get('destination')
     runtime = selected_runtime.get('manifest')
-    if (not isinstance(stage, str) or not isinstance(selected_base, str) or
-            paths.canonical_existing(selected_base) != root or not isinstance(runtime, dict)):
-        raise SDKError('C-foundation runtime inputs do not match the selected sysroot')
+    if not isinstance(stage, str) or not isinstance(selected_base, str) or not isinstance(runtime, dict):
+        raise SDKError('C-foundation runtime inputs are malformed')
+    root = paths.canonical_existing(selected_base)
     runtime = llvm_runtime.validate_identity(runtime, target=target,
         required_components=('builtins', 'libunwind-static'))
     if set(runtime['components']) != {'builtins', 'libunwind-static'}:
@@ -55,13 +56,25 @@ def load_clang_c_foundation_runtime(foundation_result, sysroot, *, target):
     return dict(root=root, stage=paths.canonical_existing(stage), runtime=measured)
 
 
-def clang_c_foundation_commands(compiler, foundation_result, sysroot, *, target):
+def load_clang_c_foundation_runtime(foundation_result, sysroot, *, target, runtime_base=None):
+    """Select the C compiler runtime from a completed C-foundation result."""
+    selection = _load_c_foundation_base(foundation_result, target=target)
+    root = paths.canonical_existing(sysroot)
+    base = paths.canonical_existing(runtime_base) if runtime_base is not None else root
+    if base != selection['root']:
+        raise SDKError('C-foundation runtime inputs do not match the selected sysroot')
+    paths.real_directory(root)
+    return dict(root=root, base=base, stage=selection['stage'], runtime=selection['runtime'])
+
+
+def clang_c_foundation_commands(compiler, foundation_result, sysroot, *, target, runtime_base=None):
     """Bind ordinary C target commands to C headers and compiler-rt only.
 
     This contract deliberately has no C++ standard library. The selected
     C-foundation manifest supplies compiler-rt and static libunwind inputs.
     """
-    selection = load_clang_c_foundation_runtime(foundation_result, sysroot, target=target)
+    selection = load_clang_c_foundation_runtime(foundation_result, sysroot, target=target,
+        runtime_base=runtime_base)
     runtime = selection['runtime']
     target_toolchain.validate_clang_identity(compiler, runtime['triplet'])
     if compiler['version'] != runtime['llvm_version']:
@@ -89,11 +102,12 @@ def clang_c_foundation_commands(compiler, foundation_result, sysroot, *, target)
 
 
 def bind_clang_c_foundation_commands(destination, compiler, foundation_result, sysroot, *,
-                                     target, python, include_auxiliary=False):
+                                     target, python, include_auxiliary=False, runtime_base=None):
     """Bind C-only target drivers without selecting a C++ runtime."""
     if type(include_auxiliary) is not bool:
         raise SDKError('auxiliary command selection must be boolean')
-    selected = clang_c_foundation_commands(compiler, foundation_result, sysroot, target=target)
+    selected = clang_c_foundation_commands(compiler, foundation_result, sysroot,
+        target=target, runtime_base=runtime_base)
     roles = ['cc', 'cxx', 'cpp']
     commands = dict(selected['commands'])
     if include_auxiliary:

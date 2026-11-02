@@ -151,6 +151,36 @@ class ApplicationToolchainTests(TemporaryCase):
         with self.assertRaises(SDKError):
             application_toolchain.load_clang_c_foundation_runtime(result_path, root, target='riscv32')
 
+    def test_c_foundation_runtime_base_can_bind_an_installed_extension(self):
+        import shutil
+        root, stage, result_path, manifest, compiler = self._c_foundation_fixture()
+        extension = self.root/'c-foundation-extension'
+        shutil.copytree(root, extension)
+        (extension/'METALOG').write_text('native install output\n')
+        (extension/'usr/include/math-extension.h').write_text('/* native headers */\n')
+        (extension/'usr/share/man/man3/sin.3').parent.mkdir(parents=True)
+        (extension/'usr/share/man/man3/sin.3').write_text('native manual\n')
+        (extension/'usr/pkg').mkdir()
+        commands = application_toolchain.clang_c_foundation_commands(
+            compiler, result_path, extension, target='riscv32', runtime_base=root)
+        self.assertIn('--sysroot='+str(extension), commands['commands']['cc'])
+        self.assertIn(str(extension/'usr/include'), commands['commands']['cc'])
+        self.assertIn('-Wl,-rpath-link,'+str(extension)+'/usr/lib',
+            commands['link_flags']['cc'])
+        self.assertEqual(commands['selection']['base'], str(root))
+        with self.assertRaisesRegex(SDKError, 'runtime inputs do not match'):
+            application_toolchain.clang_c_foundation_commands(
+                compiler, result_path, extension, target='riscv32')
+        with self.assertRaisesRegex(SDKError, 'runtime inputs do not match'):
+            application_toolchain.clang_c_foundation_commands(
+                compiler, result_path, extension, target='riscv32', runtime_base=extension)
+        bound = self.root/'bound-extension-tools'
+        application_toolchain.bind_clang_c_foundation_commands(bound, compiler,
+            result_path, extension, target='riscv32', python=sys.executable,
+            include_auxiliary=True, runtime_base=root)
+        record = jsonio.read_json(bound/'commands.json')
+        self.assertIn('--sysroot='+str(extension), record['commands']['cc'])
+
     def test_final_and_imported_sysroots_retain_the_existing_runtime_record(self):
         self.assertEqual(application_toolchain.load_clang_runtime(self.sysroot, target='aarch64'), self.runtime)
         bundle, restored = self.root/'bundle', self.root/'restored'
