@@ -26,7 +26,9 @@ VARIABLES = r'EMBER_[A-Z0-9_]+_SOURCE(?:[ \t]+and[ \t]+EMBER_[A-Z0-9_]+_SOURCE)*
 GUARD = re.compile(r'^\.[ \t]*error[ \t]+"?Set[ \t]+(' + VARIABLES + r')\b')
 REFUSAL = re.compile(r': "?Set[ \t]+(' + VARIABLES + r')\b')
 CONDITIONAL = re.compile(r'^\.[ \t]*(?:el)?if(?:n?def|n?make)?\b')
-TARGET = re.compile(r'make\(([^()\s]+)\)')
+MAKE_PREDICATE = re.compile(r'make\(\s*([A-Za-z0-9_.+-]+)\s*\)\Z')
+TARGETS_EMPTY = re.compile(r'empty\(\s*\.TARGETS((?::N[^:()\s]+)*)\s*\)\Z')
+TARGET_FILTER = re.compile(r':N([A-Za-z0-9_.+-]+)')
 
 # Targets that compile or install a directory: build_install, do-build and
 # the release reach each subdirectory with these.
@@ -50,16 +52,195 @@ class Refused:
         self.variables = tuple(variables)
 
 
+class TargetCondition:
+    """Conservatively project a bmake conditional onto requested make targets.
+
+    Non-target predicates are unknown: they may enable a source guard, but
+    only an evaluated target predicate may rule a requested target out.
+    """
+    def __init__(self, expression):
+        self.expression = _strip_make_comment(expression).strip()
+        self.tree = _parse_target_expression(self.expression)
+        self.has_target_predicate = bool(re.search(r'\bmake\s*\(|\.TARGETS\b', self.expression))
+
+    def applies(self, requested):
+        if not self.has_target_predicate or self.tree is None:
+            return True
+        requested = frozenset(requested)
+        if not requested:
+            return True
+        # Build traversals currently contain at most four targets. Preserve a
+        # conservative answer if a future caller supplies a much larger set.
+        if len(requested) > 8:
+            return True
+        targets = tuple(requested)
+        for mask in range(1, 1 << len(targets)):
+            invocation = frozenset(targets[index] for index in range(len(targets))
+                                   if mask & (1 << index))
+            if _condition_value(self.tree, invocation) is not False:
+                return True
+        return False
+
+
+def _strip_make_comment(text):
+    """Remove an unescaped bmake comment; quoted-hash syntax stays opaque."""
+    escaped = False
+    for index, char in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if char == '\\':
+            escaped = True
+            continue
+        if char == '#':
+            return text[:index].rstrip()
+    return text
+
+
+def _condition_parts(text, operator):
+    """Split a bmake expression at top-level boolean operators only."""
+    parts = []
+    depth = 0
+    quote = None
+    escaped = False
+    start = 0
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in ('"', "'"):
+            quote = char
+            index += 1
+            continue
+        if char == '(':
+            depth += 1
+        elif char == ')':
+            depth -= 1
+            if depth < 0:
+                return None
+        elif depth == 0 and text.startswith(operator, index):
+            parts.append(text[start:index].strip())
+            index += len(operator)
+            start = index
+            continue
+        index += 1
+    if depth != 0 or quote is not None:
+        return None
+    if parts:
+        parts.append(text[start:].strip())
+        return parts if all(parts) else None
+    return []
+
+
+def _strip_condition_group(text):
+    """Remove balanced parentheses that enclose the entire expression."""
+    while text.startswith('('):
+        depth = 0
+        quote = None
+        escaped = False
+        closes_at_end = False
+        for index, char in enumerate(text):
+            if escaped:
+                escaped = False
+                continue
+            if quote is not None:
+                if char == quote:
+                    quote = None
+                continue
+            if char in ('"', "'"):
+                quote = char
+            elif char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+                if depth < 0:
+                    return text
+                if depth == 0:
+                    closes_at_end = index == len(text) - 1
+                    break
+        if depth != 0 or not closes_at_end:
+            return text
+        text = text[1:-1].strip()
+    return text
+
+
+def _parse_target_expression(expression):
+    """Parse boolean groups and target predicates; unsupported atoms stay opaque."""
+    if '\\' in expression:
+        return None
+    text = _strip_condition_group(expression.strip())
+    if not text:
+        return None
+    parts = _condition_parts(text, '||')
+    if parts is None:
+        return None
+    if parts:
+        children = tuple(_parse_target_expression(part) for part in parts)
+        return None if any(child is None for child in children) else ('or', children)
+    parts = _condition_parts(text, '&&')
+    if parts is None:
+        return None
+    if parts:
+        children = tuple(_parse_target_expression(part) for part in parts)
+        return None if any(child is None for child in children) else ('and', children)
+    if text.startswith('!') and not text.startswith('!='):
+        child = _parse_target_expression(text[1:].strip())
+        return None if child is None else ('not', child)
+    make = MAKE_PREDICATE.fullmatch(text)
+    if make:
+        return ('make', make.group(1))
+    empty_targets = TARGETS_EMPTY.fullmatch(text)
+    if empty_targets:
+        modifiers = empty_targets.group(1)
+        filters = tuple(match.group(1) for match in TARGET_FILTER.finditer(modifiers))
+        if modifiers and ''.join(match.group(0) for match in TARGET_FILTER.finditer(modifiers)) != modifiers:
+            return ('unknown', text)
+        return ('targets-empty', filters)
+    return ('unknown', text)
+
+
+def _condition_value(tree, targets):
+    """Return True, False, or None when an atom is not target-specific."""
+    kind = tree[0]
+    if kind == 'make':
+        return tree[1] in targets
+    if kind == 'targets-empty':
+        remaining = set(targets)
+        for pattern in tree[1]:
+            remaining.discard(pattern)
+        return not remaining
+    if kind == 'unknown':
+        return None
+    if kind == 'not':
+        value = _condition_value(tree[1], targets)
+        return None if value is None else not value
+    values = [_condition_value(child, targets) for child in tree[1]]
+    if kind == 'and':
+        if False in values:
+            return False
+        return True if all(value is True for value in values) else None
+    if kind == 'or':
+        if True in values:
+            return True
+        return False if all(value is False for value in values) else None
+    return None
+
+
 def source_option(variable):
     """EMBER_TCP_WRAPPERS_SOURCE -> tcp-wrappers-source."""
     return variable[len('EMBER_'):-len('_SOURCE')].lower().replace('_', '-') + '-source'
 
 
 def guards(path):
-    """Return (variables, targets) for each missing-source refusal in PATH.
-
-    TARGETS holds the make targets that the enclosing condition names, or
-    None when the refusal does not depend on the requested target."""
+    """Return (variables, target condition) for each missing-source refusal."""
     try:
         text = Path(path).read_text(encoding='utf-8', errors='surrogateescape')
     except OSError as exc:
@@ -71,8 +252,10 @@ def guards(path):
         if not match:
             continue
         condition = next((lines[i] for i in range(index - 1, -1, -1) if CONDITIONAL.match(lines[i])), '')
-        targets = frozenset(TARGET.findall(condition)) or None
-        found.append((tuple(re.findall(r'EMBER_[A-Z0-9_]+_SOURCE', match.group(1))), targets))
+        condition_match = re.match(r'^\.[ \t]*(?:(?:el)?if)(?:n?def|n?make)?\b(.*)$', condition)
+        expression = condition_match.group(1).strip() if condition_match else ''
+        target_condition = TargetCondition(expression) if re.search(r'\bmake\s*\(|\.TARGETS\b', expression) else None
+        found.append((tuple(re.findall(r'EMBER_[A-Z0-9_]+_SOURCE', match.group(1))), target_condition))
     return found
 
 
@@ -165,7 +348,7 @@ def required_sources(os_root, query, traversals, *, jobs=None):
                         if path not in parsed:
                             parsed[path] = guards(path)
                         for variables, guarded in parsed[path]:
-                            if guarded is None or guarded & targets:
+                            if guarded is None or guarded.applies(targets):
                                 for variable in variables:
                                     needed.setdefault(variable, where)
                     for name in subdirs:

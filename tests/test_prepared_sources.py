@@ -10,6 +10,7 @@ still propagates a real makefile .error when it reaches an unselected source.
 """
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -123,15 +124,102 @@ class PreparedSourceTests(TemporaryCase):
         return [f'EMBER_{name.upper()}_SOURCE=/prepared/{name}' for name in names]
 
     def test_guards_name_their_targets(self):
-        self.assertEqual(prepared_sources.guards(self.os / 'external/top/bin/Makefile'),
-                         [(('EMBER_TOP_SOURCE',), frozenset(('all', 'dependall', 'install')))])
-        self.assertEqual(prepared_sources.guards(self.os / 'external/iscsi/lib/Makefile'),
-                         [(('EMBER_ISCSI_SOURCE',), frozenset(('includes',)))])
-        self.assertEqual(prepared_sources.guards(self.os / 'external/gettext/Makefile'),
-                         [(('EMBER_GETTEXT_SOURCE', 'EMBER_LIBXML2_SOURCE'), frozenset(('all', 'install')))])
+        top = prepared_sources.guards(self.os / 'external/top/bin/Makefile')[0]
+        self.assertEqual(top[0], ('EMBER_TOP_SOURCE',))
+        self.assertTrue(top[1].applies({'all', 'dependall', 'install'}))
+        self.assertFalse(top[1].applies({'includes'}))
+        iscsi = prepared_sources.guards(self.os / 'external/iscsi/lib/Makefile')[0]
+        self.assertEqual(iscsi[0], ('EMBER_ISCSI_SOURCE',))
+        self.assertTrue(iscsi[1].applies({'includes'}))
+        self.assertFalse(iscsi[1].applies({'all', 'dependall', 'install'}))
+        gettext = prepared_sources.guards(self.os / 'external/gettext/Makefile')[0]
+        self.assertEqual(gettext[0], ('EMBER_GETTEXT_SOURCE', 'EMBER_LIBXML2_SOURCE'))
+        self.assertTrue(gettext[1].applies({'all', 'install'}))
+        self.assertFalse(gettext[1].applies({'includes'}))
         self.assertEqual(prepared_sources.guards(self.os / 'external/byacc/Makefile.inc'),
                          [(('EMBER_BYACC_SOURCE',), None)])
         self.assertEqual(prepared_sources.source_option('EMBER_TCP_WRAPPERS_SOURCE'), 'tcp-wrappers-source')
+
+    def test_target_projection_handles_negated_guards_and_multi_target_calls(self):
+        conditions = (
+            ('!make(includes)', {'all'}, {'includes'}),
+            ('!defined(EMBER_SOURCE) && make(includes)', {'includes'}, {'all'}),
+            ('make(all) && make(install)', {'all', 'install'}, {'all', 'dependall'}),
+        )
+        for expression, included, excluded in conditions:
+            with self.subTest(expression=expression):
+                guard = prepared_sources.TargetCondition(expression)
+                self.assertTrue(guard.applies(included))
+                self.assertFalse(guard.applies(excluded))
+        quoted = prepared_sources.TargetCondition('"make(all) || make(install)" && make(includes)')
+        self.assertTrue(quoted.applies({'includes'}))
+        self.assertFalse(quoted.applies({'all'}))
+        function_argument = prepared_sources.TargetCondition('empty(.MAKEFLAGS:Mfoo&&bar) && make(includes)')
+        self.assertTrue(function_argument.applies({'includes'}))
+        self.assertFalse(function_argument.applies({'all'}))
+        trailing_comment = prepared_sources.TargetCondition('make(all) # comment && make(includes)')
+        self.assertTrue(trailing_comment.applies({'all'}))
+        self.assertFalse(trailing_comment.applies({'includes'}))
+        quoted_hash = prepared_sources.TargetCondition('make(all) && "#" == "#"')
+        self.assertTrue(quoted_hash.applies({'includes'}))
+        escaped_hash = prepared_sources.TargetCondition(r'make(all) \# && make(includes)')
+        self.assertTrue(escaped_hash.applies({'includes'}))
+        for modifier in ('N[^x]*', 'N[!x]*', 'N${TARGET}'):
+            with self.subTest(modifier=modifier):
+                unsupported_filter = prepared_sources.TargetCondition(
+                    f'empty(.TARGETS:{modifier}) && make(obj)')
+                self.assertTrue(unsupported_filter.applies({'obj'}))
+        self.assertTrue(prepared_sources.TargetCondition('make(foo*)').applies({'obj'}))
+        self.assertTrue(prepared_sources.TargetCondition('make(all) &&').applies({'obj'}))
+        unsupported = prepared_sources.TargetCondition('make(${TARGET}) && trailing')
+        self.assertTrue(unsupported.applies({'obj'}))
+
+    def test_heimdal_negative_group_is_causally_required_by_the_graph(self):
+        bmake = shutil.which('bmake')
+        if not bmake:
+            self.skipTest('selected bmake is not on PATH')
+        shell = shutil.which('mksh')
+        if not shell:
+            self.skipTest('selected shell is not on PATH')
+        root = self.root / 'heimdal-os'
+        crypto = root / 'crypto'
+        (root / 'share/mk').mkdir(parents=True)
+        crypto.mkdir(parents=True)
+        (root / 'Makefile').write_text('SUBDIR= crypto\n')
+        (crypto / 'Makefile').write_text(
+            f'.SHELL: name=sh path={shell}\n'
+            'SUBDIR=\n'
+            '.include "Makefile.inc"\n'
+            '.PHONY: obj clean cleandir all dependall install includes\n'
+            'obj clean cleandir all dependall install includes:\n\t@:\n')
+        (crypto / 'Makefile.inc').write_text(
+            '.if (!defined(EMBER_HEIMDAL_SOURCE) || empty(EMBER_HEIMDAL_SOURCE)) && \\\n'
+            '    empty(.MAKEFLAGS:M-V*) && \\\n'
+            '    !((make(obj) || make(clean) || make(cleandir)) && \\\n'
+            '    empty(.TARGETS:Nobj:Nclean:Ncleandir)) # comment && make(clean)\n'
+            '.error Set EMBER_HEIMDAL_SOURCE to the prepared common Heimdal source\n'
+            '.endif\n')
+        query = prepared_sources.bmake_query(bmake, str(root), ['-r'], env=os.environ.copy())
+        # The actual bmake -V obj query is intentionally suppressed by the
+        # guard, while normal build targets are refused without the source.
+        query_result = query(str(crypto))
+        self.assertFalse(isinstance(query_result, prepared_sources.Refused))
+        for target in ('obj', 'clean', 'cleandir'):
+            result = subprocess.run([bmake, '-r', '-C', str(crypto), target],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        for target in ('all', 'dependall', 'install'):
+            result = subprocess.run([bmake, '-r', '-C', str(crypto), target],
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('Set EMBER_HEIMDAL_SOURCE', result.stderr)
+        accepted = subprocess.run([bmake, '-r', '-C', str(crypto),
+                                   'EMBER_HEIMDAL_SOURCE=/prepared/heimdal', 'all'],
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        needed = prepared_sources.required_sources(
+            str(root), query, (('crypto', prepared_sources.BUILD_TARGETS),), jobs=1)
+        self.assertEqual(needed.get('EMBER_HEIMDAL_SOURCE'), 'crypto')
 
     def test_required_sources_uses_shared_job_resolution(self):
         with patch('emberbsd_sdk.prepared_sources.resolve_jobs', return_value=3) as resolve:
