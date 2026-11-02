@@ -348,7 +348,7 @@ class LLVMCoordinator:
                     '--host-prefix', selected.paths['host-prefix'],
                     '--host-compiler-family', self.options.get('host-compiler-family', 'clang'),
                     '--target-prefix', selected.paths['compiler'], '--git', selected.git_command,
-                    '--jobs', self.options['jobs'],
+                    '--jobs', str(selected.options['jobs']),
                     '--work', os.path.join(self.runtime_root, phase + '-work'), '--stage', stage]
         if phase == 'full':
             command += ['--bootstrap-stage', os.path.join(self.runtime_root, 'bootstrap-stage')]

@@ -14,7 +14,7 @@ import sys
 from unittest.mock import patch
 
 from test_core import TemporaryCase, SDK_SOURCE
-from emberbsd_sdk import inventory, jsonio, llvm_stage_inputs
+from emberbsd_sdk import inventory, jsonio, llvm_stage_inputs, process
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.verification_receipts import RunReceipts
 from emberbsd_sdk.sysroot_builder import SysrootBuilder
@@ -564,6 +564,71 @@ class LLVMBuilderTests(TemporaryCase):
                 self.assertEqual(phase_states,
                     [('headers', False), ('base', producer_phase == 'headers')])
                 self.assertEqual(final_state, [producer_phase in ('headers', 'base')])
+
+    def test_runtime_jobs_cli_resolution_crosses_process_boundary(self):
+        from types import SimpleNamespace
+        from emberbsd_sdk import sysroot_builder
+        from emberbsd_sdk.cpu_capacity import resolve_jobs
+
+        base_arguments = ['--sdk', '/unused/sdk', '--os', '/unused/os',
+                          '--ports', '/unused/ports', '--compiler', '/unused/compiler',
+                          '--target', 'aarch64', '--sdk-source', str(SDK_SOURCE),
+                          '--libedit-source', '/unused/libedit', '--host-prefix', '/unused/host',
+                          '--host-binutils', '/unused/binutils', '--runtime-work', '/unused/runtime',
+                          '--llvm-source', '/unused/llvm']
+
+        class CaptureBuilder(SysrootBuilder):
+            def run(self):
+                captured.update(self.options)
+                return {}
+
+        script = SDK_SOURCE / 'scripts/build-sysroot.py'
+        producer = self.root / 'selected-ports/pkgsrc/lang/compiler-rt/files/runtime.py'
+        producer.parent.mkdir(parents=True)
+        producer.write_text('import json, sys\nprint(json.dumps(sys.argv[1:]))\n')
+
+        for case, extra in (('automatic', []), ('explicit', ['--jobs', '16'])):
+            with self.subTest(case=case):
+                captured = {}
+                with patch.object(sysroot_builder, 'SysrootBuilder', CaptureBuilder), \
+                     patch.object(sys, 'argv', [str(script), *base_arguments, *extra]), \
+                     contextlib.redirect_stdout(io.StringIO()), \
+                     self.assertRaises(SystemExit) as exit_info:
+                    runpy.run_path(str(script), run_name='__main__')
+                self.assertEqual(exit_info.exception.code, 0)
+                if case == 'explicit':
+                    self.assertIs(type(captured['jobs']), int)
+                    self.assertEqual(captured['jobs'], 16)
+                else:
+                    self.assertNotIn('jobs', captured)
+
+                # This is the normalization performed by SysrootBuilder.preflight
+                # on each coordinator phase's options; the coordinator keeps the
+                # raw CLI mapping, where jobs may be an int or absent.
+                expected_jobs = str(resolve_jobs(captured.get('jobs')))
+                phase_options = captured | {'jobs': expected_jobs}
+                coordinator = LLVMCoordinator(captured, SysrootBuilder)
+                coordinator.headers = SimpleNamespace(
+                    options=phase_options,
+                    paths={'python': sys.executable,
+                           'ports': str(self.root / 'selected-ports'),
+                           'sdk-source': str(SDK_SOURCE),
+                           'llvm-source': '/selected/llvm',
+                           'os': '/selected/os',
+                           'host-prefix': '/selected/host',
+                           'compiler': '/selected/compiler'},
+                    git_command='/selected/git', environment=os.environ.copy())
+
+                for phase in ('bootstrap', 'full'):
+                    with self.subTest(phase=phase):
+                        command = coordinator.runtime_command(phase, '/selected/sysroot')
+                        result = process.capture(command, env=os.environ.copy())
+                        jobs = command[command.index('--jobs') + 1]
+                        self.assertEqual(jobs, expected_jobs)
+                        received = json.loads(result.stdout.decode())
+                        self.assertEqual(received[received.index('--jobs') + 1], expected_jobs)
+                        if phase == 'full':
+                            self.assertIn('--bootstrap-stage', received)
 
     def test_coordinator_forwards_original_source_to_runtime_verify(self):
         options = {'sdk': '/sdk', 'runtime-work': '/sdk/obj/runtime', 'target': 'aarch64',
