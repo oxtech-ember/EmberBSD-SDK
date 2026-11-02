@@ -188,6 +188,43 @@ class PreparedSourceTests(TemporaryCase):
             '.error Set EMBER_CONTEXT_SOURCE to the prepared common Ports source\n')
         self.assertIsNone(prepared_sources.guards(unbalanced)[0][1])
 
+    def test_builder_graph_uses_selected_sed_before_tools_exist(self):
+        bmake, sed, shell = (shutil.which(name) for name in ('bmake', 'gsed', 'mksh'))
+        if not all((bmake, sed, shell)):
+            self.skipTest('selected bmake, gsed and mksh must be on PATH')
+        root = self.root / 'sed-os'
+        (root / 'share/mk').mkdir(parents=True)
+        (root / 'share/mk/sys.mk').write_text('# fixture\n')
+        config = root / 'config.h'
+        config.write_text('#define SYSCONFDIR "/etc"\n')
+        (root / 'Makefile').write_text(
+            f'.SHELL: name=sh path={shell}\n'
+            'TOOL_SED?= ${TOOLDIR}/bin/nbsed\n'
+            f"PATH_VALUE!= ${{TOOL_SED}} -n -e 's/.*SYSCONFDIR //p' {config}\n"
+            '.if empty(PATH_VALUE)\n.error missing sed output\n.endif\n'
+            '.if empty(.MAKEFLAGS:M-V*) && make(all)\n'
+            '.error Set EMBER_FIXTURE_SOURCE to the prepared source\n.endif\n'
+            'SUBDIR=\n.PHONY: obj\nobj:\n\t@:\n')
+        builder = self.builder(())
+        builder.paths['os'] = str(root)
+        builder.paths['tools'] = str(root / 'absent-tools')
+        builder.environment = os.environ.copy()
+        traversals = (('.', frozenset(('all',))),)
+        baseline = prepared_sources.bmake_query(bmake, str(root),
+            ['TOOLDIR=' + builder.paths['tools']], env=builder.environment)
+        with self.assertRaises(SDKError):
+            baseline(str(root))
+        builder.native = SimpleNamespace(tool=lambda role: {'make': bmake, 'sed': sed}[role])
+        with self.assertRaisesRegex(SDKError, '--fixture-source'):
+            builder.require_prepared_sources([], traversals)
+        builder.paths['fixture-source'] = '/prepared/fixture'
+        found = builder.require_prepared_sources([], traversals)
+        self.assertEqual(found, {'EMBER_FIXTURE_SOURCE': '.'})
+        builder.native = SimpleNamespace(tool=lambda role: {'make': bmake, 'sed': '/missing/sed'}[role])
+        with self.assertRaisesRegex(SDKError, 'cannot inspect OS directory'):
+            builder.require_prepared_sources([], traversals)
+        self.assertFalse(Path(builder.paths['tools']).exists())
+
     def test_mdns_else_guard_is_causally_required_by_make_targets(self):
         bmake = shutil.which('bmake')
         if not bmake:

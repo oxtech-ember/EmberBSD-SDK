@@ -1325,6 +1325,7 @@ class SysrootBuilder:
                   'NETBSDOBJDIR=' + self.paths['objects'],
                   'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
                   'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
+                  'TOOL_SED=' + self.native.tool('sed'),
                   'MKREPRO_TIMESTAMP=' + str(self.source_timestamp())]
         if any(start == 'tools' for start, _ in traversals):
             _, rows, _ = read_native_os_contract(self.native_contract, sha256=self.native_contract_sha256)
