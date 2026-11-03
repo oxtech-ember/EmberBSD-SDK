@@ -20,7 +20,8 @@ NATIVE_OS_ROUTING_API = 1
 _SAFE_PATH = re.compile(r'/[A-Za-z0-9_./+@%=\-]+\Z')
 _NAME = re.compile(r'[A-Za-z0-9_+][A-Za-z0-9_+.\-]*\Z')
 _BINDINGS = frozenset(('-', 'HOST_AR', 'HOST_CC', 'HOST_CXX', 'HOST_CPP',
-                       'HOST_LD', 'HOST_LN', 'HOST_RANLIB', 'HOST_SH', 'HOST_YACC', 'HOST_MV_CP', 'HOST_MV_RM', 'MAKE', 'SED'))
+                       'HOST_LD', 'HOST_LN', 'HOST_RANLIB', 'HOST_SH', 'HOST_YACC',
+                       'HOST_PYTHON', 'HOST_PERL', 'HOST_GMAKE', 'HOST_MV_CP', 'HOST_MV_RM', 'MAKE', 'SED'))
 
 
 def native_host_flags(selection):
