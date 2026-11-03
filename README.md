@@ -71,7 +71,7 @@ SDK and OS inventories and channel pointers using one X.509 trust root.
 The [binary catalog](docs/binary-catalog.md) projects Ports runtime dependencies,
 signs packages before generating pkg_summary, and supports source-free selection
 of published package sets. [S3 publication and HTTPS delivery](docs/s3-distribution.md)
-publish complete releases and fetch authenticated metadata snapshots. Binary
+maintain one current package set, remove superseded versions, and fetch authenticated metadata. Binary
 installation remains a subsequent step.
 The [distribution guide](docs/distribution.md) defines the remaining boundary
 for an installable binary SDK and package channel.

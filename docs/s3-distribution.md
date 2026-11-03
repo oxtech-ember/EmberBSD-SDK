@@ -138,6 +138,9 @@ The first native catalog contains `fetch-1.9nb4` and `openssl-4.1.0nb1` for
 Darwin arm64. Their signed archives total 9,926,880 bytes; local manifest and
 indexes occupy 5,538 bytes. These bootstrap packages validate delivery and
 selection, not a portable complete SDK or an EmberBSD target install.
+On 2026-11-03, the [current pointer](https://emberbsd-pkg.oxteam.me/current.p7m)
+and both packages were published in this layout and fetched anonymously.
+The old development pointer and dated S3 release directory were removed.
 
 Tests cover conditional publication, interrupted upload and cleanup, version
 replacement, unchanged archive reuse, competing writers, current changing
