@@ -44,6 +44,27 @@ def installed_source_prefix(metadata):
     return None
 
 
+def complete(prefix, metadata, lines):
+    """Commit completed relocation only after payload and hooks have succeeded."""
+    contents = metadata / '+CONTENTS'
+    lines = [SOURCE + str(prefix) if line.startswith(SOURCE) else line for line in lines if line != HOOKS]
+    _replace_file(contents, ('\n'.join(lines) + '\n').encode())
+    (metadata / READY).unlink(missing_ok=True)
+
+
+def complete_bootstrap(prefix, database, name):
+    """Complete deferred package hooks already run by bootstrap initialization."""
+    metadata = Path(database) / name
+    lines = (metadata / '+CONTENTS').read_text().splitlines()
+    selected = declaration(lines)
+    if selected is None:
+        return
+    if selected[0] != str(prefix):
+        raise SDKError('bootstrap package relocation prefix differs: ' + name)
+    if HOOKS in lines or (metadata / READY).exists():
+        complete(prefix, metadata, lines)
+
+
 def finish(prefix, database, name):
     """Idempotent: the source-prefix comment changes only after all file edits."""
     prefix, database = Path(prefix), Path(database)
@@ -91,9 +112,7 @@ def finish(prefix, database, name):
         run_install_hooks(prefix, database, metadata.name)
     refresh_checksums(prefix, [metadata.name], database=database, selected=set(names))
     lines = contents.read_text().splitlines()
-    lines = [SOURCE + str(prefix) if line.startswith(SOURCE) else line for line in lines if line != HOOKS]
-    _replace_file(contents, ('\n'.join(lines) + '\n').encode())
-    ready.unlink()
+    complete(prefix, metadata, lines)
 
 
 def pending(prefix, database):

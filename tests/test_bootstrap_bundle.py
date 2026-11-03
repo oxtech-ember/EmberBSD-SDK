@@ -7,6 +7,8 @@ from pathlib import Path
 import py_compile
 import struct
 import sys
+import subprocess
+from types import SimpleNamespace
 import tempfile
 import tarfile
 import unittest
@@ -119,6 +121,69 @@ class BootstrapTests(unittest.TestCase):
             run.return_value.returncode = 0
             initialize(self.root)
             self.assertEqual(read_json(self.root / MANIFEST)['prefix'], str(self.root))
+
+    def test_deferred_portable_hooks_complete_after_success_and_retry(self):
+        from emberbsd_sdk import package_relocation as relocation
+        from emberbsd_sdk.package_install import PackageInstaller
+
+        name, prefix = unpack_package(self.package(install=True), self.root)
+        database = self.root / 'pkgdb'
+        package = database / name
+        contents = package / '+CONTENTS'
+        contents.write_text(contents.read_text() + relocation.MARKER + '\n' +
+                            relocation.SOURCE + prefix + '\n' + relocation.HOOKS + '\n')
+        hook = package / '+INSTALL'
+        hook.write_text('#!/bin/sh\nprintf "%s\\n" "$2" >> "$PKG_PREFIX/hook-log"\n'
+                        'test -f "$PKG_PREFIX/allow-hooks"\n')
+        hook.chmod(0o755)
+        (self.root / MANIFEST).parent.mkdir(parents=True)
+        write_json(self.root / MANIFEST, dict(schema='emberbsd.bootstrap.v1', prefix=prefix,
+            initialized=False, packages=[name], text_files=['bin/example', 'pkgdb/example-1/+CONTENTS']))
+        actual_run = subprocess.run
+
+        def run(command, **kwargs):
+            if command[0].endswith('/sbin/pkg_admin'):
+                return SimpleNamespace(returncode=0, stderr=b'')
+            if command[0].endswith('/pkg_info'):
+                return SimpleNamespace(returncode=0, stdout=(name + '\n').encode(), stderr=b'')
+            return actual_run(command, **kwargs)
+
+        with patch('emberbsd_sdk.bootstrap_bundle.subprocess.run', side_effect=run):
+            with self.assertRaisesRegex(SDKError, 'package configuration failed'):
+                initialize(self.root)
+            self.assertFalse(read_json(self.root / MANIFEST)['initialized'])
+            self.assertIn(relocation.HOOKS, contents.read_text())
+            self.assertEqual(list(relocation.pending(self.root, database)), [name])
+            (self.root / 'allow-hooks').touch()
+            initialize(self.root)
+            self.assertTrue(read_json(self.root / MANIFEST)['initialized'])
+            self.assertNotIn(relocation.HOOKS, contents.read_text())
+            self.assertIn(relocation.SOURCE + str(self.root), contents.read_text())
+            self.assertEqual(list(relocation.pending(self.root, database)), [])
+            self.assertFalse((package / relocation.READY).exists())
+            self.assertEqual((self.root / 'hook-log').read_text().splitlines(),
+                             ['PRE-INSTALL', 'PRE-INSTALL', 'POST-INSTALL'])
+            crypto = SimpleNamespace(prefix=SimpleNamespace(tool=lambda _: '/fake/pkg_info', path='/fake'))
+            installer = PackageInstaller(crypto, self.root / 'trust')
+            self.assertEqual(installer.installed({'prefix': str(self.root), 'pkgdb': str(database)}), {name})
+            initialize(self.root)
+            self.assertEqual((self.root / 'hook-log').read_text().splitlines(),
+                             ['PRE-INSTALL', 'PRE-INSTALL', 'POST-INSTALL'])
+
+    def test_bootstrap_rejects_unrelocated_deferred_declaration(self):
+        from emberbsd_sdk import package_relocation as relocation
+
+        name, prefix = unpack_package(self.package(), self.root)
+        contents = self.root / 'pkgdb' / name / '+CONTENTS'
+        contents.write_text(contents.read_text() + relocation.MARKER + '\n' +
+                            relocation.SOURCE + prefix + '\n' + relocation.HOOKS + '\n')
+        (self.root / MANIFEST).parent.mkdir(parents=True)
+        write_json(self.root / MANIFEST, dict(schema='emberbsd.bootstrap.v1', prefix=prefix,
+            initialized=False, packages=[name], text_files=['bin/example']))
+        with self.assertRaisesRegex(SDKError, 'relocation prefix differs'):
+            initialize(self.root)
+        self.assertIn(relocation.HOOKS, contents.read_text())
+        self.assertFalse(read_json(self.root / MANIFEST)['initialized'])
 
     def test_external_links_and_traversal_are_rejected(self):
         for fields in ({'link': '/outside/file'}, {'link': '../../outside'}, {'path': '../outside'}):
