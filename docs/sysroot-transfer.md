@@ -52,6 +52,30 @@ caller-owned output before retrying,
 or select a new ID. Never merge exports or overwrite an accepted version.
 When copying a bundle with another tool, copy `READY` last.
 
+## Compose from release sets
+
+`scripts/compose-release-sysroot.py --help` creates the same transfer bundle
+from an explicitly pinned EmberBSD release kit and a current Ports LLVM runtime
+stage. This path reuses the release's headers, CRT, libraries and loader; it
+does not rebuild libc or treat the release as a new SDK source build.
+
+Select `--release-kit`, its trusted `--manifest-sha256`, `--runtime-stage`,
+`--ports-source`, `--host-prefix`, `--target`, `--git` and a new `--output`.
+The producer checks the base/comp archives against the pin and uses Ports'
+existing set extractor. It verifies the new runtime's C inputs against those
+sets, retains headers, libraries, loader and legal notices, and replaces the
+old runtime's declared C++ aliases. Temporary extracted sets are removed after
+export. The bundle contains `usr/share/emberbsd/sysroot-origin.json` with the
+base pins and current runtime/compiler provenance, without a fabricated
+`.prebuild-sdk-build.json` receipt.
+In this bundle, the transfer provenance fields `build_context_sha256` and
+`build_receipt_sha256` both identify that composition origin record.
+
+This producer consumes the pinned set format, independently of historical
+host tool bindings in the original release metadata. Its output still needs
+the normal compiler/link and target execution checks before claiming those
+acceptance levels; the old release's execution results are not inherited.
+
 ## Import into a new local directory
 
 Select the target explicitly. Supply the pin recorded at export.
