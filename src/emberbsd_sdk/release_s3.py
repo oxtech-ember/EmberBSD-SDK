@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import http.client
 import os
+import queue
 import re
 import ssl
 from urllib.parse import quote, urlsplit
@@ -62,6 +63,30 @@ class HTTPStore:
             _relative(self.prefix)
         self.timeout = timeout
         self.context = ssl.create_default_context(cafile=ca_file)
+        self._idle_connections = queue.SimpleQueue()
+
+    def close(self):
+        """Close idle transports after the caller has completed its requests."""
+        while True:
+            try:
+                self._idle_connections.get_nowait().close()
+            except queue.Empty:
+                return
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    def _connection(self, reusable):
+        if reusable:
+            try:
+                return self._idle_connections.get_nowait()
+            except queue.Empty:
+                pass
+        return http.client.HTTPSConnection(self.host, timeout=self.timeout, context=self.context,
+                                           blocksize=64 * 1024)
 
     def _headers(self, method, path, headers):
         return headers
@@ -77,10 +102,10 @@ class HTTPStore:
         headers = dict(headers or {})
         headers.setdefault('host', self.host)
         headers.setdefault('accept-encoding', 'identity')
-        attempts = 3 if method in ('GET', 'HEAD') and body is None else 1
+        reusable = method in ('GET', 'HEAD') and body is None
+        attempts = 3 if reusable else 1
         for attempt in range(attempts):
-            connection = http.client.HTTPSConnection(self.host, timeout=self.timeout, context=self.context,
-                                                      blocksize=64 * 1024)
+            connection = self._connection(reusable and attempt == 0)
             try:
                 connection.request(method, path, body=body, headers=self._headers(method, path, dict(headers)))
                 response = connection.getresponse()
@@ -93,16 +118,26 @@ class HTTPStore:
                 raise SDKError(f'{method} {path}: HTTPS transport failed ({type(exc).__name__})') from exc
             else:
                 break
+        complete = False
         try:
             if response.status not in statuses:
                 raise HTTPStatusError(response.status, method, path)
             if response.getheader('Content-Encoding', 'identity') != 'identity':
                 raise SDKError('HTTP content encoding changes signed artifact bytes')
             yield response
+            complete = True
         except (OSError, http.client.HTTPException) as exc:
             raise SDKError(f'{method} {path}: HTTPS transport failed ({type(exc).__name__})') from exc
         finally:
-            connection.close()
+            # A partial body or failed validation must never contaminate the
+            # next response. isclosed() alone also accepts a manually closed
+            # partial body. Unknown-length/chunked replies are not pooled.
+            if (complete and reusable and not response.will_close and
+                    response.length == 0):
+                response.close()
+                self._idle_connections.put(connection)
+            else:
+                connection.close()
 
     @staticmethod
     def _length(response):

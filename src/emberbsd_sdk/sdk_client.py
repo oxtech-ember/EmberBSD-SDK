@@ -350,7 +350,8 @@ def main(argv=None, *, default_config=None):
             if 'trust_root' not in config and not trust.is_file():
                 trust = temporary.enter_context(resources.as_file(
                     resources.files('emberbsd_sdk').joinpath('emberbsd-release-root.pem')))
-            store = HTTPStore(config.get('url', DEFAULT_URL), ca_file=config.get('https_ca'))
+            store = temporary.enter_context(HTTPStore(config.get('url', DEFAULT_URL),
+                                                      ca_file=config.get('https_ca')))
             installer = PackageInstaller(crypto, trust)
             previous = None
             for attempt in range(2):
