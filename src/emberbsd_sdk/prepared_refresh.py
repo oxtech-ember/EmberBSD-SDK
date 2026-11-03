@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 import re
 
 from .errors import SDKError
+from . import paths
 
 CONTRACT = 'share/mk/prepared-source-refresh.json'
 RUNTIME_ARCHIVES = {'lib/libc': ('libc.a', 'libc_pic.a'),
@@ -68,7 +69,8 @@ def plan_native(os_root, objects, names):
 
 
 def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
-         extra_headers=(), extra_linked=(), allowed_source_roots=(), scan_consumers=True):
+         extra_headers=(), extra_linked=(), allowed_source_roots=(), scan_consumers=True,
+         file_outputs=None):
     root, obj = Path(os_root), Path(objects)
     try:
         root_resolved, obj_resolved = root.resolve(), obj.resolve()
@@ -190,7 +192,12 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
                     relpath = PurePosixPath(rel)
                     independent = any(len(relpath.parts) == len(PurePosixPath(p).parts) and relpath.match(p) for p in patterns)
                     if not independent:
-                        dirs.add(base.relative_to(obj).as_posix())
+                        if file_outputs is not None and path.suffix == '.ln':
+                            if path.is_symlink() or not path.is_file():
+                                raise ValueError('invalid lint output ' + str(path))
+                            file_outputs.append(rel)
+                        else:
+                            dirs.add(base.relative_to(obj).as_posix())
         result = []
         missing = []
         for name in sorted(dirs):
@@ -218,7 +225,9 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
             if built.exists():
                 if built.is_symlink() or not built.is_dir():
                     raise ValueError('invalid object directory ' + name)
-                result.append(name)
+                with os.scandir(built) as entries:
+                    if next(entries, None) is not None:
+                        result.append(name)
         if missing:
             raise ValueError('missing OS makefiles for ' + ', '.join(missing))
         result = set(result)
@@ -226,6 +235,26 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
             parent in result and name.startswith(parent + '/') for parent in recursive))
     except (OSError, ValueError, TypeError, KeyError) as exc:
         raise SDKError('cannot safely plan prepared source refresh: ' + str(exc)) from exc
+
+
+def remove_lint_outputs(objects, outputs):
+    """Remove planned lint outputs under the caller's object-tree lease."""
+    root = Path(os.path.abspath(objects))
+    if str(root) == '/' or os.path.realpath(root) != str(root):
+        raise SDKError('lint object root must not be a symlink')
+    paths.real_directory(str(root))
+    selected = []
+    for name in outputs:
+        relative(name)
+        path = root / name
+        if path.suffix != '.ln' or path.is_symlink() or path.resolve() != path:
+            raise SDKError('invalid planned lint output: ' + str(path))
+        if path.exists():
+            if not path.is_file():
+                raise SDKError('invalid planned lint output: ' + str(path))
+            selected.append(path)
+    for path in selected:
+        path.unlink()
 
 
 def runtime_independent_patterns(os_root):

@@ -720,9 +720,11 @@ class SysrootBuilder:
                     bindings = [flag[len(prefix):] for flag in flags if flag.startswith(prefix)]
                     if len(bindings) == 1 and os.path.isabs(bindings[0]):
                         source_roots.add(bindings[0])
+            self.refresh_file_outputs = []
             self.refresh_dirs = prepared_refresh.plan(self.paths['os'], path, changed, members,
                                                       self.refresh_nested_outputs,
-                                                      allowed_source_roots=sorted(source_roots), **extra)
+                                                      allowed_source_roots=sorted(source_roots),
+                                                      file_outputs=self.refresh_file_outputs, **extra)
             return bool(self.refresh_dirs) or runtime is not None or bool(changed)
         except (KeyError, TypeError, AttributeError):
             return False
@@ -1779,6 +1781,8 @@ class SysrootBuilder:
         llvm_plan = getattr(self, 'llvm_refresh_plan', None)
         if llvm_plan is not None:
             llvm_source_refresh.apply(self.paths['objects'], llvm_plan, *self.llvm_refresh_roots)
+        if getattr(self, 'refresh_file_outputs', None):
+            prepared_refresh.remove_lint_outputs(self.paths['objects'], self.refresh_file_outputs)
         if hasattr(self, 'runtime_refresh_files'):
             self.begin_runtime_refresh()
         native_dirs = getattr(self, 'native_refresh_dirs', [])

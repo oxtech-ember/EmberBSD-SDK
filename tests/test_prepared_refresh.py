@@ -108,9 +108,56 @@ class PreparedRefreshTests(unittest.TestCase):
             (self.os / name).mkdir(parents=True)
             (self.os / name / 'Makefile').write_text('')
             (self.obj / name).mkdir(parents=True)
+            (self.obj / name / '.fixture').touch()
 
     def write_contract(self):
         (self.os / prepared_refresh.CONTRACT).write_text(json.dumps(self.contract))
+
+    def test_empty_refresh_owner_is_skipped_but_outputs_are_kept(self):
+        owner = self.obj / "external/cbor"
+        (owner / ".fixture").unlink()
+        self.assertNotIn("external/cbor", prepared_refresh.plan(
+            self.os, self.obj, {"libcbor"}, scan_consumers=False))
+        (owner / "generated.h").touch()
+        self.assertIn("external/cbor", prepared_refresh.plan(
+            self.os, self.obj, {"libcbor"}, scan_consumers=False))
+        (owner / "generated.h").unlink()
+        (owner / "child").mkdir()
+        self.contract["sources"]["EMBER_LIBCBOR_SOURCE"]["recursive_producer_dirs"] = ["external/cbor"]
+        self.write_contract()
+        self.assertIn("external/cbor", prepared_refresh.plan(
+            self.os, self.obj, {"libcbor"}, scan_consumers=False))
+
+    def test_missing_lint_metadata_is_a_scoped_file_plan(self):
+        directory = self.obj / "other/consumer"
+        lint = directory / "unit.ln"
+        lint.touch()
+        outputs = []
+        dirs = prepared_refresh.plan(self.os, self.obj, {"libcbor"}, file_outputs=outputs)
+        self.assertNotIn("other/consumer", dirs)
+        self.assertEqual(outputs, ["other/consumer/unit.ln"])
+        self.assertIn("other/consumer", prepared_refresh.plan(self.os, self.obj, {"libcbor"}))
+        obj = directory / "unit.o"
+        obj.touch()
+        outputs = []
+        self.assertIn("other/consumer", prepared_refresh.plan(self.os, self.obj, {"libcbor"}, file_outputs=outputs))
+        prepared_refresh.remove_lint_outputs(self.obj, outputs)
+        self.assertFalse(lint.exists())
+        self.assertTrue(obj.exists())
+        lint.write_text("rebuilt lint output")
+        self.assertTrue(lint.is_file())
+        with self.assertRaises(SDKError):
+            prepared_refresh.remove_lint_outputs(self.obj, ["../outside.ln"])
+        alias = self.obj.parent / "obj-alias"
+        alias.symlink_to(self.obj, target_is_directory=True)
+        with self.assertRaises(SDKError):
+            prepared_refresh.remove_lint_outputs(alias, ["other/consumer/unit.ln"])
+        lint.unlink()
+        lint.symlink_to(obj)
+        with self.assertRaises(SDKError):
+            prepared_refresh.remove_lint_outputs(self.obj, ["other/consumer/unit.ln"])
+        with self.assertRaises(SDKError):
+            prepared_refresh.plan(self.os, self.obj, {"libcbor"}, file_outputs=[])
 
     def test_headers_skip_consumer_walk_keep_declared_owners(self):
         from unittest.mock import patch
@@ -355,6 +402,7 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(plan.call_args.args[2], {'openssl'})
         self.assertEqual(plan.call_args.kwargs,
                          {'allowed_source_roots': ['/new/openssl', '/old/openssl'],
+                          'file_outputs': [],
                           'extra_headers': ['usr/include/c++/v1'],
                           'extra_linked': ['libc++.so.1']})
         for flag in ('EMBER_HOST_ABI_CFLAGS=-mabi=other', 'UNRELATED_FLAG=yes'):
