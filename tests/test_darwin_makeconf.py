@@ -23,7 +23,7 @@ FACTS = dict(os='Darwin', cpu='aarch64', kernel_version='25.0.0',
              product_version='26.0', pkgsrc_opsys_version='260000')
 EARLY = 'awk basename cat cut date dirname env expr grep head id pwd sed sort tail tr uname uniq wc'
 ROLES = ('cc cxx cpp make gmake sh as ld dsymutil ar ranlib nm strip '
-         'pkg_info pkg_admin pkg_add pkg_create').split() + EARLY.split()
+         'od lipo otool pkg_info pkg_admin pkg_add pkg_create').split() + EARLY.split()
 
 
 class DarwinMakeconfTests(TemporaryCase):
@@ -63,6 +63,9 @@ class DarwinMakeconfTests(TemporaryCase):
         self.assertIn('.include "' + self.options['pkgsrc'] + '/EMBERBSD-DARWIN-BOOTSTRAP-MK.CONF"', data)
         self.assertIn('LOCALBASE= ' + self.options['prefix'], data)
         self.assertIn('BATCH= yes\n', data)
+        self.assertIn('MACHO_USE_LOAD_COMMANDS= yes\n', data)
+        for variable, role in (('MACHO_OD', 'od'), ('MACHO_LIPO', 'lipo'), ('MACHO_OTOOL', 'otool')):
+            self.assertIn(variable + '= ' + self.tools[role] + '\n', data)
         self.assertNotIn('EMBERBSD_NATIVE_CXX_BINDING_RECORD=', data)
         self.assertIn('EMBERBSD_DARWIN_SOURCE_TOOLS= gunzip gzcat gzip', data)
         self.assertEqual(result['initial_command'], [self.tools['make'], '-m', self.options['makefiles'],
