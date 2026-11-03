@@ -136,6 +136,26 @@ passed create-only writes, ETag replacement, two competing writers (one success,
 one 409), Content-Length, byte ranges and read-after-write. Temporary probes
 were deleted. Provider behavior is verified, not inferred from an S3 label.
 
+### First published development catalog
+
+The [development channel](https://emberbsd-pkg.oxteam.me/channels/development.p7m)
+initially points to release
+[`2026.11.03-native-1`](https://emberbsd-pkg.oxteam.me/releases/2026.11.03-native-1/release.p7m).
+Its [Darwin arm64 catalog](https://emberbsd-pkg.oxteam.me/releases/2026.11.03-native-1/darwin-arm64/catalog.json)
+selects `host-fetch`: `fetch-1.9nb4` and its `openssl-4.1.0nb1` runtime dependency.
+The two signed archives total 9,926,880 bytes. The pinned manifest and indexes
+occupy 5,538 bytes locally; fetching them does not download either archive.
+
+These are native bootstrap packages used to accept publication and anonymous
+metadata selection, not a qualified portable SDK or an EmberBSD target install.
+Existing producer TAR payloads were gzip-compressed before signing without
+recompilation. The source revision in the manifest identifies their actual
+Ports input, rather than a newer checkout. Public read-back of all objects,
+signed selection and first/last byte ranges of the OpenSSL archive passed.
+Repeating publication reused the objects and retained channel generation 1.
+Initial channel generation 1 expires on 2026-12-03 at 11:04:09 UTC; the publisher
+must refresh it before then for continued online use. It is not auto-renewed.
+
 ```sh
 EMBERBSD_TEST_HOST_PREFIX=/work/host-pkg-llvm \
   python3 -B scripts/select-tests.py --run
