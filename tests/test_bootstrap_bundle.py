@@ -13,10 +13,16 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from emberbsd_sdk.bootstrap_bundle import (MANIFEST, bundle_paths, initialize, unpack_package,
+from emberbsd_sdk.bootstrap_bundle import (MANIFEST, bundle_paths, initialize, make_relative, unpack_package,
                                            relocate_text, text_references, write_archive)
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.jsonio import read_json, write_json
+
+
+def fat_archive(payload=b'!<arch>\n', *, cpu=0x100000c, subtype=0, offset=32):
+    table = struct.pack('>5I', cpu, subtype, offset, len(payload), 3)
+    header = struct.pack('>II', 0xcafebabe, 1) + table
+    return header.ljust(offset, b'\0') + payload
 
 
 class BootstrapTests(unittest.TestCase):
@@ -47,6 +53,34 @@ class BootstrapTests(unittest.TestCase):
                     member.size = len(data)
                     stream.addfile(member, io.BytesIO(data))
         return archive
+
+    def test_native_single_slice_fat_static_archive_is_not_rewritten_or_signed(self):
+        archive = self.root / 'libclang_rt.a'
+        archive.write_bytes(fat_archive())
+        with patch('emberbsd_sdk.bootstrap_bundle.subprocess.run') as run:
+            changed = make_relative(self.root, '/producer/sdk', {'os': 'Darwin', 'cpu': 'arm64'},
+                                    '/usr/bin/install_name_tool', '/usr/bin/codesign')
+        self.assertEqual(changed, [])
+        run.assert_not_called()
+
+    def test_fat_static_archive_wrong_architecture_and_bad_bounds_are_refused(self):
+        archive = self.root / 'libclang_rt.a'
+        malformed = bytearray(fat_archive())
+        struct.pack_into('>I', malformed, 16, 4096)
+        for contents, message in ((fat_archive(cpu=0x1000007, subtype=3), 'does not match'),
+                                  (bytes(malformed), 'slice bounds')):
+            with self.subTest(message=message):
+                archive.write_bytes(contents)
+                with self.assertRaisesRegex(SDKError, message):
+                    make_relative(self.root, '/producer/sdk', {'os': 'Darwin', 'cpu': 'arm64'},
+                                  '/usr/bin/install_name_tool', '/usr/bin/codesign')
+
+    def test_fat_macho_image_still_requires_thin_native_runtime(self):
+        image = self.root / 'libexample.dylib'
+        image.write_bytes(fat_archive(b'\xcf\xfa\xed\xfe' * 2))
+        with self.assertRaisesRegex(SDKError, 'thin native Mach-O'):
+            make_relative(self.root, '/producer/sdk', {'os': 'Darwin', 'cpu': 'arm64'},
+                          '/usr/bin/install_name_tool', '/usr/bin/codesign')
 
     def test_relocation_updates_files_and_real_package_ownership_once(self):
         name, prefix = unpack_package(self.package(), self.root)
