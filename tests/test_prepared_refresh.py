@@ -12,6 +12,36 @@ from emberbsd_sdk.errors import SDKError
 
 
 class PreparedRefreshTests(unittest.TestCase):
+    def test_native_binding_transition_requires_original_selected_paths(self):
+        from emberbsd_sdk.sysroot_builder import _compatible_native_contract
+        old = ['EmberBSD-native-tools 2', 'perl perl -']
+        new = ['EmberBSD-native-tools 2', 'perl perl HOST_PERL', 'python python HOST_PYTHON',
+               'gmake gmake HOST_GMAKE', 'autoconf autoconf HOST_AUTOCONF']
+        tools = {'perl': '/prefix/perl', 'python': '/prefix/python',
+                 'gmake': '/prefix/gmake', 'autoconf': '/prefix/autoconf'}
+        flags = ['HOST_PERL=/prefix/perl', 'HOST_PYTHON=/prefix/python',
+                 'HOST_GMAKE=/prefix/gmake', 'HOST_AUTOCONF=/prefix/autoconf']
+        self.assertTrue(_compatible_native_contract(old, new, tools, flags, flags, set()))
+        self.assertFalse(_compatible_native_contract(old, new, tools, flags[1:], flags, set()))
+        self.assertFalse(_compatible_native_contract(old, new, dict(tools, perl='/other/perl'), flags, flags, set()))
+        wrong = [row.replace('HOST_PERL', 'HOST_OTHER') for row in new]
+        self.assertFalse(_compatible_native_contract(old, wrong, tools, flags, flags, set()))
+        self.assertFalse(_compatible_native_contract(old, new[1:], tools, flags, flags, set()))
+
+    def test_tool_context_uses_only_its_matching_recorded_object_flags(self):
+        from emberbsd_sdk.sysroot_builder import _native_tool_context_flags
+        tools = {'perl': '/p/perl', 'python': '/p/python', 'gmake': '/p/gmake', 'autoconf': '/p/autoconf'}
+        flags = ['HOST_PERL=/p/perl', 'HOST_PYTHON=/p/python', 'HOST_GMAKE=/p/gmake', 'HOST_AUTOCONF=/p/autoconf']
+        old = {'format': 'emberbsd-sysroot-object-context', 'version': 1,
+               'signature': {'tools': '/tools', 'flags': flags, 'native_toolset': {'tools': tools}}}
+        new = {'tools': '/tools', 'flags': flags, 'native_toolset': {'tools': tools}}
+        self.assertEqual(_native_tool_context_flags(old, new, '/tools', tools, tools), (flags, flags))
+        self.assertIsNone(_native_tool_context_flags(old, new, '/other-tools', tools, tools))
+        changed = dict(tools, perl='/other/perl')
+        self.assertIsNone(_native_tool_context_flags(old, new, '/tools', changed, tools))
+        missing = dict(old, signature=dict(old['signature'], flags=[]))
+        self.assertEqual(_native_tool_context_flags(missing, new, '/tools', tools, tools), ([], flags))
+
     def test_unique_flag_assignments_are_canonicalized(self):
         from emberbsd_sdk.sysroot_builder import _canonicalize_unique_flag_assignments
 
@@ -278,12 +308,13 @@ class TransitionTests(unittest.TestCase):
         with patch('emberbsd_sdk.sysroot_builder.runtime_refresh.cpp_update',
                    return_value={'headers': ['usr/include/c++/v1'],
                                  'linked': ['libc++.so.1']}), \
-             patch('emberbsd_sdk.sysroot_builder.llvm_source_refresh.plan', return_value={}), \
+             patch('emberbsd_sdk.sysroot_builder.llvm_source_refresh.plan', return_value={}) as llvm_plan, \
              patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan',
                    return_value=['lib/libcxx']) as plan:
             refreshed = SysrootBuilder.plan_prepared_refresh(
                 fake, {'signature': old_signature}, '/objects')
         self.assertTrue(refreshed)
+        llvm_plan.assert_called_once_with('/objects', '/llvm', '/llvm')
         self.assertEqual(fake.refresh_dirs, ['lib/libcxx'])
         self.assertEqual(plan.call_args.args[2], {'openssl'})
         self.assertEqual(plan.call_args.kwargs,

@@ -10,6 +10,10 @@ import re
 from .errors import SDKError
 
 CONTRACT = 'share/mk/prepared-source-refresh.json'
+RUNTIME_ARCHIVES = {'lib/libc': ('libc.a', 'libc_pic.a'),
+                    'lib/libm': ('libm.a', 'libm_pic.a'),
+                    'lib/libkern': ('libkern.a', None),
+                    'sys/stand/efiboot/bootaa64/lib/kern': ('libkern.a', None)}
 
 
 def relative(value, *, pattern=False):
@@ -211,3 +215,326 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
         return sorted(set(result))
     except (OSError, ValueError, TypeError, KeyError) as exc:
         raise SDKError('cannot safely plan prepared source refresh: ' + str(exc)) from exc
+
+
+def runtime_independent_patterns(os_root):
+    # Read the OS owner's existing header-independent object exceptions.
+    try:
+        contract = json.loads((Path(os_root) / CONTRACT).read_text())
+        patterns = contract['header_independent_object_patterns']
+        if contract.get('version') != 1 or not isinstance(patterns, list):
+            raise ValueError('unsupported runtime refresh contract')
+        return [relative(pattern, pattern=True) for pattern in patterns]
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise SDKError('cannot safely read runtime refresh contract: ' + str(exc)) from exc
+
+
+def runtime_objects(objects, old_source, changed_files, independent_patterns=()):
+    """List only existing build objects whose recorded dependencies changed."""
+    obj = Path(objects)
+    source = Path(old_source)
+    if not obj.is_absolute() or not source.is_absolute() or not obj.is_dir() or not source.is_dir():
+        raise SDKError('runtime refresh needs absolute existing object and source roots')
+    obj_real = obj.resolve()
+    paths = set()
+    direct = {}
+    for name in changed_files:
+        relative(name)
+        path = source / name
+        if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(source.resolve()):
+            raise SDKError('invalid changed runtime source: ' + name)
+        if any(char.isspace() for char in str(path)):
+            raise SDKError('runtime dependency paths with spaces are unsupported')
+        paths.add(os.fsencode(str(path)))
+        if path.suffix == '.c':
+            if path.stem in direct and direct[path.stem] != os.fsencode(str(path)):
+                raise SDKError('ambiguous runtime source stem: ' + path.stem)
+            direct[path.stem] = os.fsencode(str(path))
+    if not paths:
+        raise SDKError('no changed runtime sources selected')
+    result = set()
+    def walk_error(error):
+        raise error
+    for directory, subdirs, files in os.walk(obj, followlinks=False, onerror=walk_error):
+        base = Path(directory)
+        subdirs[:] = [name for name in subdirs if not (base / name).is_symlink()]
+        for name in files:
+            file = base / name
+            if file.suffix in ('.o', '.pico', '.po', '.go', '.ln') and file.stem in direct:
+                dep = file.with_suffix('.d')
+                if not dep.is_file() and not dep.is_symlink():
+                    dep = Path(str(file) + '.d')
+                if not dep.is_file() or dep.is_symlink():
+                    raise SDKError('missing runtime dependency file: ' + str(file))
+                data = dep.read_bytes().replace(bytes((92, 10)), b' ')
+                if b':' not in data or direct[file.stem] not in data.split(b':', 1)[1].split():
+                    raise SDKError('runtime dependency does not reference selected source: ' + str(file))
+            if not name.endswith('.d'):
+                continue
+            if file.is_symlink():
+                raise SDKError('symlink runtime dependency file')
+            data = file.read_bytes().replace(bytes((92, 10)), b' ')
+            if b':' not in data:
+                if any(path in data for path in paths):
+                    raise SDKError('invalid runtime dependency file: ' + str(file))
+                continue
+            dependencies = set(data.split(b':', 1)[1].split())
+            if not paths.intersection(dependencies):
+                continue
+            if not file.resolve().is_relative_to(obj_real):
+                raise SDKError('runtime dependency leaves object root')
+            result.add(file.relative_to(obj).as_posix())
+            dep_base = file.with_suffix('')
+            variants = (dep_base,) if dep_base.suffix in ('.o', '.pico', '.po', '.go', '.ln') else tuple(
+                file.with_suffix(extension) for extension in ('.o', '.pico', '.po', '.go', '.ln'))
+            for output in variants:
+                if output.is_symlink():
+                    raise SDKError('symlink runtime object')
+                if output.is_file():
+                    if output.suffix not in ('.o', '.pico'):
+                        raise SDKError('unsupported runtime object variant: ' + str(output))
+                    owner = output.parent.relative_to(obj).as_posix()
+                    if owner not in RUNTIME_ARCHIVES or RUNTIME_ARCHIVES[owner][output.suffix == '.pico'] is None:
+                        raise SDKError('unknown runtime object archive owner: ' + str(output))
+                    if not output.resolve().is_relative_to(obj_real):
+                        raise SDKError('runtime object leaves object root')
+                    result.add(output.relative_to(obj).as_posix())
+    # A header can affect any existing object in a selected producer.  Refuse
+    # unaccounted dependency files there; documented owner exceptions remain.
+    affected = {str(Path(name).parent) for name in result if name.endswith('.d')}
+    for directory in affected:
+        aggregate = obj / directory / '.depend'
+        if aggregate.is_symlink():
+            raise SDKError('symlink runtime dependency aggregate: ' + str(aggregate))
+        if aggregate.is_file() and any(source in aggregate.read_bytes() for source in paths):
+            result.add(aggregate.relative_to(obj).as_posix())
+        for file in (obj / directory).iterdir():
+            if file.suffix not in ('.o', '.pico', '.po', '.go', '.ln'):
+                continue
+            rel = file.relative_to(obj)
+            if any(len(rel.parts) == len(Path(pattern).parts) and rel.match(pattern)
+                   for pattern in independent_patterns):
+                continue
+            dep = file.with_suffix('.d')
+            long_dep = Path(str(file) + '.d')
+            if file.is_symlink() or not ((dep.is_file() and not dep.is_symlink()) or
+                                         (long_dep.is_file() and not long_dep.is_symlink())):
+                raise SDKError('missing runtime dependency file: ' + str(file))
+    return sorted(result)
+
+
+def cleanup_runtime_quarantine(objects, names, quarantine):
+    # Delete only the verified inventory created by this refresh.
+    root, backup = Path(objects), Path(quarantine)
+    if not root.is_absolute() or backup.parent != root or backup.is_symlink() or not backup.is_dir():
+        raise SDKError('invalid runtime quarantine location')
+    expected = set()
+    expected_dirs = {'.'}
+    for name in names:
+        relative(name)
+        if name in expected:
+            raise SDKError('duplicate runtime refresh object')
+        expected.add(name)
+        parent = Path(name).parent
+        while str(parent) != '.':
+            expected_dirs.add(parent.as_posix())
+            parent = parent.parent
+    found, directories = set(), set()
+    def walk_error(error):
+        raise error
+    for directory, subdirs, files in os.walk(backup, followlinks=False, onerror=walk_error):
+        base = Path(directory)
+        directories.add(base.relative_to(backup).as_posix())
+        if any((base / name).is_symlink() for name in subdirs + files):
+            raise SDKError('quarantine inventory changed')
+        for name in files:
+            path = base / name
+            if not path.is_file():
+                raise SDKError('quarantine inventory changed')
+            found.add(path.relative_to(backup).as_posix())
+    if found != expected or directories != expected_dirs:
+        raise SDKError('quarantine inventory changed')
+    for name in sorted(expected):
+        (backup / name).unlink()
+    for directory in sorted(expected_dirs - {'.'}, key=lambda d: len(Path(d).parts), reverse=True):
+        (backup / directory).rmdir()
+    backup.rmdir()
+
+
+def rollback_failed_runtime(objects, quarantine, evidence, names, aggregates):
+    """Preserve failed outputs and restore only the original quarantined files."""
+    root, backup, saved = Path(objects), Path(quarantine), Path(evidence)
+    if (not root.is_absolute() or not root.is_dir() or backup.parent != root or
+            backup.is_symlink() or not backup.is_dir() or not saved.is_absolute() or
+            os.path.lexists(saved) or not saved.parent.is_dir() or
+            saved.parent.stat().st_dev != root.stat().st_dev):
+        raise SDKError('invalid failed runtime rollback paths')
+    original = [relative(name) for name in names]
+    dependencies = [relative(name) for name in aggregates]
+    if len(set(original)) != len(original) or len(set(dependencies)) != len(dependencies) or set(original) & set(dependencies):
+        raise SDKError('duplicate failed runtime rollback path')
+    expected = set(original)
+    expected_dirs = {'.'}
+    for name in original:
+        parent = Path(name).parent
+        while str(parent) != '.':
+            expected_dirs.add(parent.as_posix())
+            parent = parent.parent
+    actual, actual_dirs = set(), set()
+    def walk_error(error):
+        raise error
+    for directory, subdirs, files in os.walk(backup, followlinks=False, onerror=walk_error):
+        parent = Path(directory)
+        actual_dirs.add(parent.relative_to(backup).as_posix())
+        if any((parent / name).is_symlink() for name in subdirs + files):
+            raise SDKError('invalid runtime quarantine inventory')
+        for name in files:
+            path = parent / name
+            if not path.is_file():
+                raise SDKError('invalid runtime quarantine inventory')
+            actual.add(path.relative_to(backup).as_posix())
+    if actual != expected or actual_dirs != expected_dirs:
+        raise SDKError('runtime quarantine inventory changed')
+    selected = []
+    for name in original + dependencies:
+        path = root / name
+        if path.is_symlink() or (os.path.lexists(path) and not path.is_file()) or not path.resolve().is_relative_to(root.resolve()):
+            raise SDKError('invalid failed runtime output: ' + name)
+        if path.is_file():
+            selected.append(name)
+    saved.mkdir(mode=0o700)
+    moved = []
+    try:
+        for name in selected:
+            destination = saved / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(root / name, destination)
+            moved.append((root / name, destination))
+        for name in original:
+            destination = root / name
+            if os.path.lexists(destination):
+                raise SDKError('runtime rollback destination appeared: ' + name)
+            os.replace(backup / name, destination)
+            moved.append((backup / name, destination))
+    except BaseException:
+        for source, destination in reversed(moved):
+            if not os.path.lexists(source) and os.path.lexists(destination):
+                source.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(destination, source)
+        raise
+    for directory, subdirs, files in os.walk(backup, topdown=False, followlinks=False, onerror=walk_error):
+        if files:
+            raise SDKError('runtime quarantine retained unexpected files')
+        os.rmdir(directory)
+    return selected
+
+
+def runtime_shared_identity(objects, names):
+    root = Path(objects)
+    result = {}
+    for name in names:
+        relative(name)
+        path = root / name
+        if path.suffix != '.pico':
+            continue
+        parent = path.parent.relative_to(root).as_posix()
+        if parent not in ('lib/libc', 'lib/libm'):
+            raise SDKError('unknown runtime shared library owner: ' + parent)
+        shared = path.parent / ('libc.so' if parent == 'lib/libc' else 'libm.so')
+        resolved = shared.resolve()
+        if not resolved.is_relative_to(path.parent.resolve()) or not resolved.is_file():
+            raise SDKError('invalid runtime shared library: ' + parent)
+        st = resolved.stat()
+        result[parent] = (str(resolved), st.st_dev, st.st_ino, st.st_ctime_ns, st.st_mtime_ns, st.st_size)
+    return result
+
+
+def verify_runtime_outputs(objects, names, new_source, changed_files, archive_members, archive_content, before_shared=None):
+    # A rebuilt object must have fresh dependency data, and every relevant
+    # installed archive member must contain the newly built bytes.
+    root, source = Path(objects), Path(new_source)
+    if not root.is_absolute() or not source.is_absolute():
+        raise SDKError('invalid runtime output verification roots')
+    dependencies = {os.fsencode(str(source / relative(name))) for name in changed_files}
+    for name in names:
+        relative(name)
+        path = root / name
+        if path.name == '.depend':
+            affected_objects = any(Path(item).parent == Path(name).parent and
+                                   Path(item).suffix in ('.o', '.pico') for item in names)
+            if affected_objects and (path.is_symlink() or not path.is_file() or
+                    not any(dep in path.read_bytes() for dep in dependencies)):
+                raise SDKError('runtime dependency aggregate was not rebuilt: ' + name)
+            continue
+        if path.suffix == '.d':
+            continue
+        if path.suffix not in ('.o', '.pico'):
+            raise SDKError('unsupported runtime object variant: ' + name)
+        if (path.is_symlink() or not path.is_file() or
+                not path.resolve().is_relative_to(root.resolve())):
+            raise SDKError('runtime object was not rebuilt: ' + name)
+        dep = path.with_suffix('.d')
+        if not dep.is_file() and not dep.is_symlink():
+            dep = Path(str(path) + '.d')
+        if dep.is_symlink() or not dep.is_file():
+            raise SDKError('runtime dependency was not rebuilt: ' + name)
+        data = dep.read_bytes().replace(bytes((92, 10)), b' ')
+        if b':' not in data or not dependencies.intersection(data.split(b':', 1)[1].split()):
+            raise SDKError('runtime dependency did not select new source: ' + name)
+        parent = path.parent.relative_to(root).as_posix()
+        if parent not in RUNTIME_ARCHIVES:
+            raise SDKError('unknown runtime object archive owner: ' + parent)
+        archive_name = RUNTIME_ARCHIVES[parent][path.suffix == '.pico']
+        if archive_name is None:
+            raise SDKError('unknown runtime object archive variant: ' + name)
+        archive = path.parent / archive_name
+        if archive.is_symlink() or not archive.is_file() or path.name not in archive_members(archive):
+            raise SDKError('runtime object missing from archive: ' + name)
+        if archive_content(archive, path.name) != path.read_bytes():
+            raise SDKError('runtime archive member is stale: ' + name)
+        if path.suffix == '.pico':
+            shared = path.parent / ('libc.so' if parent == 'lib/libc' else 'libm.so')
+            resolved = shared.resolve()
+            if (not resolved.is_relative_to(path.parent.resolve()) or not resolved.is_file() or
+                    resolved.stat().st_mtime_ns < path.stat().st_mtime_ns):
+                raise SDKError('runtime shared library is stale: ' + name)
+            st = resolved.stat()
+            identity = (str(resolved), st.st_dev, st.st_ino, st.st_ctime_ns, st.st_mtime_ns, st.st_size)
+            if (before_shared is None or parent not in before_shared or
+                    identity[0] != before_shared[parent][0] or identity == before_shared[parent]):
+                raise SDKError('runtime shared library was not relinked: ' + name)
+
+
+def quarantine_runtime_objects(objects, names, quarantine):
+    """Move only the selected old objects aside, with rollback on failure."""
+    obj = Path(objects)
+    backup = Path(quarantine)
+    if not obj.is_absolute() or not obj.is_dir() or backup.parent != obj:
+        raise SDKError('invalid runtime quarantine location')
+    if os.path.lexists(backup):
+        raise SDKError('runtime quarantine already exists')
+    selected = []
+    for name in names:
+        relative(name)
+        source = obj / name
+        if source.is_symlink() or not source.is_file() or not source.resolve().is_relative_to(obj.resolve()):
+            raise SDKError('invalid runtime refresh object: ' + name)
+        selected.append((source, backup / name))
+    if len({source for source, _ in selected}) != len(selected):
+        raise SDKError('duplicate runtime refresh object')
+    backup.mkdir(mode=0o700)
+    moved = []
+    try:
+        for source, destination in selected:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(source, destination)
+            moved.append((source, destination))
+    except BaseException:
+        for source, destination in reversed(moved):
+            if not os.path.lexists(source):
+                os.replace(destination, source)
+        for directory, subdirs, files in os.walk(backup, topdown=False):
+            if not files:
+                os.rmdir(directory)
+        raise
+    return [source.relative_to(obj).as_posix() for source, _ in moved]

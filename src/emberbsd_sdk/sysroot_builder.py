@@ -132,6 +132,63 @@ def validate_native_binding(signature, selected_paths, shell=None):
 # The manifest the Ports LLVM owner writes into a prepared source tree.
 LLVM_SOURCE_MANIFEST = 'llvm-source.json'
 
+def _compatible_native_contract(old_rows, new_rows, tools, previous_flags, selected_flags, added_roles):
+    """Allow generator bindings only when both contexts selected the same tool."""
+    if not old_rows or not new_rows or old_rows[0] != new_rows[0]:
+        return False
+    def rows(lines):
+        result = {}
+        for line in lines[1:]:
+            fields = line.split(' ')
+            if len(fields) != 3 or (fields[0], fields[1]) in result:
+                return None
+            result[(fields[0], fields[1])] = fields[2]
+        return result
+    old, new = rows(old_rows), rows(new_rows)
+    if old is None or new is None or not old.keys() <= new.keys():
+        return False
+    bindings = {'perl': 'HOST_PERL', 'python': 'HOST_PYTHON',
+                'gmake': 'HOST_GMAKE', 'autoconf': 'HOST_AUTOCONF'}
+    def equivalent(role, binding):
+        path = tools.get(role)
+        if binding != bindings.get(role) or not isinstance(path, str) or not os.path.isabs(path):
+            return False
+        expected = binding + '=' + path
+        return ([flag for flag in previous_flags if flag.startswith(binding + '=')] == [expected] and
+                [flag for flag in selected_flags if flag.startswith(binding + '=')] == [expected])
+    for key, binding in old.items():
+        replacement = new[key]
+        if binding != replacement and not (binding == '-' and equivalent(key[1], replacement)):
+            return False
+    added = new.keys() - old.keys()
+    if not added_roles <= {role for _, role in added}:
+        return False
+    return all(new[key] == '-' or equivalent(key[1], new[key]) for key in added)
+
+
+def _native_tool_context_flags(old_object_record, selected_object, tools_path, old_tools, selected_tools):
+    """Use flags only from the object context that owns this exact tool tree."""
+    try:
+        if (old_object_record['format'] != 'emberbsd-sysroot-object-context' or
+                old_object_record['version'] != 1):
+            return None
+        old_object = old_object_record['signature']
+        if old_object['tools'] != tools_path or selected_object['tools'] != tools_path:
+            return None
+        roles = ('perl', 'python', 'gmake', 'autoconf')
+        previous = old_object['native_toolset']['tools']
+        selected = selected_object['native_toolset']['tools']
+        if any(previous[role] != old_tools[role] or selected[role] != selected_tools[role]
+               for role in roles):
+            return None
+        old_flags, new_flags = old_object['flags'], selected_object['flags']
+        if not isinstance(old_flags, list) or not isinstance(new_flags, list):
+            return None
+        return old_flags, new_flags
+    except (KeyError, TypeError, AttributeError):
+        return None
+
+
 class SysrootBuilder:
     TARGETS = TARGETS
     FLAGS = ('TOOLCHAIN_MISSING=yes MKGCCCMDS=no MKCOMPAT=no MKCXX=yes '
@@ -141,6 +198,7 @@ class SysrootBuilder:
     VERIFIER = 'profiles/development-toolchain/runtime/recipe/files/runtime.py'
     CONTEXT = '.prebuild-sdk-context.json'
     QUARANTINE = '.prebuild-sdk-quarantine.json'
+    RUNTIME_QUARANTINE = '.prebuild-sdk-runtime-refresh'
     RECEIPT = '.prebuild-sdk-build.json'
     # A development run restarts SDK-named LLVM stages that a failed run left.
     RESUMES_FAILED_STAGES = True
@@ -438,6 +496,8 @@ class SysrootBuilder:
         paths.real_directory(path)
         if paths.entry(os.path.join(path, self.QUARANTINE)) is not None:
             raise SDKError(f'object context is quarantined: {path}')
+        if path == self.paths['objects'] and os.path.lexists(os.path.join(path, self.RUNTIME_QUARANTINE)):
+            raise SDKError(f'incomplete runtime refresh is quarantined: {path}')
         if not os.listdir(path):
             return None
         record = jsonio.read_json(os.path.join(path, self.CONTEXT))
@@ -509,7 +569,37 @@ class SysrootBuilder:
                 return False
             changed = {name for name in after if name not in before or
                        before[name].get('tree_sha256') != after[name].get('tree_sha256')}
+            old_flags = _canonicalize_unique_flag_assignments(self.reuse_signature(copy.deepcopy(old))['flags'])
+            new_flags = _canonicalize_unique_flag_assignments(self.reuse_signature(copy.deepcopy(new))['flags'])
+            checked_runtime = {}
+            def runtime_sources():
+                selector = 'EMBER_LLVM_SOURCE='
+                previous = [f[len(selector):] for f in old_flags if f.startswith(selector)]
+                selected = [f[len(selector):] for f in new_flags if f.startswith(selector)]
+                if (len(previous) != 1 or len(selected) != 1 or
+                        selected[0] != self.paths.get('llvm-source') or
+                        not os.path.isabs(previous[0])):
+                    return None
+                if not checked_runtime:
+                    changed_files = runtime_refresh.changed_builtins(previous[0], selected[0])
+                    checked_runtime.update(previous=previous[0], selected=selected[0], changed=changed_files)
+                return checked_runtime
+            def recipe_guard(before_recipe, after_recipe):
+                checked = runtime_sources()
+                if checked is None:
+                    return False
+                changed_paths = list(checked['changed'])
+                darwin = 'compiler-rt/cmake/Modules/AddCompilerRT.cmake'
+                if (Path(checked['previous'], darwin).read_bytes() !=
+                        Path(checked['selected'], darwin).read_bytes()):
+                    changed_paths.append(darwin)
+                return runtime_refresh.compatible_recipe_transition(
+                    before_recipe, after_recipe, changed_paths,
+                    ports=self.paths['ports'], python=self.paths['python'], git=self.git_command,
+                    target=self.options['target'], machine_arch=self.target['arch'],
+                    environment=self.environment)
             runtime = None
+            runtime_kind = None
             llvm_prefix = 'EMBER_LLVM_SOURCE='
             llvm_old = [f[len(llvm_prefix):] for f in old['flags'] if f.startswith(llvm_prefix)]
             llvm_new = [f[len(llvm_prefix):] for f in new['flags'] if f.startswith(llvm_prefix)]
@@ -518,6 +608,12 @@ class SysrootBuilder:
                 return False
             if llvm_changed or any(old.get(key) != new.get(key) for key in ('runtime', 'runtime_prefix')):
                 runtime = runtime_refresh.cpp_update(old, new)
+                if runtime is not None:
+                    runtime_kind = 'cpp'
+                else:
+                    runtime = runtime_refresh.builtins_update(old, new, recipe_guard=recipe_guard)
+                    if runtime is not None:
+                        runtime_kind = 'builtins'
                 if runtime is not None:
                     for key in ('runtime', 'runtime_prefix', 'llvm_source'):
                         old[key] = copy.deepcopy(new[key])
@@ -531,10 +627,6 @@ class SysrootBuilder:
                     return None
                 return tuple(record[key] for key in ('format', 'version', 'package', 'tree_sha256'))
 
-            old_flags = self.reuse_signature(copy.deepcopy(old))['flags']
-            new_flags = self.reuse_signature(copy.deepcopy(new))['flags']
-            old_flags = _canonicalize_unique_flag_assignments(old_flags)
-            new_flags = _canonicalize_unique_flag_assignments(new_flags)
             if not changed and runtime is None:
                 return False
             moved = set()
@@ -557,6 +649,18 @@ class SysrootBuilder:
                              for name in changed | moved if name in common_packages)
             if runtime is not None:
                 prefixes += ('EMBER_EXTERNAL_LLVM_RUNTIME=', 'EMBER_LLVM_RESOURCE_DIR=', 'EMBER_LLVM_SOURCE=')
+            if runtime_kind == 'builtins':
+                binding = 'EMBER_LIBUNWIND_ARCHIVE='
+                previous = [f[len(binding):] for f in old_flags if f.startswith(binding)]
+                selected = [f[len(binding):] for f in new_flags if f.startswith(binding)]
+                manifest = new['runtime']['manifest']
+                unwind = manifest['artifacts']['libunwind']['static']
+                digest = manifest['bootstrap']['files'][unwind]
+                if (len(previous) != 1 or len(selected) != 1 or
+                        not runtime_refresh.equivalent_unwind_binding(
+                            previous[0], selected[0], self.paths['llvm-bootstrap-stage'], unwind, digest)):
+                    return False
+                prefixes += (binding,)
             comparable_new_flags = new_flags
             openssh_autoconf_added = False
             if 'openssh' in changed and not any(flag.startswith('HOST_AUTOCONF=') for flag in old_flags):
@@ -572,6 +676,7 @@ class SysrootBuilder:
                 before[name] = copy.deepcopy(after[name])
             old['flags'] = copy.deepcopy(new['flags'])
             candidate = dict(record, signature=old)
+            candidate['_compat_previous_flags'] = copy.deepcopy(record['signature']['flags'])
             if openssh_autoconf_added:
                 previous_tools = candidate['signature']['native_toolset']['tools']
                 selected_tools = new['native_toolset']['tools']
@@ -587,12 +692,22 @@ class SysrootBuilder:
                                           't', str(archive)], env=self.environment)
                 return result.stdout.decode('utf-8', 'strict').splitlines()
             self.refresh_nested_outputs = []
-            if llvm_changed and runtime is not None:
+            if llvm_changed and runtime_kind == 'cpp':
                 self.llvm_refresh_roots = (llvm_old[0], llvm_new[0])
                 self.llvm_refresh_plan = llvm_source_refresh.plan(path, *self.llvm_refresh_roots)
             else:
                 self.llvm_refresh_plan = None
-            extra = dict(extra_headers=runtime['headers'], extra_linked=runtime['linked']) if runtime is not None else {}
+            if runtime_kind == 'builtins':
+                checked = runtime_sources()
+                if checked is None:
+                    return False
+                patterns = prepared_refresh.runtime_independent_patterns(self.paths['os'])
+                self.runtime_refresh_files = prepared_refresh.runtime_objects(
+                    path, checked['previous'], checked['changed'], patterns)
+                self.runtime_refresh_source = checked['selected']
+                self.runtime_refresh_changed = checked['changed']
+            extra = (dict(extra_headers=runtime['headers'], extra_linked=runtime['linked'])
+                     if runtime_kind == 'cpp' else {})
             source_roots = set()
             for name in before.keys() | after.keys():
                 if name not in common_packages:
@@ -785,14 +900,22 @@ class SysrootBuilder:
                 old_rows = data.splitlines()
                 selected_contract = Path(self.native_contract).read_text(encoding='ascii')
                 new_rows = selected_contract.splitlines()
-                if old_rows[:1] == new_rows[:1]:
-                    if not set(old_rows[1:]) <= set(new_rows[1:]):
+                previous_flags = record.get('_compat_previous_flags', record['signature'].get('flags'))
+                selected_flags = new.get('flags')
+                if (previous_flags is None or selected_flags is None) and path == self.paths['tools']:
+                    object_context = os.path.join(self.paths['objects'], self.CONTEXT)
+                    if paths.entry(object_context) is None:
                         return False
-                    extra = [row.split(' ') for row in new_rows[1:] if row not in old_rows[1:]]
-                else:
+                    evidence = _native_tool_context_flags(
+                        jsonio.read_json(object_context), self.context_signature(self.paths['objects']),
+                        path, previous['tools'], selected['tools'])
+                    if evidence is None:
+                        return False
+                    previous_flags, selected_flags = evidence
+                if previous_flags is None or selected_flags is None:
                     return False
-                if (any(len(row) != 3 or row[2] != '-' for row in extra) or
-                        not added_contract <= {row[1] for row in extra}):
+                if not _compatible_native_contract(old_rows, new_rows, selected['tools'],
+                                                   previous_flags, selected_flags, added_contract):
                     return False
                 old_digest = hashlib.sha256(data.encode('ascii')).hexdigest()
                 allowed = (os.path.join(old['tools'], 'native-routing'),
@@ -1650,6 +1773,8 @@ class SysrootBuilder:
         llvm_plan = getattr(self, 'llvm_refresh_plan', None)
         if llvm_plan is not None:
             llvm_source_refresh.apply(self.paths['objects'], llvm_plan, *self.llvm_refresh_roots)
+        if hasattr(self, 'runtime_refresh_files'):
+            self.begin_runtime_refresh()
         native_dirs = getattr(self, 'native_refresh_dirs', [])
         if getattr(self, 'refresh_dirs', []) or native_dirs:
             # TOOLDIR has one nbmake wrapper, and each build.sh invocation
@@ -1696,11 +1821,46 @@ class SysrootBuilder:
             self.dispatch(base + ['MKCLEANSRC=no', 'cleandir'])
             self.dispatch(base + ['-j' + self.options['jobs'], 'dependall', 'install'])
         for name in ('objects', 'tools'):
+            if name == 'objects' and hasattr(self, 'runtime_refresh_files'):
+                # Old context stays authoritative until rebuilt archives pass.
+                continue
             path = self.paths[name]
             record = dict(format='emberbsd-sysroot-object-context', version=1,
                           signature=self.context_signature(path), sources=self.sources)
             self.mkdirs(path, os.path.join(self.paths['sdk'], 'obj'))
             jsonio.write_json(os.path.join(path, self.CONTEXT), record, exclusive=self.contexts[name] is None)
+
+    def begin_runtime_refresh(self):
+        if not hasattr(self, 'runtime_refresh_files'):
+            return
+        for directory in getattr(self, 'refresh_dirs', []):
+            if any(name == directory or name.startswith(directory + '/')
+                   for name in self.runtime_refresh_files):
+                raise SDKError('prepared source cleanup overlaps runtime objects: ' + directory)
+        self.runtime_before_shared = prepared_refresh.runtime_shared_identity(
+            self.paths['objects'], self.runtime_refresh_files)
+        backup = os.path.join(self.paths['objects'], self.RUNTIME_QUARANTINE)
+        prepared_refresh.quarantine_runtime_objects(
+            self.paths['objects'], self.runtime_refresh_files, backup)
+
+    def finish_runtime_refresh(self):
+        if not hasattr(self, 'runtime_refresh_files'):
+            return
+        ar = self.compiler_record['binaries']['ar']['selected_path']
+        def members(archive):
+            return process.capture([ar, 't', str(archive)], env=self.environment).stdout.decode('utf-8', 'strict').splitlines()
+        def contents(archive, member):
+            return process.capture([ar, 'p', str(archive), member], env=self.environment).stdout
+        prepared_refresh.verify_runtime_outputs(
+            self.paths['objects'], self.runtime_refresh_files,
+            self.runtime_refresh_source, self.runtime_refresh_changed, members, contents,
+            self.runtime_before_shared)
+        path = self.paths['objects']
+        record = dict(format='emberbsd-sysroot-object-context', version=1,
+                      signature=self.context_signature(path), sources=self.sources)
+        jsonio.write_json(os.path.join(path, self.CONTEXT), record, exclusive=False)
+        prepared_refresh.cleanup_runtime_quarantine(
+            path, self.runtime_refresh_files, os.path.join(path, self.RUNTIME_QUARANTINE))
 
     def native_makewrapper_command(self):
         operations = list(self.os_build_operations)
@@ -1917,6 +2077,8 @@ class SysrootBuilder:
             self.build_payload()
             self.receipt['outputs'] = self.inspect_payload()
             self.interrupted()
+            if hasattr(self, 'runtime_refresh_files'):
+                self.finish_runtime_refresh()
             self.receipt['qualification'] = 'built-and-inspected'
             self.save_receipt()
             os.unlink(marker)
