@@ -15,7 +15,7 @@ from . import package_relocation
 from .package_cache import directory_lock
 from .release_signing import read_bytes
 
-PORTABLE_PREFIX = '@comment emberbsd-prefix-independent-v1'
+PORTABLE_PREFIX = package_relocation.INDEPENDENT
 
 
 def install_paths(config):
@@ -62,12 +62,12 @@ def inspect_install_paths(package, config):
                         raise SDKError('oversized package packing list')
                     lines = archive.extractfile(member).read().decode('utf-8').splitlines()
                     relocation = package_relocation.declaration(lines)
-                    if relocation is not None:
+                    portable = (PORTABLE_PREFIX in lines or relocation is not None) and not config.get('target')
+                    if portable:
                         names = [line[6:] for line in lines if line.startswith('@name ')]
                         if len(names) != 1 or len(_relative(names[0]).parts) != 1:
-                            raise SDKError('relocatable package requires one package name')
+                            raise SDKError('portable package requires one package name')
                         package_name = names[0]
-                    portable = (PORTABLE_PREFIX in lines or relocation is not None) and not config.get('target')
                     if relocation is not None:
                         if config.get('target') or PORTABLE_PREFIX in lines:
                             raise SDKError('text relocation is a distinct native package contract')
@@ -113,7 +113,7 @@ def inspect_install_paths(package, config):
         if relocation is not None and original_prefix is None:
             raise SDKError('relocatable package has no original prefix')
     verify_stable(package, before)
-    return (package_name, relocation) if relocation is not None else None
+    return (package_name, relocation) if portable else None
 
 
 class PackageInstaller:
@@ -165,7 +165,7 @@ class PackageInstaller:
             if result.returncode:
                 raise SDKError('pkg_add failed: ' + result.stderr[-4096:].decode('utf-8', 'replace'))
             if selected is not None:
-                name, (original, _) = selected
-                if original != str(prefix):
-                    (database / name / package_relocation.READY).write_text(original + '\n')
-                    package_relocation.finish(prefix, database, name)
+                name, relocation = selected
+                if relocation is not None and relocation[0] != str(prefix):
+                    (database / name / package_relocation.READY).write_text(relocation[0] + '\n')
+                package_relocation.finish(prefix, database, name)

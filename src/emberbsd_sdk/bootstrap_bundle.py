@@ -203,6 +203,18 @@ def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency
     return changed
 
 
+def relocate_build_info(path, old, new):
+    """Update installed lookup fields; retain compiler flags as build provenance."""
+    if not path.is_file():
+        return
+    before = path.read_bytes()
+    content = b''.join(relocate_text(line, old, new)
+        if line.startswith((b'LOCALBASE=', b'REQUIRES=', b'PROVIDES=')) else line
+        for line in before.splitlines(keepends=True))
+    if content != before:
+        _replace_file(path, content)
+
+
 def refresh_checksums(root, packages, *, database=None, selected=None):
     """Keep pkg_tools ownership and installed MD5 records after relocation."""
     database = root / 'pkgdb' if database is None else Path(database)
@@ -336,6 +348,7 @@ def refresh_bytecode(root, packages, changed_sources):
     import importlib.util
     import py_compile
 
+    changed = set()
     for path in package_paths(root, packages):
         if path.suffix != '.pyc' or path.is_symlink():
             continue
@@ -368,6 +381,8 @@ def refresh_bytecode(root, packages, changed_sources):
         if source in changed_sources or not valid:
             py_compile.compile(str(source), cfile=str(path), doraise=True,
                                optimize=int(optimization or '0'), invalidation_mode=mode)
+            changed.add(path.relative_to(root).as_posix())
+    return changed
 
 
 def initialize(root):
@@ -400,14 +415,7 @@ def initialize(root):
                     changed_sources.add(path)
         for name in metadata['packages']:
             path = root / 'pkgdb' / name / '+BUILD_INFO'
-            if path.exists():
-                lines = path.read_bytes().splitlines(keepends=True)
-                # These two fields are active pkg_tools metadata. Other fields
-                # describe the original build and must retain its provenance.
-                content = b''.join(relocate_text(line, old, str(root).encode())
-                    if line.startswith((b'REQUIRES=', b'PROVIDES=')) else line for line in lines)
-                if content != path.read_bytes():
-                    _replace_file(path, content)
+            relocate_build_info(path, old, str(root).encode())
         refresh_bytecode(root, metadata['packages'], changed_sources)
         refresh_checksums(root, metadata['packages'])
         # Run the package owner's normal configuration actions. The host's

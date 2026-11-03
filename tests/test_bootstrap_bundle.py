@@ -51,7 +51,7 @@ class BootstrapTests(unittest.TestCase):
     def test_relocation_updates_files_and_real_package_ownership_once(self):
         name, prefix = unpack_package(self.package(), self.root)
         info = self.root / 'pkgdb/example-1/+BUILD_INFO'
-        info.write_text('REQUIRES=/producer/sdk/lib/example.dylib\nCFLAGS=-I/producer/sdk/include\n')
+        info.write_text('LOCALBASE=/producer/sdk\nREQUIRES=/producer/sdk/lib/example.dylib\nCFLAGS=-I/producer/sdk/include\n')
         (self.root / MANIFEST).parent.mkdir(parents=True)
         write_json(self.root / MANIFEST, dict(schema='emberbsd.bootstrap.v1', prefix=prefix,
             packages=[name], text_files=['bin/example', 'pkgdb/example-1/+CONTENTS']))
@@ -61,6 +61,7 @@ class BootstrapTests(unittest.TestCase):
             self.assertEqual([call.args[0][-1] for call in run.call_args_list], ['rebuild', 'rebuild-tree'])
             content = (self.root / 'pkgdb/example-1/+CONTENTS').read_text()
             self.assertIn('@cwd ' + str(self.root), content)
+            self.assertIn('LOCALBASE=' + str(self.root) + '\n', info.read_text())
             self.assertIn('REQUIRES=' + str(self.root) + '/lib/example.dylib', info.read_text())
             self.assertIn('CFLAGS=-I/producer/sdk/include', info.read_text())
             self.assertNotIn('MD5:old', content)

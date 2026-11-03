@@ -63,7 +63,9 @@ common Ports recipe resolves standard configuration, certificate and module
 paths relative to its loaded library. First initialization adjusts textual
 prefixes and package checksums, runs package hooks, then rebuilds pkgdb.
 Historical `+BUILD_INFO` and `+BUILD_VERSION` remain original producer evidence;
-only active `REQUIRES`/`PROVIDES` paths are adjusted in the installed database.
+only active `LOCALBASE`, `REQUIRES` and `PROVIDES` paths are adjusted in the
+installed database. `LOCALBASE` must name the consumer prefix because Ports
+buildlink reads it to find installed headers and libraries.
 
 The archive preserves every exact payload name from the package packing lists,
 including names that differ only by case on the producer filesystem. Each file
@@ -101,7 +103,9 @@ For compiler packages, `--relocate-text` records the owned text files that need
 prefix replacement and permits prefix-local library `PROVIDES`. The signed
 `emberbsd-prefix-relocation-v1` marker declares this contract. After successful
 `pkg_add`, the client adjusts those text files and active provider metadata,
-then refreshes checksums for the changed files. An interrupted relocation can
+then refreshes checksums for the changed files. Both portable package contracts
+update active `LOCALBASE` metadata, including recovery after an interrupted
+metadata update, without changing payload checksums. An interrupted relocation can
 resume; a failed package installation must be repaired first. Hooks remain
 unsupported. Overlapping old and new prefixes are refused when a replacement
 would not be safe to repeat.

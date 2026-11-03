@@ -4,9 +4,11 @@
 
 from pathlib import Path
 
-from .bootstrap_bundle import _replace_file, relative_path, relocate_text, refresh_checksums
+from .bootstrap_bundle import (_replace_file, relative_path, relocate_text,
+                               refresh_checksums, relocate_build_info)
 from .errors import SDKError
 
+INDEPENDENT = '@comment emberbsd-prefix-independent-v1'
 MARKER = '@comment emberbsd-prefix-relocation-v1'
 SOURCE = '@comment emberbsd-relocation-prefix='
 TEXT = '@comment emberbsd-relocation-text='
@@ -27,6 +29,18 @@ def declaration(lines):
     return prefixes[0], names
 
 
+def installed_source_prefix(metadata):
+    info = metadata / '+BUILD_INFO'
+    if info.is_file():
+        for line in info.read_text().splitlines():
+            if line.startswith('LOCALBASE='):
+                value = line[len('LOCALBASE='):]
+                if not Path(value).is_absolute() or value == '/':
+                    raise SDKError('invalid installed package LOCALBASE: ' + metadata.name)
+                return value
+    return None
+
+
 def finish(prefix, database, name):
     """Idempotent: the source-prefix comment changes only after all file edits."""
     prefix, database = Path(prefix), Path(database)
@@ -35,6 +49,10 @@ def finish(prefix, database, name):
     lines = contents.read_text().splitlines()
     selected = declaration(lines)
     if selected is None or selected[0] == str(prefix):
+        if selected is not None or INDEPENDENT in lines:
+            original = installed_source_prefix(metadata)
+            if original is not None and original != str(prefix):
+                relocate_build_info(metadata / '+BUILD_INFO', original.encode(), str(prefix).encode())
         return
     original, names = selected
     ready = metadata / READY
@@ -52,14 +70,7 @@ def finish(prefix, database, name):
         updated = relocate_text(content, original.encode(), str(prefix).encode())
         if content != updated:
             _replace_file(path, updated)
-    info = metadata / '+BUILD_INFO'
-    if info.is_file():
-        before = info.read_bytes()
-        content = b''.join(relocate_text(line, original.encode(), str(prefix).encode())
-            if line.startswith((b'REQUIRES=', b'PROVIDES=')) else line
-            for line in before.splitlines(keepends=True))
-        if content != before:
-            _replace_file(info, content)
+    relocate_build_info(metadata / '+BUILD_INFO', original.encode(), str(prefix).encode())
     refresh_checksums(prefix, [metadata.name], database=database, selected=set(names))
     lines = contents.read_text().splitlines()
     lines = [SOURCE + str(prefix) if line.startswith(SOURCE) else line for line in lines]
@@ -70,6 +81,11 @@ def finish(prefix, database, name):
 def pending(prefix, database):
     """Small pkgdb-only scan; never rescan installed compiler payloads."""
     for path in sorted(Path(database).glob('*/+CONTENTS')):
-        selected = declaration(path.read_text().splitlines())
+        lines = path.read_text().splitlines()
+        selected = declaration(lines)
         if selected is not None and selected[0] != str(prefix):
             yield path.parent.name
+        elif selected is not None or INDEPENDENT in lines:
+            original = installed_source_prefix(path.parent)
+            if original is not None and original != str(prefix):
+                yield path.parent.name

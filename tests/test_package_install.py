@@ -12,7 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.package_install import PackageInstaller, inspect_install_paths, PORTABLE_PREFIX
-from emberbsd_sdk import package_relocation
+from emberbsd_sdk import bootstrap_bundle, package_relocation
 
 
 @unittest.skipUnless(os.environ.get('EMBERBSD_TEST_HOST_PREFIX'), 'select native Ports pkg_tools')
@@ -47,6 +47,7 @@ class InstallTests(unittest.TestCase):
         prefix = '/usr/pkg' if target else str(self.destination)
         (stage / 'PLIST').write_text('@name fixture-1.0\npayload\n' + commands)
         (stage / 'INFO').write_text('PKGPATH=devel/fixture\nLICENSE=2-clause-bsd\n' +
+            f'LOCALBASE={prefix}\nCFLAGS=-I{prefix}/include\n' +
             (f'REQUIRES={prefix}/payload\n' if requires_self else '') +
             (f'PROVIDES={prefix}/payload\n' if provides else '') +
             (f'OPSYS=NetBSD\nMACHINE_ARCH={arch}\nOS_VERSION=11.0\n' if target else
@@ -61,6 +62,9 @@ class InstallTests(unittest.TestCase):
             '-f', stage / 'PLIST', '-B', stage / 'INFO', '-p', stage, '-I', prefix, unsigned])
         self.crypto.sign_package(unsigned, signed, self.signer, self.ca.certificate)
         return signed
+
+    def localbase(self, database):
+        return self.crypto.run_package('pkg_info', ['-K', str(database), '-Q', 'LOCALBASE', 'fixture-1.0']).decode().strip()
 
     def test_native_package_is_owned_by_pkgdb_and_repeat_detected(self):
         installer = PackageInstaller(self.crypto, self.ca.certificate)
@@ -80,6 +84,7 @@ class InstallTests(unittest.TestCase):
         self.assertFalse(marker.exists())
         self.assertEqual((self.work / 'sysroot/usr/pkg/payload').read_text(), 'installed data')
         self.assertIn('fixture-1.0', installer.installed(self.cfg))
+        self.assertIn('LOCALBASE=/usr/pkg\n', (self.work / 'sysroot/usr/pkg/pkgdb/fixture-1.0/+BUILD_INFO').read_text())
 
     def test_escaping_link_refused_before_install(self):
         package = self.package(link='../../outside')
@@ -115,6 +120,29 @@ class InstallTests(unittest.TestCase):
         self.cfg['pkgdb'] = self.cfg['prefix'] + '/pkgdb'
         PackageInstaller(self.crypto, self.ca.certificate).install(package, self.cfg)
         self.assertEqual((Path(self.cfg['prefix']) / 'payload').read_text(), 'installed data')
+        self.assertEqual(self.localbase(self.cfg['pkgdb']), self.cfg['prefix'])
+        self.assertIn('CFLAGS=-I' + str(self.destination) + '/include',
+                      (Path(self.cfg['pkgdb']) / 'fixture-1.0/+BUILD_INFO').read_text())
+
+    def test_independent_metadata_recovery_does_not_rewrite_payload(self):
+        package = self.package(commands=PORTABLE_PREFIX + '\n')
+        destination = self.work / 'different-prefix'
+        database = destination / 'pkgdb'
+        self.cfg.update(prefix=str(destination), pkgdb=str(database))
+        installer = PackageInstaller(self.crypto, self.ca.certificate)
+        with patch.object(package_relocation, 'relocate_build_info', side_effect=OSError('interrupted')):
+            with self.assertRaisesRegex(OSError, 'interrupted'):
+                installer.install(package, self.cfg)
+        payload = destination / 'payload'
+        before = payload.stat().st_mtime_ns
+        contents = (database / 'fixture-1.0/+CONTENTS').read_bytes()
+        with patch.object(package_relocation, 'refresh_checksums', side_effect=AssertionError('payload scan')):
+            self.assertIn('fixture-1.0', installer.installed(self.cfg))
+            self.assertIn('fixture-1.0', installer.installed(self.cfg))
+        self.assertEqual(self.localbase(database), str(destination))
+        self.assertEqual(payload.stat().st_mtime_ns, before)
+        self.assertEqual((database / 'fixture-1.0/+CONTENTS').read_bytes(), contents)
+        self.crypto.run_package('pkg_admin', ['-K', database, 'check', 'fixture-1.0'])
 
     def test_prefix_independent_commands_are_refused(self):
         package = self.package(commands=PORTABLE_PREFIX + '\n@exec echo unsafe\n')
@@ -152,18 +180,20 @@ class InstallTests(unittest.TestCase):
         database = self.work / 'selected-pkgdb'
         self.cfg.update(prefix=str(destination), pkgdb=str(database))
         installer = PackageInstaller(self.crypto, self.ca.certificate)
-        replace = package_relocation._replace_file
+        replace = bootstrap_bundle._replace_file
         def interrupted(path, data):
             if path.name == '+BUILD_INFO':
                 raise OSError('interrupted after pkg_add')
             return replace(path, data)
-        with patch.object(package_relocation, '_replace_file', side_effect=interrupted):
+        with patch.object(bootstrap_bundle, '_replace_file', side_effect=interrupted):
             with self.assertRaisesRegex(OSError, 'interrupted'):
                 installer.install(signed, self.cfg)
         self.assertEqual((destination / 'payload').read_text(), '#!' + str(destination) + '/bin/python3.15\n')
         self.assertIn('fixture-1.0', installer.installed(self.cfg))
         info = (database / 'fixture-1.0/+BUILD_INFO').read_text()
         self.assertIn('PROVIDES=' + str(destination) + '/payload', info)
+        self.assertIn('CFLAGS=-I' + original + '/include', info)
+        self.assertEqual(self.localbase(database), str(destination))
         self.assertFalse(list(package_relocation.pending(destination, database)))
         self.crypto.run_package('pkg_admin', ['-K', database, 'check', 'fixture-1.0'])
         with patch.object(package_relocation, 'refresh_checksums', side_effect=AssertionError('repeat payload scan')):
