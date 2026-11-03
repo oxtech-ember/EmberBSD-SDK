@@ -70,6 +70,12 @@ switches `current.p7m`, then removes superseded files. Existing identical
 packages are read back but not uploaded again. Repeating the same publication
 retains the generation and finishes any interrupted cleanup.
 
+When extending an existing catalog, preserve its current packages and sets in
+the candidate and pass `--expected-generation N` from the verified snapshot.
+Under the publisher lock, a changed generation stops publication before any
+artifact upload or cleanup; merge the newer catalog and retry. Use `0` only
+when the repository must still be empty. The option does not merge catalogs.
+
 A create-only `.publisher-lock` serializes publication **and cleanup** across
 publishers. Normal exit removes it. After a process crash, inspect the publisher
 and remove that exact object with the storage administrator's tools only when
