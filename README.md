@@ -66,8 +66,10 @@ Use [release preparation and tags](docs/release-tags.md) to set the source
 product version before building and tag the checked OS, Ports, and SDK commits.
 Use [OS release composition](docs/os-release.md) for complete OS producer orchestration,
 kit verification and immutable GitHub publication.
-The [distribution guide](docs/distribution.md) defines the additional boundary
-for a future SDK release that accompanies a binary package profile.
+The [signed release tools](docs/signed-releases.md) seal and verify package,
+SDK and OS inventories and channel pointers using one X.509 trust root.
+The [distribution guide](docs/distribution.md) defines the remaining boundary
+for an installable binary SDK and package channel.
 
 A [source-built AArch64 check](docs/sysroot-transfer.md#source-built-aarch64-check)
 on macOS arm64 passed SMB export/import and C/C++ consumer links at a new path.

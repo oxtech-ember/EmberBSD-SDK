@@ -1,4 +1,8 @@
-# Future SDK and binary package distribution
+# SDK and binary package distribution
+
+The [signed release contract and CLI](signed-releases.md) implement the shared
+authenticated inventory, package signing and replay-protected channel pointer.
+They verify local complete releases; S3 transport and installation are separate.
 
 This document defines the release boundary. The implemented
 [sysroot transfer commands](sysroot-transfer.md) export and import a completed
@@ -63,6 +67,6 @@ Record unsupported hosts and target architectures explicitly. A portable
 orchestration language does not make every upstream build backend native to
 Windows or prove ABI compatibility between architectures.
 
-Publish the accepted SDK artifact and its checksums alongside the matching
-binary package profile. Distribution signing, update policy and artifact
-format require their own implemented and tested contracts.
+Publish the accepted SDK artifact through the signed release inventory alongside
+the matching binary package profile. Use its host/target, ABI/runtime, artifact
+hashes and dependencies. Updates and installation must reuse that contract.
