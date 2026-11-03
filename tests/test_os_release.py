@@ -1118,6 +1118,53 @@ class BuilderReleaseTests(TemporaryCase):
         selected = ProductionReleaseBuilder.__new__(ProductionReleaseBuilder)
         self.assertEqual(selected.reuse_signature(signature), dict(flags=['MKFOO=yes']))
 
+    def test_amd64_commit_change_reuses_objects_with_new_installer_url(self):
+        options = release_fixture(self.root, 'amd64')
+        first = OSReleaseBuilder(options).run()
+        write(Path(options['os']) / 'usr.bin/config/main.c', 'int changed;\n')
+        commit(options['os'])
+        later = options | {'destination': str(Path(options['sdk']) / 'stages/next-release')}
+        plan = OSReleaseBuilder(later | {'plan': True}).run()
+        second = OSReleaseBuilder(later).run()
+        old_sha = first['sources']['os']['commit']
+        new_sha = second['sources']['os']['commit']
+        self.assertNotEqual(old_sha, new_sha)
+        self.assertEqual(second['previous_contexts']['objects']['sources']['os']['commit'], old_sha)
+        url = 'SYSINST_FTP_DIR=oxtech-ember/EmberBSD/releases/download/' + kit.tag(new_sha, 'amd64')
+        self.assertIn(url, plan['plan'][1])
+        self.assertIn(url, second['signature']['flags'])
+        profile = jsonio.read_json(Path(later['destination']) / 'build-profile.json')
+        self.assertIn(url, profile['commands'][0])
+
+    def test_amd64_installer_url_normalization_is_strict(self):
+        builder = ProductionReleaseBuilder.__new__(ProductionReleaseBuilder)
+        prefix = 'SYSINST_FTP_DIR=oxtech-ember/EmberBSD/releases/download/'
+        def signature(sha, profile='amd64'):
+            return {'release_profile': profile, 'flags': ['EMBER_BUILD_ID=' + sha,
+                    prefix + kit.tag(sha, 'amd64'), 'SYSINST_HTTP_HOST=github.com', 'MKPIC=yes']}
+        def compare(value):
+            import copy
+            return builder.reuse_signature(copy.deepcopy(value))
+        old, new = signature('a' * 40), signature('b' * 40)
+        self.assertEqual(compare(old), compare(new))
+        self.assertNotEqual(compare(signature("a" * 40, "aarch64")),
+                            compare(signature("b" * 40, "aarch64")))
+        cases = [
+            {'release_profile': 'aarch64', 'flags': new['flags']},
+            {'release_profile': 'amd64', 'flags': new['flags'][1:]},
+            {'release_profile': 'amd64', 'flags': new['flags'] + ['EMBER_BUILD_ID=' + 'b' * 40]},
+            {'release_profile': 'amd64', 'flags': ['EMBER_BUILD_ID=invalid'] + new['flags'][1:]},
+            {'release_profile': 'amd64', 'flags': [new['flags'][0]] + new['flags'][2:]},
+            {'release_profile': 'amd64', 'flags': new['flags'] + [new['flags'][1]]},
+            {'release_profile': 'amd64', 'flags': [new['flags'][0], 'SYSINST_FTP_DIR=custom'] + new['flags'][2:]},
+            {'release_profile': 'amd64', 'flags': new['flags'][:2] + ['SYSINST_HTTP_HOST=other', 'MKPIC=yes']},
+            {'release_profile': 'amd64', 'flags': new['flags'][:3] + ['MKPIC=no']},
+        ]
+        for case in cases:
+            with self.subTest(case=case):
+                self.assertNotEqual(compare(old), compare(case))
+        self.assertEqual(new['flags'][1], prefix + kit.tag('b' * 40, 'amd64'))
+
     def test_fresh_object_mode_needs_new_trees_and_is_recorded(self):
         options = release_fixture(self.root, 'aarch64')
         OSReleaseBuilder(options).run()

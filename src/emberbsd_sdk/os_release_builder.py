@@ -482,7 +482,20 @@ class OSReleaseBuilder(SysrootBuilder):
         # The same profile, toolchain and configuration at another OS commit
         # updates the kept objects; the commit metadata itself is not compared.
         if isinstance(signature.get('flags'), list):
-            signature['flags'] = [flag for flag in signature['flags']
+            flags = signature['flags']
+            # sysinst tracks the commit-derived URL through ember-build-config.
+            # Preserve custom or ambiguous values as actual comparison inputs.
+            if signature.get('release_profile') == 'amd64':
+                ids = [f[len('EMBER_BUILD_ID='):] for f in flags
+                       if isinstance(f, str) and f.startswith('EMBER_BUILD_ID=')]
+                dirs = [f for f in flags if isinstance(f, str) and f.startswith('SYSINST_FTP_DIR=')]
+                if (len(ids) == 1 and re.fullmatch(r'[0-9a-f]{40}', ids[0]) and
+                        len(dirs) == 1 and dirs[0] ==
+                        'SYSINST_FTP_DIR=oxtech-ember/EmberBSD/releases/download/' + tag(ids[0], 'amd64')):
+                    # NUL cannot occur in an actual argv value, so a custom URL
+                    # cannot collide with this comparison-only marker.
+                    flags = ['SYSINST_FTP_DIR=\0derived-amd64' if f == dirs[0] else f for f in flags]
+            signature['flags'] = [flag for flag in flags
                                   if not (isinstance(flag, str) and flag.startswith(self.COMMIT_FLAGS))]
         return super().reuse_signature(signature)
 
