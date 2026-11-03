@@ -140,6 +140,35 @@ class BinaryReleaseTests(unittest.TestCase):
         return compose(self.crypto, self.spec, self.ports, self.work / 'release',
                        self.leaf, self.ca.certificate)
 
+    def test_unchanged_signed_packages_keep_exact_bytes_in_next_catalog(self):
+        from emberbsd_sdk.binary_release import compose
+        repo = self.repository()
+        self.compose()
+        for root in repo['packages']:
+            repo['packages'][root] = str(self.work / 'release/arm64' /
+                                        (root.rsplit('/', 1)[-1] + '-1.0.tgz'))
+        expected = {Path(path).name: Path(path).read_bytes() for path in repo['packages'].values()}
+        self.spec['release_id'] = 'next'
+        compose(self.crypto, self.spec, self.ports, self.work / 'next', self.leaf, self.ca.certificate)
+        for name, data in expected.items():
+            self.assertEqual((self.work / 'next/arm64' / name).read_bytes(), data)
+
+    def test_signed_foreign_binary_does_not_bypass_target_inspection(self):
+        repo = self.repository()
+        unsigned = self.package('net/foreign', payload=b'\xcf\xfa\xed\xfe' + b'x' * 60)
+        signed = self.work / 'foreign-1.0.tgz'
+        self.crypto.sign_package(unsigned, signed, self.leaf, self.ca.certificate)
+        from emberbsd_sdk.binary_release import inspect_package
+        with self.assertRaisesRegex(SDKError, 'foreign host binary'):
+            inspect_package(signed, repo['target'])
+
+    def test_signed_extended_ar_filename_is_inspected_without_extraction(self):
+        source = self.package('net/package-with-a-long-name', payload=b'odd payload')
+        signed = self.work / 'package-with-a-long-name-1.0.tgz'
+        self.crypto.sign_package(source, signed, self.leaf, self.ca.certificate)
+        from emberbsd_sdk.binary_release import inspect_package
+        self.assertEqual(inspect_package(signed, None), len(b'odd payload'))
+
     def test_signed_catalog_and_standard_summary_select_without_payloads(self):
         from emberbsd_sdk.binary_release import load_catalogs
         self.repository()

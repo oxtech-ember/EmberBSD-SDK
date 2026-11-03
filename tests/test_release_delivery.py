@@ -56,44 +56,44 @@ class DeliveryTests(unittest.TestCase):
 
     def publish(self, release):
         return publish_release(self.crypto, self.store, self.public, release, self.signer,
-                               self.ca.certificate, 'development')
+                               self.ca.certificate)
 
     def fetch(self, directory='snapshot'):
-        return fetch_release(self.crypto, self.public, self.ca.certificate, 'development',
+        return fetch_release(self.crypto, self.public, self.ca.certificate,
                              self.work / 'state.json', self.work / directory)
 
     def test_publish_fetch_and_same_release_retry(self):
         release = self.release()
         first = self.publish(release)
-        pointer = self.server.objects['/bucket/channels/development.p7m']
+        pointer = self.server.objects['/bucket/current.p7m']
         self.assertEqual(self.publish(release), first)
-        self.assertEqual(self.server.objects['/bucket/channels/development.p7m'], pointer)
+        self.assertEqual(self.server.objects['/bucket/current.p7m'], pointer)
         fetched = self.fetch()
         self.assertEqual(fetched['release_id'], 'one')
         self.assertTrue((self.work / 'snapshot/host/pkg_summary.gz').is_file())
         self.assertFalse((self.work / 'snapshot/payload').exists())
         self.assertTrue((self.work / 'state.json').is_file())
-        self.assertIn('immutable', self.server.headers['/bucket/releases/one/payload']['cache-control'])
-        self.assertIn('no-cache', self.server.headers['/bucket/channels/development.p7m']['cache-control'])
+        self.assertIn('immutable', self.server.headers['/bucket/current/host/darwin-arm64/payload']['cache-control'])
+        self.assertIn('no-cache', self.server.headers['/bucket/current.p7m']['cache-control'])
 
     def test_failed_upload_does_not_advance_channel(self):
         self.publish(self.release())
-        pointer = self.server.objects['/bucket/channels/development.p7m']
+        pointer = self.server.objects['/bucket/current.p7m']
         new = self.release('two')
         original = self.store.put
         def fail(key, *args, **kwargs):
-            if key == 'releases/two/host/pkg_summary.gz':
+            if key.endswith('/host/pkg_summary.gz'):
                 raise SDKError('interrupted upload')
             return original(key, *args, **kwargs)
         with patch.object(self.store, 'put', side_effect=fail), self.assertRaises(SDKError):
             self.publish(new)
-        self.assertEqual(self.server.objects['/bucket/channels/development.p7m'], pointer)
-        self.assertNotIn('/bucket/releases/two/release.p7m', self.server.objects)
+        self.assertEqual(self.server.objects['/bucket/current.p7m'], pointer)
+        self.assertEqual(self.server.objects['/bucket/current.p7m'], pointer)
         self.assertEqual(self.publish(new)['generation'], 2)
 
     def test_release_identity_cannot_change(self):
         release = self.release()
-        self.publish(release)
+        pointer = self.publish(release)
         other = self.release('other', b'different')
         # Change the signed ID but keep a complete, valid new manifest.
         from emberbsd_sdk.release_catalog import parse_release
@@ -102,7 +102,7 @@ class DeliveryTests(unittest.TestCase):
         other.write_bytes(self.crypto.sign_cms(json_bytes(value), self.signer, self.ca.certificate))
         with self.assertRaises(SDKError):
             self.publish(other)
-        self.assertEqual(self.server.objects['/bucket/releases/one/release.p7m'], release.read_bytes())
+        self.assertEqual(self.server.objects['/bucket/' + pointer['release']['path']], release.read_bytes())
 
     def test_competing_channel_writer_is_not_overwritten(self):
         self.publish(self.release())
@@ -110,34 +110,35 @@ class DeliveryTests(unittest.TestCase):
         original = self.store.put
         winner = b'another writer changed the object'
         def race(key, *args, **kwargs):
-            if key == 'channels/development.p7m':
+            if key == 'current.p7m':
                 self.server.objects['/bucket/' + key] = winner
             return original(key, *args, **kwargs)
         with patch.object(self.store, 'put', side_effect=race), self.assertRaises(SDKError):
             self.publish(second)
-        self.assertEqual(self.server.objects['/bucket/channels/development.p7m'], winner)
+        self.assertEqual(self.server.objects['/bucket/current.p7m'], winner)
 
     def test_modified_index_fails_before_client_state(self):
-        self.publish(self.release())
-        self.server.objects['/bucket/releases/one/host/pkg_summary.gz'] = b'changed index'
+        pointer = self.publish(self.release())
+        base = pointer['release']['path'].removesuffix('/release.p7m')
+        self.server.objects['/bucket/' + base + '/host/pkg_summary.gz'] = b'changed index'
         with self.assertRaises(SDKError):
             self.fetch()
         self.assertFalse((self.work / 'state.json').exists())
         self.assertFalse((self.work / 'snapshot').exists())
 
     def test_corrupt_manifest_and_old_generation_rejected(self):
-        self.publish(self.release())
-        old = self.server.objects['/bucket/channels/development.p7m']
+        pointer = self.publish(self.release())
+        old = self.server.objects['/bucket/current.p7m']
         self.fetch()
         self.publish(self.release('two'))
         self.fetch('second-snapshot')
         state = (self.work / 'state.json').read_bytes()
-        self.server.objects['/bucket/channels/development.p7m'] = old
+        self.server.objects['/bucket/current.p7m'] = old
         with self.assertRaises(SDKError):
             self.fetch('replayed')
         self.assertEqual((self.work / 'state.json').read_bytes(), state)
 
-        self.server.objects['/bucket/releases/one/release.p7m'] = b'invalid envelope'
+        self.server.objects['/bucket/' + pointer['release']['path']] = b'invalid envelope'
         with self.assertRaises(SDKError):
             self.fetch('corrupted')
         self.assertEqual((self.work / 'state.json').read_bytes(), state)
@@ -151,7 +152,7 @@ class DeliveryTests(unittest.TestCase):
     def test_channel_expiring_during_verification_is_refreshed(self):
         release = self.release()
         first = publish_release(self.crypto, self.store, self.public, release, self.signer,
-                                self.ca.certificate, 'development', ttl=60)
+                                self.ca.certificate, ttl=60)
         clock = [first['issued_at']]
         verify = self.public.verify
         def advance(*args, **kwargs):
@@ -166,7 +167,7 @@ class DeliveryTests(unittest.TestCase):
     def test_expired_previous_signer_has_explicit_publisher_recovery(self):
         old = self.crypto.issue_signer(self.ca, self.work / 'short-signer', days=1)
         first = publish_release(self.crypto, self.store, self.public, self.release(), old,
-                                self.ca.certificate, 'development')
+                                self.ca.certificate)
         release = self.release('two')
         future = int(time.time()) + 2 * 86400
         verify = self.crypto.verify_cms
@@ -177,7 +178,7 @@ class DeliveryTests(unittest.TestCase):
             with self.assertRaises(SDKError):
                 self.publish(release)
             second = publish_release(self.crypto, self.store, self.public, release, self.signer,
-                self.ca.certificate, 'development', previous_channel_time=first['issued_at'])
+                self.ca.certificate, previous_channel_time=first['issued_at'])
         self.assertEqual(second['generation'], 2)
 
 

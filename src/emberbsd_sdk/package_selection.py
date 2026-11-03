@@ -110,7 +110,7 @@ def _require_environment(args):
     return values, native, shell, selected_bmake, state
 
 
-def _run_controller(ports_root, state, native, roots, command, build_environment):
+def _run_controller(ports_root, state, native, roots, command, build_environment, *, stdout=None):
     tmp_root = Path(os.environ.get("TMPDIR") or state.parent)
     if not tmp_root.is_absolute():
         raise ValueError("TMPDIR must be absolute when set")
@@ -146,7 +146,7 @@ def _run_controller(ports_root, state, native, roots, command, build_environment
             child = subprocess.Popen(
                 [os.fspath(shell), os.fspath(ports_root / "scripts" / "cross-bulk.sh"),
                  command, os.fspath(roots_path), os.fspath(state)],
-                env=environment, start_new_session=True)
+                env=environment, stdout=stdout, start_new_session=True)
             if forwarded:
                 child.send_signal(forwarded[0])
             while True:
@@ -163,7 +163,7 @@ def _run_controller(ports_root, state, native, roots, command, build_environment
         roots_path.unlink(missing_ok=True)
 
 
-def main(argv=None):
+def main(argv=None, *, controller_stdout=None):
     args = _parser().parse_args(argv)
     try:
         ports_root = args.ports_root.resolve(strict=True)
@@ -195,7 +195,8 @@ def main(argv=None):
         print("Sets: " + (", ".join(args.sets) if args.sets else "none"))
         print("Roots: " + (", ".join(roots) if roots else "none"), flush=True)
         mode = "selected-order" if args.command == "plan" else "selected-build"
-        status = _run_controller(ports_root, state, native, roots, mode, build_environment)
+        status = _run_controller(ports_root, state, native, roots, mode, build_environment,
+                                 stdout=controller_stdout)
         if status:
             return status
         if args.command == "build":

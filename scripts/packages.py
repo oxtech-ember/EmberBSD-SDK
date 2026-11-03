@@ -12,4 +12,6 @@ from emberbsd_sdk.package_selection import main
 
 
 if __name__ == "__main__":
+    if '--config' in sys.argv or any(arg.startswith('--config=') for arg in sys.argv):
+        from emberbsd_sdk.sdk_client import main
     raise SystemExit(main())

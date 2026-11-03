@@ -16,7 +16,7 @@ import signal
 import stat
 import sysconfig
 import time
-from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, prepared_sources, prepared_refresh, process, provenance, runtime_refresh, sourceprep, workspace
+from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native_toolset, paths, prepared_sources, prepared_refresh, process, provenance, runtime_refresh, llvm_source_refresh, sourceprep, workspace
 from .verification_receipts import RunReceipts
 from .cpu_capacity import resolve_jobs
 from .errors import CommandError, SDKError, ProcessOwnershipError
@@ -600,7 +600,13 @@ class SysrootBuilder:
                     environment=self.environment)
             runtime = None
             runtime_kind = None
-            if any(old.get(key) != new.get(key) for key in ('runtime', 'runtime_prefix', 'llvm_source')):
+            llvm_prefix = 'EMBER_LLVM_SOURCE='
+            llvm_old = [f[len(llvm_prefix):] for f in old['flags'] if f.startswith(llvm_prefix)]
+            llvm_new = [f[len(llvm_prefix):] for f in new['flags'] if f.startswith(llvm_prefix)]
+            llvm_changed = old.get('llvm_source') != new.get('llvm_source') or llvm_old != llvm_new
+            if llvm_changed and (len(llvm_old) != 1 or len(llvm_new) != 1):
+                return False
+            if llvm_changed or any(old.get(key) != new.get(key) for key in ('runtime', 'runtime_prefix')):
                 runtime = runtime_refresh.cpp_update(old, new)
                 if runtime is not None:
                     runtime_kind = 'cpp'
@@ -686,6 +692,11 @@ class SysrootBuilder:
                                           't', str(archive)], env=self.environment)
                 return result.stdout.decode('utf-8', 'strict').splitlines()
             self.refresh_nested_outputs = []
+            if llvm_changed and runtime_kind == 'cpp':
+                self.llvm_refresh_roots = (llvm_old[0], llvm_new[0])
+                self.llvm_refresh_plan = llvm_source_refresh.plan(path, *self.llvm_refresh_roots)
+            else:
+                self.llvm_refresh_plan = None
             if runtime_kind == 'builtins':
                 checked = runtime_sources()
                 if checked is None:
@@ -1759,6 +1770,9 @@ class SysrootBuilder:
             if self.inspect_context(self.paths[name]) != self.contexts[name]:
                 raise SDKError('object context changed after preflight')
         # Hold the existing object-tree lease throughout cleanup and context update.
+        llvm_plan = getattr(self, 'llvm_refresh_plan', None)
+        if llvm_plan is not None:
+            llvm_source_refresh.apply(self.paths['objects'], llvm_plan, *self.llvm_refresh_roots)
         if hasattr(self, 'runtime_refresh_files'):
             self.begin_runtime_refresh()
         native_dirs = getattr(self, 'native_refresh_dirs', [])

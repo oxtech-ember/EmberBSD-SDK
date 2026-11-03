@@ -1,14 +1,47 @@
-# S3 publication and HTTPS metadata delivery
+# One current S3 repository
 
-`scripts/s3-release.py` publishes an existing [signed release](signed-releases.md)
-and retrieves a pinned metadata snapshot. It uses Python's standard library and
-the selected Ports OpenSSL/pkg_tools. AWS CLI, boto3 and client S3 credentials
-are not required. Package installation and the shared artifact cache remain
-the next layer; this command does not change installed packages.
+`scripts/s3-release.py` publishes the current signed package set and retrieves
+its authenticated metadata through HTTPS. It uses Python's standard library
+and the selected Ports OpenSSL/pkg_tools. Installation is a separate layer.
 
-## Publisher
+## Layout and retention
 
-Provide these environment variables to the publishing process:
+There is one `current`, with one package version per platform:
+
+```text
+current.p7m
+current/host/darwin-arm64/openssl-4.1.0nb1.tgz
+current/target/aarch64/openssl-4.1.0nb1.tgz
+current/metadata/<manifest-sha256>/release.p7m
+current/metadata/<manifest-sha256>/<repository>/catalog.json
+current/metadata/<manifest-sha256>/<repository>/pkg_summary.gz
+```
+
+Packages retain pkgsrc names: `name-version[nbN].tgz`. The platform belongs in
+the directory, and SHA256 belongs in the signed inventory. A changed package
+must have a new version or package revision; the publisher refuses different
+bytes under the same current filename. An unchanged signed package is reused
+byte for byte. The [catalog composer](binary-catalog.md) accepts existing signed
+archives for this purpose after verifying their signatures and payloads.
+
+The small metadata directory lets the publisher prepare the new catalog while
+the old one is readable. It is temporary coexistence, not release history.
+After switching `current.p7m`, the publisher deletes obsolete packages, previous
+metadata and abandoned upload files under its `current/` prefix. Only the
+current set remains. Objects outside that prefix are never swept.
+
+There are no dated release directories or separate S3 content-addressed package
+pool. Local client caches can use SHA256 to avoid repeated downloads across
+projects; that does not require keeping historical server versions.
+
+The CMS pointer retains the shared channel schema with the fixed name `current`,
+a generation, expiry and exact manifest reference. The manifest keeps producer
+paths for local files; `artifact_key()` maps payloads to the platform directories
+above. Repository IDs in metadata remain those selected by the producer.
+
+## Publish
+
+Provide credentials only to the publishing process, outside Git:
 
 ```text
 EMBERBSD_S3_ENDPOINT
@@ -18,154 +51,103 @@ EMBERBSD_S3_ACCESS_KEY
 EMBERBSD_S3_SECRET_KEY
 ```
 
-Keep their values outside Git. Only the publisher gets write credentials.
-Endpoint, region and bucket also have explicit CLI options; credentials do not
-appear in command arguments. The transport implements path-style S3 URLs and
-SigV4 header authentication. It does not follow redirects or log authorization.
-
 ```sh
 python3 scripts/s3-release.py --host-prefix /work/host-pkg-llvm publish \
-  /work/releases/preview-1/release.p7m \
-  --url https://packages.example.org --channel development \
+  /work/prepared-release/release.p7m --url https://emberbsd-pkg.oxteam.me \
   --trust-root trust/emberbsd-release-root.pem \
   --signer-directory /private/release-signer
 ```
 
-`--url` is the public HTTPS base. Optional `--prefix` selects the same relative
-key prefix under both that base and the bucket. The command checks local package
-signatures and hashes, then publishes:
+The publisher verifies local signatures and hashes, uploads missing packages
+and new metadata, checks every object through public HTTPS, conditionally
+switches `current.p7m`, then removes superseded files. Existing identical
+packages are read back but not uploaded again. Repeating the same publication
+retains the generation and finishes any interrupted cleanup.
 
-```text
-releases/<release_id>/<artifact paths>
-releases/<release_id>/release.p7m
-channels/<channel>.p7m
-```
+A create-only `.publisher-lock` serializes publication **and cleanup** across
+publishers. Normal exit removes it. After a process crash, inspect the publisher
+and remove that exact object with the storage administrator's tools only when
+no publisher is running, then retry. No lease service or background worker is
+needed. Current still uses ETag compare-and-swap; HTTP 409/412 refuses a competing
+write. ETags are concurrency tokens, not integrity checksums.
 
-Payloads precede indexes; the signed manifest comes last. Immutable object
-creation uses `If-None-Match: *`. Existing objects must have identical public
-bytes. A previously sealed release ID cannot acquire a different manifest.
-Unreferenced objects from an interrupted attempt can be reused by retrying the
-same release; a different release needs a different ID.
+A failed upload does not switch current. A failure after switching, including
+cleanup failure, can leave a usable new current and extra old files: retry the
+same input. Deletion never happens before public verification of current.
 
-Before making the channel current, the publisher streams every object from
-the public HTTPS endpoint and checks Content-Length and SHA256. The channel is
-one CMS object containing both pointer and signature. Updating it uses the ETag
-read at the start, or create-only when absent. HTTP 409/412 means another writer
-won: the command stops without an unconditional overwrite or hidden retry.
-ETags are concurrency tokens, not checksums. S3 If-Match carries the ETag value
-without the HTTP response's surrounding quotes.
+`--prefix` optionally selects an owned repository namespace shared by S3 and
+HTTPS. It must not contain unrelated files under `current/`. Endpoint, region
+and bucket have explicit options; keys come only from environment variables.
+S3 uses path-style URLs and SigV4, including paginated ListObjectsV2 for cleanup.
+No redirects, external S3 library or client write credentials are required.
 
-Release objects use `public, max-age=31536000, immutable`; channels use
-`no-cache, max-age=0, must-revalidate`. Existing bucket/CDN access policy must
-allow public object GET; the command does not change bucket policies or ACLs.
-A 403 on the bucket root can simply mean directory listing is disabled.
+Package and immutable metadata objects use long immutable caching. Current uses
+`no-cache, max-age=0, must-revalidate`. Single PUT supports objects up to 5 GiB;
+multipart remains unsupported. The public endpoint must permit object GET;
+403 on its root can simply mean directory listing is disabled.
 
-Repeat publication of the same current release is a no-op after verification.
-`--refresh` advances the generation and renews expiry even for that release.
-Default lifetime is seven days; `--ttl SECONDS` chooses another positive value.
-The validity window starts after uploads and read-back verification finish.
-
-### Certificate rotation and recovery
-
-Rotate the working signer under the same root before it expires. Routine
-publication verifies old and new signatures against the current clock.
-If the previous channel's signer has already expired, a publisher can explicitly
-select `--previous-channel-time UNIX_SECONDS`: a known historical instant at
-or after that channel's issuance when its chain was valid. This authenticates
-**only the previous channel** at that time, retaining its generation and ETag.
-Its signature, trust chain and signer profile are still verified. New release
-metadata, packages and the new signer must pass current-time verification.
-Clients have no historical-time flag. Do not change the computer clock or
-disable signature checks to recover publication.
-
-## Anonymous reader
-
-Use a private, persistent directory for replay state and a new output directory
-for each snapshot. The output parent must already exist.
+## Read
 
 ```sh
 mkdir -m 700 /work/repository-state
 python3 scripts/s3-release.py --host-prefix /work/host-pkg-llvm fetch \
-  --url https://packages.example.org --channel development \
+  --url https://emberbsd-pkg.oxteam.me \
   --trust-root trust/emberbsd-release-root.pem \
-  --state /work/repository-state/development.json --output /work/catalog-1 \
+  --state /work/repository-state/current.json --output /work/catalog \
   --repository darwin-arm64
 ```
 
-The reader verifies the channel at the current time, downloads the exact
-referenced release, and streams selected package indexes into private staging.
-Only after their signed sizes/hashes match does it advance the replay floor
-and atomically publish the snapshot. A malformed signature, changed index,
-missing repository or old generation fails before state acceptance. An output
-publication failure may leave an advanced metadata floor; retrying the same
-authenticated generation is permitted. No installed state has been changed.
+The output parent must exist and the output directory must be new. The reader
+verifies current, its exact manifest and selected index sizes/hashes, then
+advances persistent replay state and publishes the local snapshot. Indexes
+stream to disk; package archives are not downloaded. If superseded metadata
+disappears during reading, it retries once only when current has changed.
+An ordinary missing file, invalid signature or corrupt bytes is an error.
 
-`--repository` may be repeated; omitting it fetches all package indexes. Names
-are the first path segment used by the [binary catalog producer](binary-catalog.md).
-The snapshot includes `release.p7m` and the selected indexes, without package
-archives, compilers or sysroots. Select its components using the existing reader:
+Choose package sets from the snapshot with `scripts/binary-catalog.py plan`.
+The [SDK client](sdk-client.md) finishes downloading and verifying its whole selection
+before modifying installed state; if the server has removed a superseded
+package, it re-reads current and re-plans first. These installation operations
+remain separate from the metadata-only fetch command.
 
-```sh
-python3 scripts/binary-catalog.py --host-prefix /work/host-pkg-llvm plan \
-  --release /work/catalog-1/release.p7m --directory /work/catalog-1 \
-  --trust-root trust/emberbsd-release-root.pem \
-  --repository darwin-arm64 --set host-fetch
-```
+The `pkg_summary` format is unchanged. Direct stock pkgin does not authenticate
+our manifest or select its metadata snapshot: its verified repository adapter
+remains a separate integration. This tool does not claim a working pkgin install.
 
-HTTPS server trust is separate from release signing trust. The TLS stack uses
-its normal CA bundle. `--tls-ca-file FILE` explicitly selects another HTTPS CA
-bundle, for example a host-provided bundle while preparing the first toolset.
-It never replaces `--trust-root`, and there is no insecure TLS option.
+## Trust and lifetime
 
-## Size, retries and boundaries
+The default current lifetime is seven days. `--ttl SECONDS` chooses another
+positive lifetime; it starts after upload and read-back complete. `--refresh`
+renews it and advances the generation without changing package bytes. Expiry
+blocks accepting stale online metadata; it does not delete packages or stop
+installed programs. Renewal is not automatic.
 
-Uploads and read-back verification stream data; downloads of indexes also
-stream to disk. Only bounded CMS channel/release envelopes are kept in memory.
-The publisher copies exact producer archives; choose gzip or another supported
-package compression before signing. It does not keep another payload cache.
+Rotate the working certificate under the same root before expiry. If the
+previous pointer's signer has expired, explicit publisher-only
+`--previous-channel-time UNIX_SECONDS` authenticates that pointer at a known
+valid historical time, retaining its generation and ETag. New packages,
+metadata and signer still require current validity. Readers have no such flag.
 
-This first transport supports single PUT objects up to 5 GiB. Multipart upload
-and automatic artifact-download resume belong to later work. The HTTPS layer
-already validates exact Range/Content-Range reads for that downloader. A failed
-upload leaves the current channel unchanged; a retry checks existing objects.
-If the channel PUT succeeds but the following public read fails, publication
-can already be current: inspect/retry rather than attempting a rollback.
+HTTPS CA trust is separate from the release root. `--tls-ca-file FILE` selects
+the HTTPS CA bundle when needed, for example a host CA bundle while preparing
+the first toolset. There is no insecure TLS option.
 
-On 2026-11-03, Timeweb `s3.twcstorage.ru` with the project's public HTTPS domain
-passed create-only writes, ETag replacement, two competing writers (one success,
-one 409), Content-Length, byte ranges and read-after-write. Temporary probes
-were deleted. Provider behavior is verified, not inferred from an S3 label.
+## Validation boundary
 
-### First published development catalog
+The first native catalog contains `fetch-1.9nb4` and `openssl-4.1.0nb1` for
+Darwin arm64. Their signed archives total 9,926,880 bytes; local manifest and
+indexes occupy 5,538 bytes. These bootstrap packages validate delivery and
+selection, not a portable complete SDK or an EmberBSD target install.
+On 2026-11-03, the [current pointer](https://emberbsd-pkg.oxteam.me/current.p7m)
+and both packages were published in this layout and fetched anonymously.
+The old development pointer and dated S3 release directory were removed.
 
-The [development channel](https://emberbsd-pkg.oxteam.me/channels/development.p7m)
-initially points to release
-[`2026.11.03-native-1`](https://emberbsd-pkg.oxteam.me/releases/2026.11.03-native-1/release.p7m).
-Its [Darwin arm64 catalog](https://emberbsd-pkg.oxteam.me/releases/2026.11.03-native-1/darwin-arm64/catalog.json)
-selects `host-fetch`: `fetch-1.9nb4` and its `openssl-4.1.0nb1` runtime dependency.
-The two signed archives total 9,926,880 bytes. The pinned manifest and indexes
-occupy 5,538 bytes locally; fetching them does not download either archive.
-
-These are native bootstrap packages used to accept publication and anonymous
-metadata selection, not a qualified portable SDK or an EmberBSD target install.
-Existing producer TAR payloads were gzip-compressed before signing without
-recompilation. The source revision in the manifest identifies their actual
-Ports input, rather than a newer checkout. Public read-back of all objects,
-signed selection and first/last byte ranges of the OpenSSL archive passed.
-Repeating publication reused the objects and retained channel generation 1.
-Initial channel generation 1 expires on 2026-12-03 at 11:04:09 UTC; the publisher
-must refresh it before then for continued online use. It is not auto-renewed.
-
-```sh
-EMBERBSD_TEST_HOST_PREFIX=/work/host-pkg-llvm \
-  python3 -B scripts/select-tests.py --run
-```
-
-Tests include the published AWS SigV4 vector, a local conditional object server,
-real OpenSSL signatures, interrupted upload, same-ID conflict, competing writer,
-metadata-only fetch, corrupt index/manifest, replay, large streamed index,
-expiry during verification and explicit publisher certificate recovery.
+Tests cover conditional publication, interrupted upload and cleanup, version
+replacement, unchanged archive reuse, competing writers, current changing
+during a read, bad signatures/hashes, replay and streamed large indexes. Timeweb
+S3 listing may omit Content-Length; listing responses are bounded independently
+of it, while signed artifact downloads still require the exact size.
 
 Protocol references: [AWS conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html),
-[AWS SigV4](https://docs.aws.amazon.com/AmazonS3/latest/developerguide/sig-v4-header-based-auth.html),
+[AWS ListObjectsV2](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html),
 [Timeweb S3 API](https://timeweb.cloud/docs/s3-storage/manage-storage/s3-guide).

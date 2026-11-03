@@ -199,12 +199,15 @@ class RuntimeRefreshTests(unittest.TestCase):
         with patch('emberbsd_sdk.sysroot_builder.runtime_refresh.changed_builtins', return_value=['compiler-rt/lib/builtins/a.c']) as sources, \
              patch('emberbsd_sdk.sysroot_builder.prepared_refresh.runtime_objects', return_value=['lib/libc/a.o']) as objects, \
              patch('emberbsd_sdk.sysroot_builder.runtime_refresh.equivalent_unwind_binding', return_value=True), \
+             patch('emberbsd_sdk.sysroot_builder.llvm_source_refresh.plan',
+                   side_effect=AssertionError('builtins outputs must stay in their quarantine path')), \
              patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=[]), \
              patch('emberbsd_sdk.sysroot_builder.prepared_refresh.runtime_independent_patterns', return_value=[]):
             self.assertTrue(SysrootBuilder.plan_prepared_refresh(fake, {'signature': old}, '/obj'))
         sources.assert_called_once_with('/source/old', '/source/new')
         objects.assert_called_once()
         self.assertEqual(fake.runtime_refresh_files, ['lib/libc/a.o'])
+        self.assertIsNone(fake.llvm_refresh_plan)
 
     def test_unwind_relocation_requires_selected_stage_and_matching_bytes(self):
         import hashlib
@@ -569,8 +572,10 @@ class RuntimeRefreshTests(unittest.TestCase):
             environment={},
         )
         fake.reuse_signature = fake.reuse_signature.__get__(fake)
-        with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=['other/cxx']) as plan:
+        with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=['other/cxx']) as plan, \
+             patch('emberbsd_sdk.sysroot_builder.llvm_source_refresh.plan', return_value={}) as llvm_plan:
             self.assertTrue(SysrootBuilder.plan_prepared_refresh(fake, record, '/obj'), repr(checks))
+        llvm_plan.assert_not_called()
         self.assertEqual(fake.refresh_dirs, ['other/cxx'])
         self.assertEqual(len(checks), 1)
         self.assertEqual(checks[0]['compiler'], old['compiler'])
@@ -639,8 +644,10 @@ class RuntimeRefreshTests(unittest.TestCase):
             environment={}, native=SimpleNamespace(tool=lambda role: '/native/bin/' + role),
         )
         fake.reuse_signature = fake.reuse_signature.__get__(fake)
-        with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=['other/cxx']) as plan:
+        with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=['other/cxx']) as plan, \
+             patch('emberbsd_sdk.sysroot_builder.llvm_source_refresh.plan', return_value={}) as llvm_plan:
             self.assertTrue(SysrootBuilder.plan_prepared_refresh(fake, record, '/obj'), repr(checks))
+        llvm_plan.assert_called_once_with('/obj', '/prepared/llvm-old', '/tmp/llvm-current')
         self.assertEqual(fake.refresh_dirs, ['other/cxx'])
         self.assertEqual(len(checks), 1)
         self.assertEqual(checks[0]['flags'], new['flags'])

@@ -34,15 +34,16 @@ replace package verification. Installer integration must also configure
 Example layout, relative to the repository HTTPS base:
 
 ```text
-channels/development.p7m
-releases/2026.11.03-1/release.p7m
-releases/2026.11.03-1/host/darwin-arm64/All/example-1.0.tgz
-releases/2026.11.03-1/host/darwin-arm64/pkg_summary.gz
-releases/2026.11.03-1/target/aarch64/All/example-1.0.tgz
+current.p7m
+current/host/darwin-arm64/example-1.0.tgz
+current/target/aarch64/example-1.0.tgz
+current/metadata/<manifest-sha256>/release.p7m
+current/metadata/<manifest-sha256>/darwin-arm64/pkg_summary.gz
 ```
 
-Release directories are immutable. Upload all payloads and the signed release,
-then atomically replace the **single** channel object. CMS combines its content
+There is one current package set, without historical release retention. Upload
+new payloads and metadata, then atomically replace the **single** current object.
+After verification, remove obsolete packages and metadata. CMS combines content
 and signature, avoiding a new pointer paired with an old detached signature.
 The local sealer refuses existing output paths; remote publication and writer
 coordination are separate transport responsibilities.
@@ -116,13 +117,13 @@ so their exact bytes are bound to this release.
 ```json
 {
   "schema": "emberbsd.channel.v1",
-  "channel": "development",
+  "channel": "current",
   "generation": 1,
   "issued_at": 1793664000,
   "expires_at": 1794268800,
   "release": {
     "id": "2026.11.03-1",
-    "path": "releases/2026.11.03-1/release.p7m",
+    "path": "current/metadata/<64 lowercase hex>/release.p7m",
     "size": 4321,
     "sha256": "<64 lowercase hex>"
   }
@@ -131,7 +132,8 @@ so their exact bytes are bound to this release.
 
 Generation is positive and increases on every change, including expiry
 refreshes. Validity is `issued_at <= now < expires_at`. The expected channel
-name is a client input. The reference hashes the complete release CMS envelope;
+name is a client input to the generic verifier; S3 delivery fixes it to `current`.
+The reference hashes the complete release CMS envelope;
 its ID must match the authenticated release. Envelopes are limited to 16 MiB,
 embedded content to 15 MiB. Payloads are streamed for hashing.
 
@@ -171,9 +173,9 @@ release seal-release --trust-root /private/signing/root/certificate.pem \
   --output /repository/releases/example/release.p7m inventory.json
 release seal-channel --trust-root /private/signing/root/certificate.pem \
   --signer-directory /private/signing/release-2026 --directory /repository \
-  --output /staging/development.p7m channel.json
+  --output /staging/current.p7m channel.json
 release verify-channel --trust-root /installed/trust/root.pem --directory /repository \
-  --channel development --state /private/client/development.json /staging/development.p7m
+  --channel current --state /private/client/current.json /staging/current.p7m
 release verify-release --trust-root /installed/trust/root.pem \
   --directory /repository/releases/example /repository/releases/example/release.p7m
 ```

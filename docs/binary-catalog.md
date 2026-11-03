@@ -73,7 +73,8 @@ The producer selects OpenSSL, pkg_info and pkg_admin from that prefix. It:
 1. Projects runtime closures; build, tool and test edges stay out.
 2. Checks path/version/platform, licenses, sizes and archive DEPENDS against
    the resolved runtime providers using pkg_tools.
-3. Signs selected packages with the existing X.509 mechanism.
+3. Signs unsigned packages with the existing X.509 mechanism. Existing signed
+   inputs are authenticated and inspected, then copied without re-signing.
 4. Runs standard `pkg_info -X` on the **signed** archives and writes
    `pkg_summary.gz`; FILE_SIZE describes the distributed bytes.
 5. Writes the component catalog, seals the release with package/index hashes
@@ -83,6 +84,12 @@ Existing output is never overwritten. Failure removes only the operation's
 staging directory, preserving source packages, objects and caches. Only selected
 archives get signed copies; no whole SDK or unpacked tree is copied. Shared
 directory publication currently supports Darwin and Linux.
+
+For an unchanged package, pass its existing signed archive in `packages`.
+This preserves exact bytes and avoids uploading it again to `current`; signing
+the same source again can change the signature container. A rebuilt or changed
+package needs the appropriate version/revision before replacing its predecessor.
+Both unsigned TARs and signed BSD-ar containers undergo the same payload checks.
 
 Missing LICENSE, nonempty NO_BIN_ON_FTP/RESTRICTED and payload size exceeding
 SIZE_PKG are rejected. Declared redistribution checks do not replace license
@@ -112,7 +119,7 @@ Two sets union their dependencies. A second target does not repeat host tools.
 Plans show exact artifacts, roles, dependencies, licenses, download bytes and
 logical unpacked bytes. Totals precede cache/installed-component subtraction;
 filesystem overhead, staging and rollback space are additional. Cache-aware
-accounting belongs to the subsequent installer.
+accounting is provided by the [SDK client](sdk-client.md).
 
 Reading verifies CMS and selected catalog hashes. Package archives and
 pkg_summary need not be downloaded merely to list, show or plan. A direct
@@ -142,5 +149,6 @@ wrong role/architecture, foreign host payload, shared libraries, development
 roots, second target, kernel tools without sysroot, CLI selection and no overwrite.
 Fixture packages establish the distribution contract, not a built compiler or
 an application running on EmberBSD. [S3 delivery](s3-distribution.md) publishes
-these catalogs and fetches authenticated metadata. Installation, cache management
-and a complete portable C/C++ SDK remain subsequent steps.
+these catalogs and fetches authenticated metadata. The [SDK client](sdk-client.md)
+adds installation, shared caching and source builds for missing binaries.
+A complete portable C/C++ SDK remains separate acceptance work.

@@ -17,7 +17,8 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 from emberbsd_sdk.darwin_runtime import (capture_darwin_runtime_audit,
-    darwin_runtime_closure, validate_darwin_runtime_closure, _runtime_cache_uuid)
+    darwin_runtime_closure, validate_darwin_runtime_closure, _runtime_cache_uuid,
+    read_macho_runtime, _macho)
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.inventory import snapshot_tree
 
@@ -164,6 +165,17 @@ class Fixture:
 
 
 class DarwinRuntimeTests(unittest.TestCase):
+    def test_packaging_reads_relative_extension_without_relaxing_runtime_audit(self):
+        data = bytearray(macho(BASE, [(0xc, '@loader_path/../lib/libcrypto.dylib')]))
+        struct.pack_into('<I', data, 12, 8)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / '_ssl.so'
+            path.write_bytes(data)
+            host = {'os': 'Darwin', 'cpu': 'arm64'}
+            self.assertEqual(read_macho_runtime(path, host)['filetype'], 8)
+            with self.assertRaises(SDKError):
+                _macho(lambda offset, size: data[offset:offset + size], host)
+
     def test_alias_subcache_cycle_and_versions(self):
         f = Fixture(self)
         audit, closure = f.accepted()

@@ -2,6 +2,10 @@
 
 Developer tools and build contracts for [EmberBSD](https://github.com/oxtech-ember/EmberBSD), Unix for intelligent devices.
 
+Start on macOS arm64 with the [minimal binary SDK](docs/bootstrap-client.md):
+one download supplies Python, package management and the `ember-sdk` client.
+Install components by task; compilers and target sysroots are separate additions.
+
 ## Prebuild SDK
 
 Prebuild SDK is the shared development-host workspace for compiled objects,
@@ -71,8 +75,10 @@ SDK and OS inventories and channel pointers using one X.509 trust root.
 The [binary catalog](docs/binary-catalog.md) projects Ports runtime dependencies,
 signs packages before generating pkg_summary, and supports source-free selection
 of published package sets. [S3 publication and HTTPS delivery](docs/s3-distribution.md)
-publish complete releases and fetch authenticated metadata snapshots. Binary
-installation remains a subsequent step.
+maintain one current package set, remove superseded versions, and fetch authenticated metadata. Binary
+installation uses the [minimal client](docs/sdk-client.md), with a shared cache
+and Ports builds for missing binaries. A self-contained portable bootstrap
+runtime remains separate acceptance work.
 The [distribution guide](docs/distribution.md) defines the remaining boundary
 for an installable binary SDK and package channel.
 
