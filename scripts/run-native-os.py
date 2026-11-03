@@ -18,6 +18,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host-prefix', required=True)
     parser.add_argument('--compiler-family', choices=('clang', 'gcc'), default='clang')
+    parser.add_argument('--target-tools', help='selected OS TOOLDIR target tool directory for GNU consumers')
+    parser.add_argument('--target-libtool', help='selected OS TOOLDIR target libtool')
     for name in ('source','routing','cwd'):
         parser.add_argument('--'+name, required=True)
     output = parser.add_mutually_exclusive_group(required=True)
@@ -30,12 +32,16 @@ def main(argv=None):
     parser.add_argument('arguments', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     try:
+        if (args.target_tools is None) != (args.target_libtool is None):
+            raise SDKError('GNU target tools and libtool must be selected together')
         native = native_os.select_native_os_tools(args.host_prefix, args.source,
-                                                  compiler_family=args.compiler_family)
+                                                  compiler_family=args.compiler_family,
+                                                  gnu_target=args.target_tools is not None)
         arguments = args.arguments[1:] if args.arguments[:1] == ['--'] else args.arguments
         result = native_os.run_native_os(native, source=args.source, routing=args.routing,
             cwd=args.cwd, log=args.log, capture=args.capture, append=args.append_log,
-            build_sh=args.build_sh, shell=args.shell, arguments=arguments)
+            build_sh=args.build_sh, shell=args.shell, arguments=arguments,
+            target_tools=args.target_tools, target_libtool=args.target_libtool)
         if args.capture:
             sys.stdout.buffer.write(result.stdout)
             sys.stderr.buffer.write(result.stderr)

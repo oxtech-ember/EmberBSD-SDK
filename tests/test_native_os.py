@@ -79,6 +79,77 @@ class NativeOSRunnerTests(TemporaryCase):
             self.assertNotIn(name, env)
         self.assertTrue(run.call_args.kwargs['append'])
 
+    def test_gnu_distribution_selects_host_generators_and_owned_target_tools(self):
+        original = self.native
+        extra = {name: str(self.fixture.write(name.replace('pkg-config', 'pkgconf'), b'tool'))
+                 for name in ('gmake', 'pkg-config', 'od', 'msgfmt', 'msgmerge',
+                              'xgettext', 'msginit', 'msgconv', 'msgfilter', 'sed')}
+        selection = original.as_dict()
+        selection['tools'] = dict(selection['tools'], **extra)
+        self.native = SimpleNamespace(path=original.path, as_dict=lambda: selection,
+            tool=lambda role: extra[role] if role in extra else original.tool(role))
+        tooldir = self.root/'os-tools'
+        target = tooldir/'gettext-libtool/context/target-tools'
+        (target/'bin').mkdir(parents=True)
+        libtool = tooldir/'gettext-libtool/context/bin/target-libtool'
+        libtool.parent.mkdir(parents=True)
+        libtool.write_text('tool'); libtool.chmod(0o755)
+        (target/'bin/target-libtool').symlink_to(libtool)
+        with patch('emberbsd_sdk.native_os.native_os_routing.ensure_native_os_routing'), \
+             patch('emberbsd_sdk.native_os.process.run_logged') as run:
+            self.run_os('-T', str(tooldir), 'distribution', build_sh=True, log=self.root/'build.log',
+                        target_tools=str(target), target_libtool=str(libtool))
+        argv = run.call_args.args[0]
+        for flag in native_os_routing.gnu_target_host_flags(selection) + native_os_routing.gettext_target_host_flags(selection):
+            self.assertIn(flag, argv)
+        self.assertIn('GNU_TARGET_LIBTOOL=' + str(libtool), argv)
+        self.assertIn('EMBER_TARGET_TOOL_DIR=' + str(target), argv)
+        self.assertIn('EMBER_HOST_GNU_TRIPLE=' + selection['compiler']['triplet'], argv)
+        unsafe = tooldir / "target'unsafe"
+        (unsafe/'bin').mkdir(parents=True)
+        (unsafe/'bin/target-libtool').symlink_to(libtool)
+        with patch('emberbsd_sdk.native_os.native_os_routing.ensure_native_os_routing'), \
+             self.assertRaisesRegex(SDKError, 'target tools'):
+            self.run_os('-T', str(tooldir), 'distribution', build_sh=True, log=self.root/'build.log',
+                        target_tools=str(unsafe), target_libtool=str(libtool))
+        with patch('emberbsd_sdk.native_os.native_os_routing.ensure_native_os_routing'), \
+             patch('emberbsd_sdk.native_os.process.run_logged') as clustered:
+            self.run_os('-uT' + str(tooldir), 'distribution', build_sh=True, log=self.root/'build.log',
+                        target_tools=str(target), target_libtool=str(libtool))
+        self.assertIn('EMBER_TARGET_TOOL_DIR=' + str(target), clustered.call_args.args[0])
+        for late in (('--', '-T', str(tooldir), 'distribution'),
+                     ('distribution', '-T', str(tooldir))):
+            with self.subTest(late=late), \
+                 patch('emberbsd_sdk.native_os.native_os_routing.ensure_native_os_routing'), \
+                 self.assertRaisesRegex(SDKError, 'TOOLDIR'):
+                self.run_os(*late, build_sh=True, log=self.root/'build.log',
+                            target_tools=str(target), target_libtool=str(libtool))
+        old_msgfmt = selection['tools']['msgfmt']
+        selection['tools']['msgfmt'] = str(self.root / "host'unsafe/msgfmt")
+        with patch('emberbsd_sdk.native_os.native_os_routing.ensure_native_os_routing'), \
+             self.assertRaisesRegex(SDKError, 'safe selected host paths'):
+            self.run_os('-T', str(tooldir), 'distribution', build_sh=True, log=self.root/'build.log',
+                        target_tools=str(target), target_libtool=str(libtool))
+        selection['tools']['msgfmt'] = old_msgfmt
+        shell_meta = tooldir / 'target&unsafe'
+        (shell_meta/'bin').mkdir(parents=True)
+        (shell_meta/'bin/target-libtool').symlink_to(libtool)
+        with patch('emberbsd_sdk.native_os.native_os_routing.ensure_native_os_routing'), \
+             self.assertRaisesRegex(SDKError, 'safe absolute paths'):
+            self.run_os('-T', str(tooldir), 'distribution', build_sh=True, log=self.root/'build.log',
+                        target_tools=str(shell_meta), target_libtool=str(libtool))
+        foreign = self.root/'foreign'
+        foreign.mkdir()
+        with patch('emberbsd_sdk.native_os.native_os_routing.ensure_native_os_routing'), \
+             self.assertRaisesRegex(SDKError, 'target tools'):
+            self.run_os('-T', str(tooldir), 'distribution', build_sh=True, log=self.root/'build.log',
+                        target_tools=str(foreign), target_libtool=str(libtool))
+        with patch('emberbsd_sdk.native_os.native_os_routing.ensure_native_os_routing'), \
+             self.assertRaisesRegex(SDKError, 'selected native'):
+            self.run_os('-T', str(tooldir), '-V', 'HOST_MSGFMT=/foreign', 'distribution',
+                        build_sh=True, log=self.root/'build.log',
+                        target_tools=str(target), target_libtool=str(libtool))
+
     def test_capture_and_shell_use_existing_process_backend(self):
         script = self.root/'nbmake'; script.write_text('exit 0\n')
         with patch('emberbsd_sdk.native_os.process.capture') as capture:
@@ -100,7 +171,7 @@ class NativeOSRunnerTests(TemporaryCase):
             self.run_os(self.native.tool('cpp'), capture=True)
 
     def test_build_sh_cannot_override_selected_host_variables(self):
-        for args in (('-V','HOST_CC=/foreign'), ('-VHOST_CFLAGS=-bad',),
+        for args in (('-V','HOST_CC=/foreign'), ('-VHOST_CFLAGS=-bad',), ('-ZHOST_MSGFMT',),
                      ('-V', 'HOST_SH=/foreign/sh'),
                      ('-V','EMBER_HOST_ABI_CPPFLAGS=-bad'),
                      ('-V','EMBER_HOST_COMPILER_FAMILY=gcc'), ('-V','PATH=/usr/bin')):
@@ -116,6 +187,26 @@ class NativeOSRunnerTests(TemporaryCase):
             native_os.select_native_os_tools('/selected', self.source, compiler_family='gcc')
         self.assertEqual(load.call_args.kwargs['compiler_family'], 'gcc')
         self.assertEqual(set(load.call_args.kwargs['required_roles']), {'cc','cxx','cpp','sh','python'})
+
+    def test_gnu_loader_requires_all_selected_generators(self):
+        with patch('emberbsd_sdk.native_os.load_host_prefix', return_value=self.native) as load:
+            native_os.select_native_os_tools('/selected', self.source, gnu_target=True)
+        expected = {'gmake'} | {role for _, role in native_os_routing.GETTEXT_TARGET_ROLES}
+        self.assertTrue(expected <= set(load.call_args.kwargs['required_roles']))
+
+    def test_cli_forwards_explicit_gnu_target_selection(self):
+        spec = importlib.util.spec_from_file_location('run_native_os_gnu', SDK_SOURCE/'scripts/run-native-os.py')
+        cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
+        with patch.object(cli.native_os, 'select_native_os_tools', return_value=self.native) as select, \
+             patch.object(cli.native_os, 'run_native_os') as run:
+            result = cli.main(['--host-prefix','/selected','--source',str(self.source),
+                '--routing',str(self.routing),'--cwd',str(self.root),'--log',str(self.root/'build.log'),
+                '--target-tools','/os-tools/target','--target-libtool','/os-tools/libtool',
+                '--build-sh','--','-T','/os-tools','distribution'])
+        self.assertEqual(result, 0)
+        self.assertTrue(select.call_args.kwargs['gnu_target'])
+        self.assertEqual(run.call_args.kwargs['target_tools'], '/os-tools/target')
+        self.assertEqual(run.call_args.kwargs['target_libtool'], '/os-tools/libtool')
 
     def test_cli_forwards_modes_and_preserves_capture_bytes(self):
         spec = importlib.util.spec_from_file_location('run_native_os', SDK_SOURCE/'scripts/run-native-os.py')
