@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import platform
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -9,7 +10,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
-from emberbsd_sdk.package_install import PackageInstaller, inspect_install_paths
+from emberbsd_sdk.package_install import PackageInstaller, inspect_install_paths, PORTABLE_PREFIX
 
 
 @unittest.skipUnless(os.environ.get('EMBERBSD_TEST_HOST_PREFIX'), 'select native Ports pkg_tools')
@@ -33,7 +34,7 @@ class InstallTests(unittest.TestCase):
         self.cfg = dict(prefix=str(self.destination), pkgdb=str(self.destination / 'pkgdb'),
                         host=dict(os=platform.system(), arch=platform.machine(), abi='test', runtime='native'))
 
-    def package(self, *, target=False, link=None, commands='', arch='aarch64'):
+    def package(self, *, target=False, link=None, commands='', arch='aarch64', requires_self=False):
         stage = self.work / 'stage'
         stage.mkdir()
         if link:
@@ -43,6 +44,7 @@ class InstallTests(unittest.TestCase):
         prefix = '/usr/pkg' if target else str(self.destination)
         (stage / 'PLIST').write_text('@name fixture-1.0\npayload\n' + commands)
         (stage / 'INFO').write_text('PKGPATH=devel/fixture\nLICENSE=2-clause-bsd\n' +
+            (f'REQUIRES={prefix}/payload\n' if requires_self else '') +
             (f'OPSYS=NetBSD\nMACHINE_ARCH={arch}\nOS_VERSION=11.0\n' if target else
              f'OPSYS={platform.system()}\nMACHINE_ARCH={"aarch64" if platform.machine() == "arm64" else platform.machine()}\nOS_VERSION={platform.release()}\n'))
         unsigned, signed = self.work / 'unsigned.tgz', self.work / 'fixture-1.0.tgz'
@@ -97,6 +99,33 @@ class InstallTests(unittest.TestCase):
         self.cfg['prefix'] = str(self.work / 'different-prefix')
         with self.assertRaisesRegex(SDKError, 'prefix'):
             inspect_install_paths(package, self.cfg)
+
+    def test_signed_prefix_independent_package_installs_into_selected_prefix(self):
+        package = self.package(commands=PORTABLE_PREFIX + '\n')
+        self.cfg['prefix'] = str(self.work / 'different-prefix')
+        self.cfg['pkgdb'] = self.cfg['prefix'] + '/pkgdb'
+        PackageInstaller(self.crypto, self.ca.certificate).install(package, self.cfg)
+        self.assertEqual((Path(self.cfg['prefix']) / 'payload').read_text(), 'installed data')
+
+    def test_prefix_independent_commands_are_refused(self):
+        package = self.package(commands=PORTABLE_PREFIX + '\n@exec echo unsafe\n')
+        with self.assertRaisesRegex(SDKError, 'installation commands'):
+            inspect_install_paths(package, self.cfg)
+
+    @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
+    def test_portable_producer_omits_empty_requires_before_real_pkg_add(self):
+        package = self.package(requires_self=True)
+        portable, signed = self.work / 'portable.tgz', self.work / 'portable-signed.tgz'
+        subprocess.run([sys.executable, '-B', str(Path(__file__).resolve().parents[1] / 'scripts/package-portable.py'),
+            str(package), '--host-prefix', os.environ['EMBERBSD_TEST_HOST_PREFIX'],
+            '--dependency-prefix', str(self.work / 'unused'), '--output', str(portable),
+            '--bootstrap-install-name-tool', '/usr/bin/false', '--codesign', '/usr/bin/false'],
+            check=True, capture_output=True)
+        self.crypto.sign_package(portable, signed, self.signer, self.ca.certificate)
+        self.cfg['prefix'] = str(self.work / 'relocated')
+        self.cfg['pkgdb'] = self.cfg['prefix'] + '/pkgdb'
+        PackageInstaller(self.crypto, self.ca.certificate).install(signed, self.cfg)
+        self.assertEqual((Path(self.cfg['prefix']) / 'payload').read_text(), 'installed data')
 
 
 if __name__ == '__main__':

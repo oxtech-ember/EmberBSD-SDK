@@ -13,6 +13,8 @@ from .errors import SDKError
 from .paths import open_regular, verify_stable
 from .release_signing import read_bytes
 
+PORTABLE_PREFIX = '@comment emberbsd-prefix-independent-v1'
+
 
 def install_paths(config):
     prefix, database = Path(config['prefix']), Path(config['pkgdb'])
@@ -42,6 +44,8 @@ def inspect_install_paths(package, config):
     stream, before = open_regular(package)
     with stream, tarfile.open(fileobj=_package_payload(stream), mode='r|*') as archive:
         original_prefix = None
+        portable = False
+        hooks = False
         links = set()
         for member in archive:
             name = member.name.removeprefix('./')
@@ -50,12 +54,16 @@ def inspect_install_paths(package, config):
                 if name == '+CONTENTS':
                     if member.size > 8 * 1024 * 1024:
                         raise SDKError('oversized package packing list')
-                    for line in archive.extractfile(member).read().decode('utf-8').splitlines():
+                    lines = archive.extractfile(member).read().decode('utf-8').splitlines()
+                    portable = PORTABLE_PREFIX in lines and not config.get('target')
+                    if portable and any(line.startswith(('@exec ', '@unexec ')) for line in lines):
+                        raise SDKError('prefix-independent package contains installation commands')
+                    for line in lines:
                         if line.startswith('@cwd '):
                             value = line[5:]
                             if original_prefix is None:
                                 original_prefix = value
-                                if value != config['prefix']:
+                                if value != config['prefix'] and not portable:
                                     raise SDKError('package prefix differs; this package has no qualified relocation')
                             elif value != original_prefix:
                                 raise SDKError('package changes directory outside its selected prefix')
@@ -63,6 +71,8 @@ def inspect_install_paths(package, config):
                             _relative(line)
                         elif line.startswith(('@pkgdir ', '@dirrm ')):
                             _relative(line.split(' ', 1)[1])
+                elif name in ('+INSTALL', '+DEINSTALL'):
+                    hooks = True
                 continue
             destination = prefix / str(path)
             if not destination.resolve().is_relative_to(root):
@@ -79,6 +89,8 @@ def inspect_install_paths(package, config):
                 links.add(path)
             elif not (member.isfile() or member.isdir()):
                 raise SDKError(f'unsupported special file in SDK package: {name}')
+        if portable and hooks:
+            raise SDKError('prefix-independent package contains installation scripts')
     verify_stable(package, before)
 
 

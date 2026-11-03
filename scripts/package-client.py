@@ -5,21 +5,17 @@
 
 import argparse
 from pathlib import Path
-import zipfile
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+from emberbsd_sdk.client_bundle import package_client
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    source = Path(__file__).resolve().parents[1]
-    with args.output.open('xb') as output:
-        with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr('__main__.py', 'from emberbsd_sdk.sdk_client import main\nraise SystemExit(main())\n')
-            for path in sorted((source / 'src/emberbsd_sdk').rglob('*.py')):
-                archive.write(path, str(path.relative_to(source / 'src')))
-            archive.write(source / 'trust/emberbsd-release-root.pem', 'emberbsd_sdk/emberbsd-release-root.pem')
-            archive.write(source / 'LICENSE', 'LICENSE')
+    package_client(args.output)
     print(f'{args.output}: {args.output.stat().st_size} bytes (Python and native pkg_tools required)')
 
 

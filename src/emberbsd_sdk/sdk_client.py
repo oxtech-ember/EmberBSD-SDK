@@ -263,7 +263,10 @@ def install_selection(plan, config, installer, cache, store):
 
 
 def load_config(path):
-    value = read_json(path)
+    return validate_config(read_json(path))
+
+
+def validate_config(value):
     if value.get('schema') != 'emberbsd.sdk-client.v1':
         raise SDKError('unsupported SDK client configuration')
     for key in ('host_prefix', 'cache_dir', 'state_dir'):
@@ -290,15 +293,15 @@ def load_config(path):
     return value
 
 
-def main(argv=None):
+def main(argv=None, *, default_config=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', type=Path, required=True)
+    parser.add_argument('--config', type=Path, required=default_config is None)
     parser.add_argument('command', choices=('list', 'show', 'plan', 'install', 'cache-clean'))
     parser.add_argument('--set', action='append', default=[], dest='sets')
     parser.add_argument('--package', action='append', default=[], dest='roots')
     args = parser.parse_args(argv)
     try:
-        config = load_config(args.config)
+        config = load_config(args.config) if args.config else validate_config(default_config)
         state = Path(config['state_dir'])
         state.mkdir(parents=True, exist_ok=True)
         cache = PackageCache(config['cache_dir'])

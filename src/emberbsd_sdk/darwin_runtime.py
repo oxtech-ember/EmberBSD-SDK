@@ -82,13 +82,13 @@ class _File:
         return data
 
 
-def _macho(read, host, *, cached=False, executable=False):
+def _macho(read, host, *, cached=False, executable=False, bundle=False, relative=False):
     header = read(0, 32)
     magic, cpu, subtype, kind, count, size, flags, reserved = struct.unpack('<8I', header)
     expected = {'arm64': 0x100000c, 'aarch64': 0x100000c,
                 'x86_64': 0x1000007, 'amd64': 0x1000007}.get(host['cpu'])
     _require(magic == 0xfeedfacf and expected is not None and cpu == expected and
-             kind == (2 if executable else 6), 'expected a native Darwin Mach-O image')
+             kind == (2 if executable else 8 if bundle else 6), 'expected a native Darwin Mach-O image')
     _require(not cached or flags & 0x80000000, 'image is not marked as a cached dylib')
     _require(0 < count <= 8192 and 8 * count <= size <= 4 * 1024 * 1024,
              'invalid Mach-O load command extent')
@@ -111,7 +111,8 @@ def _macho(read, host, *, cached=False, executable=False):
             _require(offset >= minimum, 'Mach-O string overlaps its command fields')
             name, _ = _cstring(data, offset)
             if command in _LOADS:
-                _require(name.startswith(('/', '@rpath/')),
+                _require(name.startswith(('/', '@rpath/')) or
+                         (relative and name.startswith(('@loader_path/', '@executable_path/'))),
                          'relative runtime loads are not supported')
                 current, compatibility = struct.unpack_from('<II', data, 16)
                 attributes = {0x80000018: 1, 0x8000001f: 2, 0x80000023: 4, 0x20: 8}.get(command, 0)
@@ -163,7 +164,7 @@ def _macho(read, host, *, cached=False, executable=False):
         position += length
     _require(position == size and result['uuid'] is not None and result['segments'],
              'incomplete Mach-O identity or segments')
-    _require(executable or result['install_name'] is not None, 'dylib has no install name')
+    _require(executable or bundle or result['install_name'] is not None, 'dylib has no install name')
     _require(any(row['platform'] == 1 for row in result['build_versions']),
              'image has no supported macOS build platform')
     # UnsafeHeader::forEachLinkedDylib synthesizes this runtime edge when no
@@ -174,6 +175,21 @@ def _macho(read, host, *, cached=False, executable=False):
             reason='dyld-synthesized-libSystem', current_version=0x10000,
             compatibility_version=0x10000, attributes=0))
     return result
+
+
+def read_macho_runtime(path, host):
+    """Read a thin native executable, dylib or extension for SDK packaging."""
+    with ExitStack() as stack:
+        source = _File(path, stack)
+        header = source.read(0, min(source.size, 32))
+        if header[:4] != b'\xcf\xfa\xed\xfe':
+            raise SDKError('runtime packaging requires thin native Mach-O: ' + str(path))
+        _require(len(header) == 32, 'truncated native Mach-O header')
+        kind = struct.unpack_from('<I', header, 12)[0]
+        _require(kind in (2, 6, 8), 'unsupported runtime Mach-O file type')
+        result = _macho(source.read, host, executable=kind == 2, bundle=kind == 8, relative=True)
+        _require(not result['lazy_info'], 'runtime packaging does not support lazy dylib tables')
+        return result
 
 
 def _lazy_loads(image, read, symbol_bytes):
