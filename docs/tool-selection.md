@@ -26,7 +26,8 @@ The native prefix supplies compilers, preprocessors, assembler, linker,
 archiver, make, CMake, Meson, Ninja, interpreters, and generators as required.
 Each selected executable and its real path must remain inside the prefix.
 Check the native CPU, compiler host triplet, compiler-selected components,
-and script interpreter paths. Set a prefix-only build `PATH`.
+and script interpreter paths. Set the build `PATH` from the selected prefix
+and any explicitly bounded OS service route.
 Reject a missing tool or an external build-tool path instead of substituting one.
 
 Do not select build tools from ambient `PATH`, Xcode, Homebrew, MacPorts,
@@ -34,6 +35,13 @@ or host package directories. Host ABI libraries and headers, loaders,
 and OS process services are normal host inputs. Keep native ABI paths out of
 target include, library, and pkg-config searches.
 Git source inspection and documentation checks are separate from artifact builds.
+
+Standalone producers can use `host_services.build_path(native, work)` for
+configure scripts. It creates reusable work-local aliases for a small declared
+set of filesystem and OS inspection commands, plus the selected prefix's
+`sh`, `awk` and `sed`. The route precedes the prefix so those aliases cannot
+be shadowed by another spelling. It never exposes OS compilers, build systems
+or interpreters and does not add the host's complete executable directories.
 
 Explicit producers can call `host_prefix.validate_host_executable(prefix, executable,
 host, search_path=...)` for a selected host executable and each resolved compiler
