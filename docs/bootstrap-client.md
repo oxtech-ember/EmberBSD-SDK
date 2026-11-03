@@ -69,6 +69,10 @@ including names that differ only by case on the producer filesystem. Each file
 has independent archive data; aliases do not become self-hardlinks during
 extraction. Text relocation includes every spelling, so an archive prepared on
 a case-insensitive filesystem can initialize on a case-sensitive destination.
+Package file timestamps survive staging. Initialization refreshes owned Python
+bytecode only when stale or when its source was relocated, preserving hash and
+optimization modes before updating package checksums. Ordinary Python imports
+do not then rewrite the installed cache files; `-B` is not an installation rule.
 
 Publish the archive as a `bootstrap` artifact in the same signed release as its
 component catalog; [S3 publication](s3-distribution.md) replaces the previous

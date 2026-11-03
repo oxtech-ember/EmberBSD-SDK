@@ -107,6 +107,9 @@ def unpack_package(archive_path, root):
                 shutil.copy2(target, destination)
             else:
                 raise SDKError('unsupported bootstrap file: ' + name)
+            if member.isfile() or member.islnk():
+                # Python timestamp caches and build inputs retain package times.
+                os.utime(destination, (member.mtime, member.mtime))
             owned.add(destination.lstat().st_ino)
         if not package or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9+_.-]*', package):
             raise SDKError('invalid bootstrap package name')
@@ -248,9 +251,9 @@ def relocate_text(content, old, new):
     return content
 
 
-def bundle_paths(root, packages):
-    """Include every exact package spelling, even on a case-insensitive stage."""
-    paths = {path.relative_to(root).as_posix(): path for path in root.rglob('*')}
+def package_paths(root, packages):
+    """Return exact owned payload paths, excluding ignored packing-list entries."""
+    paths = {}
     for package in packages:
         ignored = False
         for line in (root / 'pkgdb' / package / '+CONTENTS').read_text().splitlines():
@@ -263,9 +266,17 @@ def bundle_paths(root, packages):
                 path = _destination(root, line)
                 if not os.path.lexists(path):
                     raise SDKError('bootstrap package member is missing: ' + line)
-                while path != root:
-                    paths[path.relative_to(root).as_posix()] = path
-                    path = path.parent
+                paths[path.relative_to(root).as_posix()] = path
+    return [paths[name] for name in sorted(paths)]
+
+
+def bundle_paths(root, packages):
+    """Include every exact package spelling, even on a case-insensitive stage."""
+    paths = {path.relative_to(root).as_posix(): path for path in root.rglob('*')}
+    for path in package_paths(root, packages):
+        while path != root:
+            paths[path.relative_to(root).as_posix()] = path
+            path = path.parent
     return [paths[name] for name in sorted(paths)]
 
 
@@ -308,6 +319,45 @@ def text_references(root, prefix, packages):
     return result
 
 
+def refresh_bytecode(root, packages, changed_sources):
+    """Refresh owned Python caches after extraction and actual text relocation."""
+    import importlib.util
+    import py_compile
+
+    for path in package_paths(root, packages):
+        if path.suffix != '.pyc' or path.is_symlink():
+            continue
+        try:
+            source = Path(importlib.util.source_from_cache(str(path)))
+        except ValueError as exc:
+            raise SDKError('unsupported bootstrap bytecode path: ' + str(path)) from exc
+        _destination(root, source.relative_to(root).as_posix())
+        if not source.is_file() or source.is_symlink():
+            raise SDKError('bootstrap bytecode lacks its source: ' + str(path))
+        optimization = path.stem.rsplit('.opt-', 1)[1] if '.opt-' in path.stem else ''
+        if optimization not in ('', '1', '2') or Path(importlib.util.cache_from_source(
+                str(source), optimization=optimization)) != path:
+            raise SDKError('bootstrap bytecode targets a different Python: ' + str(path))
+        with path.open('rb') as cache:
+            header = cache.read(16)
+        flags = int.from_bytes(header[4:8], 'little')
+        mode = py_compile.PycInvalidationMode.TIMESTAMP
+        valid = len(header) == 16 and header[:4] == importlib.util.MAGIC_NUMBER
+        if flags in (1, 3):
+            mode = (py_compile.PycInvalidationMode.CHECKED_HASH if flags == 3 else
+                    py_compile.PycInvalidationMode.UNCHECKED_HASH)
+            valid = valid and header[8:16] == importlib.util.source_hash(source.read_bytes())
+        elif flags == 0:
+            info = source.stat()
+            valid = valid and header[8:16] == struct.pack('<II',
+                int(info.st_mtime) & 0xffffffff, info.st_size & 0xffffffff)
+        else:
+            valid = False
+        if source in changed_sources or not valid:
+            py_compile.compile(str(source), cfile=str(path), doraise=True,
+                               optimize=int(optimization or '0'), invalidation_mode=mode)
+
+
 def initialize(root):
     root = root.resolve()
     if not re.fullmatch(r'[A-Za-z0-9_./-]+', str(root)):
@@ -325,6 +375,7 @@ def initialize(root):
         old = metadata['prefix'].encode()
         if str(root).startswith(metadata['prefix'] + '/'):
             raise SDKError('SDK destination must not be inside its producer prefix')
+        changed_sources = set()
         for name in metadata['text_files']:
             path = _destination(root, name)
             if path.is_symlink() or not path.is_file():
@@ -333,6 +384,8 @@ def initialize(root):
             updated = relocate_text(content, old, str(root).encode())
             if updated != content:
                 _replace_file(path, updated)
+                if path.suffix == '.py':
+                    changed_sources.add(path)
         for name in metadata['packages']:
             path = root / 'pkgdb' / name / '+BUILD_INFO'
             if path.exists():
@@ -343,6 +396,7 @@ def initialize(root):
                     if line.startswith((b'REQUIRES=', b'PROVIDES=')) else line for line in lines)
                 if content != path.read_bytes():
                     _replace_file(path, content)
+        refresh_bytecode(root, metadata['packages'], changed_sources)
         refresh_checksums(root, metadata['packages'])
         # Run the package owner's normal configuration actions. The host's
         # POSIX utilities are installation services, not a compiler fallback.

@@ -4,6 +4,12 @@
 its authenticated metadata through HTTPS. It uses Python's standard library
 and the selected Ports OpenSSL/pkg_tools. Installation is a separate layer.
 
+Bodyless GET and HEAD requests make at most three connection attempts for
+transient timeouts or disconnected peers before exposing a response. TLS trust,
+HTTP status, signed-byte failures and interrupted response bodies remain errors.
+S3 writes and deletes are never automatically retried; publication recovery uses
+the existing lock, conditional operations and reconciliation.
+
 ## Layout and retention
 
 There is one `current`, with one package version per platform:
