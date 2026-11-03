@@ -253,10 +253,10 @@ class TransitionTests(unittest.TestCase):
         from emberbsd_sdk.sysroot_builder import SysrootBuilder
         old_flags = ['EMBER_HOST_ABI_CPPFLAGS=', 'EMBER_HOST_ABI_CFLAGS=',
                      'EMBER_HOST_ABI_CXXFLAGS=', 'EMBER_HOST_ABI_LDFLAGS=',
-                     'EMBER_HOST_COMPILER_FAMILY=clang', 'EMBER_OPENSSL_SOURCE=/old/openssl']
+                     'EMBER_HOST_COMPILER_FAMILY=clang', 'EMBER_LLVM_SOURCE=/llvm', 'EMBER_OPENSSL_SOURCE=/old/openssl']
         new_flags = ['EMBER_HOST_ABI_CPPFLAGS=', 'EMBER_HOST_ABI_CFLAGS=',
                      'EMBER_HOST_ABI_CXXFLAGS=', 'EMBER_HOST_ABI_LDFLAGS=',
-                     'EMBER_HOST_COMPILER_FAMILY=clang', 'EMBER_OPENSSL_SOURCE=/new/openssl']
+                     'EMBER_HOST_COMPILER_FAMILY=clang', 'EMBER_LLVM_SOURCE=/llvm', 'EMBER_OPENSSL_SOURCE=/new/openssl']
 
         def source(tree):
             return {'format': 'emberbsd-prepared-source', 'version': 1,
@@ -278,6 +278,7 @@ class TransitionTests(unittest.TestCase):
         with patch('emberbsd_sdk.sysroot_builder.runtime_refresh.cpp_update',
                    return_value={'headers': ['usr/include/c++/v1'],
                                  'linked': ['libc++.so.1']}), \
+             patch('emberbsd_sdk.sysroot_builder.llvm_source_refresh.plan', return_value={}), \
              patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan',
                    return_value=['lib/libcxx']) as plan:
             refreshed = SysrootBuilder.plan_prepared_refresh(

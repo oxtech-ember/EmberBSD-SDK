@@ -28,6 +28,10 @@ ignores that source manifest and its `EMBER_LLVM_SOURCE` path, while source
 preflight still verifies the selected input. Compiler/ABI options, other build
 flags, OS headers and output bytes retain their checks. C base and final
 objects continue to depend on the selected LLVM runtime source.
+When the full runtime owner verifies a compatible update to the prepared LLVM
+source, the builder refreshes matching LLVM source dependency metadata and its
+associated objects under the existing object lease. Unrelated objects are kept;
+unsupported paths or incomplete dependency metadata are refused.
 
 `--llvm-runtime-stage` explicitly reuses a completed full runtime and skips
 the prerequisite coordinator. Its LLVM version, target, source archive and recipe files must match the

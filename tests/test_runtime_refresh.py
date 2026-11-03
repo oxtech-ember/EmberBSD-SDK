@@ -197,8 +197,10 @@ class RuntimeRefreshTests(unittest.TestCase):
             environment={},
         )
         fake.reuse_signature = fake.reuse_signature.__get__(fake)
-        with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=['other/cxx']) as plan:
+        with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=['other/cxx']) as plan, \
+             patch('emberbsd_sdk.sysroot_builder.llvm_source_refresh.plan', return_value={}) as llvm_plan:
             self.assertTrue(SysrootBuilder.plan_prepared_refresh(fake, record, '/obj'), repr(checks))
+        llvm_plan.assert_not_called()
         self.assertEqual(fake.refresh_dirs, ['other/cxx'])
         self.assertEqual(len(checks), 1)
         self.assertEqual(checks[0]['compiler'], old['compiler'])
@@ -267,8 +269,10 @@ class RuntimeRefreshTests(unittest.TestCase):
             environment={}, native=SimpleNamespace(tool=lambda role: '/native/bin/' + role),
         )
         fake.reuse_signature = fake.reuse_signature.__get__(fake)
-        with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=['other/cxx']) as plan:
+        with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=['other/cxx']) as plan, \
+             patch('emberbsd_sdk.sysroot_builder.llvm_source_refresh.plan', return_value={}) as llvm_plan:
             self.assertTrue(SysrootBuilder.plan_prepared_refresh(fake, record, '/obj'), repr(checks))
+        llvm_plan.assert_called_once_with('/obj', '/prepared/llvm-old', '/tmp/llvm-current')
         self.assertEqual(fake.refresh_dirs, ['other/cxx'])
         self.assertEqual(len(checks), 1)
         self.assertEqual(checks[0]['flags'], new['flags'])
