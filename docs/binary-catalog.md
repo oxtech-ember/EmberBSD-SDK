@@ -141,5 +141,6 @@ signed summary sizes, missing/incompatible dependencies, corrupt catalog,
 wrong role/architecture, foreign host payload, shared libraries, development
 roots, second target, kernel tools without sysroot, CLI selection and no overwrite.
 Fixture packages establish the distribution contract, not a built compiler or
-an application running on EmberBSD. S3 delivery, installation, cache management
-and a complete portable C/C++ SDK are subsequent steps.
+an application running on EmberBSD. [S3 delivery](s3-distribution.md) publishes
+these catalogs and fetches authenticated metadata. Installation, cache management
+and a complete portable C/C++ SDK remain subsequent steps.

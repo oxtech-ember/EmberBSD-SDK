@@ -2,7 +2,8 @@
 
 The [signed release contract and CLI](signed-releases.md) implement the shared
 authenticated inventory, package signing and replay-protected channel pointer.
-They verify local complete releases; S3 transport and installation are separate.
+They verify local complete releases. [S3 publication and HTTPS metadata delivery](s3-distribution.md)
+are implemented; binary installation remains separate.
 The [binary catalog producer and reader](binary-catalog.md) compose signed
 package repositories from Ports graphs and select fixed runtime closures without
 source checkouts or bmake on the client.

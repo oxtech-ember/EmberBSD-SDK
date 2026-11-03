@@ -46,6 +46,8 @@ then atomically replace the **single** channel object. CMS combines its content
 and signature, avoiding a new pointer paired with an old detached signature.
 The local sealer refuses existing output paths; remote publication and writer
 coordination are separate transport responsibilities.
+The [S3 publisher](s3-distribution.md) implements those conditional writes and
+verifies public delivery before switching the channel.
 
 ## Release: `emberbsd.release.v1`
 
