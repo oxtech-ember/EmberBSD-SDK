@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-"""Publish immutable releases before one conditional channel update; fetch metadata."""
+"""Keep one signed current repository, replacing obsolete packages after publication."""
 
+from contextlib import contextmanager
 import hashlib
 import io
 from pathlib import Path
+import secrets
 import shutil
 import tempfile
 import time
@@ -21,6 +23,7 @@ from .release_s3 import HTTPStatusError
 
 IMMUTABLE_CACHE = 'public, max-age=31536000, immutable'
 CHANNEL_CACHE = 'no-cache, max-age=0, must-revalidate'
+CHANNEL = 'current'
 
 
 def _key(prefix, path):
@@ -65,20 +68,76 @@ def _immutable(store, public, key, body, size, sha256, content_type):
     public.verify(key, size, sha256)
 
 
-def publish_release(crypto, store, public, envelope_path, identity, trust, channel,
+def artifact_key(artifact, metadata_base):
+    """Ordinary versioned package names; only metadata needs a temporary snapshot."""
+    if artifact['kind'] == 'package-index':
+        return metadata_base + '/' + artifact['path']
+    if artifact['host']:
+        host = artifact['host']
+        platform = host['os'].lower() + '-' + host['arch']
+        role = 'host'
+    else:
+        platform, role = artifact['target']['arch'], 'target'
+    _pattern(platform, _SLUG, 'repository platform')
+    return 'current/' + role + '/' + platform + '/' + artifact['path'].split('/')[-1]
+
+
+@contextmanager
+def _publisher_lock(store, prefix):
+    # Covers both switching and deletion: CAS on current alone cannot prevent
+    # an earlier publisher's cleanup from deleting a later publisher's inputs.
+    key = _key(prefix, '.publisher-lock')
+    token = json_bytes({'token': secrets.token_hex(16), 'started_at': int(time.time())})
+    try:
+        store.put(key, token, **_digest(token))
+    except HTTPStatusError as exc:
+        if exc.status in (409, 412):
+            raise SDKError(f'publisher is busy; if it crashed, inspect and remove {key}') from exc
+        raise
+    try:
+        yield
+    finally:
+        store.delete(key)
+
+
+def _clean_current(store, prefix, keep):
+    # Collect before deleting, so pagination stays stable even for stores using
+    # positional continuation tokens. Never inspect or delete outside current/.
+    obsolete = set(store.list_keys(_key(prefix, 'current') + '/')) - keep
+    for key in sorted(obsolete):
+        store.delete(key)
+
+
+def publish_release(crypto, store, public, envelope_path, identity, trust,
                     *, prefix='', ttl=7 * 86400, refresh=False, previous_channel_time=None):
-    _pattern(channel, _SLUG, 'channel')
     if type(ttl) is not int or ttl <= 0:
         raise SDKError('channel lifetime must be a positive number of seconds')
     envelope_path = Path(envelope_path)
     envelope = read_bytes(envelope_path)
     release = verify_release(crypto, envelope, envelope_path.parent, trust)
-    base = 'releases/' + release['release_id']
+    base = 'current/metadata/' + hashlib.sha256(envelope).hexdigest()
+    keys = [artifact_key(item, base) for item in release['artifacts']]
+    if len({key.casefold() for key in keys}) != len(keys):
+        raise SDKError('multiple artifacts have the same current path')
+    packages = set()
+    for artifact, key in zip(release['artifacts'], keys):
+        if artifact['kind'] in ('host-package', 'target-package'):
+            directory, name = key.rsplit('/', 1)
+            if not name.endswith('.tgz') or '-' not in name:
+                raise SDKError('current requires standard name-version[nbN].tgz package names')
+            package = (directory.casefold(), name.rsplit('-', 1)[0].casefold())
+            if package in packages:
+                raise SDKError('current permits only one version of each package per platform')
+            packages.add(package)
+    with _publisher_lock(store, prefix):
+        return _publish_current(crypto, store, public, envelope_path, envelope, release,
+                                base, identity, trust, prefix, ttl, refresh, previous_channel_time)
+
+
+def _publish_current(crypto, store, public, envelope_path, envelope, release, base,
+                     identity, trust, prefix, ttl, refresh, previous_channel_time):
     release_key = _key(prefix, base + '/release.p7m')
-    existing, _ = _optional_read(store, release_key)
-    if existing is not None and existing != envelope:
-        raise SDKError('release ID is already sealed with different metadata; choose a new ID')
-    channel_key = _key(prefix, 'channels/' + channel + '.p7m')
+    channel_key = _key(prefix, 'current.p7m')
     old_envelope, old_headers = _optional_read(store, channel_key)
     now, previous = int(time.time()), None
     if previous_channel_time is not None and (type(previous_channel_time) is not int or
@@ -88,20 +147,26 @@ def publish_release(crypto, store, public, envelope_path, identity, trust, chann
         content = crypto.verify_cms(old_envelope, trust, now=previous_channel_time)
         # A publisher can refresh an expired pointer; clients still check current time.
         raw = loads_json(content)
-        previous = parse_channel(content, channel, now=raw.get('issued_at') if isinstance(raw, dict) else None)
+        previous = parse_channel(content, CHANNEL, now=raw.get('issued_at') if isinstance(raw, dict) else None)
         if previous['issued_at'] > now:
             raise SDKError('existing channel is from the future; check the publisher clock')
         if previous_channel_time is not None and previous_channel_time < previous['issued_at']:
             raise SDKError('historical verification time precedes the existing channel issuance')
         if 'etag' not in old_headers:
             raise SDKError('S3 channel response is missing its concurrency ETag')
+        if (previous['release']['id'] == release['release_id'] and
+                previous['release']['sha256'] != hashlib.sha256(envelope).hexdigest()):
+            raise SDKError('current release ID already has different metadata; choose a new ID')
+    keep = {release_key}
     # Packages precede indexes. The release envelope is always uploaded last.
     for artifact in sorted(release['artifacts'], key=lambda item: item['kind'] == 'package-index'):
         path = local_artifact(envelope_path.parent, artifact['path'])
         handle, before = open_regular(path)
+        key = _key(prefix, artifact_key(artifact, base))
+        keep.add(key)
         with handle:
             content_type = 'application/json' if path.suffix == '.json' else 'application/octet-stream'
-            _immutable(store, public, _key(prefix, base + '/' + artifact['path']), handle,
+            _immutable(store, public, key, handle,
                        artifact['size'], artifact['sha256'], content_type)
         local_artifact(envelope_path.parent, artifact['path'])
         verify_stable(path, before)
@@ -114,12 +179,13 @@ def publish_release(crypto, store, public, envelope_path, identity, trust, chann
         raise SDKError('publisher clock moved behind the existing channel')
     if previous and previous['release'] == reference and previous['expires_at'] > now and not refresh:
         public.verify(channel_key, **_digest(old_envelope))
+        _clean_current(store, prefix, keep)
         return previous
-    pointer = dict(schema='emberbsd.channel.v1', channel=channel,
+    pointer = dict(schema='emberbsd.channel.v1', channel=CHANNEL,
                    generation=previous['generation'] + 1 if previous else 1,
                    issued_at=now, expires_at=now + ttl, release=reference)
     data = json_bytes(pointer)
-    parse_channel(data, channel)
+    parse_channel(data, CHANNEL)
     signed = crypto.sign_cms(data, identity, trust)
     try:
         store.put(channel_key, signed, **_digest(signed), etag=old_headers.get('etag'),
@@ -129,19 +195,33 @@ def publish_release(crypto, store, public, envelope_path, identity, trust, chann
             raise SDKError('channel changed during publication; inspect it and retry explicitly') from exc
         raise
     public.verify(channel_key, **_digest(signed))
+    _clean_current(store, prefix, keep)
     return pointer
 
 
-def fetch_release(crypto, public, trust, channel, state, output, *, prefix='', repositories=()):
+def fetch_release(crypto, public, trust, state, output, *, prefix='', repositories=()):
     """Pin one authenticated release and its selected indexes, without payloads."""
-    _pattern(channel, _SLUG, 'channel')
     output = Path(output).absolute()
     if output.exists() or output.is_symlink():
         raise SDKError('metadata destination already exists; select a new snapshot directory')
-    channel_bytes, _ = public.read(_key(prefix, 'channels/' + channel + '.p7m'), MAX_ENVELOPE,
+    channel_bytes, _ = public.read(_key(prefix, 'current.p7m'), MAX_ENVELOPE,
                                    headers={'cache-control': 'no-cache'})
+    for attempt in range(2):
+        try:
+            return _fetch_snapshot(crypto, public, trust, state, output, prefix, repositories, channel_bytes)
+        except HTTPStatusError as exc:
+            if exc.status != 404 or attempt:
+                raise
+            newer, _ = public.read(_key(prefix, 'current.p7m'), MAX_ENVELOPE,
+                                   headers={'cache-control': 'no-cache'})
+            if newer == channel_bytes:
+                raise
+            channel_bytes = newer
+
+
+def _fetch_snapshot(crypto, public, trust, state, output, prefix, repositories, channel_bytes):
     content = crypto.verify_cms(channel_bytes, trust)
-    pointer = parse_channel(content, channel)
+    pointer = parse_channel(content, CHANNEL)
     reference = pointer['release']
     envelope, _ = public.read(_key(prefix, reference['path']), MAX_ENVELOPE)
     _check(envelope, reference)
@@ -167,7 +247,7 @@ def fetch_release(crypto, public, trust, channel, state, output, *, prefix='', r
                               artifact['size'], artifact['sha256'], sink=stream)
         if requested - found:
             raise SDKError('requested repository is not present in this release')
-        commit_channel(content, state, channel)
+        commit_channel(content, state, CHANNEL)
         publish_directory_noreplace(scratch, output)
         return release
     finally:

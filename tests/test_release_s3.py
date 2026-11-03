@@ -10,6 +10,8 @@ from pathlib import Path
 import sys
 import threading
 import unittest
+from urllib.parse import urlsplit, parse_qs
+import xml.etree.ElementTree as ET
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
@@ -61,7 +63,33 @@ class ObjectHandler(BaseHTTPRequestHandler):
         self.get(head=True)
 
     def do_GET(self):
+        query = parse_qs(urlsplit(self.path).query)
+        if query.get('list-type') == ['2']:
+            root = ET.Element('ListBucketResult')
+            prefix = query['prefix'][0]
+            start = int(query.get('continuation-token', ['0'])[0])
+            keys = sorted(key.removeprefix('/bucket/') for key in self.server.objects
+                          if key.startswith('/bucket/' + prefix))
+            batch = keys[start:start + 2]  # Force pagination in tests.
+            more = start + len(batch) < len(keys)
+            ET.SubElement(root, 'IsTruncated').text = str(more).lower()
+            if more:
+                ET.SubElement(root, 'NextContinuationToken').text = str(start + len(batch))
+            for key in batch:
+                ET.SubElement(ET.SubElement(root, 'Contents'), 'Key').text = key
+            data = ET.tostring(root)
+            self.send_response(200)
+            # S3 listings may be streamed without Content-Length (Timeweb).
+            self.end_headers()
+            self.wfile.write(data)
+            return
         self.get()
+
+    def do_DELETE(self):
+        with self.server.lock:
+            self.server.objects.pop(self.path, None)
+        self.send_response(204)
+        self.end_headers()
 
     def get(self, head=False):
         data = self.server.objects.get(self.path)
@@ -138,6 +166,15 @@ class HTTPTests(unittest.TestCase):
         for key in ('../escape', 'x?token=y', '/absolute', 'bad%2fpath'):
             with self.subTest(key=key), self.assertRaises(SDKError):
                 self.store.head(key)
+
+    def test_list_current_is_paginated_and_delete_is_exact(self):
+        for key in ('current/a', 'current/b', 'current/c', 'another/keep'):
+            self.server.objects['/bucket/' + key] = b'x'
+        self.assertEqual(list(self.store.list_keys('current/')),
+                         ['current/a', 'current/b', 'current/c'])
+        self.store.delete('current/b')
+        self.assertNotIn('/bucket/current/b', self.server.objects)
+        self.assertIn('/bucket/another/keep', self.server.objects)
 
 
 if __name__ == '__main__':

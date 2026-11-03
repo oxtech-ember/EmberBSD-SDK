@@ -26,7 +26,6 @@ def main(argv=None):
         command.add_argument('--url', required=True, help='public HTTPS base URL, without S3 credentials')
         command.add_argument('--prefix', default='', help='optional repository key prefix, shared by S3 and HTTPS')
         command.add_argument('--trust-root', required=True, type=Path)
-        command.add_argument('--channel', required=True)
         if name == 'publish':
             command.add_argument('release', type=Path, help='local release.p7m beside its payloads')
             command.add_argument('--signer-directory', required=True, type=Path)
@@ -51,10 +50,10 @@ def main(argv=None):
             identity = SigningIdentity(args.signer_directory / 'certificate.pem',
                                        args.signer_directory / 'private-key.pem')
             value = publish_release(crypto, store, public, args.release, identity, args.trust_root,
-                                    args.channel, prefix=args.prefix, ttl=args.ttl, refresh=args.refresh,
+                                    prefix=args.prefix, ttl=args.ttl, refresh=args.refresh,
                                     previous_channel_time=args.previous_channel_time)
         else:
-            value = fetch_release(crypto, public, args.trust_root, args.channel, args.state, args.output,
+            value = fetch_release(crypto, public, args.trust_root, args.state, args.output,
                                   prefix=args.prefix, repositories=args.repository)
         sys.stdout.buffer.write(json_bytes(value))
         return 0

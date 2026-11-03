@@ -37,8 +37,50 @@ def _artifact(repository, identity, path, kind, *, size=0, depends=(), licenses=
                 size=0, sha256='0' * 64, unpacked_size=size, depends=list(depends), licenses=list(licenses))
 
 
+class _PayloadReader:
+    def __init__(self, stream, remaining):
+        self.stream, self.remaining = stream, remaining
+
+    def read(self, size=-1):
+        size = self.remaining if size < 0 else min(size, self.remaining)
+        data = self.stream.read(size)
+        self.remaining -= len(data)
+        return data
+
+
+def _package_payload(stream):
+    """Locate TAR bytes inside pkg_tools' BSD ar X.509 wrapper, without extraction.
+
+    This parses the container only. The caller authenticates signed inputs with
+    pkg_admin before treating their contents as a reusable producer package.
+    """
+    if stream.read(8) != b'!<arch>\n':
+        stream.seek(0)
+        return stream
+    for number in range(3):
+        header = stream.read(60)
+        if len(header) != 60 or header[58:] != b'`\n' or not header[48:58].strip().isdigit():
+            raise SDKError('invalid pkg_tools signature container')
+        size = int(header[48:58])
+        end = stream.tell() + size + size % 2
+        name = header[:16].rstrip(b' ')
+        if name.startswith(b'#1/'):
+            length = name[3:]
+            if not length.isdigit() or not 0 < int(length) <= min(size, 4096):
+                raise SDKError('invalid BSD ar member name')
+            length = int(length)
+            name = stream.read(length).rstrip(b'\0')
+            size -= length
+        if number < 2:
+            if name != (b'+PKG_HASH', b'+PKG_SIGNATURE')[number]:
+                raise SDKError('expected pkg_tools X.509 signature members')
+            stream.seek(end)
+        else:
+            return _PayloadReader(stream, size)
+
+
 def inspect_package(path, target):
-    """Inspect unsigned producer tar archives without extracting or executing them.
+    """Inspect producer tar payloads without extracting or executing them.
 
     Header checks catch foreign dynamic payloads. They do not replace the recipe's
     target linkage/ABI checks or inspect objects nested in static archives.
@@ -46,7 +88,7 @@ def inspect_package(path, target):
     handle, before = open_regular(path)
     payload_size = 0
     try:
-        with handle, tarfile.open(fileobj=handle, mode='r|*') as archive:
+        with handle, tarfile.open(fileobj=_package_payload(handle), mode='r|*') as archive:
             for member in archive:
                 if not member.isfile():
                     continue
@@ -72,7 +114,7 @@ def inspect_package(path, target):
                                 raise SDKError('target binary inspection does not support this architecture yet')
                             parse_elf_header(header, label=name, machine=machine)
     except (tarfile.TarError, UnicodeError) as exc:
-        raise SDKError(f'expected an unsigned pkg_tools producer archive: {path}: {exc}') from exc
+        raise SDKError(f'expected a pkg_tools producer archive: {path}: {exc}') from exc
     verify_stable(path, before)
     return payload_size
 
@@ -87,7 +129,7 @@ def _matches(crypto, pattern, name):
     return result.returncode == 0
 
 
-def _prepare_repository(crypto, spec, ports_root, sources):
+def _prepare_repository(crypto, spec, ports_root, sources, trust):
     _object(spec, ('id', 'host', 'target', 'graph', 'packages', 'sets'), 'package repository')
     _pattern(spec['id'], _SLUG, 'repository id')
     # Reuse the release contract for platform shape and role checks.
@@ -158,10 +200,14 @@ def _prepare_repository(crypto, spec, ports_root, sources):
         if not re.fullmatch('[0-9]+', size_text):
             raise SDKError('invalid package unpacked size')
         size = int(size_text)
+        with path.open('rb') as stream:
+            signed = stream.read(8) == b'!<arch>\n'
+        if signed:
+            crypto.verify_package(path, trust)
         if inspect_package(path, spec['target']) > size:
             raise SDKError('package payload exceeds its declared unpacked size')
         verify_stable(path, before)
-        entries[identity] = dict(node=node, path=path, before=before, record=record, name=name, size=size,
+        entries[identity] = dict(node=node, path=path, before=before, record=record, name=name, size=size, signed=signed,
                                  license=scalar(record, 'LICENSE'),
                                  artifact=spec['id'] + '-' + hashlib.sha256(identity.encode()).hexdigest()[:24])
     for identity, item in entries.items():
@@ -180,7 +226,7 @@ def compose(crypto, spec, ports_root, output, identity, trust):
     output = Path(output).absolute()
     if output.exists() or output.is_symlink():
         raise SDKError('release output already exists')
-    prepared = [_prepare_repository(crypto, repo, ports_root, spec['sources']) for repo in spec['repositories']]
+    prepared = [_prepare_repository(crypto, repo, ports_root, spec['sources'], trust) for repo in spec['repositories']]
     names = [repo['id'] for repo, _, _ in prepared]
     if len(names) != len(set(names)):
         raise SDKError('duplicate repository identity')
@@ -198,7 +244,10 @@ def compose(crypto, spec, ports_root, output, identity, trust):
                 name = item['name'] + '.tgz'
                 destination = directory / name
                 verify_stable(item['path'], item['before'])
-                crypto.sign_package(item['path'], destination, identity, trust)
+                if item['signed']:
+                    shutil.copyfile(item['path'], destination)
+                else:
+                    crypto.sign_package(item['path'], destination, identity, trust)
                 verify_stable(item['path'], item['before'])
                 signed.append(destination)
                 release['artifacts'].append(_artifact(repo, item['artifact'], repo['id'] + '/' + name,
