@@ -114,6 +114,12 @@ resume; a failed package installation must be repaired first.
 Overlapping old and new prefixes are refused when a replacement
 would not be safe to repeat.
 
+`--package-revision N` increases a package's pkgsrc `nb` revision while
+qualifying it, without changing its upstream version or compiled provenance.
+First bump the matching Ports recipe; use this only for a metadata or packaging
+change that does not require recompilation. Existing `+BUILD_VERSION` remains
+the record of the source used to build the package.
+
 `--allow-binary-prefix` additionally permits binary build-path strings that
 cannot be rewritten as text. It requires `--relocate-text` and an actual
 compiler check at a different prefix before publication. Mach-O load commands
