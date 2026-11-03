@@ -397,7 +397,7 @@ class TransitionTests(unittest.TestCase):
             refreshed = SysrootBuilder.plan_prepared_refresh(
                 fake, {'signature': old_signature}, '/objects')
         self.assertTrue(refreshed)
-        llvm_plan.assert_called_once_with('/objects', '/llvm', '/llvm')
+        llvm_plan.assert_called_once_with('/objects', '/llvm', '/llvm', None)
         self.assertEqual(fake.refresh_dirs, ['lib/libcxx'])
         self.assertEqual(plan.call_args.args[2], {'openssl'})
         self.assertEqual(plan.call_args.kwargs,

@@ -559,6 +559,27 @@ class SysrootBuilder:
         except (KeyError, TypeError, AttributeError, OSError, UnicodeError):
             return False
 
+    def llvm_changed_paths(self, before, selected):
+        """Use owner proof when available; otherwise retain conservative refresh."""
+        stage = self.paths.get('pkgsrc-export')
+        if not stage:
+            return None
+        script = os.path.join(self.paths['ports'], 'pkgsrc/lang/compiler-rt/files/refresh-profile-source.py')
+        if not os.path.isfile(script):
+            return None
+        command = [self.paths['python'], '-B', script, '--sdk-source', self.paths['sdk-source'],
+                   '--ports', self.paths['ports'], '--pkgsrc-root', os.path.join(stage, 'pkgsrc'),
+                   '--git', self.git_command, '--before', before, '--source', selected, '--list-changes']
+        try:
+            result = jsonio.loads_json(process.capture(command, env=self.environment).stdout)
+        except (CommandError, SDKError, OSError, ValueError):
+            return None
+        if (not isinstance(result, dict) or set(result) != {'version', 'changed_paths'} or
+                type(result['version']) is not int or result['version'] != 1 or
+                not isinstance(result['changed_paths'], list)):
+            return None
+        return result['changed_paths']
+
     def plan_prepared_refresh(self, record, path):
         """Refresh declared source consumers and compatible C++ runtime users."""
         try:
@@ -694,7 +715,9 @@ class SysrootBuilder:
             self.refresh_nested_outputs = []
             if llvm_changed and runtime_kind == 'cpp':
                 self.llvm_refresh_roots = (llvm_old[0], llvm_new[0])
-                self.llvm_refresh_plan = llvm_source_refresh.plan(path, *self.llvm_refresh_roots)
+                self.llvm_changed_source_paths = SysrootBuilder.llvm_changed_paths(self, *self.llvm_refresh_roots)
+                self.llvm_refresh_plan = llvm_source_refresh.plan(
+                    path, *self.llvm_refresh_roots, self.llvm_changed_source_paths)
             else:
                 self.llvm_refresh_plan = None
             if runtime_kind == 'builtins':
@@ -1780,7 +1803,8 @@ class SysrootBuilder:
         # Hold the existing object-tree lease throughout cleanup and context update.
         llvm_plan = getattr(self, 'llvm_refresh_plan', None)
         if llvm_plan is not None:
-            llvm_source_refresh.apply(self.paths['objects'], llvm_plan, *self.llvm_refresh_roots)
+            llvm_source_refresh.apply(self.paths['objects'], llvm_plan, *self.llvm_refresh_roots,
+                                      getattr(self, 'llvm_changed_source_paths', None))
         if getattr(self, 'refresh_file_outputs', None):
             prepared_refresh.remove_lint_outputs(self.paths['objects'], self.refresh_file_outputs)
         if hasattr(self, 'runtime_refresh_files'):
