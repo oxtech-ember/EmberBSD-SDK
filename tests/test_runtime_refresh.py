@@ -280,12 +280,13 @@ class RuntimeRefreshTests(unittest.TestCase):
             changed.write_bytes(b'old')
             unit = obj / 'lib/libc'
             (unit / 'dependent.d').write_text('dependent.o: ' + str(changed) + chr(10))
+            (unit / '.depend').write_text('dependent.o: ' + str(changed) + chr(10))
             for name in ('dependent.o', 'dependent.pico', 'independent.o', 'independent.d'):
                 (unit / name).write_bytes(b'keep')
             (unit / 'independent.d').write_text('independent.o: /unrelated/header.h' + chr(10))
             result = prepared_refresh.runtime_objects(obj, old, ('compiler-rt/lib/builtins/fp_lib.h',))
             self.assertEqual(set(result), {'lib/libc/dependent.d', 'lib/libc/dependent.o',
-                                           'lib/libc/dependent.pico'})
+                                           'lib/libc/dependent.pico', 'lib/libc/.depend'})
             self.assertTrue((unit / 'independent.o').exists())
             (unit / 'dependent.po').write_bytes(b'profiled object')
             with self.assertRaisesRegex(Exception, 'unsupported runtime object variant'):
@@ -436,6 +437,28 @@ class RuntimeRefreshTests(unittest.TestCase):
                     prepared_refresh.quarantine_runtime_objects(root, ['lib/a.o', 'lib/b.o'], backup)
             self.assertEqual((root / 'lib/a.o').read_text(), 'a.o')
             self.assertEqual((root / 'lib/b.o').read_text(), 'b.o')
+            self.assertFalse(backup.exists())
+
+    def test_failed_runtime_rollback_preserves_both_versions_and_aggregate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'objects'
+            unit = root / 'lib/libc'
+            unit.mkdir(parents=True)
+            (unit / 'a.o').write_bytes(b'old')
+            (unit / 'a.d').write_bytes(b'old-dep')
+            backup = root / '.runtime-refresh-owned'
+            prepared_refresh.quarantine_runtime_objects(root, ['lib/libc/a.o', 'lib/libc/a.d'], backup)
+            (unit / 'a.o').write_bytes(b'failed-new')
+            (unit / 'a.d').write_bytes(b'failed-dep')
+            (unit / '.depend').write_bytes(b'old-aggregate')
+            evidence = Path(temporary) / 'failed-evidence'
+            prepared_refresh.rollback_failed_runtime(root, backup, evidence,
+                ['lib/libc/a.o', 'lib/libc/a.d'], ['lib/libc/.depend'])
+            self.assertEqual((unit / 'a.o').read_bytes(), b'old')
+            self.assertEqual((unit / 'a.d').read_bytes(), b'old-dep')
+            self.assertFalse((unit / '.depend').exists())
+            self.assertEqual((evidence / 'lib/libc/a.o').read_bytes(), b'failed-new')
+            self.assertEqual((evidence / 'lib/libc/.depend').read_bytes(), b'old-aggregate')
             self.assertFalse(backup.exists())
 
     def test_quarantine_cleanup_requires_exact_owned_files(self):

@@ -303,6 +303,11 @@ def runtime_objects(objects, old_source, changed_files, independent_patterns=())
     # unaccounted dependency files there; documented owner exceptions remain.
     affected = {str(Path(name).parent) for name in result if name.endswith('.d')}
     for directory in affected:
+        aggregate = obj / directory / '.depend'
+        if aggregate.is_symlink():
+            raise SDKError('symlink runtime dependency aggregate: ' + str(aggregate))
+        if aggregate.is_file() and any(source in aggregate.read_bytes() for source in paths):
+            result.add(aggregate.relative_to(obj).as_posix())
         for file in (obj / directory).iterdir():
             if file.suffix not in ('.o', '.pico', '.po', '.go', '.ln'):
                 continue
@@ -356,6 +361,74 @@ def cleanup_runtime_quarantine(objects, names, quarantine):
     backup.rmdir()
 
 
+def rollback_failed_runtime(objects, quarantine, evidence, names, aggregates):
+    """Preserve failed outputs and restore only the original quarantined files."""
+    root, backup, saved = Path(objects), Path(quarantine), Path(evidence)
+    if (not root.is_absolute() or not root.is_dir() or backup.parent != root or
+            backup.is_symlink() or not backup.is_dir() or not saved.is_absolute() or
+            os.path.lexists(saved) or not saved.parent.is_dir() or
+            saved.parent.stat().st_dev != root.stat().st_dev):
+        raise SDKError('invalid failed runtime rollback paths')
+    original = [relative(name) for name in names]
+    dependencies = [relative(name) for name in aggregates]
+    if len(set(original)) != len(original) or len(set(dependencies)) != len(dependencies) or set(original) & set(dependencies):
+        raise SDKError('duplicate failed runtime rollback path')
+    expected = set(original)
+    expected_dirs = {'.'}
+    for name in original:
+        parent = Path(name).parent
+        while str(parent) != '.':
+            expected_dirs.add(parent.as_posix())
+            parent = parent.parent
+    actual, actual_dirs = set(), set()
+    def walk_error(error):
+        raise error
+    for directory, subdirs, files in os.walk(backup, followlinks=False, onerror=walk_error):
+        parent = Path(directory)
+        actual_dirs.add(parent.relative_to(backup).as_posix())
+        if any((parent / name).is_symlink() for name in subdirs + files):
+            raise SDKError('invalid runtime quarantine inventory')
+        for name in files:
+            path = parent / name
+            if not path.is_file():
+                raise SDKError('invalid runtime quarantine inventory')
+            actual.add(path.relative_to(backup).as_posix())
+    if actual != expected or actual_dirs != expected_dirs:
+        raise SDKError('runtime quarantine inventory changed')
+    selected = []
+    for name in original + dependencies:
+        path = root / name
+        if path.is_symlink() or (os.path.lexists(path) and not path.is_file()) or not path.resolve().is_relative_to(root.resolve()):
+            raise SDKError('invalid failed runtime output: ' + name)
+        if path.is_file():
+            selected.append(name)
+    saved.mkdir(mode=0o700)
+    moved = []
+    try:
+        for name in selected:
+            destination = saved / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(root / name, destination)
+            moved.append((root / name, destination))
+        for name in original:
+            destination = root / name
+            if os.path.lexists(destination):
+                raise SDKError('runtime rollback destination appeared: ' + name)
+            os.replace(backup / name, destination)
+            moved.append((backup / name, destination))
+    except BaseException:
+        for source, destination in reversed(moved):
+            if not os.path.lexists(source) and os.path.lexists(destination):
+                source.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(destination, source)
+        raise
+    for directory, subdirs, files in os.walk(backup, topdown=False, followlinks=False, onerror=walk_error):
+        if files:
+            raise SDKError('runtime quarantine retained unexpected files')
+        os.rmdir(directory)
+    return selected
+
+
 def runtime_shared_identity(objects, names):
     root = Path(objects)
     result = {}
@@ -386,6 +459,13 @@ def verify_runtime_outputs(objects, names, new_source, changed_files, archive_me
     for name in names:
         relative(name)
         path = root / name
+        if path.name == '.depend':
+            affected_objects = any(Path(item).parent == Path(name).parent and
+                                   Path(item).suffix in ('.o', '.pico') for item in names)
+            if affected_objects and (path.is_symlink() or not path.is_file() or
+                    not any(dep in path.read_bytes() for dep in dependencies)):
+                raise SDKError('runtime dependency aggregate was not rebuilt: ' + name)
+            continue
         if path.suffix == '.d':
             continue
         if path.suffix not in ('.o', '.pico'):
