@@ -198,12 +198,23 @@ def _inside(path, root):
 def _mapping(destination, tools):
     """Publish only links to explicit tools; keep a matching existing map."""
     if os.path.lexists(destination):
-        _require(os.path.isdir(destination) and not os.path.islink(destination) and
-                 set(os.listdir(destination)) == set(tools) and
-                 all(os.path.islink(os.path.join(destination, role)) and
-                     os.readlink(os.path.join(destination, role)) == path for role, path in tools.items()),
+        _require(os.path.isdir(destination) and not os.path.islink(destination),
                  'existing utility mapping differs from selected tools')
-        return False
+        existing = set(os.listdir(destination))
+        _require(existing <= set(tools) and
+                 all(os.path.islink(os.path.join(destination, role)) and
+                     os.readlink(os.path.join(destination, role)) == tools[role] for role in existing),
+                 'existing utility mapping differs from selected tools')
+        added = []
+        try:
+            for role in sorted(set(tools) - existing):
+                os.symlink(tools[role], os.path.join(destination, role))
+                added.append(role)
+        except BaseException:
+            for role in reversed(added):
+                os.unlink(os.path.join(destination, role))
+            raise
+        return False, added
     stage = tempfile.mkdtemp(prefix='.darwin-tools-', dir=os.path.dirname(destination))
     try:
         for role, path in tools.items():
@@ -212,7 +223,7 @@ def _mapping(destination, tools):
     finally:
         if os.path.isdir(stage):
             shutil.rmtree(stage)
-    return True
+    return True, []
 
 
 def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pkgdb,
@@ -353,7 +364,7 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
         variables['NATIVE_PKG_' + role[4:].upper() + '_CMD'] = tools[role]
     for role, path in utilities.items():
         variables['EMBERBSD_DARWIN_TOOL.' + role] = path
-    created = _mapping(utility_bin, utilities)
+    created, added = _mapping(utility_bin, utilities)
     temporary = None
     try:
         for selected in tools.values():
@@ -408,6 +419,9 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
     except BaseException:
         if created:
             shutil.rmtree(utility_bin)
+        else:
+            for role in reversed(added):
+                os.unlink(os.path.join(utility_bin, role))
         raise
     finally:
         if temporary and os.path.lexists(temporary):
