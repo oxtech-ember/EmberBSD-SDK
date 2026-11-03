@@ -2,6 +2,10 @@
 
 Developer tools and build contracts for [EmberBSD](https://github.com/oxtech-ember/EmberBSD), Unix for intelligent devices.
 
+Start on macOS arm64 with the [minimal binary SDK](docs/bootstrap-client.md):
+one download supplies Python, package management and the `ember-sdk` client.
+Install components by task; compilers and target sysroots are separate additions.
+
 ## Prebuild SDK
 
 Prebuild SDK is the shared development-host workspace for compiled objects,

@@ -14,6 +14,9 @@ There is no separate dependency resolver, toolchain or build tree per task.
 
 ## Use the client
 
+For a machine without Python or SDK tools, use the [first-install bootstrap](bootstrap-client.md).
+It provides an `ember-sdk` command and default configuration in one native prefix.
+
 Use Python 3.15 and a native prefix containing OpenSSL and pkg_tools. No compiler
 or bmake is loaded for binary-only operations. A client configuration is shared
 by tasks using the same target/ABI; other targets can share its native prefix
@@ -152,17 +155,18 @@ The zipapp contains the SDK Python modules, license and public signing root.
 It needs no SDK/Ports checkout for binary operations and contains no compiler,
 sysroot, tests or private keys. It requires the selected Python/native runtime;
 its archive size is **not** the size of a self-contained initial SDK.
-The complete portable bootstrap runtime, relocation of native package payloads,
-base-sysroot import from current and clean-host C/aarch64 execution remain
-separate distribution acceptance work. pkg_add prefix relocation alone does
-not rewrite Mach-O/ELF load paths or producer paths in scripts. This client
-therefore requires the archive's declared prefix to match its destination.
+A [self-contained initial runtime](bootstrap-client.md) supplies these tools
+on Darwin arm64. pkg_add prefix relocation alone does not rewrite binary load
+paths or producer paths in scripts. Only host packages explicitly qualified by
+the publisher's signed prefix-independent contract may use another prefix;
+unqualified packages still require the archive's declared destination.
+Base-sysroot import from current and clean-host C/aarch64 execution remain
+separate distribution acceptance work.
 
-The first published [client artifact](https://emberbsd-pkg.oxteam.me/current/host/darwin-arm64/ember-sdk-0.1.pyz)
-is 479,369 bytes. Its hash is authenticated by the release referenced by
-[`current.p7m`](https://emberbsd-pkg.oxteam.me/current.p7m); it is a client program,
-not a self-contained Python/pkg_tools bootstrap. The Python program is portable;
-the presently published repository and native verification cover Darwin arm64.
+The current self-contained archive is authenticated by the release referenced
+by [`current.p7m`](https://emberbsd-pkg.oxteam.me/current.p7m). The Python client
+itself is portable; the published bootstrap and native execution checks cover
+Darwin arm64/macOS 27.
 
 Checks cover shared dependencies, repeat installation, missing binaries versus
 broken downloads, resumed transfers, insufficient disk, wrong platforms,
