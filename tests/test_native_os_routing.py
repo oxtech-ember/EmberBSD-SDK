@@ -26,11 +26,11 @@ class GeneratedToolContractTests(unittest.TestCase):
     def test_generated_tool_bindings_are_declared(self):
         data = (b"EmberBSD-native-tools 2\ncmp cmp -\nmake make MAKE\n"
                 b"readlink readlink -\nsh sh HOST_SH\n"
-                b"python python HOST_PYTHON\nperl perl HOST_PERL\ngmake gmake HOST_GMAKE\n")
+                b"python python HOST_PYTHON\nperl perl HOST_PERL\ngmake gmake HOST_GMAKE\nautoconf autoconf HOST_AUTOCONF\n")
         _, rows, roles = native_os_routing.parse_native_os_contract(data)
-        self.assertTrue({"python", "perl", "gmake"} <= roles)
-        self.assertEqual({row[2] for row in rows} & {"HOST_PYTHON", "HOST_PERL", "HOST_GMAKE"},
-                         {"HOST_PYTHON", "HOST_PERL", "HOST_GMAKE"})
+        self.assertTrue({"python", "perl", "gmake", "autoconf"} <= roles)
+        self.assertEqual({row[2] for row in rows} & {"HOST_PYTHON", "HOST_PERL", "HOST_GMAKE", "HOST_AUTOCONF"},
+                         {"HOST_PYTHON", "HOST_PERL", "HOST_GMAKE", "HOST_AUTOCONF"})
 
 
 class NativeOSRoutingTests(unittest.TestCase):
