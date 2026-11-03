@@ -48,6 +48,27 @@ def _canonicalize_unique_flag_assignments(flags):
     return [name + '=' + value for name, value in sorted(assignments)]
 
 
+def _match_clang_resource_binding(old, new):
+    """Account for the newly explicit binding to an unchanged compiler resource."""
+    try:
+        prefix = 'EMBER_CLANG_RESOURCE_DIR='
+        old_compiler, new_compiler = old['compiler'], new['compiler']
+        if old_compiler['family'] != 'clang' or new_compiler['family'] != 'clang':
+            return
+        resource = old_compiler['resource_dir']
+        if not isinstance(resource, str) or not resource or resource != new_compiler['resource_dir']:
+            return
+        old_flags, new_flags = old['flags'], new['flags']
+        if not isinstance(old_flags, list) or not isinstance(new_flags, list):
+            return
+        old_values = [f for f in old_flags if isinstance(f, str) and f.startswith(prefix)]
+        new_values = [f for f in new_flags if isinstance(f, str) and f.startswith(prefix)]
+        if not old_values and new_values == [prefix + resource]:
+            old_flags.append(prefix + resource)
+    except (KeyError, TypeError):
+        return
+
+
 class BuildInterrupted(KeyboardInterrupt):
     pass
 
@@ -585,6 +606,7 @@ class SysrootBuilder:
         try:
             old = copy.deepcopy(record['signature'])
             new = copy.deepcopy(self.context_signature(path))
+            _match_clang_resource_binding(old, new)
             before, after = old['common_sources'], new['common_sources']
             if not isinstance(before, dict) or not isinstance(after, dict) or set(before) - set(after):
                 return False
@@ -823,6 +845,7 @@ class SysrootBuilder:
         """Compare compiled inputs, allowing controller updates and new utilities."""
         old = self.reuse_signature(copy.deepcopy(record['signature']))
         new = self.reuse_signature(copy.deepcopy(self.context_signature(path)))
+        _match_clang_resource_binding(old, new)
         old['flags'] = _canonicalize_unique_flag_assignments(old.get('flags'))
         new['flags'] = _canonicalize_unique_flag_assignments(new.get('flags'))
         # Routing evidence must retain bindings that phase-specific comparison
@@ -1677,6 +1700,8 @@ class SysrootBuilder:
         self.git(self.paths['ports'], 'ls-files', '--error-unmatch', verifier)
         self.git(self.paths['ports'], 'ls-files', '--error-unmatch', PRODUCER)
         self.compiler_record = self.compiler()
+        if clang:
+            self.paths['clang-resource'] = self.compiler_record['resource_dir']
         producer = [self.paths['python'], '-B', os.path.join(self.paths['ports'], PRODUCER),
                     '--sdk-source', self.paths['sdk-source']]
         self.llvm_source_command = producer + ['verify-source', '--source', self.paths['llvm-source'],

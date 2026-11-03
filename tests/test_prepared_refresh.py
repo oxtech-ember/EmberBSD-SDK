@@ -12,6 +12,30 @@ from emberbsd_sdk.errors import SDKError
 
 
 class PreparedRefreshTests(unittest.TestCase):
+    def test_derived_clang_resource_binding_requires_matching_compilers(self):
+        from copy import deepcopy
+        from emberbsd_sdk.sysroot_builder import _match_clang_resource_binding
+        old = {"compiler": {"family": "clang", "resource_dir": "/sdk/lib/clang"}, "flags": []}
+        new = deepcopy(old)
+        new["flags"] = ["EMBER_CLANG_RESOURCE_DIR=/sdk/lib/clang"]
+        candidate = deepcopy(old)
+        _match_clang_resource_binding(candidate, new)
+        self.assertEqual(candidate["flags"], new["flags"])
+        for field, value in (("resource_dir", "/other"), ("family", "gcc")):
+            candidate = deepcopy(old)
+            candidate["compiler"][field] = value
+            _match_clang_resource_binding(candidate, new)
+            self.assertEqual(candidate["flags"], [])
+        candidate = deepcopy(old)
+        candidate["flags"] = ["EMBER_CLANG_RESOURCE_DIR=/wrong"]
+        _match_clang_resource_binding(candidate, new)
+        self.assertEqual(candidate["flags"], ["EMBER_CLANG_RESOURCE_DIR=/wrong"])
+        candidate = deepcopy(old)
+        wrong = deepcopy(new)
+        wrong["flags"] = ["EMBER_CLANG_RESOURCE_DIR=/wrong"]
+        _match_clang_resource_binding(candidate, wrong)
+        self.assertEqual(candidate["flags"], [])
+
     def test_native_binding_transition_requires_original_selected_paths(self):
         from emberbsd_sdk.sysroot_builder import _compatible_native_contract
         old = ['EmberBSD-native-tools 2', 'perl perl -']

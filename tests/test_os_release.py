@@ -701,6 +701,24 @@ class BuilderReleaseTests(TemporaryCase):
         self.assertEqual(commands[1][-2:], ['distribution', 'sets'])
         validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
 
+    def test_clang_release_resource_binding_matches_compiler(self):
+        class ClangRelease(OSReleaseBuilder):
+            compiler = llvm_fixtures.ClangBuilder.compiler
+        builder, _ = llvm_fixtures.LLVMBuilderTests.builder(self,
+            release_fixture(self.root, "aarch64"), ClangRelease)
+        builder.options["base-cxx"] = False
+        receipt = builder.run()
+        profile = jsonio.read_json(Path(builder.paths["destination"]) / "build-profile.json")
+        resource = receipt["signature"]["compiler"]["resource_dir"]
+        self.assertEqual(receipt["paths"]["clang-resource"], resource)
+        self.assertIn("EMBER_CLANG_RESOURCE_DIR=" + resource, receipt["signature"]["flags"])
+        sha = receipt["sources"]["os"]["commit"]
+        validate_profile(profile, sha, "aarch64")
+        forged = copy.deepcopy(profile)
+        forged["sdk_receipt"]["paths"]["clang-resource"] = "/wrong"
+        with self.assertRaisesRegex(SDKError, "Clang resource path"):
+            validate_profile(forged, sha, "aarch64")
+
     def test_clang_release_uses_versioned_runtime_and_qualification(self):
         class ClangRelease(OSReleaseBuilder):
             compiler = llvm_fixtures.ClangBuilder.compiler

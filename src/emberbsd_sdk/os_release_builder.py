@@ -276,6 +276,9 @@ def validate_profile(profile, sha, target):
         for key in ('GCC_RUNTIME_INPUTS_SHA256', 'GCC_RUNTIME_STAGE_SHA256', 'GCC_RUNTIME_LINKS_SHA256'):
             check(full_hash(metadata[key]), 'Missing runtime receipt hash')
     paths = receipt['paths']
+    if 'clang-resource' in paths:
+        check(clang and paths['clang-resource'] == compiler.get('resource_dir'),
+              'Clang resource path differs from selected compiler')
     if any(name + '-source' in paths for name in ('openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'wpa', 'mdns', 'dhcpcd', 'heimdal', 'openssh')) and 'common_sources' not in signature:
         raise SDKError('Missing common source selection')
     if ('gettext-source' in paths or 'libxml2-source' in paths) and 'common_sources' not in signature:

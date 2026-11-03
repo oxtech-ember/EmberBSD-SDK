@@ -784,7 +784,9 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         selected = {'compiler': '/compiler', 'llvm-source': '/source',
                     **runtime_paths('/stage', self.manifest())}
         selected['llvm-libc-unwind'] = '/bootstrap/usr/pkg/llvm/lib/libunwind.a'
+        selected['clang-resource'] = '/compiler/lib/clang/23'
         base = llvm_flags(selected, phase='base')
+        self.assertIn('EMBER_CLANG_RESOURCE_DIR=/compiler/lib/clang/23', base)
         self.assertIn('MKCXX=no', base)
         self.assertIn('EMBER_LIBUNWIND_ARCHIVE=/stage/usr/pkg/llvm/lib/libunwind.a', base)
         self.assertIn('EMBER_EXTERNAL_LLVM_RUNTIME=/stage/usr/pkg/llvm', base)
@@ -1820,6 +1822,24 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         receipt['version'] = 2
         with self.assertRaisesRegex(SDKError, 'GCC16'):
             sysroot_transfer._provenance(receipt, 'aarch64')
+
+    def test_clang_resource_binding_reuses_matching_context(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        objects = builder.paths["objects"]
+        record = {"signature": copy.deepcopy(builder.context_signature(objects)),
+                  "sources": copy.deepcopy(builder.sources)}
+        resource = builder.signature["compiler"]["resource_dir"]
+        prefix = "EMBER_CLANG_RESOURCE_DIR="
+        self.assertIn(prefix + resource, record["signature"]["flags"])
+        record["signature"]["flags"] = [f for f in record["signature"]["flags"] if not f.startswith(prefix)]
+        self.assertTrue(builder.compatible_context(record, objects))
+        wrong = copy.deepcopy(record)
+        wrong["signature"]["flags"].append(prefix + "/wrong")
+        self.assertFalse(builder.compatible_context(wrong, objects))
+        wrong = copy.deepcopy(record)
+        wrong["signature"]["compiler"]["resource_dir"] = "/other"
+        self.assertFalse(builder.compatible_context(wrong, objects))
 
     def test_header_normalization_preserves_routing_binding_evidence(self):
         import hashlib
