@@ -91,6 +91,21 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(self.server.objects['/bucket/current.p7m'], pointer)
         self.assertEqual(self.publish(new)['generation'], 2)
 
+    def test_stale_candidate_does_not_replace_a_newer_current(self):
+        first = self.release()
+        publish_release(self.crypto, self.store, self.public, first, self.signer,
+                        self.ca.certificate, expected_generation=0)
+        # Reuse the immutable payload key with identical bytes; this test covers
+        # generation rejection rather than a changed package version.
+        new = self.release('two', b'payload' * 1000)
+        before = dict(self.server.objects)
+        with self.assertRaisesRegex(SDKError, 'expected generation 0, found 1'):
+            publish_release(self.crypto, self.store, self.public, new, self.signer,
+                            self.ca.certificate, expected_generation=0)
+        self.assertEqual(self.server.objects, before)
+        self.assertEqual(publish_release(self.crypto, self.store, self.public, new, self.signer,
+                                       self.ca.certificate, expected_generation=1)['generation'], 2)
+
     def test_release_identity_cannot_change(self):
         release = self.release()
         pointer = self.publish(release)

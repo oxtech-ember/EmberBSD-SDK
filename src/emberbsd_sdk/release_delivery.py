@@ -109,9 +109,12 @@ def _clean_current(store, prefix, keep):
 
 
 def publish_release(crypto, store, public, envelope_path, identity, trust,
-                    *, prefix='', ttl=7 * 86400, refresh=False, previous_channel_time=None):
+                    *, prefix='', ttl=7 * 86400, refresh=False, previous_channel_time=None,
+                    expected_generation=None):
     if type(ttl) is not int or ttl <= 0:
         raise SDKError('channel lifetime must be a positive number of seconds')
+    if expected_generation is not None and (type(expected_generation) is not int or expected_generation < 0):
+        raise SDKError('expected generation must be a nonnegative integer')
     envelope_path = Path(envelope_path)
     envelope = read_bytes(envelope_path)
     release = verify_release(crypto, envelope, envelope_path.parent, trust)
@@ -131,11 +134,12 @@ def publish_release(crypto, store, public, envelope_path, identity, trust,
             packages.add(package)
     with _publisher_lock(store, prefix):
         return _publish_current(crypto, store, public, envelope_path, envelope, release,
-                                base, identity, trust, prefix, ttl, refresh, previous_channel_time)
+                                base, identity, trust, prefix, ttl, refresh, previous_channel_time,
+                                expected_generation)
 
 
 def _publish_current(crypto, store, public, envelope_path, envelope, release, base,
-                     identity, trust, prefix, ttl, refresh, previous_channel_time):
+                     identity, trust, prefix, ttl, refresh, previous_channel_time, expected_generation):
     release_key = _key(prefix, base + '/release.p7m')
     channel_key = _key(prefix, 'current.p7m')
     old_envelope, old_headers = _optional_read(store, channel_key)
@@ -157,6 +161,10 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
         if (previous['release']['id'] == release['release_id'] and
                 previous['release']['sha256'] != hashlib.sha256(envelope).hexdigest()):
             raise SDKError('current release ID already has different metadata; choose a new ID')
+    generation = previous['generation'] if previous else 0
+    if expected_generation is not None and generation != expected_generation:
+        raise SDKError(f'current changed: expected generation {expected_generation}, found {generation}; '
+                       'merge the latest current before publishing')
     keep = {release_key}
     # Packages precede indexes. The release envelope is always uploaded last.
     for artifact in sorted(release['artifacts'], key=lambda item: item['kind'] == 'package-index'):
