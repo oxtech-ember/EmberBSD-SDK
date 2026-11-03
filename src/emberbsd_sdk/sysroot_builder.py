@@ -800,6 +800,9 @@ class SysrootBuilder:
         new = self.reuse_signature(copy.deepcopy(self.context_signature(path)))
         old['flags'] = _canonicalize_unique_flag_assignments(old.get('flags'))
         new['flags'] = _canonicalize_unique_flag_assignments(new.get('flags'))
+        # Routing evidence must retain bindings that phase-specific comparison
+        # may later remove as irrelevant to header object contents.
+        selected_binding_flags = copy.deepcopy(new.get('flags'))
         if old == new:
             return True
         try:
@@ -904,7 +907,7 @@ class SysrootBuilder:
                 selected_contract = Path(self.native_contract).read_text(encoding='ascii')
                 new_rows = selected_contract.splitlines()
                 previous_flags = record.get('_compat_previous_flags', record['signature'].get('flags'))
-                selected_flags = new.get('flags')
+                selected_flags = selected_binding_flags
                 if (previous_flags is None or selected_flags is None) and path == self.paths['tools']:
                     object_context = os.path.join(self.paths['objects'], self.CONTEXT)
                     if paths.entry(object_context) is None:

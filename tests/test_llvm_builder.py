@@ -1821,6 +1821,52 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         with self.assertRaisesRegex(SDKError, 'GCC16'):
             sysroot_transfer._provenance(receipt, 'aarch64')
 
+    def test_header_normalization_preserves_routing_binding_evidence(self):
+        import hashlib
+        from emberbsd_sdk.native_os_routing import native_path
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        objects, tools = builder.paths['objects'], builder.paths['tools']
+        old_contract = ('EmberBSD-native-tools 2\ncmp cmp -\nmake make MAKE\n'
+                        'readlink readlink -\nsh sh HOST_SH\nperl perl -\n')
+        new_contract = (old_contract.replace('perl perl -', 'perl perl HOST_PERL') +
+                        'python python HOST_PYTHON\ngmake gmake HOST_GMAKE\n'
+                        'autoconf autoconf HOST_AUTOCONF\n')
+        Path(builder.native_contract).write_text(new_contract)
+        roles = builder.signature['native_toolset']['tools']
+        for role in ('perl', 'python', 'gmake', 'autoconf'):
+            roles[role] = '/native/' + role
+        builder.signature['environment']['PATH'] = native_path(builder.signature['native_toolset'])
+        for role in ('perl', 'python', 'gmake', 'autoconf'):
+            key = 'HOST_' + role.upper()
+            builder.signature['flags'] = [f for f in builder.signature['flags']
+                                          if not f.startswith(key + '=')]
+            builder.signature['flags'].append(key + '=' + roles[role])
+        digest = hashlib.sha256(old_contract.encode('ascii')).hexdigest()
+        record = {'signature': copy.deepcopy(builder.context_signature(objects)),
+                  'sources': copy.deepcopy(builder.sources)}
+        record['signature']['environment']['EMBER_NATIVE_TOOLS'] = tools + '/native-routing-' + digest
+        builder.paths['native-routing'] = tools + '/native-routing-current'
+        builder.signature['environment']['EMBER_NATIVE_TOOLS'] = builder.paths['native-routing']
+        with patch.object(builder, 'recorded_native_contract', return_value=old_contract):
+            self.assertTrue(builder.compatible_context(record, objects))
+            for mode in ('missing', 'changed'):
+                with self.subTest(mode=mode):
+                    selected = copy.deepcopy(builder.context_signature(objects))
+                    selected['flags'] = [f for f in selected['flags'] if not f.startswith('HOST_PYTHON=')]
+                    if mode == 'changed':
+                        selected['flags'].append('HOST_PYTHON=/other/python')
+                    with patch.object(builder, 'context_signature', return_value=selected):
+                        self.assertFalse(builder.compatible_context(record, objects))
+            previous = copy.deepcopy(record)
+            previous['signature']['flags'] = [f for f in previous['signature']['flags']
+                                               if not f.startswith('HOST_GMAKE=')]
+            self.assertFalse(builder.compatible_context(previous, objects))
+            previous = copy.deepcopy(record)
+            previous['signature']['tools'] = '/wrong/tools'
+            self.assertFalse(builder.compatible_context(previous, objects))
+
     def test_header_tools_relocation_refresh_is_narrow(self):
         builder, _ = self.builder()
         builder.preflight()
