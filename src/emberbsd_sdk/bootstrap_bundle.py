@@ -203,16 +203,17 @@ def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency
     return changed
 
 
-def refresh_checksums(root, packages):
+def refresh_checksums(root, packages, *, database=None, selected=None):
     """Keep pkg_tools ownership and installed MD5 records after relocation."""
+    database = root / 'pkgdb' if database is None else Path(database)
     for name in packages:
-        path = root / 'pkgdb' / name / '+CONTENTS'
+        path = database / name / '+CONTENTS'
         lines, previous, ignored = [], None, False
         for line in path.read_text().splitlines():
             if line == '@ignore':
                 ignored = True
             elif line and not line.startswith('@'):
-                previous = None if ignored else _destination(root, line)
+                previous = None if ignored or (selected is not None and line not in selected) else _destination(root, line)
                 ignored = False
             elif line.startswith('@comment MD5:') and previous is not None:
                 if previous.is_symlink():
@@ -247,7 +248,18 @@ def relocate_text(content, old, new):
         raise SDKError('bootstrap text contains a NUL byte')
     if new.startswith(old + b'/'):
         raise SDKError('SDK destination must not be inside its producer prefix')
-    content = re.sub(re.escape(old) + rb'(?=$|[^A-Za-z0-9_.-])', lambda _: new, content)
+    token = re.compile(re.escape(old) + rb'(?=$|[^A-Za-z0-9_.-])')
+    if new != old and token.search(new):
+        raise SDKError('SDK destination must not repeat its producer prefix')
+    # A repeated pass must not discover the old token across either edge of
+    # the replacement, for example /opt/sdk -> /opt with a /sdk/... suffix.
+    if new != old:
+        boundaries = [index for index, byte in enumerate(old) if byte == ord('/') and index]
+        if new in old or any(new.endswith(old[:index]) or
+               re.match(re.escape(old[index:]) + rb'(?=$|[^A-Za-z0-9_.-])', new)
+               for index in boundaries):
+            raise SDKError('SDK destination overlaps its producer prefix')
+    content = token.sub(lambda _: new, content)
     return content
 
 

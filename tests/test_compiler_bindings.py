@@ -105,6 +105,18 @@ class CompilerBindingTests(TemporaryCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('compiler binding was made by a different SDK', result.stderr)
 
+    def test_binding_from_client_zipapp_remains_executable_without_zipapp(self):
+        from emberbsd_sdk.client_bundle import package_client
+        archive = self.root / 'client.pyz'
+        package_client(archive)
+        result = self.bind_from(archive)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        archive.unlink()
+        result = subprocess.run([str(self.destination / 'cc'), '-c', 'x.c'], cwd=self.root,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), ['--selected-cc', '-c', 'x.c'])
+
     def test_existing_binding_must_match_and_is_not_overwritten(self):
         self.invoke('cc', ['-c', 'x.c'])
         self.flags['cflags'] = ['-Dchanged']

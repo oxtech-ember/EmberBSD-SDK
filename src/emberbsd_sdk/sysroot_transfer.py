@@ -294,6 +294,17 @@ def export_sysroot(source, output, *, target):
         llvm_runtime_install.validate_base_alias_inventory(rows, receipt['signature']['runtime']['manifest'])
     if receipt.get('outputs') != rows:
         raise SDKError('sysroot differs from the completed build receipt')
+    def unchanged():
+        return (jsonio.loads_json(_read(receipt_path, MAX_MANIFEST), max_bytes=MAX_MANIFEST) == receipt
+                and paths.entry(os.path.join(source, INCOMPLETE)) is None)
+    runtime = receipt['signature']['runtime'] if receipt['version'] == 3 else None
+    return _export_tree(source, output, target=target, rows=rows,
+                        provenance=provenance, runtime=runtime, unchanged=unchanged)
+
+
+def _export_tree(source, output, *, target, rows, provenance, runtime=None, unchanged=lambda: True):
+    """Common byte transport for checked build and release-composition producers."""
+    definition = target_definition(target)
     total = _validate_rows(rows, MAX_BYTES)
     root_mode = _mode(stat.S_IMODE(os.stat(source).st_mode))
     os.mkdir(output)
@@ -321,11 +332,10 @@ def export_sysroot(source, output, *, target):
         raw.flush()
         os.fsync(raw.fileno())
     if (inventory.sysroot(source, definition['elf'], exclude=EXCLUDED) != rows
-            or jsonio.loads_json(_read(receipt_path, MAX_MANIFEST), max_bytes=MAX_MANIFEST) != receipt
-            or paths.entry(os.path.join(source, INCOMPLETE)) is not None
+            or not unchanged()
             or stat.S_IMODE(os.stat(source).st_mode) != root_mode):
         raise SDKError('sysroot changed during export')
-    manifest = dict(format=FORMAT, version=2 if receipt['version'] == 3 else 1, scope='sysroot-transfer', target=target,
+    manifest = dict(format=FORMAT, version=2 if runtime is not None else 1, scope='sysroot-transfer', target=target,
                     triplet=definition['triplet'], provenance=provenance,
                     qualification='built-and-inspected', relocation='not-assessed',
                     execution_acceptance='not-assessed', root_mode=root_mode,
@@ -335,7 +345,8 @@ def export_sysroot(source, output, *, target):
     if manifest['version'] == 2:
         # Keep the existing portable record so an imported SDK can recover its
         # measured runtime paths without guessing a resource-directory layout.
-        manifest['runtime'] = receipt['signature']['runtime']
+        manifest['runtime'] = runtime
+    validate_manifest(manifest, target=target)
     data = jsonio.json_bytes(manifest)
     if len(data) > MAX_MANIFEST:
         raise SDKError('transfer manifest exceeds size limit')
