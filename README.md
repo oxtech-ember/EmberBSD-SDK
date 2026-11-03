@@ -9,6 +9,16 @@ the target sysroot, binary packages and build receipts. Reuse one compatible
 workspace across tasks for one target. Use separate workspaces for `aarch64`
 and `amd64`. Keep source checkouts separate from build outputs.
 
+Start with the smallest SDK needed by the task: selected native tool roles and,
+when required, one target/ABI sysroot. Kernel-only and freestanding work does
+not require an application sysroot. Plasma, additional language toolchains,
+firmware sources, documentation and diagnostics are explicit additions.
+An exported Ports catalogue provides recipes; it does not select every package
+for compilation. Add only the chosen packages and their dependencies, reusing
+the existing compatible tools, objects and packages.
+Use the [package selection CLI](docs/package-selection.md) to list package sets,
+inspect roots, plan their dependency closure and build an explicit selection.
+
 The first tools create and inspect that workspace. They use Python and its standard
 library. They do not download a compiler or qualify an existing sysroot.
 
@@ -56,8 +66,13 @@ Use [release preparation and tags](docs/release-tags.md) to set the source
 product version before building and tag the checked OS, Ports, and SDK commits.
 Use [OS release composition](docs/os-release.md) for complete OS producer orchestration,
 kit verification and immutable GitHub publication.
-The [distribution guide](docs/distribution.md) defines the additional boundary
-for a future SDK release that accompanies a binary package profile.
+The [signed release tools](docs/signed-releases.md) seal and verify package,
+SDK and OS inventories and channel pointers using one X.509 trust root.
+The [binary catalog](docs/binary-catalog.md) projects Ports runtime dependencies,
+signs packages before generating pkg_summary, and supports source-free selection
+of published package sets. Download and installation are subsequent steps.
+The [distribution guide](docs/distribution.md) defines the remaining boundary
+for an installable binary SDK and package channel.
 
 A [source-built AArch64 check](docs/sysroot-transfer.md#source-built-aarch64-check)
 on macOS arm64 passed SMB export/import and C/C++ consumer links at a new path.

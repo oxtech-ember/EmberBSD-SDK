@@ -17,6 +17,11 @@ reuse. Failed or incompatible stages are left intact for diagnosis. `--plan`
 describes the dependency order without creating outputs; later commands
 depend on the artifacts measured by their producers.
 
+When the selected native tools directory moves, compatible headers objects may
+be reused after the owner cleans their nested tools objects with the new routing.
+This requires the same recorded native contract and unchanged compiler, target,
+header inputs and relevant build environment. A completed stage remains strict.
+
 The OS bootstrap-headers operation does not enter libc or consume the common
 LLVM runtime source. Its object and completed-stage compatibility therefore
 ignores that source manifest and its `EMBER_LLVM_SOURCE` path, while source

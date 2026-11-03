@@ -7,6 +7,7 @@ Read [README.md](README.md) and the selected procedure before changing inputs.
 | --- | --- |
 | Create, inspect or reuse a Prebuild SDK workspace | [emberbsd-prebuild-sdk](https://github.com/oxtech-ember/Ember-Agent-Skills/blob/main/skills/emberbsd-prebuild-sdk/SKILL.md), [workspace contract](docs/prebuild-sdk.md) |
 | Build the EmberBSD sysroot | [Sysroot procedure](docs/sysroot.md), `emberbsd-prebuild-sdk` |
+| Select package roots for one SDK task | [Package selection CLI](docs/package-selection.md) |
 | Export or import a sysroot through a shared store | [Sysroot transfer procedure](docs/sysroot-transfer.md) |
 | Prepare the cross compiler or cross-build a kernel | [emberbsd-build-kernel](https://github.com/oxtech-ember/Ember-Agent-Skills/blob/main/skills/emberbsd-build-kernel/SKILL.md) |
 | Run a diagnostic host fuzz campaign and check its evidence | [Diagnostic fuzz checks](docs/fuzz-check.md) |
@@ -23,6 +24,8 @@ an installed skill package.
 
 Keep build-host tools and target output separate. Clang/LLVM is the default
 compiler family; select GCC only through an explicit platform profile.
+Keep the SDK minimal for the requested task: select only its required native roles and target/ABI sysroot.
+Do not build every target or optional package group by default. Kernel-only work does not require an application sysroot.
 Keep diagnostic fuzz objects out of target packages and sysroots. Reuse shared
 objects by their [input key](docs/input-keys.md): Git tree hashes and declared
 compiler, configuration, ABI and target. A matching key means reuse without

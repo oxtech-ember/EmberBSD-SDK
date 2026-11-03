@@ -455,11 +455,49 @@ class SysrootBuilder:
                     not self.plan_native_refresh(record, path)):
                 raise SDKError(f'cannot safely resume incomplete native source refresh: {path}')
         elif not self.compatible_context(record, path):
-            if not ((path == self.paths['objects'] and self.plan_prepared_refresh(record, path)) or
+            if not ((path == self.paths['objects'] and
+                     (self.plan_prepared_refresh(record, path) or
+                      self.plan_header_tools_refresh(record, path))) or
                     (path == self.paths['tools'] and self.plan_native_refresh(record, path))):
                 raise SDKError(f'unknown or incompatible object context; leave it unchanged: {path}')
         self.validate_source_ancestry(record, path)
         return record
+
+    def plan_header_tools_refresh(self, record, path):
+        """Refresh path-sensitive host tool objects before reusing header objects."""
+        if path != self.paths['objects'] or getattr(self, 'llvm_phase', None) != 'headers':
+            return False
+        try:
+            original = record['signature']
+            previous_contract = self.recorded_native_contract(record, original)
+            if previous_contract is None or previous_contract != Path(self.native_contract).read_text(encoding='ascii'):
+                return False
+            old = copy.deepcopy(original)
+            new = self.context_signature(path)
+            old_tools, new_tools = old['tools'], new['tools']
+            if (not all(isinstance(p, str) and os.path.isabs(p) and os.path.normpath(p) == p
+                        for p in (old_tools, new_tools)) or old_tools == new_tools):
+                return False
+            old_env, new_env = old['environment'], new['environment']
+            digest = hashlib.sha256(previous_contract.encode('ascii')).hexdigest()
+            allowed = (os.path.join(old_tools, 'native-routing'),
+                       os.path.join(old_tools, 'native-routing-' + digest))
+            if (old_env['EMBER_NATIVE_TOOLS'] not in allowed or
+                    new_env['EMBER_NATIVE_TOOLS'] != self.paths['native-routing']):
+                return False
+            old['tools'] = copy.deepcopy(new_tools)
+            for key in ('EMBER_NATIVE_TOOLS', 'HOME', 'LOGNAME', 'TMPDIR', 'USER'):
+                if key in new_env:
+                    old_env[key] = copy.deepcopy(new_env[key])
+                else:
+                    old_env.pop(key, None)
+            if not self.compatible_context(dict(record, signature=old), path):
+                return False
+            self.refresh_dirs = ['tools']
+            self.refresh_nested_outputs = []
+            return True
+        except (KeyError, TypeError, AttributeError, OSError, UnicodeError):
+            return False
 
     def plan_prepared_refresh(self, record, path):
         """Refresh declared source consumers and compatible C++ runtime users."""
