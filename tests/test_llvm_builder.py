@@ -1394,6 +1394,16 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertEqual((work / 'bootstrap.json').read_text(), 'completed receipt\n')
         self.assertEqual((work / 'bootstrap.log').read_text(), 'completed log\n')
 
+    def test_completed_headers_reject_relocated_tools(self):
+        builder, _ = self.completed_headers()
+        receipt_path = Path(builder.paths['destination']) / builder.RECEIPT
+        receipt = jsonio.read_json(receipt_path)
+        receipt['signature']['tools'] = '/old/tooldir'
+        write(receipt_path, json.dumps(receipt))
+        with self.assertRaisesRegex(SDKError, 'LLVM OS stage inputs changed'):
+            type(builder)(builder.options).run()
+        self.assertEqual(jsonio.read_json(receipt_path), receipt)
+
     def test_completed_headers_reuse_without_inspecting_outputs(self):
         builder, original = self.completed_headers()
         with patch.object(type(builder), 'build_payload', side_effect=AssertionError('must reuse')), \
@@ -1810,6 +1820,107 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         receipt['version'] = 2
         with self.assertRaisesRegex(SDKError, 'GCC16'):
             sysroot_transfer._provenance(receipt, 'aarch64')
+
+    def test_header_tools_relocation_refresh_is_narrow(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        objects, tools = builder.paths['objects'], builder.paths['tools']
+        signature = copy.deepcopy(builder.context_signature(objects))
+        old_tools = self.root / 'old-tooldir'
+        digest = inventory.sha256_file(builder.native_contract)
+        routing = old_tools / ('native-routing-' + digest)
+        write(routing / 'contract', Path(builder.native_contract).read_text(encoding='ascii'))
+        signature['tools'] = str(old_tools)
+        signature['environment']['EMBER_NATIVE_TOOLS'] = str(routing)
+        for key in ('HOME', 'LOGNAME', 'TMPDIR', 'USER'):
+            signature['environment'].pop(key, None)
+        record = {'signature': signature, 'sources': copy.deepcopy(builder.sources)}
+        contract = Path(builder.native_contract).read_text(encoding='ascii')
+        self.assertEqual(builder.recorded_native_contract(record, signature), contract)
+        self.assertFalse(builder.compatible_context(record, objects))
+        self.assertTrue(builder.plan_header_tools_refresh(record, objects))
+        self.assertEqual(builder.refresh_dirs, ['tools'])
+        self.assertEqual(builder.refresh_nested_outputs, [])
+        stored = dict(record, format='emberbsd-sysroot-object-context', version=1)
+        Path(objects).mkdir(parents=True, exist_ok=True)
+        jsonio.write_json(Path(objects) / builder.CONTEXT, stored, exclusive=True)
+        with patch.object(builder, 'validate_source_ancestry'):
+            self.assertEqual(builder.inspect_context(objects), stored)
+        self.assertEqual(builder.refresh_dirs, ['tools'])
+        self.assertFalse(builder.plan_header_tools_refresh(record, tools))
+        same = copy.deepcopy(record)
+        same['signature']['tools'] = builder.context_signature(objects)['tools']
+        self.assertFalse(builder.plan_header_tools_refresh(same, objects))
+        for invalid in ('relative/tools', '/old/../tools'):
+            changed = copy.deepcopy(record)
+            changed['signature']['tools'] = invalid
+            self.assertFalse(builder.plan_header_tools_refresh(changed, objects))
+        builder.llvm_phase = 'base'
+        self.assertFalse(builder.plan_header_tools_refresh(record, objects))
+        builder.llvm_phase = 'headers'
+        cases = {
+            'compiler': lambda s: s['compiler'].__setitem__('triplet', 'changed'),
+            'target': lambda s: s.__setitem__('target', {'changed': True}),
+            'flags': lambda s: s['flags'].append('CPPFLAGS=-DCHANGED'),
+            'header_source': lambda s: s.__setitem__('libedit', {'changed': True}),
+            'binding': lambda s: s['native_toolset']['tools'].__setitem__('cc', '/other/cc'),
+            'native_hook': lambda s: s.__setitem__('native_inputs', {'changed': True}),
+            'other_environment': lambda s: s['environment'].__setitem__('UNRELATED', 'changed'),
+            'abi': lambda s: s['compiler'].__setitem__('resource_dir', '/other/abi'),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name=name):
+                changed = copy.deepcopy(record)
+                mutate(changed['signature'])
+                self.assertFalse(builder.plan_header_tools_refresh(changed, objects))
+        fixed = copy.deepcopy(record)
+        fixed['signature']['environment']['EMBER_NATIVE_TOOLS'] = str(old_tools / 'native-routing')
+        self.assertEqual(builder.recorded_native_contract(fixed, fixed['signature']), contract)
+        self.assertTrue(builder.plan_header_tools_refresh(fixed, objects))
+        fixed['signature']['environment']['EMBER_NATIVE_TOOLS'] = '/other/native-routing'
+        self.assertEqual(builder.recorded_native_contract(fixed, fixed['signature']), contract)
+        self.assertFalse(builder.plan_header_tools_refresh(fixed, objects))
+        selected = copy.deepcopy(builder.context_signature(objects))
+        selected['environment']['EMBER_NATIVE_TOOLS'] = '/wrong/native-routing'
+        with patch.object(builder, 'context_signature', return_value=selected):
+            self.assertFalse(builder.plan_header_tools_refresh(record, objects))
+        for prior in (None, contract + 'changed\n'):
+            with self.subTest(contract=prior), patch.object(builder, 'recorded_native_contract', return_value=prior):
+                self.assertFalse(builder.plan_header_tools_refresh(record, objects))
+
+    def test_header_tools_refresh_dispatch_is_scoped(self):
+        from types import SimpleNamespace
+        root = self.root
+        obj, tools, osroot, dest = (root / n for n in ('objects', 'installed-tools', 'os', 'dest'))
+        for p in (obj / 'tools', obj / 'lib', tools, osroot / 'tools', dest):
+            p.mkdir(parents=True, exist_ok=True)
+        stale, sentinel = obj / 'tools/stale.o', obj / 'lib/keep.o'
+        stale.write_bytes(b'stale'); sentinel.write_bytes(b'keep')
+        old = {'signature': {}, 'sources': {}}
+        calls = []
+        def dispatch(cmd):
+            calls.append(cmd)
+            if cmd[-2:] == ['MKCLEANSRC=no', 'cleandir']:
+                stale.unlink()
+        fake = SimpleNamespace(paths={'objects': str(obj), 'tools': str(tools), 'os': str(osroot),
+                    'destination': str(dest), 'native-routing': str(tools / 'routing'), 'sdk': str(root)},
+                    contexts={'objects': old, 'tools': old}, refresh_dirs=['tools'],
+                    refresh_nested_outputs=[], target={'machine': 'evbarm'}, flags=['TEST_FLAG=yes'],
+                    environment={}, inspect_context=lambda p: old, dispatch=dispatch,
+                    native_makewrapper_command=lambda: ['owner-makewrapper'],
+                    context_signature=lambda p: {}, sources={}, CONTEXT='.prebuild-sdk-context.json',
+                    mkdirs=lambda *args: None)
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   return_value=SimpleNamespace(stdout=(str(obj / 'tools') + '\n').encode())) as capture, \
+             patch('emberbsd_sdk.sysroot_builder.jsonio.write_json'):
+            SysrootBuilder.prepare_contexts(fake)
+        self.assertEqual(calls[0], ['owner-makewrapper'])
+        self.assertEqual(capture.call_args.args[0][-2:], ['-V', '${.OBJDIR}'])
+        self.assertEqual(calls[1][-2:], ['MKCLEANSRC=no', 'cleandir'])
+        self.assertEqual(calls[1][calls[1].index('-C') + 1], str(osroot / 'tools'))
+        self.assertFalse(stale.exists())
+        self.assertEqual(sentinel.read_bytes(), b'keep')
 
     def test_target_runtime_changes_do_not_rebuild_native_tool_context(self):
         builder, runtime = self.builder()
