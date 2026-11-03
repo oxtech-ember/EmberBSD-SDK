@@ -55,6 +55,9 @@ class RuntimeRefreshTests(unittest.TestCase):
                 'cxx_headers': prefix + '/include/c++/v1',
             },
             'files': files,
+            'bootstrap': {'manifest_sha256': 'f' * 64, 'files': {
+                prefix + '/lib/clang/23/lib/netbsd/libclang_rt.builtins-aarch64.a': 'a' * 64,
+                prefix + '/lib/libunwind.a': 'b' * 64}},
             'symlinks': {
                 prefix + '/lib/libc++.so': 'libc++.so.1',
                 prefix + '/lib/libc++abi.so': 'libc++abi.so.1',
@@ -132,6 +135,333 @@ class RuntimeRefreshTests(unittest.TestCase):
         for label, candidate in cases:
             with self.subTest(label=label):
                 self.assertIsNone(runtime_refresh.cpp_update(self.before, candidate))
+
+    def test_builtins_refresh_recognizes_only_compatible_runtime_payload(self):
+        after = copy.deepcopy(self.before)
+        after['runtime_prefix'] = '/candidate/runtime'
+        manifest = after['runtime']['manifest']
+        for name in (manifest['artifacts']['builtins'],
+                     manifest['artifacts']['libcxx']['shared'],
+                     manifest['artifacts']['libcxxabi']['shared']):
+            manifest['files'][name] = '9' * 64
+        manifest['bootstrap']['files'][manifest['artifacts']['builtins']] = '9' * 64
+        self.assertEqual(runtime_refresh.builtins_update(self.before, after),
+                         {'builtins': manifest['artifacts']['builtins']})
+        unsafe = copy.deepcopy(after)
+        unsafe['runtime']['manifest']['bootstrap']['files'][manifest['artifacts']['libunwind']['static']] = '8' * 64
+        self.assertIsNone(runtime_refresh.builtins_update(self.before, unsafe))
+        unsafe = copy.deepcopy(after)
+        unsafe['runtime']['manifest']['recipe']['files']['pkgsrc/llvm/Makefile'] = '8' * 64
+        self.assertIsNone(runtime_refresh.builtins_update(self.before, unsafe))
+        unsafe = copy.deepcopy(after)
+        unsafe['runtime']['manifest']['files'][manifest['artifacts']['libunwind']['static']] = '8' * 64
+        self.assertIsNone(runtime_refresh.builtins_update(self.before, unsafe))
+        unsafe = copy.deepcopy(after)
+        unsafe['runtime']['manifest']['files']['usr/pkg/llvm/include/c++/v1/vector'] = '8' * 64
+        self.assertIsNone(runtime_refresh.builtins_update(self.before, unsafe))
+
+    def test_builtins_refresh_rejects_missing_or_non_clang_artifacts(self):
+        after = copy.deepcopy(self.before)
+        artifact = after['runtime']['manifest']['artifacts']['builtins']
+        after['runtime']['manifest']['files'].pop(artifact)
+        self.assertIsNone(runtime_refresh.builtins_update(self.before, after))
+        before = copy.deepcopy(self.before)
+        after = copy.deepcopy(self.before)
+        before['runtime']['manifest']['triplet'] = 'aarch64-apple-darwin'
+        after['runtime']['manifest']['triplet'] = 'aarch64-apple-darwin'
+        after['runtime']['manifest']['files'][artifact] = '9' * 64
+        self.assertIsNone(runtime_refresh.builtins_update(before, after))
+        before = copy.deepcopy(self.before)
+        after = copy.deepcopy(self.before)
+        before['runtime']['manifest']['compiler_family'] = 'gcc'
+        after['runtime']['manifest']['compiler_family'] = 'gcc'
+        after['runtime']['manifest']['files'][artifact] = '9' * 64
+        self.assertIsNone(runtime_refresh.builtins_update(before, after))
+
+    def test_builder_plans_builtins_refresh_from_selected_context(self):
+        old, new = copy.deepcopy(self.before), copy.deepcopy(self.before)
+        old['flags'].append('EMBER_LLVM_SOURCE=/source/old')
+        new['flags'].append('EMBER_LLVM_SOURCE=/source/new')
+        new['flags'] = [f.replace('/previous/runtime', '/candidate/runtime') for f in new['flags']]
+        new['runtime_prefix'] = '/candidate/runtime'
+        new['llvm_source']['manifest_sha256'] = 'c' * 64
+        artifact = new['runtime']['manifest']['artifacts']['builtins']
+        new['runtime']['manifest']['files'][artifact] = '9' * 64
+        new['runtime']['manifest']['bootstrap']['files'][artifact] = '9' * 64
+        fake = SimpleNamespace(
+            paths={'os': '/os', 'objects': '/obj', 'llvm-source': '/source/new'},
+            context_signature=lambda path: new, COMMON_SOURCES=SysrootBuilder.COMMON_SOURCES,
+            reuse_signature=SysrootBuilder.reuse_signature,
+            compatible_context=lambda candidate, path: True,
+            compiler_record={'binaries': {'ar': {'selected_path': '/tool/ar'}}}, environment={},
+        )
+        fake.reuse_signature = fake.reuse_signature.__get__(fake)
+        with patch('emberbsd_sdk.sysroot_builder.runtime_refresh.changed_builtins', return_value=['compiler-rt/lib/builtins/a.c']) as sources, \
+             patch('emberbsd_sdk.sysroot_builder.prepared_refresh.runtime_objects', return_value=['lib/libc/a.o']) as objects, \
+             patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=[]), \
+             patch('emberbsd_sdk.sysroot_builder.prepared_refresh.runtime_independent_patterns', return_value=[]):
+            self.assertTrue(SysrootBuilder.plan_prepared_refresh(fake, {'signature': old}, '/obj'))
+        sources.assert_called_once_with('/source/old', '/source/new')
+        objects.assert_called_once()
+        self.assertEqual(fake.runtime_refresh_files, ['lib/libc/a.o'])
+
+    def test_builtins_source_diff_rejects_additions_and_reports_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            old, new = root / 'old', root / 'new'
+            for source in (old, new):
+                (source / 'compiler-rt/lib/builtins').mkdir(parents=True)
+                (source / 'compiler-rt/lib/builtins/same.c').write_text('same')
+                (source / 'compiler-rt/lib/builtins/changed.h').write_text('old')
+            (new / 'compiler-rt/lib/builtins/changed.h').write_text('new')
+            (old / 'compiler-rt/lib/builtins/CMakeLists.txt').write_text('old')
+            (new / 'compiler-rt/lib/builtins/CMakeLists.txt').write_text('changed flags')
+            with self.assertRaisesRegex(Exception, 'unsupported builtins source change'):
+                runtime_refresh.changed_builtins(old, new)
+            (new / 'compiler-rt/lib/builtins/CMakeLists.txt').write_text('old')
+            self.assertEqual(runtime_refresh.changed_builtins(old, new),
+                             ['compiler-rt/lib/builtins/changed.h'])
+            cmake = Path('compiler-rt/cmake/Modules/AddCompilerRT.cmake')
+            for source in (old, new):
+                (source / cmake).parent.mkdir(parents=True)
+            dollar = chr(36)
+            original = 'if (APPLE AND NOT CMAKE_LINKER MATCHES)\nCOMMAND ' + dollar + '{CODESIGN} --sign - ' + dollar + '{EXTRA_CODESIGN_ARGUMENTS}\n'
+            (old / cmake).write_text(original)
+            (new / cmake).write_text(original.replace('--sign -', '--force --sign -'))
+            self.assertEqual(runtime_refresh.changed_builtins(old, new),
+                             ['compiler-rt/lib/builtins/changed.h'])
+            outside = 'if (APPLE AND NOT CMAKE_LINKER MATCHES)\nendif()\n' + original.split('\n', 1)[1]
+            (old / cmake).write_text(outside)
+            (new / cmake).write_text(outside.replace('--sign -', '--force --sign -'))
+            with self.assertRaisesRegex(Exception, 'unrelated runtime source changed'):
+                runtime_refresh.changed_builtins(old, new)
+            (old / cmake).write_text(original)
+            (new / cmake).write_text(original.replace('--sign -', '--force --sign -') + 'unexpected\n')
+            with self.assertRaisesRegex(Exception, 'unrelated runtime source changed'):
+                runtime_refresh.changed_builtins(old, new)
+            (new / cmake).write_text(original.replace('--sign -', '--force --sign -'))
+            (old / 'other.h').write_text('old')
+            (new / 'other.h').write_text('new')
+            with self.assertRaisesRegex(Exception, 'unrelated runtime source changed'):
+                runtime_refresh.changed_builtins(old, new)
+            (old / 'other.h').unlink()
+            (new / 'other.h').unlink()
+            (new / 'compiler-rt/lib/builtins/extra.c').write_text('extra')
+            with self.assertRaisesRegex(Exception, 'builtins source inventory changed'):
+                runtime_refresh.changed_builtins(old, new)
+
+    def test_builtins_object_plan_selects_only_dependent_variants(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            obj = root / 'objects'
+            old = root / 'old-source'
+            (obj / 'lib/libc').mkdir(parents=True)
+            (old / 'compiler-rt/lib/builtins').mkdir(parents=True)
+            changed = old / 'compiler-rt/lib/builtins/fp_lib.h'
+            changed.write_bytes(b'old')
+            unit = obj / 'lib/libc'
+            (unit / 'dependent.d').write_text('dependent.o: ' + str(changed) + chr(10))
+            for name in ('dependent.o', 'dependent.pico', 'independent.o', 'independent.d'):
+                (unit / name).write_bytes(b'keep')
+            (unit / 'independent.d').write_text('independent.o: /unrelated/header.h' + chr(10))
+            result = prepared_refresh.runtime_objects(obj, old, ('compiler-rt/lib/builtins/fp_lib.h',))
+            self.assertEqual(set(result), {'lib/libc/dependent.d', 'lib/libc/dependent.o',
+                                           'lib/libc/dependent.pico'})
+            self.assertTrue((unit / 'independent.o').exists())
+            (unit / 'dependent.po').write_bytes(b'profiled object')
+            with self.assertRaisesRegex(Exception, 'unsupported runtime object variant'):
+                prepared_refresh.runtime_objects(obj, old, ('compiler-rt/lib/builtins/fp_lib.h',))
+            (unit / 'dependent.po').unlink()
+            other = obj / 'other'
+            other.mkdir()
+            (other / 'x.o').write_bytes(b'object')
+            (other / 'x.d').write_text('x.o: ' + str(changed) + chr(10))
+            with self.assertRaisesRegex(Exception, 'unknown runtime object archive owner'):
+                prepared_refresh.runtime_objects(obj, old, ('compiler-rt/lib/builtins/fp_lib.h',))
+            (other / 'x.o').unlink()
+            (other / 'x.d').unlink()
+            (unit / 'unknown.o').write_bytes(b'old object')
+            with self.assertRaisesRegex(Exception, 'missing runtime dependency file'):
+                prepared_refresh.runtime_objects(obj, old, ('compiler-rt/lib/builtins/fp_lib.h',))
+            self.assertEqual(set(prepared_refresh.runtime_objects(
+                obj, old, ('compiler-rt/lib/builtins/fp_lib.h',), ('lib/libc/unknown.o',))), set(result))
+            (unit / 'unknown.o').unlink()
+            direct = old / 'compiler-rt/lib/builtins/direct.c'
+            direct.write_bytes(b'old')
+            (unit / 'direct.o').write_bytes(b'old object')
+            with self.assertRaisesRegex(Exception, 'missing runtime dependency file'):
+                prepared_refresh.runtime_objects(obj, old, ('compiler-rt/lib/builtins/direct.c',))
+            (unit / 'direct.d').write_text('direct.o: /another/direct.c' + chr(10))
+            with self.assertRaisesRegex(Exception, 'runtime dependency does not reference'):
+                prepared_refresh.runtime_objects(obj, old, ('compiler-rt/lib/builtins/direct.c',))
+
+    def test_runtime_object_plan_understands_long_dependency_names(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            obj, old = root / 'objects', root / 'old-source'
+            unit = obj / 'lib/libc'
+            unit.mkdir(parents=True)
+            source = old / 'compiler-rt/lib/builtins/direct.c'
+            source.parent.mkdir(parents=True)
+            source.write_text('old')
+            (unit / 'direct.o').write_bytes(b'object')
+            (unit / 'direct.o.d').write_text('direct.o: ' + str(source) + chr(10))
+            result = prepared_refresh.runtime_objects(obj, old, ['compiler-rt/lib/builtins/direct.c'])
+            self.assertEqual(set(result), {'lib/libc/direct.o', 'lib/libc/direct.o.d'})
+
+    def test_runtime_source_scan_propagates_walk_errors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            old, new = root / 'old', root / 'new'
+            for source in (old, new):
+                (source / 'compiler-rt/lib/builtins').mkdir(parents=True)
+            def walk_fail(path, *, followlinks, onerror):
+                onerror(OSError('injected source walk failure'))
+                return iter(())
+            with patch('emberbsd_sdk.runtime_refresh.os.walk', side_effect=walk_fail):
+                with self.assertRaisesRegex(OSError, 'injected source walk failure'):
+                    runtime_refresh.changed_builtins(old, new)
+
+    def test_runtime_archive_proof_rejects_stale_member(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            obj, source = root / 'objects', root / 'new-source'
+            unit = obj / 'lib/libc'
+            unit.mkdir(parents=True)
+            changed = source / 'compiler-rt/lib/builtins/a.h'
+            changed.parent.mkdir(parents=True)
+            changed.write_text('new')
+            (unit / 'x.o').write_bytes(b'new object')
+            (unit / 'x.o.d').write_text('x.o: ' + str(changed) + chr(10))
+            (unit / 'libc.a').write_bytes(b'archive')
+            selected = ['lib/libc/x.o', 'lib/libc/x.o.d']
+            members = lambda archive: ['x.o']
+            with self.assertRaisesRegex(Exception, 'archive member is stale'):
+                prepared_refresh.verify_runtime_outputs(obj, selected, source,
+                    ['compiler-rt/lib/builtins/a.h'], members, lambda archive, member: b'old object')
+            prepared_refresh.verify_runtime_outputs(obj, selected, source,
+                ['compiler-rt/lib/builtins/a.h'], members, lambda archive, member: b'new object')
+
+    def test_runtime_archive_proof_requires_shared_relink(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            obj, source = root / 'objects', root / 'new-source'
+            unit = obj / 'lib/libc'
+            unit.mkdir(parents=True)
+            changed = source / 'compiler-rt/lib/builtins/a.h'
+            changed.parent.mkdir(parents=True)
+            changed.write_text('new')
+            (unit / 'x.pico').write_bytes(b'new object')
+            (unit / 'x.d').write_text('x.o: ' + str(changed) + chr(10))
+            (unit / 'libc_pic.a').write_bytes(b'archive')
+            shared = unit / 'libc.so.12'
+            shared.write_bytes(b'shared')
+            (unit / 'libc.so').symlink_to(shared.name)
+            selected = ['lib/libc/x.pico', 'lib/libc/x.d']
+            before = prepared_refresh.runtime_shared_identity(obj, selected)
+            same = shared.stat().st_mtime_ns
+            os.utime(unit / 'x.pico', ns=(same, same))
+            with self.assertRaisesRegex(Exception, 'shared library was not relinked'):
+                prepared_refresh.verify_runtime_outputs(obj, selected, source,
+                    ['compiler-rt/lib/builtins/a.h'], lambda archive: ['x.pico'],
+                    lambda archive, member: b'new object', before)
+            shared.write_bytes(b'new shared')
+            prepared_refresh.verify_runtime_outputs(obj, selected, source,
+                ['compiler-rt/lib/builtins/a.h'], lambda archive: ['x.pico'],
+                lambda archive, member: b'new object', before)
+
+    def test_runtime_object_scan_propagates_walk_errors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            obj, source = root / 'objects', root / 'source'
+            obj.mkdir()
+            (source / 'compiler-rt/lib/builtins').mkdir(parents=True)
+            (source / 'compiler-rt/lib/builtins/a.c').write_text('source')
+            def walk_fail(path, *, followlinks, onerror):
+                onerror(OSError('injected walk failure'))
+                return iter(())
+            with patch('emberbsd_sdk.prepared_refresh.os.walk', side_effect=walk_fail):
+                with self.assertRaisesRegex(OSError, 'injected walk failure'):
+                    prepared_refresh.runtime_objects(obj, source, ('compiler-rt/lib/builtins/a.c',))
+
+    def test_runtime_quarantine_moves_only_planned_files_and_preserves_others(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'objects'
+            (root / 'lib').mkdir(parents=True)
+            for name in ('changed.o', 'changed.d', 'other.o'):
+                (root / 'lib' / name).write_text(name)
+            backup = root / '.runtime-refresh-owned'
+            prepared_refresh.quarantine_runtime_objects(root, ['lib/changed.o', 'lib/changed.d'], backup)
+            self.assertFalse((root / 'lib/changed.o').exists())
+            self.assertEqual((backup / 'lib/changed.o').read_text(), 'changed.o')
+            self.assertEqual((root / 'lib/other.o').read_text(), 'other.o')
+            with self.assertRaisesRegex(Exception, 'runtime quarantine already exists'):
+                prepared_refresh.quarantine_runtime_objects(root, ['lib/other.o'], backup)
+
+    def test_runtime_quarantine_rolls_back_partial_move(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'objects'
+            (root / 'lib').mkdir(parents=True)
+            for name in ('a.o', 'b.o'):
+                (root / 'lib' / name).write_text(name)
+            backup = root / '.runtime-refresh-owned'
+            replace = prepared_refresh.os.replace
+            calls = []
+            def fail_second(source, target):
+                calls.append((source, target))
+                if len(calls) == 2:
+                    raise OSError('injected failure')
+                return replace(source, target)
+            with patch('emberbsd_sdk.prepared_refresh.os.replace', side_effect=fail_second):
+                with self.assertRaisesRegex(OSError, 'injected failure'):
+                    prepared_refresh.quarantine_runtime_objects(root, ['lib/a.o', 'lib/b.o'], backup)
+            self.assertEqual((root / 'lib/a.o').read_text(), 'a.o')
+            self.assertEqual((root / 'lib/b.o').read_text(), 'b.o')
+            self.assertFalse(backup.exists())
+
+    def test_quarantine_cleanup_requires_exact_owned_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'objects'
+            (root / 'lib').mkdir(parents=True)
+            (root / 'lib/a.o').write_text('old')
+            backup = root / '.runtime-refresh-owned'
+            prepared_refresh.quarantine_runtime_objects(root, ['lib/a.o'], backup)
+            (backup / 'other').write_text('not owned')
+            with self.assertRaisesRegex(Exception, 'quarantine inventory changed'):
+                prepared_refresh.cleanup_runtime_quarantine(root, ['lib/a.o'], backup)
+            self.assertTrue((backup / 'lib/a.o').exists())
+            (backup / 'other').unlink()
+            prepared_refresh.cleanup_runtime_quarantine(root, ['lib/a.o'], backup)
+            self.assertFalse(backup.exists())
+
+    def test_runtime_refresh_context_changes_only_after_proof(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            obj = Path(temporary) / 'objects'
+            (obj / 'lib/libc').mkdir(parents=True)
+            (obj / 'lib/libc/a.o').write_bytes(b'old')
+            context = obj / SysrootBuilder.CONTEXT
+            context.write_text(json.dumps({'signature': {'old': True}}))
+            fake = SimpleNamespace(
+                paths={'objects': str(obj)}, runtime_refresh_files=['lib/libc/a.o'],
+                runtime_refresh_source='/new', runtime_refresh_changed=['compiler-rt/lib/builtins/a.c'],
+                refresh_dirs=[], RUNTIME_QUARANTINE=SysrootBuilder.RUNTIME_QUARANTINE,
+                CONTEXT=SysrootBuilder.CONTEXT, compiler_record={'binaries': {'ar': {'selected_path': '/ar'}}},
+                environment={}, context_signature=lambda path: {'new': True}, sources={},
+            )
+            SysrootBuilder.begin_runtime_refresh(fake)
+            backup = obj / fake.RUNTIME_QUARANTINE
+            self.assertEqual((backup / 'lib/libc/a.o').read_bytes(), b'old')
+            (obj / 'lib/libc/a.o').write_bytes(b'new')
+            with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.verify_runtime_outputs',
+                       side_effect=ValueError('archive proof failed')):
+                with self.assertRaisesRegex(ValueError, 'archive proof failed'):
+                    SysrootBuilder.finish_runtime_refresh(fake)
+            self.assertEqual(json.loads(context.read_text())['signature'], {'old': True})
+            self.assertTrue((backup / 'lib/libc/a.o').exists())
+            with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.verify_runtime_outputs'):
+                SysrootBuilder.finish_runtime_refresh(fake)
+            self.assertEqual(json.loads(context.read_text())['signature'], {'new': True})
+            self.assertFalse(backup.exists())
 
     def test_prepared_planner_unions_runtime_headers_and_links_with_common_source(self):
         with tempfile.TemporaryDirectory() as temporary:

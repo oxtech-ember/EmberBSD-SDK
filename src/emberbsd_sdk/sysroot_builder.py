@@ -141,6 +141,7 @@ class SysrootBuilder:
     VERIFIER = 'profiles/development-toolchain/runtime/recipe/files/runtime.py'
     CONTEXT = '.prebuild-sdk-context.json'
     QUARANTINE = '.prebuild-sdk-quarantine.json'
+    RUNTIME_QUARANTINE = '.prebuild-sdk-runtime-refresh'
     RECEIPT = '.prebuild-sdk-build.json'
     # A development run restarts SDK-named LLVM stages that a failed run left.
     RESUMES_FAILED_STAGES = True
@@ -438,6 +439,8 @@ class SysrootBuilder:
         paths.real_directory(path)
         if paths.entry(os.path.join(path, self.QUARANTINE)) is not None:
             raise SDKError(f'object context is quarantined: {path}')
+        if path == self.paths['objects'] and os.path.lexists(os.path.join(path, self.RUNTIME_QUARANTINE)):
+            raise SDKError(f'incomplete runtime refresh is quarantined: {path}')
         if not os.listdir(path):
             return None
         record = jsonio.read_json(os.path.join(path, self.CONTEXT))
@@ -509,9 +512,45 @@ class SysrootBuilder:
                 return False
             changed = {name for name in after if name not in before or
                        before[name].get('tree_sha256') != after[name].get('tree_sha256')}
+            old_flags = _canonicalize_unique_flag_assignments(self.reuse_signature(copy.deepcopy(old))['flags'])
+            new_flags = _canonicalize_unique_flag_assignments(self.reuse_signature(copy.deepcopy(new))['flags'])
+            checked_runtime = {}
+            def runtime_sources():
+                selector = 'EMBER_LLVM_SOURCE='
+                previous = [f[len(selector):] for f in old_flags if f.startswith(selector)]
+                selected = [f[len(selector):] for f in new_flags if f.startswith(selector)]
+                if (len(previous) != 1 or len(selected) != 1 or
+                        selected[0] != self.paths.get('llvm-source') or
+                        not os.path.isabs(previous[0])):
+                    return None
+                if not checked_runtime:
+                    changed_files = runtime_refresh.changed_builtins(previous[0], selected[0])
+                    checked_runtime.update(previous=previous[0], selected=selected[0], changed=changed_files)
+                return checked_runtime
+            def recipe_guard(before_recipe, after_recipe):
+                checked = runtime_sources()
+                if checked is None:
+                    return False
+                changed_paths = list(checked['changed'])
+                darwin = 'compiler-rt/cmake/Modules/AddCompilerRT.cmake'
+                if (Path(checked['previous'], darwin).read_bytes() !=
+                        Path(checked['selected'], darwin).read_bytes()):
+                    changed_paths.append(darwin)
+                return runtime_refresh.compatible_recipe_transition(
+                    before_recipe, after_recipe, changed_paths,
+                    ports=self.paths['ports'], python=self.paths['python'], git=self.git_command,
+                    target=self.options['target'], machine_arch=self.target['arch'],
+                    environment=self.environment)
             runtime = None
+            runtime_kind = None
             if any(old.get(key) != new.get(key) for key in ('runtime', 'runtime_prefix', 'llvm_source')):
                 runtime = runtime_refresh.cpp_update(old, new)
+                if runtime is not None:
+                    runtime_kind = 'cpp'
+                else:
+                    runtime = runtime_refresh.builtins_update(old, new, recipe_guard=recipe_guard)
+                    if runtime is not None:
+                        runtime_kind = 'builtins'
                 if runtime is not None:
                     for key in ('runtime', 'runtime_prefix', 'llvm_source'):
                         old[key] = copy.deepcopy(new[key])
@@ -525,10 +564,6 @@ class SysrootBuilder:
                     return None
                 return tuple(record[key] for key in ('format', 'version', 'package', 'tree_sha256'))
 
-            old_flags = self.reuse_signature(copy.deepcopy(old))['flags']
-            new_flags = self.reuse_signature(copy.deepcopy(new))['flags']
-            old_flags = _canonicalize_unique_flag_assignments(old_flags)
-            new_flags = _canonicalize_unique_flag_assignments(new_flags)
             if not changed and runtime is None:
                 return False
             moved = set()
@@ -581,7 +616,17 @@ class SysrootBuilder:
                                           't', str(archive)], env=self.environment)
                 return result.stdout.decode('utf-8', 'strict').splitlines()
             self.refresh_nested_outputs = []
-            extra = dict(extra_headers=runtime['headers'], extra_linked=runtime['linked']) if runtime is not None else {}
+            if runtime_kind == 'builtins':
+                checked = runtime_sources()
+                if checked is None:
+                    return False
+                patterns = prepared_refresh.runtime_independent_patterns(self.paths['os'])
+                self.runtime_refresh_files = prepared_refresh.runtime_objects(
+                    path, checked['previous'], checked['changed'], patterns)
+                self.runtime_refresh_source = checked['selected']
+                self.runtime_refresh_changed = checked['changed']
+            extra = (dict(extra_headers=runtime['headers'], extra_linked=runtime['linked'])
+                     if runtime_kind == 'cpp' else {})
             source_roots = set()
             for name in before.keys() | after.keys():
                 if name not in common_packages:
@@ -1636,6 +1681,8 @@ class SysrootBuilder:
             if self.inspect_context(self.paths[name]) != self.contexts[name]:
                 raise SDKError('object context changed after preflight')
         # Hold the existing object-tree lease throughout cleanup and context update.
+        if hasattr(self, 'runtime_refresh_files'):
+            self.begin_runtime_refresh()
         native_dirs = getattr(self, 'native_refresh_dirs', [])
         if getattr(self, 'refresh_dirs', []) or native_dirs:
             # TOOLDIR has one nbmake wrapper, and each build.sh invocation
@@ -1682,11 +1729,46 @@ class SysrootBuilder:
             self.dispatch(base + ['MKCLEANSRC=no', 'cleandir'])
             self.dispatch(base + ['-j' + self.options['jobs'], 'dependall', 'install'])
         for name in ('objects', 'tools'):
+            if name == 'objects' and hasattr(self, 'runtime_refresh_files'):
+                # Old context stays authoritative until rebuilt archives pass.
+                continue
             path = self.paths[name]
             record = dict(format='emberbsd-sysroot-object-context', version=1,
                           signature=self.context_signature(path), sources=self.sources)
             self.mkdirs(path, os.path.join(self.paths['sdk'], 'obj'))
             jsonio.write_json(os.path.join(path, self.CONTEXT), record, exclusive=self.contexts[name] is None)
+
+    def begin_runtime_refresh(self):
+        if not hasattr(self, 'runtime_refresh_files'):
+            return
+        for directory in getattr(self, 'refresh_dirs', []):
+            if any(name == directory or name.startswith(directory + '/')
+                   for name in self.runtime_refresh_files):
+                raise SDKError('prepared source cleanup overlaps runtime objects: ' + directory)
+        self.runtime_before_shared = prepared_refresh.runtime_shared_identity(
+            self.paths['objects'], self.runtime_refresh_files)
+        backup = os.path.join(self.paths['objects'], self.RUNTIME_QUARANTINE)
+        prepared_refresh.quarantine_runtime_objects(
+            self.paths['objects'], self.runtime_refresh_files, backup)
+
+    def finish_runtime_refresh(self):
+        if not hasattr(self, 'runtime_refresh_files'):
+            return
+        ar = self.compiler_record['binaries']['ar']['selected_path']
+        def members(archive):
+            return process.capture([ar, 't', str(archive)], env=self.environment).stdout.decode('utf-8', 'strict').splitlines()
+        def contents(archive, member):
+            return process.capture([ar, 'p', str(archive), member], env=self.environment).stdout
+        prepared_refresh.verify_runtime_outputs(
+            self.paths['objects'], self.runtime_refresh_files,
+            self.runtime_refresh_source, self.runtime_refresh_changed, members, contents,
+            self.runtime_before_shared)
+        path = self.paths['objects']
+        record = dict(format='emberbsd-sysroot-object-context', version=1,
+                      signature=self.context_signature(path), sources=self.sources)
+        jsonio.write_json(os.path.join(path, self.CONTEXT), record, exclusive=False)
+        prepared_refresh.cleanup_runtime_quarantine(
+            path, self.runtime_refresh_files, os.path.join(path, self.RUNTIME_QUARANTINE))
 
     def native_makewrapper_command(self):
         operations = list(self.os_build_operations)
@@ -1903,6 +1985,8 @@ class SysrootBuilder:
             self.build_payload()
             self.receipt['outputs'] = self.inspect_payload()
             self.interrupted()
+            if hasattr(self, 'runtime_refresh_files'):
+                self.finish_runtime_refresh()
             self.receipt['qualification'] = 'built-and-inspected'
             self.save_receipt()
             os.unlink(marker)
