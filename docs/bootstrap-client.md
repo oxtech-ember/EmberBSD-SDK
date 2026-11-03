@@ -79,7 +79,7 @@ current. The bootstrap archive currently occupies approximately 39 MB.
 
 `scripts/package-portable.py --help` qualifies simple Darwin packages such as
 fetch before signing. It adjusts Mach-O references, validates their dependency
-closure against the selected prefix, rejects package hooks/commands and rejects
+closure against the selected prefix, rejects unqualified hooks and packing-list commands, and rejects
 payloads still containing the producer prefix by default. Prefix-local `REQUIRES` are replaced
 by the existing package dependencies only after checking library ownership;
 system requirements stay unchanged. It then uses native pkg_create to
@@ -98,8 +98,8 @@ prefix replacement and permits prefix-local library `PROVIDES`. The signed
 `emberbsd-prefix-relocation-v1` marker declares this contract. After successful
 `pkg_add`, the client adjusts those text files and active provider metadata,
 then refreshes checksums for the changed files. An interrupted relocation can
-resume; a failed package installation must be repaired first. Hooks remain
-unsupported. Overlapping old and new prefixes are refused when a replacement
+resume; a failed package installation must be repaired first.
+Overlapping old and new prefixes are refused when a replacement
 would not be safe to repeat.
 
 `--allow-binary-prefix` additionally permits binary build-path strings that
@@ -107,6 +107,16 @@ cannot be rewritten as text. It requires `--relocate-text` and an actual
 compiler check at a different prefix before publication. Mach-O load commands
 and their transitive package-provided libraries are still checked and made
 relative; this option does not prove that embedded paths are inactive.
+
+Packages with configuration scripts additionally need `--defer-hooks`. This
+explicit qualification requires their PRE-INSTALL and POST-INSTALL actions to
+work after extraction and to be repeatable. The client uses `pkg_add -I`,
+relocates payload text and both hook scripts, then runs the same package
+configuration helper as the bootstrap. A hook failure leaves pending state;
+the next client operation retries configuration before accepting the package
+as installed. This contract applies only to signed native packages; target
+scripts are never executed on the development host. The producer must test
+these hooks and the package at a different prefix before publication.
 
 Validated on Darwin arm64: isolated bootstrap startup and HTTPS with all reads
 from the producer prefix denied; Python/OpenSSL default trust paths; dynamic

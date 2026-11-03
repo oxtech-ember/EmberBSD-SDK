@@ -320,6 +320,29 @@ def text_references(root, prefix, packages):
     return result
 
 
+def run_install_hooks(root, database, name):
+    """Run qualified package configuration after its files have been relocated.
+
+    The producer must check that both phases work after extraction and may be
+    repeated. Host POSIX utilities are installation services, not build tools.
+    """
+    root, database = Path(root), Path(database)
+    metadata = database / name
+    script = metadata / '+INSTALL'
+    if not script.exists():
+        return
+    environment = {'PATH': str(root / 'bin') + ':' + str(root / 'sbin') + ':/usr/bin:/bin:/usr/sbin:/sbin',
+                   'LC_ALL': 'C', 'PKG_PREFIX': str(root), 'PKG_DBDIR': str(database),
+                   'PKG_REFCOUNT_DBDIR': str(database.parent / (database.name + '.refcount')),
+                   'PKG_REGISTER_SHELLS': 'NO', 'PKG_METADATA_DIR': str(metadata)}
+    for stage in ('PRE-INSTALL', 'POST-INSTALL'):
+        result = subprocess.run([str(script), name, stage], cwd=metadata,
+                                env=environment, capture_output=True)
+        if result.returncode:
+            raise SDKError('package configuration failed: ' + name + ': ' +
+                           result.stderr[-4096:].decode('utf-8', 'replace'))
+
+
 def initialize(root):
     root = root.resolve()
     if not re.fullmatch(r'[A-Za-z0-9_./-]+', str(root)):
@@ -356,22 +379,8 @@ def initialize(root):
                 if content != path.read_bytes():
                     _replace_file(path, content)
         refresh_checksums(root, metadata['packages'])
-        # Run the package owner's normal configuration actions. The host's
-        # POSIX utilities are installation services, not a compiler fallback.
-        environment = {'PATH': str(root / 'bin') + ':' + str(root / 'sbin') + ':/usr/bin:/bin:/usr/sbin:/sbin',
-                       'LC_ALL': 'C', 'PKG_PREFIX': str(root), 'PKG_DBDIR': str(root / 'pkgdb'),
-                       'PKG_REFCOUNT_DBDIR': str(root / 'pkgdb.refcount'), 'PKG_REGISTER_SHELLS': 'NO'}
         for name in metadata['packages']:
-            database = root / 'pkgdb' / name
-            script = database / '+INSTALL'
-            if not script.exists():
-                continue
-            for stage in ('PRE-INSTALL', 'POST-INSTALL'):
-                result = subprocess.run([str(script), name, stage], cwd=database,
-                    env=dict(environment, PKG_METADATA_DIR=str(database)), capture_output=True)
-                if result.returncode:
-                    raise SDKError('bootstrap package configuration failed: ' + name + ': ' +
-                                   result.stderr.decode('utf-8', 'replace'))
+            run_install_hooks(root, root / 'pkgdb', name)
         command = [str(root / 'sbin/pkg_admin'), '-K', str(root / 'pkgdb')]
         for action in ('rebuild', 'rebuild-tree'):
             result = subprocess.run(command + [action], env={'PATH': str(root / 'bin') + ':' + str(root / 'sbin'),
