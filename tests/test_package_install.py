@@ -37,7 +37,7 @@ class InstallTests(unittest.TestCase):
                         host=dict(os=platform.system(), arch=platform.machine(), abi='test', runtime='native'))
 
     def package(self, *, target=False, link=None, commands='', arch='aarch64', requires_self=False, preserve=False,
-                payload='installed data', provides=False):
+                payload='installed data', provides=False, install_script=None):
         stage = self.work / 'stage'
         stage.mkdir()
         if link:
@@ -58,6 +58,10 @@ class InstallTests(unittest.TestCase):
             (stage / 'PRESERVE').write_text('bootstrap tool\n')
             (stage / 'INFO').chmod(0o444)
             extra = ['-n', stage / 'PRESERVE']
+        if install_script is not None:
+            script = stage / 'INSTALL'
+            script.write_text(install_script); script.chmod(0o755)
+            extra += ['-i', script]
         self.crypto.run_package('pkg_create', [*extra, '-c', '-fixture', '-d', '-fixture',
             '-f', stage / 'PLIST', '-B', stage / 'INFO', '-p', stage, '-I', prefix, unsigned])
         self.crypto.sign_package(unsigned, signed, self.signer, self.ca.certificate)
@@ -148,6 +152,36 @@ class InstallTests(unittest.TestCase):
         package = self.package(commands=PORTABLE_PREFIX + '\n@exec echo unsafe\n')
         with self.assertRaisesRegex(SDKError, 'installation commands'):
             inspect_install_paths(package, self.cfg)
+
+    def test_hooks_need_explicit_deferred_qualification(self):
+        package = self.package(commands=PORTABLE_PREFIX + '\n', install_script='#!/bin/sh\nexit 0\n')
+        with self.assertRaisesRegex(SDKError, 'installation scripts'):
+            inspect_install_paths(package, self.cfg)
+
+    @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
+    def test_signed_deferred_hook_runs_after_relocation_and_recovers(self):
+        original = str(self.destination)
+        package = self.package(payload=original + '/value', install_script='#!/bin/sh\n'
+            'if [ "$2" = POST-INSTALL ]; then\n'
+            '  test "$(cat "' + original + '/payload")" = "$PKG_PREFIX/value" || exit 9\n'
+            '  printf configured > "$PKG_METADATA_DIR/configured"\nfi\n')
+        portable, signed = self.work / 'portable.tgz', self.work / 'portable-signed.tgz'
+        subprocess.run([sys.executable, '-B', str(Path(__file__).resolve().parents[1] / 'scripts/package-portable.py'),
+            str(package), '--host-prefix', os.environ['EMBERBSD_TEST_HOST_PREFIX'],
+            '--dependency-prefix', str(self.work / 'unused'), '--output', str(portable), '--relocate-text',
+            '--defer-hooks', '--bootstrap-install-name-tool', '/usr/bin/false', '--codesign', '/usr/bin/false'],
+            check=True, capture_output=True)
+        self.crypto.sign_package(portable, signed, self.signer, self.ca.certificate)
+        self.cfg.update(prefix=str(self.work / 'relocated'), pkgdb=str(self.work / 'selected-pkgdb'))
+        installer = PackageInstaller(self.crypto, self.ca.certificate)
+        with patch.object(package_relocation, 'run_install_hooks', side_effect=SDKError('hook interrupted')):
+            with self.assertRaisesRegex(SDKError, 'hook interrupted'):
+                installer.install(signed, self.cfg)
+        self.assertIn('fixture-1.0', installer.installed(self.cfg))
+        metadata = Path(self.cfg['pkgdb']) / 'fixture-1.0'
+        self.assertEqual((metadata / 'configured').read_text(), 'configured')
+        self.assertNotIn(package_relocation.HOOKS, (metadata / '+CONTENTS').read_text())
+        self.assertFalse((metadata / package_relocation.READY).exists())
 
     @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
     def test_portable_producer_omits_empty_requires_before_real_pkg_add(self):

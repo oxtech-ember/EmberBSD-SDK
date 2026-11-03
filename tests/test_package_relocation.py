@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk import package_relocation as relocation
@@ -12,6 +13,29 @@ from emberbsd_sdk.errors import SDKError
 
 
 class RelocationTests(unittest.TestCase):
+    def test_deferred_hook_at_original_prefix_needs_completion_and_retries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / 'pkgdb/fixture-1'; package.mkdir(parents=True)
+            contents = package / '+CONTENTS'
+            contents.write_text('@name fixture-1\n@cwd ' + str(root) + '\n' + relocation.MARKER + '\n' +
+                                relocation.SOURCE + str(root) + '\n' + relocation.HOOKS + '\n')
+            self.assertEqual(list(relocation.pending(root, root / 'pkgdb')), ['fixture-1'])
+            with self.assertRaisesRegex(SDKError, 'pkg_add did not complete'):
+                relocation.finish(root, root / 'pkgdb', 'fixture-1')
+            (package / relocation.READY).write_text(str(root) + '\n')
+            with patch.object(relocation, 'run_install_hooks', side_effect=SDKError('failed')):
+                with self.assertRaisesRegex(SDKError, 'failed'):
+                    relocation.finish(root, root / 'pkgdb', 'fixture-1')
+            with patch.object(relocation, 'run_install_hooks') as run:
+                relocation.finish(root, root / 'pkgdb', 'fixture-1')
+                run.assert_called_once()
+            self.assertEqual(list(relocation.pending(root, root / 'pkgdb')), [])
+            # A crash after the final plist update leaves only harmless state.
+            (package / relocation.READY).write_text('/old\n')
+            relocation.finish(root, root / 'pkgdb', 'fixture-1')
+            self.assertFalse((package / relocation.READY).exists())
+
     def test_repeated_producer_prefix_is_refused_before_text_changes(self):
         with self.assertRaisesRegex(SDKError, 'repeat its producer prefix'):
             relocate_text(b'#!/opt/sdk/bin/python', b'/opt/sdk', b'/alt/opt/sdk')

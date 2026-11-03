@@ -3,8 +3,8 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Qualify a Darwin package for installation into another SDK prefix.
 
-Whole packages only; hooks remain unsupported. Text relocation is explicit,
-and retaining binary build paths requires a relocated runtime check.
+Whole packages only. Text relocation and deferred hooks are explicit;
+retaining binary build paths requires a relocated runtime check.
 """
 import argparse
 from pathlib import Path
@@ -56,12 +56,16 @@ def main():
         help='declare first-install relocation for text files and library-provider metadata')
     parser.add_argument('--allow-binary-prefix', action='store_true',
         help='retain binary build-path strings; requires relocation testing by the producer')
+    parser.add_argument('--defer-hooks', action='store_true',
+        help='qualify repeatable hooks that run after extraction and text relocation')
     args = parser.parse_args()
     try:
         if platform.system() != 'Darwin' or args.output.exists():
             raise SDKError('select a new output on a Darwin producer')
         if args.allow_binary_prefix and not args.relocate_text:
             raise SDKError('--allow-binary-prefix requires --relocate-text')
+        if args.defer_hooks and not args.relocate_text:
+            raise SDKError('--defer-hooks requires --relocate-text')
         for tool in (args.bootstrap_install_name_tool, args.codesign):
             if not tool.is_absolute() or not tool.is_file():
                 raise SDKError('select explicit absolute packaging tools')
@@ -71,7 +75,7 @@ def main():
             root.mkdir()
             name, prefix = unpack_package(args.package, root)
             database = root / 'pkgdb' / name
-            if any((database / script).exists() for script in ('+INSTALL', '+DEINSTALL')):
+            if not args.defer_hooks and any((database / script).exists() for script in ('+INSTALL', '+DEINSTALL')):
                 raise SDKError('package has installation scripts')
             lines = (database / '+CONTENTS').read_text().splitlines()
             if any(line.startswith(('@exec ', '@unexec ')) for line in lines):
@@ -130,6 +134,8 @@ def main():
             packing = ([package_relocation.MARKER, package_relocation.SOURCE + prefix,
                         *[package_relocation.TEXT + name for name in texts]]
                        if args.relocate_text else [PORTABLE_PREFIX])
+            if args.defer_hooks:
+                packing.append(package_relocation.HOOKS)
             ignored = False
             for line in lines:
                 if ignored:
@@ -146,6 +152,10 @@ def main():
                                  ('-n', '+PRESERVE'), ('-D', '+DISPLAY')):
                 if (database / member).exists():
                     command += [flag, database / member]
+            if args.defer_hooks:
+                for flag, member in (('-i', '+INSTALL'), ('-k', '+DEINSTALL')):
+                    if (database / member).exists():
+                        command += [flag, database / member]
             crypto.run_package('pkg_create', [*command, args.output.absolute()])
         print(args.output)
         return 0

@@ -23,6 +23,10 @@ from .package_cache import directory_lock
 MANIFEST = 'share/emberbsd/bootstrap.json'
 _SYSTEM = ('/usr/lib/', '/System/Library/')
 _MACHO = (b'\xcf\xfa\xed\xfe', b'\xfe\xed\xfa\xcf', b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf')
+_FAT_ARCHIVES = {
+    b'\xca\xfe\xba\xbe': ('>', 20),
+    b'\xca\xfe\xba\xbf': ('>', 32),
+}
 
 
 def relative_path(value):
@@ -135,6 +139,51 @@ def _local_reference(name, relative, prefix, image):
     raise SDKError('unsupported native runtime reference: ' + name)
 
 
+def _native_fat_archive(path, host):
+    """Accept one native FAT slice only when its payload is a plain ar archive."""
+    with path.open('rb') as stream:
+        before = os.fstat(stream.fileno())
+        magic = stream.read(8)
+        layout = _FAT_ARCHIVES.get(magic[:4])
+        if layout is None:
+            return False
+        if len(magic) != 8:
+            raise SDKError('truncated native static archive FAT header')
+        endian, entry_size = layout
+        count = struct.unpack_from(endian + 'I', magic, 4)[0]
+        table_end = 8 + count * entry_size
+        if count != 1 or table_end > before.st_size:
+            raise SDKError('runtime packaging requires one valid native static archive slice')
+        entry = stream.read(entry_size)
+        if len(entry) != entry_size:
+            raise SDKError('truncated native static archive slice table')
+        if entry_size == 20:
+            cpu, subtype, offset, extent, alignment = struct.unpack(endian + '5I', entry)
+        else:
+            cpu, subtype, offset, extent, alignment, reserved = struct.unpack(endian + 'IIQQII', entry)
+            if reserved != 0:
+                raise SDKError('invalid native static archive slice table')
+        expected = {'arm64': (0x100000c, 0), 'aarch64': (0x100000c, 0),
+                    'x86_64': (0x1000007, 3), 'amd64': (0x1000007, 3)}.get(host.get('cpu'))
+        if host.get('os') != 'Darwin' or expected is None or (cpu, subtype) != expected:
+            raise SDKError('static archive FAT slice does not match the native host')
+        if (alignment > 31 or offset < table_end or offset % (1 << alignment) != 0 or
+                extent < 8 or offset > before.st_size or extent > before.st_size - offset or
+                offset + extent != before.st_size):
+            raise SDKError('invalid native static archive FAT slice bounds')
+        stream.seek(offset)
+        archive_magic = stream.read(8)
+        if archive_magic != b'!<arch>\n':
+            return False
+        after = os.fstat(stream.fileno())
+        identity = lambda stat_result: (stat_result.st_dev, stat_result.st_ino,
+                                        stat_result.st_size, stat_result.st_mtime_ns,
+                                        stat_result.st_ctime_ns)
+        if identity(before) != identity(after):
+            raise SDKError('native static archive changed during inspection')
+        return True
+
+
 def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency_root=None,
                   dependency_files=None):
     """Rewrite native load commands before release signing, never on a client."""
@@ -148,6 +197,8 @@ def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency
             magic = header[:4]
         if magic not in _MACHO:
             continue
+        if magic in _FAT_ARCHIVES and _native_fat_archive(path, host):
+            continue  # Static archives have no runtime load commands to relocate.
         if magic == b'\xcf\xfa\xed\xfe' and len(header) == 16 and struct.unpack_from('<I', header, 12)[0] == 1:
             continue  # Installed development objects have no runtime load commands.
         relative = path.relative_to(root)
@@ -348,6 +399,29 @@ def text_references(root, prefix, packages):
     return result
 
 
+def run_install_hooks(root, database, name):
+    """Run qualified package configuration after its files have been relocated.
+
+    The producer must check that both phases work after extraction and may be
+    repeated. Host POSIX utilities are installation services, not build tools.
+    """
+    root, database = Path(root), Path(database)
+    metadata = database / name
+    script = metadata / '+INSTALL'
+    if not script.exists():
+        return
+    environment = {'PATH': str(root / 'bin') + ':' + str(root / 'sbin') + ':/usr/bin:/bin:/usr/sbin:/sbin',
+                   'LC_ALL': 'C', 'PKG_PREFIX': str(root), 'PKG_DBDIR': str(database),
+                   'PKG_REFCOUNT_DBDIR': str(database.parent / (database.name + '.refcount')),
+                   'PKG_REGISTER_SHELLS': 'NO', 'PKG_METADATA_DIR': str(metadata)}
+    for stage in ('PRE-INSTALL', 'POST-INSTALL'):
+        result = subprocess.run([str(script), name, stage], cwd=metadata,
+                                env=environment, capture_output=True)
+        if result.returncode:
+            raise SDKError('package configuration failed: ' + name + ': ' +
+                           result.stderr[-4096:].decode('utf-8', 'replace'))
+
+
 def refresh_bytecode(root, packages, changed_sources):
     """Refresh owned Python caches after extraction and actual text relocation."""
     import importlib.util
@@ -423,22 +497,8 @@ def initialize(root):
             relocate_build_info(path, old, str(root).encode())
         refresh_bytecode(root, metadata['packages'], changed_sources)
         refresh_checksums(root, metadata['packages'])
-        # Run the package owner's normal configuration actions. The host's
-        # POSIX utilities are installation services, not a compiler fallback.
-        environment = {'PATH': str(root / 'bin') + ':' + str(root / 'sbin') + ':/usr/bin:/bin:/usr/sbin:/sbin',
-                       'LC_ALL': 'C', 'PKG_PREFIX': str(root), 'PKG_DBDIR': str(root / 'pkgdb'),
-                       'PKG_REFCOUNT_DBDIR': str(root / 'pkgdb.refcount'), 'PKG_REGISTER_SHELLS': 'NO'}
         for name in metadata['packages']:
-            database = root / 'pkgdb' / name
-            script = database / '+INSTALL'
-            if not script.exists():
-                continue
-            for stage in ('PRE-INSTALL', 'POST-INSTALL'):
-                result = subprocess.run([str(script), name, stage], cwd=database,
-                    env=dict(environment, PKG_METADATA_DIR=str(database)), capture_output=True)
-                if result.returncode:
-                    raise SDKError('bootstrap package configuration failed: ' + name + ': ' +
-                                   result.stderr.decode('utf-8', 'replace'))
+            run_install_hooks(root, root / 'pkgdb', name)
         command = [str(root / 'sbin/pkg_admin'), '-K', str(root / 'pkgdb')]
         for action in ('rebuild', 'rebuild-tree'):
             result = subprocess.run(command + [action], env={'PATH': str(root / 'bin') + ':' + str(root / 'sbin'),

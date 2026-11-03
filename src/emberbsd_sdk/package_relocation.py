@@ -5,7 +5,7 @@
 from pathlib import Path
 
 from .bootstrap_bundle import (_replace_file, relative_path, relocate_text,
-                               refresh_checksums, relocate_build_info)
+                               refresh_checksums, relocate_build_info, run_install_hooks)
 from .errors import SDKError
 
 INDEPENDENT = '@comment emberbsd-prefix-independent-v1'
@@ -13,10 +13,13 @@ MARKER = '@comment emberbsd-prefix-relocation-v1'
 SOURCE = '@comment emberbsd-relocation-prefix='
 TEXT = '@comment emberbsd-relocation-text='
 READY = '+EMBERBSD_RELOCATION_READY'
+HOOKS = '@comment emberbsd-deferred-hooks-v1'
 
 
 def declaration(lines):
     if MARKER not in lines:
+        if HOOKS in lines:
+            raise SDKError('deferred hooks require package text relocation')
         return None
     prefixes = [line[len(SOURCE):] for line in lines if line.startswith(SOURCE)]
     names = [line[len(TEXT):] for line in lines if line.startswith(TEXT)]
@@ -48,11 +51,13 @@ def finish(prefix, database, name):
     contents = metadata / '+CONTENTS'
     lines = contents.read_text().splitlines()
     selected = declaration(lines)
-    if selected is None or selected[0] == str(prefix):
+    if selected is None or (selected[0] == str(prefix) and HOOKS not in lines):
         if selected is not None or INDEPENDENT in lines:
             original = installed_source_prefix(metadata)
             if original is not None and original != str(prefix):
                 relocate_build_info(metadata / '+BUILD_INFO', original.encode(), str(prefix).encode())
+        if selected is not None:
+            (metadata / READY).unlink(missing_ok=True)
         return
     original, names = selected
     ready = metadata / READY
@@ -71,9 +76,22 @@ def finish(prefix, database, name):
         if content != updated:
             _replace_file(path, updated)
     relocate_build_info(metadata / '+BUILD_INFO', original.encode(), str(prefix).encode())
+    if HOOKS in lines:
+        for member in ('+INSTALL', '+DEINSTALL'):
+            path = metadata / member
+            if path.is_symlink():
+                raise SDKError('package hook is not a regular file')
+            if path.exists():
+                if not path.is_file() or path.stat().st_size > 8 * 1024 * 1024:
+                    raise SDKError('invalid package hook')
+                content = path.read_bytes()
+                updated = relocate_text(content, original.encode(), str(prefix).encode())
+                if content != updated:
+                    _replace_file(path, updated)
+        run_install_hooks(prefix, database, metadata.name)
     refresh_checksums(prefix, [metadata.name], database=database, selected=set(names))
     lines = contents.read_text().splitlines()
-    lines = [SOURCE + str(prefix) if line.startswith(SOURCE) else line for line in lines]
+    lines = [SOURCE + str(prefix) if line.startswith(SOURCE) else line for line in lines if line != HOOKS]
     _replace_file(contents, ('\n'.join(lines) + '\n').encode())
     ready.unlink()
 
@@ -83,7 +101,7 @@ def pending(prefix, database):
     for path in sorted(Path(database).glob('*/+CONTENTS')):
         lines = path.read_text().splitlines()
         selected = declaration(lines)
-        if selected is not None and selected[0] != str(prefix):
+        if selected is not None and (selected[0] != str(prefix) or HOOKS in lines or (path.parent / READY).exists()):
             yield path.parent.name
         elif selected is not None or INDEPENDENT in lines:
             original = installed_source_prefix(path.parent)
