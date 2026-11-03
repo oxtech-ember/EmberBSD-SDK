@@ -3,6 +3,9 @@
 The [signed release contract and CLI](signed-releases.md) implement the shared
 authenticated inventory, package signing and replay-protected channel pointer.
 They verify local complete releases; S3 transport and installation are separate.
+The [binary catalog producer and reader](binary-catalog.md) compose signed
+package repositories from Ports graphs and select fixed runtime closures without
+source checkouts or bmake on the client.
 
 This document defines the release boundary. The implemented
 [sysroot transfer commands](sysroot-transfer.md) export and import a completed

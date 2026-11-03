@@ -1,5 +1,9 @@
 # Selecting Ports packages
 
+This page covers source builds. For already built components, the
+[binary catalog](binary-catalog.md) lists and plans the same versionless sets
+without a Ports checkout or bmake on the reader.
+
 An SDK workspace starts with no selected packages. Choose versionless package
 roots for one task; the shared Ports controller resolves target and native
 dependencies, reuses compatible packages and objects, and installs into the

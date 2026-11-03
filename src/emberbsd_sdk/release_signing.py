@@ -88,7 +88,7 @@ class ReleaseCrypto:
         return self._run('openssl', arguments, data)
 
     def run_package(self, role, arguments):
-        if role not in ('pkg_admin', 'pkg_create'):
+        if role not in ('pkg_admin', 'pkg_create', 'pkg_info'):
             raise SDKError(f'unsupported release package tool: {role}')
         return self._run(role, arguments)
 

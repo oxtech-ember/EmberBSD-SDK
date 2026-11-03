@@ -68,6 +68,9 @@ Use [OS release composition](docs/os-release.md) for complete OS producer orches
 kit verification and immutable GitHub publication.
 The [signed release tools](docs/signed-releases.md) seal and verify package,
 SDK and OS inventories and channel pointers using one X.509 trust root.
+The [binary catalog](docs/binary-catalog.md) projects Ports runtime dependencies,
+signs packages before generating pkg_summary, and supports source-free selection
+of published package sets. Download and installation are subsequent steps.
 The [distribution guide](docs/distribution.md) defines the remaining boundary
 for an installable binary SDK and package channel.
 
