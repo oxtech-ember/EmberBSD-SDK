@@ -6,13 +6,14 @@ import hashlib
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
+import ssl
 from pathlib import Path
 import sys
 import threading
 import unittest
 from urllib.parse import urlsplit, parse_qs
 import xml.etree.ElementTree as ET
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
@@ -175,6 +176,100 @@ class HTTPTests(unittest.TestCase):
         self.store.delete('current/b')
         self.assertNotIn('/bucket/current/b', self.server.objects)
         self.assertIn('/bucket/another/keep', self.server.objects)
+
+
+class HTTPSRetryTests(unittest.TestCase):
+    def setUp(self):
+        self.store = HTTPStore('https://example.org')
+
+    def response(self, *, status=200, data=b'payload'):
+        response = Mock(status=status)
+        response.getheader.side_effect = lambda key, default=None: (
+            str(len(data)) if key == 'Content-Length' else default)
+        response.getheaders.return_value = [('Content-Length', str(len(data)))]
+        response.read.return_value = data
+        return response
+
+    def test_s3_retry_resigns_without_previous_authorization(self):
+        store = S3Store('https://example.org', 'region-1', 'bucket', 'access', 'secret')
+        failed, success = Mock(), Mock()
+        failed.getresponse.side_effect = TimeoutError()
+        success.getresponse.return_value = self.response()
+        with patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection',
+                   side_effect=[failed, success]):
+            with store.request('GET', 'object') as response:
+                self.assertEqual(response.status, 200)
+        for connection in (failed, success):
+            sent = dict(connection.request.call_args.kwargs['headers'])
+            authorization = sent.pop('authorization')
+            self.assertNotIn('authorization', authorization.split('SignedHeaders=')[1].split(',')[0].split(';'))
+            self.assertEqual(authorization, sign_request('GET', '/bucket/object', sent,
+                                                          'region-1', 'access', 'secret'))
+            connection.close.assert_called_once_with()
+
+    def test_safe_reads_retry_connection_failures_and_close_connections(self):
+        for method in ('GET', 'HEAD'):
+            for error in (TimeoutError(), ConnectionError(), http.client.RemoteDisconnected()):
+                for phase in ('request', 'getresponse'):
+                    with self.subTest(method=method, error=type(error).__name__, phase=phase):
+                        failed, success = Mock(), Mock()
+                        getattr(failed, phase).side_effect = error
+                        success.getresponse.return_value = self.response()
+                        with patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection',
+                                   side_effect=[failed, success]) as factory:
+                            with self.store.request(method, 'object') as response:
+                                self.assertEqual(response.status, 200)
+                        self.assertEqual(factory.call_count, 2)
+                        failed.close.assert_called_once_with()
+                        success.close.assert_called_once_with()
+
+    def test_safe_read_stops_after_three_failures(self):
+        connections = [Mock() for _ in range(3)]
+        for connection in connections:
+            connection.getresponse.side_effect = TimeoutError()
+        with patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection',
+                   side_effect=connections) as factory:
+            with self.assertRaises(SDKError):
+                with self.store.request('GET', 'object'):
+                    self.fail('no response expected')
+        self.assertEqual(factory.call_count, 3)
+        for connection in connections:
+            connection.close.assert_called_once_with()
+
+    def test_mutations_and_requests_with_body_are_never_retried(self):
+        for method, body in (('PUT', b'payload'), ('DELETE', None), ('GET', b'payload')):
+            with self.subTest(method=method):
+                connection = Mock()
+                connection.getresponse.side_effect = TimeoutError()
+                with patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection',
+                           return_value=connection) as factory:
+                    with self.assertRaises(SDKError):
+                        with self.store.request(method, 'object', body=body):
+                            self.fail('no response expected')
+                self.assertEqual(factory.call_count, 1)
+                connection.close.assert_called_once_with()
+
+    def test_certificate_status_integrity_and_body_failures_are_not_retried(self):
+        for failure in ('certificate', 'status', 'integrity', 'body'):
+            with self.subTest(failure=failure):
+                connection = Mock()
+                response = self.response(status=503 if failure == 'status' else 200)
+                connection.getresponse.return_value = response
+                if failure == 'certificate':
+                    connection.getresponse.side_effect = ssl.SSLCertVerificationError('invalid certificate')
+                elif failure == 'body':
+                    response.read.side_effect = TimeoutError()
+                elif failure == 'integrity':
+                    response.read.return_value = b'wrong'
+                with patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection',
+                           return_value=connection) as factory:
+                    with self.assertRaises(SDKError):
+                        if failure == 'integrity':
+                            self.store.verify('object', 7, hashlib.sha256(b'payload').hexdigest())
+                        else:
+                            self.store.read('object', 100)
+                self.assertEqual(factory.call_count, 1)
+                connection.close.assert_called_once_with()
 
 
 if __name__ == '__main__':

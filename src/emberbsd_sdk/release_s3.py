@@ -2,7 +2,8 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Streaming HTTPS and path-style S3 SigV4, using Python's standard library.
 
-No redirects, credential logging, package execution or implicit retries.
+No redirects, credential logging, package execution or mutation retries.
+Safe reads retry transient connection failures before exposing a response.
 ETags are opaque concurrency tokens, never artifact checksums.
 """
 
@@ -76,11 +77,23 @@ class HTTPStore:
         headers = dict(headers or {})
         headers.setdefault('host', self.host)
         headers.setdefault('accept-encoding', 'identity')
-        connection = http.client.HTTPSConnection(self.host, timeout=self.timeout, context=self.context,
-                                                  blocksize=64 * 1024)
+        attempts = 3 if method in ('GET', 'HEAD') and body is None else 1
+        for attempt in range(attempts):
+            connection = http.client.HTTPSConnection(self.host, timeout=self.timeout, context=self.context,
+                                                      blocksize=64 * 1024)
+            try:
+                connection.request(method, path, body=body, headers=self._headers(method, path, dict(headers)))
+                response = connection.getresponse()
+            except (TimeoutError, ConnectionError, http.client.RemoteDisconnected) as exc:
+                connection.close()
+                if attempt + 1 == attempts:
+                    raise SDKError(f'{method} {path}: HTTPS transport failed ({type(exc).__name__})') from exc
+            except (OSError, http.client.HTTPException) as exc:
+                connection.close()
+                raise SDKError(f'{method} {path}: HTTPS transport failed ({type(exc).__name__})') from exc
+            else:
+                break
         try:
-            connection.request(method, path, body=body, headers=self._headers(method, path, headers))
-            response = connection.getresponse()
             if response.status not in statuses:
                 raise HTTPStatusError(response.status, method, path)
             if response.getheader('Content-Encoding', 'identity') != 'identity':

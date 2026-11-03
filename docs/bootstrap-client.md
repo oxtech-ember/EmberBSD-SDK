@@ -63,13 +63,19 @@ common Ports recipe resolves standard configuration, certificate and module
 paths relative to its loaded library. First initialization adjusts textual
 prefixes and package checksums, runs package hooks, then rebuilds pkgdb.
 Historical `+BUILD_INFO` and `+BUILD_VERSION` remain original producer evidence;
-only active `REQUIRES`/`PROVIDES` paths are adjusted in the installed database.
+only active `LOCALBASE`, `REQUIRES` and `PROVIDES` paths are adjusted in the
+installed database. `LOCALBASE` must name the consumer prefix because Ports
+buildlink reads it to find installed headers and libraries.
 
 The archive preserves every exact payload name from the package packing lists,
 including names that differ only by case on the producer filesystem. Each file
 has independent archive data; aliases do not become self-hardlinks during
 extraction. Text relocation includes every spelling, so an archive prepared on
 a case-insensitive filesystem can initialize on a case-sensitive destination.
+Package file timestamps survive staging. Initialization refreshes owned Python
+bytecode only when stale or when its source was relocated, preserving hash and
+optimization modes before updating package checksums. Ordinary Python imports
+do not then rewrite the installed cache files; `-B` is not an installation rule.
 
 Publish the archive as a `bootstrap` artifact in the same signed release as its
 component catalog; [S3 publication](s3-distribution.md) replaces the previous
@@ -97,7 +103,9 @@ For compiler packages, `--relocate-text` records the owned text files that need
 prefix replacement and permits prefix-local library `PROVIDES`. The signed
 `emberbsd-prefix-relocation-v1` marker declares this contract. After successful
 `pkg_add`, the client adjusts those text files and active provider metadata,
-then refreshes checksums for the changed files. An interrupted relocation can
+then refreshes checksums for the changed files. Both portable package contracts
+update active `LOCALBASE` metadata, including recovery after an interrupted
+metadata update, without changing payload checksums. An interrupted relocation can
 resume; a failed package installation must be repaired first.
 Overlapping old and new prefixes are refused when a replacement
 would not be safe to repeat.

@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: BSD-2-Clause
 import io
+import importlib.util
+import marshal
 import os
 from pathlib import Path
+import py_compile
+import struct
 import sys
 import tempfile
 import tarfile
@@ -47,7 +51,7 @@ class BootstrapTests(unittest.TestCase):
     def test_relocation_updates_files_and_real_package_ownership_once(self):
         name, prefix = unpack_package(self.package(), self.root)
         info = self.root / 'pkgdb/example-1/+BUILD_INFO'
-        info.write_text('REQUIRES=/producer/sdk/lib/example.dylib\nCFLAGS=-I/producer/sdk/include\n')
+        info.write_text('LOCALBASE=/producer/sdk\nREQUIRES=/producer/sdk/lib/example.dylib\nCFLAGS=-I/producer/sdk/include\n')
         (self.root / MANIFEST).parent.mkdir(parents=True)
         write_json(self.root / MANIFEST, dict(schema='emberbsd.bootstrap.v1', prefix=prefix,
             packages=[name], text_files=['bin/example', 'pkgdb/example-1/+CONTENTS']))
@@ -57,6 +61,7 @@ class BootstrapTests(unittest.TestCase):
             self.assertEqual([call.args[0][-1] for call in run.call_args_list], ['rebuild', 'rebuild-tree'])
             content = (self.root / 'pkgdb/example-1/+CONTENTS').read_text()
             self.assertIn('@cwd ' + str(self.root), content)
+            self.assertIn('LOCALBASE=' + str(self.root) + '\n', info.read_text())
             self.assertIn('REQUIRES=' + str(self.root) + '/lib/example.dylib', info.read_text())
             self.assertIn('CFLAGS=-I/producer/sdk/include', info.read_text())
             self.assertNotIn('MD5:old', content)
@@ -90,6 +95,102 @@ class BootstrapTests(unittest.TestCase):
     def test_internal_absolute_links_are_relative(self):
         unpack_package(self.package(link='/producer/sdk/bin/real'), self.root)
         self.assertEqual((self.root / 'bin/example').readlink(), Path('real'))
+
+    def test_unpack_preserves_package_file_mtime(self):
+        archive = self.work / 'mtime.tgz'
+        with tarfile.open(archive, 'w:gz') as tar:
+            for name, data, timestamp in [('+CONTENTS', b'@cwd /producer/sdk\n@name p-1\nmod.py\n', 1),
+                                          ('mod.py', b'x = 1\n', 1234567890)]:
+                item = tarfile.TarInfo(name)
+                item.size, item.mtime = len(data), timestamp
+                tar.addfile(item, io.BytesIO(data))
+        unpack_package(archive, self.root)
+        self.assertEqual(int((self.root / 'mod.py').stat().st_mtime), 1234567890)
+
+    def test_initialize_refreshes_invalid_bytecode_and_preserves_valid(self):
+        directory = self.root / 'lib'
+        directory.mkdir()
+        db = self.root / 'pkgdb/python-1'
+        db.mkdir(parents=True)
+        sources = {}
+        caches = {}
+        for name, mode, optimizations in (
+            ('stale', py_compile.PycInvalidationMode.TIMESTAMP, (0, 1)),
+            ('checked', py_compile.PycInvalidationMode.CHECKED_HASH, (0,)),
+            ('unchecked', py_compile.PycInvalidationMode.UNCHECKED_HASH, (1,)),
+            ('valid', py_compile.PycInvalidationMode.TIMESTAMP, (0,)),
+        ):
+            source = directory / (name + '.py')
+            source.write_text('value = "old"\n')
+            sources[name] = source
+            for opt in optimizations:
+                cache = Path(importlib.util.cache_from_source(str(source), optimization=str(opt) if opt else ''))
+                py_compile.compile(str(source), cfile=str(cache), doraise=True,
+                                   optimize=opt, invalidation_mode=mode)
+                caches[(name, opt)] = cache
+            if name != 'valid':
+                source.write_text('value = "new"\n')
+                if name == 'stale':
+                    os.utime(source, (source.stat().st_mtime + 5, source.stat().st_mtime + 5))
+        valid_before = caches[('valid', 0)].stat().st_mtime_ns
+        unrelated = directory / '__pycache__/outside.cpython-315.pyc'
+        ignored = directory / '__pycache__/ignored.cpython-315.pyc'
+        unrelated.write_bytes(b'not a cache')
+        ignored.write_bytes(b'ignored cache')
+        owned = [p.relative_to(self.root).as_posix() for p in [*sources.values(), *caches.values()]]
+        (db / '+CONTENTS').write_text('@cwd /producer/sdk\n@name python-1\n' + '\n'.join(owned) +
+                                      '\n@ignore\nlib/__pycache__/ignored.cpython-315.pyc\n')
+        (self.root / MANIFEST).parent.mkdir(parents=True)
+        write_json(self.root / MANIFEST, dict(schema='emberbsd.bootstrap.v1', prefix='/producer/sdk',
+            packages=['python-1'], text_files=[]))
+        with patch('emberbsd_sdk.bootstrap_bundle.subprocess.run') as run:
+            run.return_value.returncode = 0
+            initialize(self.root)
+            after = {key: (path.read_bytes(), path.stat().st_mtime_ns) for key, path in caches.items()}
+            initialize(self.root)
+        self.assertEqual(valid_before, caches[('valid', 0)].stat().st_mtime_ns)
+        self.assertEqual(unrelated.read_bytes(), b'not a cache')
+        self.assertEqual(ignored.read_bytes(), b'ignored cache')
+        for (name, opt), path in caches.items():
+            data = path.read_bytes()
+            self.assertEqual((data, path.stat().st_mtime_ns), after[(name, opt)])
+            self.assertIn('old' if name == 'valid' else 'new', marshal.loads(data[16:]).co_consts)
+            flags = struct.unpack('<I', data[4:8])[0]
+            self.assertEqual(flags, {'checked': 3, 'unchecked': 1}.get(name, 0))
+            if flags:
+                self.assertEqual(data[8:16], importlib.util.source_hash(sources[name].read_bytes()))
+            else:
+                self.assertEqual(data[8:16], struct.pack('<II', int(sources[name].stat().st_mtime),
+                                                         sources[name].stat().st_size))
+
+    def test_same_size_same_second_relocation_refreshes_cache(self):
+        from emberbsd_sdk.bootstrap_bundle import _replace_file
+        old = '/' + 'a' * (len(str(self.root)) - 1)
+        source = self.root / 'module.py'
+        source.write_text('value = "' + old + '/lib"\n')
+        original_mtime = int(source.stat().st_mtime)
+        os.utime(source, (original_mtime, original_mtime))
+        cache = Path(importlib.util.cache_from_source(str(source)))
+        py_compile.compile(str(source), cfile=str(cache), doraise=True)
+        before_header = cache.read_bytes()[:16]
+        db = self.root / 'pkgdb/python-1'
+        db.mkdir(parents=True)
+        (db / '+CONTENTS').write_text('@cwd ' + old + '\n@name python-1\nmodule.py\n' +
+            cache.relative_to(self.root).as_posix() + '\n')
+        (self.root / MANIFEST).parent.mkdir(parents=True)
+        write_json(self.root / MANIFEST, dict(schema='emberbsd.bootstrap.v1', prefix=old,
+            packages=['python-1'], text_files=['module.py']))
+        def same_second(path, content):
+            _replace_file(path, content)
+            if path == source:
+                os.utime(path, (original_mtime, original_mtime))
+        with patch('emberbsd_sdk.bootstrap_bundle._replace_file', side_effect=same_second), \
+             patch('emberbsd_sdk.bootstrap_bundle.subprocess.run') as run:
+            run.return_value.returncode = 0
+            initialize(self.root)
+        data = cache.read_bytes()
+        self.assertEqual(data[:16], before_header)
+        self.assertIn(str(self.root) + '/lib', marshal.loads(data[16:]).co_consts)
 
     def test_archive_case_aliases_and_relocated_text(self):
         data = self.root / 'share'
