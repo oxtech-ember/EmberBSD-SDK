@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: BSD-2-Clause
 import io
 from pathlib import Path
+import sys
 import tempfile
 import tarfile
 import unittest
 from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.bootstrap_bundle import MANIFEST, initialize, unpack_package, relocate_text
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.jsonio import read_json, write_json
