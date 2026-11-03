@@ -450,6 +450,24 @@ class BuilderTests(TemporaryCase):
             builder.preflight()
         self.assertFalse(Path(builder.paths['destination'], builder.MARKER).exists())
 
+    def test_llvm_source_accepts_verifier_versions_and_checks_compiler(self):
+        source = Path(self.options['llvm-source'])
+        manifest = source / 'llvm-source.json'
+        record = json.loads(manifest.read_text())
+        for version in (1, 2):
+            with self.subTest(version=version):
+                write(manifest, json.dumps(record | {'version': version}))
+                builder = B(self.options | {'compiler-family': 'clang'})
+                builder.paths = {'llvm-source': str(source)}
+                builder.compiler_record = {'version': '23.1.4'}
+                builder.llvm_source_command = [sys.executable, '-B',
+                    str(Path(self.options['ports']) / 'pkgsrc/lang/compiler-rt/files/runtime.py'),
+                    'verify-source', '--source', str(source)]
+                self.assertEqual(builder.verify_llvm_source()['version'], version)
+                builder.compiler_record = {'version': '22.1.0'}
+                with self.assertRaisesRegex(SDKError, 'source and selected compiler differ'):
+                    builder.verify_llvm_source()
+
     def test_llvm_source_is_keyed_by_its_manifest_not_a_tree_walk(self):
         # The prepared LLVM tree has about 150k entries; each verification
         # used to walk all of them for a fingerprint.

@@ -840,7 +840,6 @@ class SysrootBuilder:
             [os.path.join(self.paths['llvm-source'], LLVM_SOURCE_MANIFEST), *self.receipt_tools(command)],
             lambda: jsonio.loads_json(process.capture(command, env=self.environment).stdout))
         if (not isinstance(record, dict) or record.get('format') != 'emberbsd-llvm-source' or
-                record.get('version') != 1 or
                 (self.compiler_family() == 'clang' and record.get('llvm_version') != self.compiler_record['version'])):
             raise SDKError('common LLVM source and selected compiler differ')
         return record
