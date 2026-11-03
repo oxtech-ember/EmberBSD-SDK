@@ -9,6 +9,7 @@ retaining binary build paths requires a relocated runtime check.
 import argparse
 from pathlib import Path
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -56,6 +57,8 @@ def main():
         help='declare first-install relocation for text files and library-provider metadata')
     parser.add_argument('--allow-binary-prefix', action='store_true',
         help='retain binary build-path strings; requires relocation testing by the producer')
+    parser.add_argument('--package-revision', metavar='N',
+        help='increase the pkgsrc nb revision after the matching Ports recipe bump')
     parser.add_argument('--defer-hooks', action='store_true',
         help='qualify repeatable hooks that run after extraction and text relocation')
     args = parser.parse_args()
@@ -75,6 +78,15 @@ def main():
             root.mkdir()
             name, prefix = unpack_package(args.package, root)
             database = root / 'pkgdb' / name
+            new_name = name
+            if args.package_revision is not None:
+                revision = args.package_revision
+                if re.fullmatch(r'[1-9][0-9]*', revision) is None:
+                    raise SDKError('package revision must be a positive decimal integer')
+                match = re.fullmatch(r'(.+-[0-9][A-Za-z0-9._+]*?)(?:nb([0-9]+))?', name)
+                if match is None or int(revision) <= int(match.group(2) or '0'):
+                    raise SDKError('package revision must increase the existing nb revision')
+                new_name = match.group(1) + 'nb' + revision
             if not args.defer_hooks and any((database / script).exists() for script in ('+INSTALL', '+DEINSTALL')):
                 raise SDKError('package has installation scripts')
             lines = (database / '+CONTENTS').read_text().splitlines()
@@ -91,6 +103,9 @@ def main():
             info = database / '+BUILD_INFO'
             updated = []
             for line in info.read_text().splitlines():
+                if args.package_revision is not None and line.split('=', 1)[0] in (
+                        'PKGNAME', 'PKGVERSION', 'PKGREVISION'):
+                    raise SDKError('package build metadata contains a package identity field')
                 if line.startswith('PROVIDES=') and prefix + '/' in line and not args.relocate_text:
                     raise SDKError('portable library providers require package-owner relocation support')
                 if line.startswith('REQUIRES='):
@@ -138,6 +153,10 @@ def main():
                 packing.append(package_relocation.HOOKS)
             ignored = False
             for line in lines:
+                if args.package_revision is not None and line.startswith('@name '):
+                    if line != '@name ' + name:
+                        raise SDKError('package has inconsistent names')
+                    line = '@name ' + new_name
                 if ignored:
                     ignored = False
                 elif line == '@ignore':
