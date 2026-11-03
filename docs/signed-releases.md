@@ -10,6 +10,7 @@ alternative authenticated distribution formats.
 ## Trust and files
 
 Provision the root through a trusted bootstrap, OS image or administrator.
+The initial public root is [bundled in this repository](../trust/README.md).
 Never import a root offered by a package repository. A self-signed X.509 root
 directly issues a separate release certificate. New RSA keys have 3072 bits;
 certificates and CMS metadata use SHA256. The root has critical
