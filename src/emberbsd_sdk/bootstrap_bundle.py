@@ -497,8 +497,11 @@ def initialize(root):
             relocate_build_info(path, old, str(root).encode())
         refresh_bytecode(root, metadata['packages'], changed_sources)
         refresh_checksums(root, metadata['packages'])
+        # Import lazily: package relocation reuses bootstrap's file helpers.
+        from .package_relocation import complete_bootstrap
         for name in metadata['packages']:
             run_install_hooks(root, root / 'pkgdb', name)
+            complete_bootstrap(root, root / 'pkgdb', name)
         command = [str(root / 'sbin/pkg_admin'), '-K', str(root / 'pkgdb')]
         for action in ('rebuild', 'rebuild-tree'):
             result = subprocess.run(command + [action], env={'PATH': str(root / 'bin') + ':' + str(root / 'sbin'),
