@@ -37,7 +37,7 @@ class InstallTests(unittest.TestCase):
                         host=dict(os=platform.system(), arch=platform.machine(), abi='test', runtime='native'))
 
     def package(self, *, target=False, link=None, commands='', arch='aarch64', requires_self=False, preserve=False,
-                payload='installed data', provides=False, install_script=None):
+                payload='installed data', provides=False, install_script=None, package_name='fixture-1.0', build_version=None):
         stage = self.work / 'stage'
         stage.mkdir()
         if link:
@@ -45,8 +45,8 @@ class InstallTests(unittest.TestCase):
         else:
             (stage / 'payload').write_text(payload)
         prefix = '/usr/pkg' if target else str(self.destination)
-        (stage / 'PLIST').write_text('@name fixture-1.0\npayload\n' + commands)
-        (stage / 'INFO').write_text('PKGPATH=devel/fixture\nLICENSE=2-clause-bsd\n' +
+        (stage / 'PLIST').write_text('@name ' + package_name + '\npayload\n' + commands)
+        (stage / 'INFO').write_text('PKGPATH=devel/fixture\nDISTNAME=fixture-1.0\nLICENSE=2-clause-bsd\n' +
             f'LOCALBASE={prefix}\nCFLAGS=-I{prefix}/include\n' +
             (f'REQUIRES={prefix}/payload\n' if requires_self else '') +
             (f'PROVIDES={prefix}/payload\n' if provides else '') +
@@ -54,6 +54,9 @@ class InstallTests(unittest.TestCase):
              f'OPSYS={platform.system()}\nMACHINE_ARCH={"aarch64" if platform.machine() == "arm64" else platform.machine()}\nOS_VERSION={platform.release()}\n'))
         unsigned, signed = self.work / 'unsigned.tgz', self.work / 'fixture-1.0.tgz'
         extra = []
+        if build_version is not None:
+            (stage / 'BUILD_VERSION').write_text(build_version)
+            extra += ['-b', stage / 'BUILD_VERSION']
         if preserve:
             (stage / 'PRESERVE').write_text('bootstrap tool\n')
             (stage / 'INFO').chmod(0o444)
@@ -182,6 +185,34 @@ class InstallTests(unittest.TestCase):
         self.assertEqual((metadata / 'configured').read_text(), 'configured')
         self.assertNotIn(package_relocation.HOOKS, (metadata / '+CONTENTS').read_text())
         self.assertFalse((metadata / package_relocation.READY).exists())
+
+    @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
+    def test_portable_package_revision_preserves_payload_and_build_provenance(self):
+        package = self.package(package_name='fixture-1.0nb2', build_version='original build provenance\n',
+                               commands='@pkgdep mksh>=59c\n')
+        script = Path(__file__).resolve().parents[1] / 'scripts/package-portable.py'
+        def command(revision, output):
+            return [sys.executable, '-B', str(script), str(package), '--host-prefix',
+                os.environ['EMBERBSD_TEST_HOST_PREFIX'], '--dependency-prefix', os.environ['EMBERBSD_TEST_HOST_PREFIX'],
+                '--output', str(output), '--package-revision', revision,
+                '--bootstrap-install-name-tool', '/usr/bin/false', '--codesign', '/usr/bin/false']
+        for revision in ('0', '2', '1', '-1', '3.0', '03', 'no'):
+            result = subprocess.run(command(revision, self.work / ('bad-' + revision + '.tgz')),
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0, revision)
+            self.assertFalse((self.work / ('bad-' + revision + '.tgz')).exists())
+        output = self.work / 'fixture-1.0nb3.tgz'
+        subprocess.run(command('3', output), check=True, capture_output=True)
+        with tarfile.open(output, 'r:gz') as archive:
+            def member(name):
+                return archive.extractfile(next(m for m in archive if m.name.removeprefix('./') == name)).read()
+            contents = member('+CONTENTS').decode()
+            self.assertIn('@name fixture-1.0nb3\n', contents)
+            self.assertNotIn('@name fixture-1.0nb2\n', contents)
+            self.assertIn('@pkgdep mksh>=59c\n', contents)
+            self.assertIn(b'DISTNAME=fixture-1.0\n', member('+BUILD_INFO'))
+            self.assertEqual(member('+BUILD_VERSION'), b'original build provenance\n')
+            self.assertEqual(member('payload'), b'installed data')
 
     @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
     def test_portable_producer_omits_empty_requires_before_real_pkg_add(self):

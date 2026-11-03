@@ -87,8 +87,8 @@ The MAKECONF and utility mapping stay inside the explicit work directory.
 The prefix, package database, distfiles, and packages retain their separately selected paths.
 The renderer writes only the configuration and utility mapping.
 It does not install packages, alter the selected tools, or execute make.
-Rerunning with the same mapping replaces the configuration atomically.
-A different existing utility map fails without changing it.
+Rerunning replaces the configuration atomically and adds newly selected utility roles.
+Existing roles must remain selected with the same targets; conflicts fail without changing the mapping.
 
 The command prints the exact `initial_command` and its environment as JSON data.
 This is an invocation description, not a receipt.

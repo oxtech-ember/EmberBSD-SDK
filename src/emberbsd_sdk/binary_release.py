@@ -16,7 +16,7 @@ from .binary_catalog import (CATALOG_SCHEMA, node_root, parse_catalog, parse_sum
 from .elf import parse_elf_header
 from .errors import SDKError
 from .jsonio import json_bytes, read_json
-from .package_selection import _package_sets, _read_roots
+from .package_selection import _package_sets, _parse_root, _read_roots
 from .paths import open_regular, regular_file, verify_stable
 from .publication import publish_directory_noreplace
 from .release_catalog import (_object, _pattern, _SLUG, local_artifact, parse_release)
@@ -130,15 +130,25 @@ def _matches(crypto, pattern, name):
 
 
 def _prepare_repository(crypto, spec, ports_root, sources, trust):
-    _object(spec, ('id', 'host', 'target', 'graph', 'packages', 'sets'), 'package repository')
+    fields = ('id', 'host', 'target', 'graph', 'packages', 'sets')
+    _object(spec, (*fields, 'roots') if isinstance(spec, dict) and 'roots' in spec else fields,
+            'package repository')
     _pattern(spec['id'], _SLUG, 'repository id')
     # Reuse the release contract for platform shape and role checks.
     role = 'host' if spec['host'] is not None else 'target'
     probe = _artifact(spec, spec['id'], spec['id'] + '/probe', role + '-package')
     parse_release(json_bytes(dict(schema='emberbsd.release.v1', release_id='probe', created_at=1,
                                   sources=sources, artifacts=[probe])))
-    if not isinstance(spec['packages'], dict) or not isinstance(spec['sets'], list):
-        raise SDKError('repository requires package paths and selected sets')
+    explicit = spec.get('roots', [])
+    if (not isinstance(spec['packages'], dict) or not isinstance(spec['sets'], list) or
+            not isinstance(explicit, list) or not all(isinstance(root, str) for root in explicit)):
+        raise SDKError('repository requires package paths, selected sets and valid roots')
+    try:
+        explicit = [_parse_root(root, 'package repository') for root in explicit]
+    except ValueError as exc:
+        raise SDKError(str(exc)) from exc
+    if any(root.endswith('@native') != (role == 'host') for root in explicit):
+        raise SDKError('package root has a different repository role')
     graph = read_json(spec['graph'])
     if graph.get('provenance', {}).get('revision') != sources['ports']:
         raise SDKError('graph Ports revision differs from release sources')
@@ -160,7 +170,9 @@ def _prepare_repository(crypto, spec, ports_root, sources, trust):
     for node in graph['nodes']:
         if node['id'].startswith(role + ':'):
             by_root.setdefault(node_root(node['id']), []).append(node['id'])
-    roots = set(root for group in sets.values() for root in group)
+    roots = set(explicit) | {root for group in sets.values() for root in group}
+    if not roots:
+        raise SDKError('package repository requires at least one selected root')
     selected = []
     for root in sorted(roots):
         candidates = by_root.get(root, [])

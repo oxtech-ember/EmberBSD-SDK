@@ -142,7 +142,12 @@ metadata and signer still require current validity. Readers have no such flag.
 
 HTTPS CA trust is separate from the release root. `--tls-ca-file FILE` selects
 the HTTPS CA bundle when needed, for example a host CA bundle while preparing
-the first toolset. There is no insecure TLS option.
+the first toolset. There is no insecure TLS option. Bodyless GET/HEAD requests reuse HTTPS
+connections only after successfully consuming the complete known-length response
+(or a bodyless HEAD response). Chunked and unknown-length replies remain
+supported but are not pooled. Partial reads and failed checks close the connection. Mutations use fresh
+connections and are never retried; safe reads retain their bounded retries.
+Callers close the transport after its requests complete.
 
 ## Validation boundary
 
