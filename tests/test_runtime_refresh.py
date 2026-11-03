@@ -525,6 +525,8 @@ class RuntimeRefreshTests(unittest.TestCase):
                 (os_root / directory).mkdir(parents=True, exist_ok=True)
                 (os_root / directory / 'Makefile').write_text('all:\n')
                 (obj / directory).mkdir(parents=True, exist_ok=True)
+            for directory in ('external/cbor', 'external/fido'):
+                (obj / directory / 'declared.o').write_bytes(b'obj')
             (obj / 'other/cxx/locale.d').write_text(
                 'locale.o: /usr/pkg/llvm/include/c++/v1/locale\n')
             (obj / 'other/cxx/locale.o').write_bytes(b'obj')
@@ -647,7 +649,7 @@ class RuntimeRefreshTests(unittest.TestCase):
         with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=['other/cxx']) as plan, \
              patch('emberbsd_sdk.sysroot_builder.llvm_source_refresh.plan', return_value={}) as llvm_plan:
             self.assertTrue(SysrootBuilder.plan_prepared_refresh(fake, record, '/obj'), repr(checks))
-        llvm_plan.assert_called_once_with('/obj', '/prepared/llvm-old', '/tmp/llvm-current')
+        llvm_plan.assert_called_once_with('/obj', '/prepared/llvm-old', '/tmp/llvm-current', None)
         self.assertEqual(fake.refresh_dirs, ['other/cxx'])
         self.assertEqual(len(checks), 1)
         self.assertEqual(checks[0]['flags'], new['flags'])
