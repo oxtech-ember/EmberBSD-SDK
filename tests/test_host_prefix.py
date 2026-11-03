@@ -19,7 +19,7 @@ class PrefixFixture:
         self.host = {'os': 'Linux', 'cpu': 'x86_64'}
         self.queries = []
         for name in ('gcc', 'g++', 'cpp', 'as', 'ld', 'ar', 'sh', 'python3.15',
-                     'bmake', 'cmp', 'readlink', 'cc1', 'cc1plus', 'collect2', 'lto1', 'lto-wrapper'):
+                     'nbsed', 'bmake', 'cmp', 'readlink', 'cc1', 'cc1plus', 'collect2', 'lto1', 'lto-wrapper'):
             self.write(name, header(62, 2))
 
     def write(self, name, data):
@@ -153,6 +153,11 @@ class HostPrefixTests(TemporaryCase):
         self.assertEqual(selected.tool('awk'), str(self.fixture.root / 'bin/nawk'))
         self.assertEqual(selected.tool('cat'), str(cat))
         self.assertIn(str(gnu), selected.path.split(os.pathsep))
+
+    def test_native_sed_role_prefers_nbsed(self):
+        self.fixture.write('sed', header(62, 2))
+        selected = self.fixture.load(roles=('sed',))
+        self.assertEqual(selected.tool('sed'), str(self.fixture.root / 'bin/nbsed'))
 
     def test_pkgsrc_installed_names_need_no_compatibility_links(self):
         names = {'patch': 'bin/nbpatch', 'tar': 'bin/nbtar',
