@@ -140,6 +140,42 @@ class BinaryReleaseTests(unittest.TestCase):
         return compose(self.crypto, self.spec, self.ports, self.work / 'release',
                        self.leaf, self.ca.certificate)
 
+    def test_explicit_root_includes_runtime_closure_only(self):
+        from emberbsd_sdk.binary_release import load_catalogs
+        repo = self.repository()
+        repo['sets'] = []
+        repo['roots'] = ['net/app']
+        # An unselected archive must not even be opened.
+        repo['packages']['target:net/other'] = str(self.work / 'missing-extra.tgz')
+        release = self.compose()
+        _, catalogs = load_catalogs(
+            self.crypto, self.work / 'release/release.p7m', self.work / 'release', self.ca.certificate, ['arm64'])
+        self.assertEqual(catalogs[0]['sets'], {})
+        self.assertEqual({p['root'] for p in catalogs[0]['packages']}, {'net/app', 'devel/lib'})
+        self.assertEqual(len(catalog.select_packages(release, catalogs, roots=['net/app'])['packages']), 2)
+        self.assertFalse((self.work / 'release/arm64/other-1.0.tgz').exists())
+
+    def test_explicit_root_unions_with_sets_and_deduplicates(self):
+        from emberbsd_sdk.binary_release import load_catalogs
+        repo = self.repository()
+        repo['sets'] = ['app']
+        repo['roots'] = ['net/app', 'net/other', 'net/other']
+        self.compose()
+        _, catalogs = load_catalogs(self.crypto, self.work / 'release/release.p7m',
+                                    self.work / 'release', self.ca.certificate, ['arm64'])
+        self.assertEqual(catalogs[0]['sets'], {'app': ['net/app']})
+        self.assertEqual({p['root'] for p in catalogs[0]['packages']}, {'net/app', 'net/other', 'devel/lib'})
+        self.assertEqual(len(catalogs[0]['packages']), 3)
+
+    def test_explicit_roots_reject_invalid_role_type_and_empty(self):
+        repo = self.repository()
+        repo['sets'] = []
+        for roots in ([], ['../escape'], ['net/app>=1'], ['net/app@native'], [None], 'net/app'):
+            repo['roots'] = roots
+            with self.subTest(roots=roots), self.assertRaises(SDKError):
+                self.compose()
+            self.assertFalse((self.work / 'release').exists())
+
     def test_unchanged_signed_packages_keep_exact_bytes_in_next_catalog(self):
         from emberbsd_sdk.binary_release import compose
         repo = self.repository()
