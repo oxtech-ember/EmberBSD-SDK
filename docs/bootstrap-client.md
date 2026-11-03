@@ -58,7 +58,11 @@ package supplies `etc/openssl/certs/ca-certificates.crt`; private HTTPS trust an
 release signing keys are never included. The public EmberBSD signing root is
 part of the client.
 
-Mach-O load commands are made relative before the release is signed. OpenSSL's
+Mach-O dependency load commands are made relative before the release is signed.
+Dylib IDs use `@rpath/<basename>` so newly linked consumers resolve the provider
+through their declared library-directory RPATH, including programs in `bin`.
+Existing runtime loads retain image-relative paths. Ports buildlink supplies
+the provider RPATH; a nested library requires its own library-directory contract. OpenSSL's
 common Ports recipe resolves standard configuration, certificate and module
 paths relative to its loaded library. First initialization adjusts textual
 prefixes and package checksums, runs package hooks, then rebuilds pkgdb.

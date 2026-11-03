@@ -27,7 +27,8 @@ LLVM = {'LLVM_MC': 'as', 'LD64_LLD': 'ld', 'DSYMUTIL': 'dsymutil',
         'AR': 'ar', 'RANLIB': 'ranlib', 'NM': 'nm', 'STRIP': 'strip', 'UNAME': 'uname'}
 CMAKE = {'LIBTOOL': 'libtool_darwin', 'INSTALL_NAME_TOOL': 'install_name_tool', 'TAPI': 'llvm_readtapi'}
 BOUND = frozenset((*COMPILERS, 'as', 'ld', 'make', 'gmake', 'sh'))
-REQUIRED = frozenset((*BOUND, *LLVM.values(), 'pkg_info', 'pkg_admin', 'pkg_add', 'pkg_create'))
+MACHO = {'MACHO_OD': 'od', 'MACHO_LIPO': 'lipo', 'MACHO_OTOOL': 'otool'}
+REQUIRED = frozenset((*BOUND, *LLVM.values(), *MACHO.values(), 'pkg_info', 'pkg_admin', 'pkg_add', 'pkg_create'))
 ROLE = re.compile(r'[a-z][a-z0-9_.+-]*\Z')
 NATIVE_STAGE_MAKECONF_API = 1
 
@@ -335,6 +336,8 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
         variables['EMBERBSD_DARWIN_LINKER_LAUNCHER'] = recipe_linker_launcher(link)
         if compiler_family == 'gcc':
             variables['EMBERBSD_GCC16_LINKER_LAUNCHER'] = recipe_linker_launcher(link)
+    variables['MACHO_USE_LOAD_COMMANDS'] = 'yes'
+    variables.update({variable: tools[role] for variable, role in MACHO.items()})
     for role, command in commands.items():
         variables['EMBERBSD_DARWIN_SEED_' + role.upper()] = shlex.join(command)
     variables['EMBERBSD_DARWIN_SEED_AS'] = shlex.join(

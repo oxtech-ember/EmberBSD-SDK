@@ -182,7 +182,12 @@ def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency
             if new != name:
                 options += ['-change', name, new]
         if image['install_name']:
-            options += ['-id', '@loader_path/' + path.name]
+            # Linkers copy this ID into new consumers. A loader-relative ID
+            # would then resolve against that consumer (for example bin/),
+            # rather than the provider directory supplied by its link RPATH.
+            install_name = '@rpath/' + path.name
+            if image['install_name'] != install_name:
+                options += ['-id', install_name]
         for rpath in image['rpaths']:
             if rpath.startswith(prefix + '/') or rpath == prefix:
                 options += ['-rpath', rpath, '@loader_path/' + os.path.relpath(
