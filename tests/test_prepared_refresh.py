@@ -112,6 +112,16 @@ class PreparedRefreshTests(unittest.TestCase):
     def write_contract(self):
         (self.os / prepared_refresh.CONTRACT).write_text(json.dumps(self.contract))
 
+    def test_headers_skip_consumer_walk_keep_declared_owners(self):
+        from unittest.mock import patch
+        with patch('emberbsd_sdk.prepared_refresh.os.walk',
+                   side_effect=AssertionError('unexpected consumer scan')):
+            self.assertEqual(prepared_refresh.plan(self.os, self.obj, {'libcbor'},
+                                                   scan_consumers=False),
+                             ['external/cbor', 'external/fido'])
+            with self.assertRaisesRegex(AssertionError, 'unexpected consumer scan'):
+                prepared_refresh.plan(self.os, self.obj, {'libcbor'})
+
     def test_changed_headers_and_unknown_objects_are_cleaned(self):
         (self.obj / 'other/consumer/test.d').write_text('test.o: /old/usr/include/cbor/data.h\n')
         (self.obj / 'other/consumer/test.o').write_bytes(b'')

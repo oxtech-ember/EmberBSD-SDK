@@ -708,6 +708,9 @@ class SysrootBuilder:
                 self.runtime_refresh_changed = checked['changed']
             extra = (dict(extra_headers=runtime['headers'], extra_linked=runtime['linked'])
                      if runtime_kind == 'cpp' else {})
+            if getattr(self, 'llvm_phase', None) == 'headers' and self.compiler_family() == 'clang':
+                # Native producers have their own tools-context refresh.
+                extra['scan_consumers'] = False
             source_roots = set()
             for name in before.keys() | after.keys():
                 if name not in common_packages:

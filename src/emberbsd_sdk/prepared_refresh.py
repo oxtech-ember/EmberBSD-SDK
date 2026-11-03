@@ -68,7 +68,7 @@ def plan_native(os_root, objects, names):
 
 
 def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
-         extra_headers=(), extra_linked=(), allowed_source_roots=()):
+         extra_headers=(), extra_linked=(), allowed_source_roots=(), scan_consumers=True):
     root, obj = Path(os_root), Path(objects)
     try:
         root_resolved, obj_resolved = root.resolve(), obj.resolve()
@@ -127,7 +127,7 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
             raise error
         # A source with no installed headers or linked libraries affects only
         # its declared producers and consumers; no global object scan is needed.
-        walk = os.walk(obj, followlinks=False, onerror=walk_error) if headers or linked else ()
+        walk = os.walk(obj, followlinks=False, onerror=walk_error) if scan_consumers and (headers or linked) else ()
         for directory, subdirs, files in walk:
             base = Path(directory)
             subdirs[:] = [name for name in subdirs if base / name not in nested_prune]
