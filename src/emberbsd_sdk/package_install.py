@@ -11,6 +11,8 @@ import tempfile
 from .binary_release import _arch, _package_payload
 from .errors import SDKError
 from .paths import open_regular, verify_stable
+from . import package_relocation
+from .package_cache import directory_lock
 from .release_signing import read_bytes
 
 PORTABLE_PREFIX = '@comment emberbsd-prefix-independent-v1'
@@ -44,6 +46,8 @@ def inspect_install_paths(package, config):
     stream, before = open_regular(package)
     with stream, tarfile.open(fileobj=_package_payload(stream), mode='r|*') as archive:
         original_prefix = None
+        relocation = None
+        package_name = None
         portable = False
         hooks = False
         links = set()
@@ -51,11 +55,24 @@ def inspect_install_paths(package, config):
             name = member.name.removeprefix('./')
             path = _relative(name)
             if name.startswith('+'):
+                if name == package_relocation.READY:
+                    raise SDKError('package contains client-owned relocation state')
                 if name == '+CONTENTS':
                     if member.size > 8 * 1024 * 1024:
                         raise SDKError('oversized package packing list')
                     lines = archive.extractfile(member).read().decode('utf-8').splitlines()
-                    portable = PORTABLE_PREFIX in lines and not config.get('target')
+                    relocation = package_relocation.declaration(lines)
+                    if relocation is not None:
+                        names = [line[6:] for line in lines if line.startswith('@name ')]
+                        if len(names) != 1 or len(_relative(names[0]).parts) != 1:
+                            raise SDKError('relocatable package requires one package name')
+                        package_name = names[0]
+                    portable = (PORTABLE_PREFIX in lines or relocation is not None) and not config.get('target')
+                    if relocation is not None:
+                        if config.get('target') or PORTABLE_PREFIX in lines:
+                            raise SDKError('text relocation is a distinct native package contract')
+                        from .bootstrap_bundle import relocate_text
+                        relocate_text(b'', relocation[0].encode(), config['prefix'].encode())
                     if portable and any(line.startswith(('@exec ', '@unexec ')) for line in lines):
                         raise SDKError('prefix-independent package contains installation commands')
                     for line in lines:
@@ -63,6 +80,8 @@ def inspect_install_paths(package, config):
                             value = line[5:]
                             if original_prefix is None:
                                 original_prefix = value
+                                if relocation is not None and relocation[0] != value:
+                                    raise SDKError('package relocation source differs from its prefix')
                                 if value != config['prefix'] and not portable:
                                     raise SDKError('package prefix differs; this package has no qualified relocation')
                             elif value != original_prefix:
@@ -91,17 +110,25 @@ def inspect_install_paths(package, config):
                 raise SDKError(f'unsupported special file in SDK package: {name}')
         if portable and hooks:
             raise SDKError('prefix-independent package contains installation scripts')
+        if relocation is not None and original_prefix is None:
+            raise SDKError('relocatable package has no original prefix')
     verify_stable(package, before)
+    return (package_name, relocation) if relocation is not None else None
 
 
 class PackageInstaller:
     def __init__(self, crypto, trust):
         self.crypto, self.trust = crypto, Path(trust)
+        self._checked = {}
 
     def installed(self, config):
-        _, database = install_paths(config)
+        prefix, database = install_paths(config)
         if not database.exists():
             return set()
+        if not config.get('target') and list(package_relocation.pending(prefix, database)):
+            with directory_lock(database.parent / (database.name + '.sdk-lock')):
+                for name in package_relocation.pending(prefix, database):
+                    package_relocation.finish(prefix, database, name)
         result = subprocess.run([self.crypto.prefix.tool('pkg_info'), '-K', str(database), '-e', '*'],
             env={'PATH': self.crypto.prefix.path, 'LC_ALL': 'C'}, capture_output=True, timeout=60)
         if result.returncode not in (0, 1):
@@ -110,11 +137,15 @@ class PackageInstaller:
 
     def check(self, package, config):
         self.crypto.verify_package(package, self.trust)
-        inspect_install_paths(package, config)
+        result = inspect_install_paths(package, config)
+        self._checked[str(Path(package).absolute())] = result
+        return result
 
     def install(self, package, config, *, checked=False):
         if not checked:
             self.check(package, config)
+        key = str(Path(package).absolute())
+        selected = (self._checked[key] if key in self._checked else inspect_install_paths(package, config))
         prefix, database = install_paths(config)
         database.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='ember-install-') as directory:
@@ -133,3 +164,8 @@ class PackageInstaller:
                                               'PKG_PATH': ''}, capture_output=True)
             if result.returncode:
                 raise SDKError('pkg_add failed: ' + result.stderr[-4096:].decode('utf-8', 'replace'))
+            if selected is not None:
+                name, (original, _) = selected
+                if original != str(prefix):
+                    (database / name / package_relocation.READY).write_text(original + '\n')
+                    package_relocation.finish(prefix, database, name)

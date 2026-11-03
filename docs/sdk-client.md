@@ -61,6 +61,38 @@ and roots requiring compilation. Successful installs remember the union of
 explicit roots in `selection.json`; pkg_tools remains the version/file owner.
 No packages are removed merely because a later task selects fewer roots.
 
+## Application compiler and sysroot
+
+When the selected channel publishes the compiler set and a matching sysroot:
+
+```sh
+ember-sdk plan --set sdk-c --target aarch64
+ember-sdk install --set sdk-c --target aarch64
+/absolute/ember-sdk/bin/aarch64--netbsd-cc hello.c -o hello
+```
+
+`--target` adds one signed `sysroot` artifact to the selection. It uses the
+matching target repository's configured `sysroot`, or `HOST_PREFIX/sysroots/TARGET`
+when only a native repository is configured. An ambiguous target/ABI is refused;
+no board or different compiler family is chosen implicitly. The native compiler
+is shared by all targets. `--target` alone can acquire a sysroot before its compiler.
+
+The archive contains the existing [sysroot transfer](sysroot-transfer.md) bundle.
+All downloads are verified before installation. The base is restored at a new
+path before target packages populate its pkgdb. An existing matching artifact
+is reused without downloading or hashing the entire tree. A different or
+unrecognized sysroot is preserved; replacing it requires the component update
+path. The signed target runtime is part of the sysroot, with no external artifact
+dependencies.
+
+Once Clang is present, installation creates the existing SDK's operation-aware
+`TRIPLET-cc`, `TRIPLET-c++`, `TRIPLET-cpp`, `TRIPLET-as` and `TRIPLET-ld` bindings
+in the native `bin` directory. They select the target, sysroot and matching LLVM
+runtime without consulting a source checkout on each compilation. Direct `ld`
+calls still require the caller to select its libraries. An absent sysroot artifact
+is reported explicitly: the Ports package fallback does not build an OS base;
+use the [sysroot builder](sysroot.md) for that producer.
+
 ## Missing binaries and source builds
 
 Add `source` to the configuration when compilation is available:
@@ -160,8 +192,9 @@ on Darwin arm64. pkg_add prefix relocation alone does not rewrite binary load
 paths or producer paths in scripts. Only host packages explicitly qualified by
 the publisher's signed prefix-independent contract may use another prefix;
 unqualified packages still require the archive's declared destination.
-Base-sysroot import from current and clean-host C/aarch64 execution remain
-separate distribution acceptance work.
+The sysroot delivery and compiler-binding contracts do not establish availability
+of a compiler/sysroot pair on current. Clean-host C/aarch64 execution remains
+separate distribution acceptance work until a published pair passes that check.
 
 The current self-contained archive is authenticated by the release referenced
 by [`current.p7m`](https://emberbsd-pkg.oxteam.me/current.p7m). The Python client

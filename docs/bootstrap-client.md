@@ -40,8 +40,9 @@ is resumable and registers normal package configuration actions only once.
 The default state and cache live in `var/sdk` and `var/cache/packages` under the
 SDK. `--config /absolute/client.json` selects an explicit configuration, including
 the common Ports source-build inputs. A missing binary without those inputs
-reports what needs to be prepared; this bootstrap does not yet acquire a compiler
-or an application sysroot automatically. Coherent installed-component updates
+reports what needs to be prepared. With a published compiler set and target
+sysroot, `ember-sdk install --set sdk-c --target aarch64` acquires both and
+creates the target compiler commands. Coherent installed-component updates
 and additional host platforms remain separate work.
 
 ## Producing the archive
@@ -71,10 +72,9 @@ current. The bootstrap archive currently occupies approximately 39 MB.
 `scripts/package-portable.py --help` qualifies simple Darwin packages such as
 fetch before signing. It adjusts Mach-O references, validates their dependency
 closure against the selected prefix, rejects package hooks/commands and rejects
-payloads still containing the producer prefix. Prefix-local `REQUIRES` are replaced
+payloads still containing the producer prefix by default. Prefix-local `REQUIRES` are replaced
 by the existing package dependencies only after checking library ownership;
-system requirements stay unchanged. Packages with prefix-local `PROVIDES` still
-need their owner's relocation support. It then uses native pkg_create to
+system requirements stay unchanged. It then uses native pkg_create to
 preserve metadata (including protection and display notices) and regenerate
 checksums. Changing already-published package bytes requires a new Ports package
 revision; the first publication can qualify an existing recipe's package.
@@ -84,6 +84,21 @@ host installation at another prefix. Unqualified packages retain the exact-prefi
 check; target packages retain their fixed target prefix and no-script install.
 This deliberately narrow contract is not a generic relocator for arbitrary
 applications, scripts or configuration files.
+
+For compiler packages, `--relocate-text` records the owned text files that need
+prefix replacement and permits prefix-local library `PROVIDES`. The signed
+`emberbsd-prefix-relocation-v1` marker declares this contract. After successful
+`pkg_add`, the client adjusts those text files and active provider metadata,
+then refreshes checksums for the changed files. An interrupted relocation can
+resume; a failed package installation must be repaired first. Hooks remain
+unsupported. Overlapping old and new prefixes are refused when a replacement
+would not be safe to repeat.
+
+`--allow-binary-prefix` additionally permits binary build-path strings that
+cannot be rewritten as text. It requires `--relocate-text` and an actual
+compiler check at a different prefix before publication. Mach-O load commands
+and their transitive package-provided libraries are still checked and made
+relative; this option does not prove that embedded paths are inactive.
 
 Validated on Darwin arm64: isolated bootstrap startup and HTTPS with all reads
 from the producer prefix denied; Python/OpenSSL default trust paths; dynamic

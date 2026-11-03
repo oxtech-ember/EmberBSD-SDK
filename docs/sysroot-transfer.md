@@ -140,6 +140,22 @@ object and external source roots to canonical paths such as
 
 ## Shared store for a team
 
+For the signed binary channel, wrap a completed transfer in one uncompressed
+tar container (the payload is already compressed):
+
+```sh
+python3 scripts/package-sysroot.py /absolute/transfer-bundle \
+  --target aarch64 --manifest-sha256 MANIFEST_SHA256 \
+  --output /absolute/emberbsd-sysroot-aarch64.tar
+```
+
+The container has exactly three regular members: `manifest.json`, `READY`, and
+`payload.tar.gz`. Publish it as a `sysroot` artifact in the existing signed release,
+using the reported unpacked size and explicit target/ABI/runtime. The
+[SDK client](sdk-client.md#application-compiler-and-sysroot) restores it with
+the same transfer verifier. Temporary payload copies are removed after import;
+the compressed artifact shares the bounded package cache.
+
 Use this directory convention on a mounted share:
 
 ```text
