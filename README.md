@@ -72,7 +72,9 @@ The [binary catalog](docs/binary-catalog.md) projects Ports runtime dependencies
 signs packages before generating pkg_summary, and supports source-free selection
 of published package sets. [S3 publication and HTTPS delivery](docs/s3-distribution.md)
 maintain one current package set, remove superseded versions, and fetch authenticated metadata. Binary
-installation remains a subsequent step.
+installation uses the [minimal client](docs/sdk-client.md), with a shared cache
+and Ports builds for missing binaries. A self-contained portable bootstrap
+runtime remains separate acceptance work.
 The [distribution guide](docs/distribution.md) defines the remaining boundary
 for an installable binary SDK and package channel.
 

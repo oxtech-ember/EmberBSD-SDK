@@ -35,6 +35,21 @@ class SelectedHostPrefix:
 
 
 class PackageSelectionTests(unittest.TestCase):
+    def test_controller_stdout_can_be_separated_from_frontend_output(self):
+        native = SelectedHostPrefix(self.bmake, self.shell)
+        output = StringIO()
+        with tempfile.TemporaryFile(mode='w+') as child_output, \
+                mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(package_selection, 'load_host_prefix', return_value=native), \
+                redirect_stdout(output):
+            status = package_selection.main(['--ports-root', str(self.ports), 'plan',
+                '--host-prefix', str(self.prefix), '--state', str(self.state), '--set', 'plasma'],
+                controller_stdout=child_output)
+            child_output.seek(0)
+            self.assertIn('Dependency closure:', child_output.read())
+        self.assertEqual(status, 0)
+        self.assertNotIn('Dependency closure:', output.getvalue())
+
     def setUp(self):
         tmp = Path(os.environ.get('TMPDIR', SDK / 'tmp'))
         tmp.mkdir(parents=True, exist_ok=True)

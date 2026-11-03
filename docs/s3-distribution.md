@@ -105,10 +105,10 @@ disappears during reading, it retries once only when current has changed.
 An ordinary missing file, invalid signature or corrupt bytes is an error.
 
 Choose package sets from the snapshot with `scripts/binary-catalog.py plan`.
-A later installer must finish downloading and verifying its whole selection
+The [SDK client](sdk-client.md) finishes downloading and verifying its whole selection
 before modifying installed state; if the server has removed a superseded
-package, re-read current and re-plan first. Package installation and this
-artifact download/re-plan integration are not implemented by metadata fetch.
+package, it re-reads current and re-plans first. These installation operations
+remain separate from the metadata-only fetch command.
 
 The `pkg_summary` format is unchanged. Direct stock pkgin does not authenticate
 our manifest or select its metadata snapshot: its verified repository adapter

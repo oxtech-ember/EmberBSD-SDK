@@ -1,6 +1,9 @@
 # Selecting Ports packages
 
-This page covers source builds. For already built components, the
+For normal installation, use the [binary-first SDK client](sdk-client.md):
+`packages.py --config /path/client.json install --set NAME` checks installed
+packages and published binaries, then builds missing roots through this same
+Ports controller. This page covers explicit source builds. For already built components, the
 [binary catalog](binary-catalog.md) lists and plans the same versionless sets
 without a Ports checkout or bmake on the reader.
 

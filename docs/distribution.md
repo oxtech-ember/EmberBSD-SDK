@@ -3,7 +3,9 @@
 The [signed release contract and CLI](signed-releases.md) implement the shared
 authenticated inventory, package signing and replay-protected channel pointer.
 They verify local complete releases. [S3 publication and HTTPS metadata delivery](s3-distribution.md)
-are implemented; binary installation remains separate.
+are implemented; the [SDK client](sdk-client.md) supplies binary installation
+and uses Ports for missing roots. The self-contained runtime/bootstrap and
+complete compiler/sysroot distribution remain separate acceptance work.
 The [binary catalog producer and reader](binary-catalog.md) compose signed
 package repositories from Ports graphs and select fixed runtime closures without
 source checkouts or bmake on the client.

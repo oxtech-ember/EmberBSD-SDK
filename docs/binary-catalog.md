@@ -119,7 +119,7 @@ Two sets union their dependencies. A second target does not repeat host tools.
 Plans show exact artifacts, roles, dependencies, licenses, download bytes and
 logical unpacked bytes. Totals precede cache/installed-component subtraction;
 filesystem overhead, staging and rollback space are additional. Cache-aware
-accounting belongs to the subsequent installer.
+accounting is provided by the [SDK client](sdk-client.md).
 
 Reading verifies CMS and selected catalog hashes. Package archives and
 pkg_summary need not be downloaded merely to list, show or plan. A direct
@@ -149,5 +149,6 @@ wrong role/architecture, foreign host payload, shared libraries, development
 roots, second target, kernel tools without sysroot, CLI selection and no overwrite.
 Fixture packages establish the distribution contract, not a built compiler or
 an application running on EmberBSD. [S3 delivery](s3-distribution.md) publishes
-these catalogs and fetches authenticated metadata. Installation, cache management
-and a complete portable C/C++ SDK remain subsequent steps.
+these catalogs and fetches authenticated metadata. The [SDK client](sdk-client.md)
+adds installation, shared caching and source builds for missing binaries.
+A complete portable C/C++ SDK remains separate acceptance work.
