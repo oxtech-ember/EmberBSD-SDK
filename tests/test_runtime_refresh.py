@@ -180,8 +180,8 @@ class RuntimeRefreshTests(unittest.TestCase):
 
     def test_builder_plans_builtins_refresh_from_selected_context(self):
         old, new = copy.deepcopy(self.before), copy.deepcopy(self.before)
-        old['flags'].append('EMBER_LLVM_SOURCE=/source/old')
-        new['flags'].append('EMBER_LLVM_SOURCE=/source/new')
+        old['flags'].extend(['EMBER_LLVM_SOURCE=/source/old', 'EMBER_LIBUNWIND_ARCHIVE=/old/libunwind.a'])
+        new['flags'].extend(['EMBER_LLVM_SOURCE=/source/new', 'EMBER_LIBUNWIND_ARCHIVE=/stage/usr/pkg/llvm/lib/libunwind.a'])
         new['flags'] = [f.replace('/previous/runtime', '/candidate/runtime') for f in new['flags']]
         new['runtime_prefix'] = '/candidate/runtime'
         new['llvm_source']['manifest_sha256'] = 'c' * 64
@@ -189,7 +189,7 @@ class RuntimeRefreshTests(unittest.TestCase):
         new['runtime']['manifest']['files'][artifact] = '9' * 64
         new['runtime']['manifest']['bootstrap']['files'][artifact] = '9' * 64
         fake = SimpleNamespace(
-            paths={'os': '/os', 'objects': '/obj', 'llvm-source': '/source/new'},
+            paths={'os': '/os', 'objects': '/obj', 'llvm-source': '/source/new', 'llvm-bootstrap-stage': '/stage'},
             context_signature=lambda path: new, COMMON_SOURCES=SysrootBuilder.COMMON_SOURCES,
             reuse_signature=SysrootBuilder.reuse_signature,
             compatible_context=lambda candidate, path: True,
@@ -198,12 +198,31 @@ class RuntimeRefreshTests(unittest.TestCase):
         fake.reuse_signature = fake.reuse_signature.__get__(fake)
         with patch('emberbsd_sdk.sysroot_builder.runtime_refresh.changed_builtins', return_value=['compiler-rt/lib/builtins/a.c']) as sources, \
              patch('emberbsd_sdk.sysroot_builder.prepared_refresh.runtime_objects', return_value=['lib/libc/a.o']) as objects, \
+             patch('emberbsd_sdk.sysroot_builder.runtime_refresh.equivalent_unwind_binding', return_value=True), \
              patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=[]), \
              patch('emberbsd_sdk.sysroot_builder.prepared_refresh.runtime_independent_patterns', return_value=[]):
             self.assertTrue(SysrootBuilder.plan_prepared_refresh(fake, {'signature': old}, '/obj'))
         sources.assert_called_once_with('/source/old', '/source/new')
         objects.assert_called_once()
         self.assertEqual(fake.runtime_refresh_files, ['lib/libc/a.o'])
+
+    def test_unwind_relocation_requires_selected_stage_and_matching_bytes(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            old = root / 'old/libunwind.a'
+            stage = root / 'stage'
+            rel = 'usr/pkg/llvm/lib/libunwind.a'
+            new = stage / rel
+            old.parent.mkdir()
+            new.parent.mkdir(parents=True)
+            old.write_bytes(b'unchanged unwind')
+            new.write_bytes(b'unchanged unwind')
+            digest = hashlib.sha256(b'unchanged unwind').hexdigest()
+            self.assertTrue(runtime_refresh.equivalent_unwind_binding(str(old), str(new), str(stage), rel, digest))
+            self.assertFalse(runtime_refresh.equivalent_unwind_binding(str(old), str(new), str(root), rel, digest))
+            new.write_bytes(b'changed unwind')
+            self.assertFalse(runtime_refresh.equivalent_unwind_binding(str(old), str(new), str(stage), rel, digest))
 
     def test_builtins_source_diff_rejects_additions_and_reports_changes(self):
         with tempfile.TemporaryDirectory() as temporary:

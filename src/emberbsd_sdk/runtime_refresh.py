@@ -2,6 +2,7 @@
 # Origin: EmberBSD; AI-assisted incremental build support.
 """Describe runtime updates that can use the existing dependency planner."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -142,6 +143,20 @@ def builtins_update(before, after, recipe_guard=None):
         return dict(builtins=builtins)
     except (KeyError, TypeError, AttributeError):
         return None
+
+
+def equivalent_unwind_binding(previous, selected, selected_stage, artifact, digest):
+    """Accept only a relocated, byte-identical selected bootstrap unwind."""
+    try:
+        old, new, stage, relative = map(Path, (previous, selected, selected_stage, artifact))
+        if (not old.is_absolute() or not new.is_absolute() or not stage.is_absolute() or
+                relative.is_absolute() or '..' in relative.parts or
+                not old.is_file() or old.is_symlink() or not new.is_file() or new.is_symlink() or
+                new != stage / relative or not isinstance(digest, str)):
+            return False
+        return all(hashlib.sha256(path.read_bytes()).hexdigest() == digest for path in (old, new))
+    except (OSError, TypeError, ValueError):
+        return False
 
 
 def changed_builtins(old_source, new_source):

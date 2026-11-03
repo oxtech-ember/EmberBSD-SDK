@@ -586,6 +586,18 @@ class SysrootBuilder:
                              for name in changed | moved if name in common_packages)
             if runtime is not None:
                 prefixes += ('EMBER_EXTERNAL_LLVM_RUNTIME=', 'EMBER_LLVM_RESOURCE_DIR=', 'EMBER_LLVM_SOURCE=')
+            if runtime_kind == 'builtins':
+                binding = 'EMBER_LIBUNWIND_ARCHIVE='
+                previous = [f[len(binding):] for f in old_flags if f.startswith(binding)]
+                selected = [f[len(binding):] for f in new_flags if f.startswith(binding)]
+                manifest = new['runtime']['manifest']
+                unwind = manifest['artifacts']['libunwind']['static']
+                digest = manifest['bootstrap']['files'][unwind]
+                if (len(previous) != 1 or len(selected) != 1 or
+                        not runtime_refresh.equivalent_unwind_binding(
+                            previous[0], selected[0], self.paths['llvm-bootstrap-stage'], unwind, digest)):
+                    return False
+                prefixes += (binding,)
             comparable_new_flags = new_flags
             openssh_autoconf_added = False
             if 'openssh' in changed and not any(flag.startswith('HOST_AUTOCONF=') for flag in old_flags):
