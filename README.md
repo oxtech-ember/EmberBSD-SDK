@@ -9,6 +9,16 @@ the target sysroot, binary packages and build receipts. Reuse one compatible
 workspace across tasks for one target. Use separate workspaces for `aarch64`
 and `amd64`. Keep source checkouts separate from build outputs.
 
+Start with the smallest SDK needed by the task: selected native tool roles and,
+when required, one target/ABI sysroot. Kernel-only and freestanding work does
+not require an application sysroot. Plasma, additional language toolchains,
+firmware sources, documentation and diagnostics are explicit additions.
+An exported Ports catalogue provides recipes; it does not select every package
+for compilation. Add only the chosen packages and their dependencies, reusing
+the existing compatible tools, objects and packages.
+Use the [package selection CLI](docs/package-selection.md) to list package sets,
+inspect roots, plan their dependency closure and build an explicit selection.
+
 The first tools create and inspect that workspace. They use Python and its standard
 library. They do not download a compiler or qualify an existing sysroot.
 

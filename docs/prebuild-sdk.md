@@ -10,7 +10,7 @@ prebuild-sdk-aarch64/
   .prebuild-sdk.json    Version 2 layout, declared target and triplet
   obj/                 Shared target objects and native build tools
   sysroot/             Target headers, CRT, libraries and dependency metadata
-  packages/            Binary package output, grouped by profile
+  packages/            Selected target packages and native tool packages
   receipts/            Source, configuration, tool and result records
 ```
 
@@ -19,6 +19,24 @@ Use a separate canonical root for each target. Recommended names are
 Only the canonical root's manifest declares its target. `aarch64` uses the
 `aarch64--netbsd` triplet. `amd64` uses `x86_64--netbsd`.
 The layout scope is `workspace-layout`; it does not qualify the ABI or payload.
+
+## Minimal scope and additions
+
+Creating a workspace selects no packages. Prepare only the native tool roles
+needed by the task and a sysroot for the selected target/ABI when required.
+Kernel-only and freestanding producers may work without an application sysroot.
+Plasma, additional language toolchains, firmware sources, documentation and
+diagnostics are optional. A complete Ports source export is a recipe catalogue,
+not a request to build the whole catalogue.
+
+Package groups select roots from the common Ports recipes. They do not define
+another toolchain, prefix, package version or dependency resolver. Adding a
+group reuses the same compatible workspace and builds only missing or
+incompatible packages in its dependency closure. Package selection is separate
+from the board, target/ABI and compiler selection. Removing a selection does
+not automatically remove shared dependencies or compiled objects.
+
+## Build contexts
 
 Use stable component paths inside `obj`, such as `os`, `modules` and
 `host-tools`. Reuse the selected component paths across tasks. Keep incompatible
