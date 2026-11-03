@@ -4,6 +4,7 @@
 
 import copy
 import hashlib
+import json
 import os
 import sys
 from pathlib import Path
@@ -210,6 +211,79 @@ class ApplicationToolchainTests(TemporaryCase):
         alias.unlink()
         with self.assertRaisesRegex(SDKError, 'base alias'):
             application_toolchain.load_clang_runtime(restored, target='aarch64')
+
+    def test_completed_amd64_release_dest_is_an_application_sysroot(self):
+        from unittest.mock import patch
+        import test_os_release as release_tests
+
+        class AMD64Identity:
+            def compiler(self):
+                record = llvm_tests.ClangBuilder.compiler(self)
+                record['triplet'] = 'x86_64--netbsd'
+                record['reported_triplet'] = 'x86_64-unknown-netbsd'
+                for role, command in record['commands'].items():
+                    record['commands'][role] = [arg.replace('aarch64--netbsd', 'x86_64--netbsd')
+                                                for arg in command]
+                return record
+
+        class ClangRelease(AMD64Identity, release_tests.OSReleaseBuilder):
+            pass
+
+        test_root = self.root / 'release-test'
+        test_root.mkdir()
+        options = release_tests.release_fixture(test_root, 'amd64')
+        original_root = self.root
+        self.root = test_root
+        try:
+            builder, _ = llvm_tests.LLVMBuilderTests.builder(
+                self, options, ClangRelease, retarget=release_tests.retarget_runtime_amd64)
+        finally:
+            self.root = original_root
+        with patch('emberbsd_sdk.native_runtime_install.NativeRuntimeInstaller',
+                   release_tests.FixtureNativeRuntimeInstaller):
+            receipt = builder.run()
+        parent = Path(options['destination']); root = parent / 'dest'
+        expected = receipt['signature']['runtime']['manifest']
+        package = root / 'usr/pkg/include/ordinary-package.h'
+        package.parent.mkdir(parents=True, exist_ok=True); package.write_text('package')
+        self.assertEqual(application_toolchain.load_clang_runtime(root, target='amd64'), expected)
+        with self.assertRaises(SDKError):
+            application_toolchain.load_clang_runtime(root, target='aarch64')
+        marker = parent / '.prebuild-sdk-build-incomplete'
+        marker.write_text('pending')
+        with self.assertRaises(SDKError):
+            application_toolchain.load_clang_runtime(root, target='amd64')
+        marker.unlink()
+        profile_file = parent / 'build-profile.json'
+        profile = jsonio.read_json(profile_file)
+        bad = copy.deepcopy(profile); bad['sdk_receipt']['paths']['destination'] = str(self.root)
+        profile_file.write_text(json.dumps(bad))
+        with self.assertRaises(SDKError):
+            application_toolchain.load_clang_runtime(root, target='amd64')
+        profile_file.write_text(json.dumps(profile))
+        receipt_file = parent / '.prebuild-sdk-build.json'
+        for case in ('error', 'runtime-check'):
+            bad_receipt = copy.deepcopy(receipt)
+            if case == 'error':
+                bad_receipt['error'] = 'interrupted'
+            else:
+                bad_receipt['commands'].append(dict(scope='runtime-check', status='failed'))
+            bad_profile = copy.deepcopy(profile)
+            bad_profile['sdk_receipt'] = bad_receipt
+            receipt_file.write_text(json.dumps(bad_receipt))
+            profile_file.write_text(json.dumps(bad_profile))
+            with self.subTest(case=case), self.assertRaises(SDKError):
+                application_toolchain.load_clang_runtime(root, target='amd64')
+            receipt_file.write_text(json.dumps(receipt))
+            profile_file.write_text(json.dumps(profile))
+        profile_file.unlink()
+        with self.assertRaises(SDKError):
+            application_toolchain.load_clang_runtime(root, target='amd64')
+        profile_file.write_text(json.dumps(profile))
+        alias = root / 'usr/include/c++/vector'
+        alias.unlink()
+        with self.assertRaises(SDKError):
+            application_toolchain.load_clang_runtime(root, target='amd64')
 
     def test_added_package_files_do_not_replace_or_invalidate_the_runtime(self):
         package = self.sysroot/'usr/pkg/include/package.h'; package.parent.mkdir(parents=True, exist_ok=True)

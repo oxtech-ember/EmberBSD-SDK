@@ -4,7 +4,10 @@
 the existing completed or imported sysroot record and checks the installed
 LLVM runtime. It does not create another qualification record. Additional
 packages outside `usr/pkg/llvm` are permitted; their contents are not verified
-by runtime selection.
+by runtime selection. A completed amd64 Clang OS release may also use its
+recorded `destination/dest` directly after release outputs are finalized. The
+parent release profile and receipt must match and have no incomplete marker;
+this selection does not create a sysroot receipt or extend sysroot transfer.
 
 ```python
 from emberbsd_sdk import application_toolchain
