@@ -110,7 +110,8 @@ def main():
                     line = 'REQUIRES=' + ' '.join(required)
                 updated.append(line)
             _replace_file(info, ('\n'.join(updated) + '\n').encode())
-            texts = [name for name in text_references(root, prefix) if not name.startswith('pkgdb/')]
+            texts = [relative for relative in text_references(root, prefix, [name])
+                     if not relative.startswith('pkgdb/')]
             for path in root.rglob('*'):
                 if path.is_file() and not path.is_symlink() and not path.is_relative_to(root / 'pkgdb'):
                     if args.relocate_text and path.relative_to(root).as_posix() in texts:
