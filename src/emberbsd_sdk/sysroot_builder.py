@@ -132,6 +132,40 @@ def validate_native_binding(signature, selected_paths, shell=None):
 # The manifest the Ports LLVM owner writes into a prepared source tree.
 LLVM_SOURCE_MANIFEST = 'llvm-source.json'
 
+def _compatible_native_contract(old_rows, new_rows, tools, previous_flags, selected_flags, added_roles):
+    """Allow generator bindings only when both contexts selected the same tool."""
+    if not old_rows or not new_rows or old_rows[0] != new_rows[0]:
+        return False
+    def rows(lines):
+        result = {}
+        for line in lines[1:]:
+            fields = line.split(' ')
+            if len(fields) != 3 or (fields[0], fields[1]) in result:
+                return None
+            result[(fields[0], fields[1])] = fields[2]
+        return result
+    old, new = rows(old_rows), rows(new_rows)
+    if old is None or new is None or not old.keys() <= new.keys():
+        return False
+    bindings = {'perl': 'HOST_PERL', 'python': 'HOST_PYTHON',
+                'gmake': 'HOST_GMAKE', 'autoconf': 'HOST_AUTOCONF'}
+    def equivalent(role, binding):
+        path = tools.get(role)
+        if binding != bindings.get(role) or not isinstance(path, str) or not os.path.isabs(path):
+            return False
+        expected = binding + '=' + path
+        return ([flag for flag in previous_flags if flag.startswith(binding + '=')] == [expected] and
+                [flag for flag in selected_flags if flag.startswith(binding + '=')] == [expected])
+    for key, binding in old.items():
+        replacement = new[key]
+        if binding != replacement and not (binding == '-' and equivalent(key[1], replacement)):
+            return False
+    added = new.keys() - old.keys()
+    if not added_roles <= {role for _, role in added}:
+        return False
+    return all(new[key] == '-' or equivalent(key[1], new[key]) for key in added)
+
+
 class SysrootBuilder:
     TARGETS = TARGETS
     FLAGS = ('TOOLCHAIN_MISSING=yes MKGCCCMDS=no MKCOMPAT=no MKCXX=yes '
@@ -613,6 +647,7 @@ class SysrootBuilder:
                 before[name] = copy.deepcopy(after[name])
             old['flags'] = copy.deepcopy(new['flags'])
             candidate = dict(record, signature=old)
+            candidate['_compat_previous_flags'] = copy.deepcopy(record['signature']['flags'])
             if openssh_autoconf_added:
                 previous_tools = candidate['signature']['native_toolset']['tools']
                 selected_tools = new['native_toolset']['tools']
@@ -831,14 +866,9 @@ class SysrootBuilder:
                 old_rows = data.splitlines()
                 selected_contract = Path(self.native_contract).read_text(encoding='ascii')
                 new_rows = selected_contract.splitlines()
-                if old_rows[:1] == new_rows[:1]:
-                    if not set(old_rows[1:]) <= set(new_rows[1:]):
-                        return False
-                    extra = [row.split(' ') for row in new_rows[1:] if row not in old_rows[1:]]
-                else:
-                    return False
-                if (any(len(row) != 3 or row[2] != '-' for row in extra) or
-                        not added_contract <= {row[1] for row in extra}):
+                previous_flags = record.get('_compat_previous_flags', record['signature']['flags'])
+                if not _compatible_native_contract(old_rows, new_rows, selected['tools'],
+                                                   previous_flags, new['flags'], added_contract):
                     return False
                 old_digest = hashlib.sha256(data.encode('ascii')).hexdigest()
                 allowed = (os.path.join(old['tools'], 'native-routing'),

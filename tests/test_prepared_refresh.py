@@ -12,6 +12,22 @@ from emberbsd_sdk.errors import SDKError
 
 
 class PreparedRefreshTests(unittest.TestCase):
+    def test_native_binding_transition_requires_original_selected_paths(self):
+        from emberbsd_sdk.sysroot_builder import _compatible_native_contract
+        old = ['EmberBSD-native-tools 2', 'perl perl -']
+        new = ['EmberBSD-native-tools 2', 'perl perl HOST_PERL', 'python python HOST_PYTHON',
+               'gmake gmake HOST_GMAKE', 'autoconf autoconf HOST_AUTOCONF']
+        tools = {'perl': '/prefix/perl', 'python': '/prefix/python',
+                 'gmake': '/prefix/gmake', 'autoconf': '/prefix/autoconf'}
+        flags = ['HOST_PERL=/prefix/perl', 'HOST_PYTHON=/prefix/python',
+                 'HOST_GMAKE=/prefix/gmake', 'HOST_AUTOCONF=/prefix/autoconf']
+        self.assertTrue(_compatible_native_contract(old, new, tools, flags, flags, set()))
+        self.assertFalse(_compatible_native_contract(old, new, tools, flags[1:], flags, set()))
+        self.assertFalse(_compatible_native_contract(old, new, dict(tools, perl='/other/perl'), flags, flags, set()))
+        wrong = [row.replace('HOST_PERL', 'HOST_OTHER') for row in new]
+        self.assertFalse(_compatible_native_contract(old, wrong, tools, flags, flags, set()))
+        self.assertFalse(_compatible_native_contract(old, new[1:], tools, flags, flags, set()))
+
     def test_unique_flag_assignments_are_canonicalized(self):
         from emberbsd_sdk.sysroot_builder import _canonicalize_unique_flag_assignments
 
