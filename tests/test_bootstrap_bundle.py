@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-2-Clause
 import io
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -8,7 +9,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from emberbsd_sdk.bootstrap_bundle import MANIFEST, initialize, unpack_package, relocate_text
+from emberbsd_sdk.bootstrap_bundle import (MANIFEST, bundle_paths, initialize, unpack_package,
+                                           relocate_text, text_references, write_archive)
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.jsonio import read_json, write_json
 
@@ -88,6 +90,71 @@ class BootstrapTests(unittest.TestCase):
     def test_internal_absolute_links_are_relative(self):
         unpack_package(self.package(link='/producer/sdk/bin/real'), self.root)
         self.assertEqual((self.root / 'bin/example').readlink(), Path('real'))
+
+    def test_archive_case_aliases_and_relocated_text(self):
+        data = self.root / 'share'
+        data.mkdir()
+        (data / 'Name').write_text('/producer/sdk/lib\n')
+        if not (data / 'name').exists():
+            (data / 'name').write_text('/producer/sdk/lib\n')
+        (data / 'Link').symlink_to('Name')
+        if not (data / 'link').is_symlink():
+            (data / 'link').symlink_to('Name')
+        os.link(data / 'Name', data / 'hard')
+        db = self.root / 'pkgdb/example-1'
+        db.mkdir(parents=True)
+        (db / '+CONTENTS').write_text('@cwd /producer/sdk\n@name example-1\n'
+            'share/Name\nshare/name\nshare/Link\nshare/link\nshare/hard\n'
+            '@ignore\nshare/not-present\n')
+        refs = text_references(self.root, '/producer/sdk', ['example-1'])
+        self.assertIn('share/Name', refs)
+        self.assertIn('share/name', refs)
+        self.assertNotIn('share/Link', refs)
+        self.assertNotIn('share/not-present', [p.relative_to(self.root).as_posix()
+                                                for p in bundle_paths(self.root, ['example-1'])])
+        (self.root / MANIFEST).parent.mkdir(parents=True)
+        write_json(self.root / MANIFEST, dict(schema='emberbsd.bootstrap.v1',
+            prefix='/producer/sdk', packages=['example-1'], text_files=refs))
+        output = self.work / 'bundle.tar.gz'
+        write_archive(self.root, output, ['example-1'])
+        with tarfile.open(output) as archive:
+            members = {m.name: m for m in archive.getmembers()}
+            for name in ('Name', 'name', 'hard'):
+                member = members['ember-sdk/share/' + name]
+                self.assertTrue(member.isfile(), name)
+                self.assertEqual(archive.extractfile(member).read(), b'/producer/sdk/lib\n')
+            for name in ('Link', 'link'):
+                member = members['ember-sdk/share/' + name]
+                self.assertTrue(member.issym(), name)
+                self.assertEqual(member.linkname, 'Name')
+            # Separate files are independently extracted and relocated on a
+            # case-sensitive consumer. Case-insensitive hosts still verify the
+            # exact archive entries above.
+            probe = self.work / 'case-probe'
+            probe.write_text('probe')
+            if not (self.work / 'CASE-PROBE').exists():
+                destination = self.work / 'extract'
+                destination.mkdir()
+                archive.extractall(destination, filter='data')
+                installed = destination / 'ember-sdk'
+                self.assertNotEqual((installed / 'share/Name').stat().st_ino,
+                                    (installed / 'share/hard').stat().st_ino)
+                with patch('emberbsd_sdk.bootstrap_bundle.subprocess.run') as run:
+                    run.return_value.returncode = 0
+                    initialize(installed)
+                for name in ('Name', 'name', 'hard'):
+                    self.assertEqual((installed / 'share' / name).read_text(),
+                                     str(installed) + '/lib\n')
+
+    def test_missing_owned_member_fails_but_ignored_member_does_not(self):
+        db = self.root / 'pkgdb/example-1'
+        db.mkdir(parents=True)
+        contents = db / '+CONTENTS'
+        contents.write_text('@cwd /producer/sdk\n@name example-1\n@ignore\nmissing\n')
+        bundle_paths(self.root, ['example-1'])
+        contents.write_text(contents.read_text() + 'other-missing\n')
+        with self.assertRaisesRegex(SDKError, 'other-missing'):
+            bundle_paths(self.root, ['example-1'])
 
     def test_overlapping_packages_cannot_replace_files(self):
         archive = self.package()

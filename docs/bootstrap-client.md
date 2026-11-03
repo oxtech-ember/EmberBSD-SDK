@@ -19,8 +19,10 @@ sh install-sdk.sh "$HOME/Downloads/ember-sdk"
 
 The first installer uses macOS curl, LibreSSL, plutil and tar. It pins the signing
 root fingerprint, verifies both CMS envelopes and the selected archive hash
-before running downloaded code. The first RSA-3072/SHA256 certificate profile
-is explicit; changing that profile requires updating this installer. No Python,
+before running downloaded code. HTTPS acquisition uses finite connection and
+transfer timeouts and up to three retries for transient network failures; a
+failed transfer leaves no installed prefix. The first RSA-3072/SHA256 certificate
+profile is explicit; changing that profile requires updating this installer. No Python,
 Homebrew, compiler or SDK is required beforehand. Further operations use the
 installed Python/OpenSSL and the [normal client](sdk-client.md), including its
 bounded shared cache and persistent channel generation.
@@ -62,6 +64,12 @@ paths relative to its loaded library. First initialization adjusts textual
 prefixes and package checksums, runs package hooks, then rebuilds pkgdb.
 Historical `+BUILD_INFO` and `+BUILD_VERSION` remain original producer evidence;
 only active `REQUIRES`/`PROVIDES` paths are adjusted in the installed database.
+
+The archive preserves every exact payload name from the package packing lists,
+including names that differ only by case on the producer filesystem. Each file
+has independent archive data; aliases do not become self-hardlinks during
+extraction. Text relocation includes every spelling, so an archive prepared on
+a case-insensitive filesystem can initialize on a case-sensitive destination.
 
 Publish the archive as a `bootstrap` artifact in the same signed release as its
 component catalog; [S3 publication](s3-distribution.md) replaces the previous
