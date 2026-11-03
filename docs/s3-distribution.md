@@ -134,8 +134,10 @@ the first toolset. There is no insecure TLS option.
 
 ## Validation boundary
 
-The current native catalog contains `fetch-1.9nb5` and `openssl-4.1.0nb2` for
-Darwin arm64, alongside the [self-contained initial SDK](bootstrap-client.md).
+The current native catalog contains fetch, OpenSSL, digest, nawk, nbsed,
+nbpatch, mktools and cwrappers for Darwin arm64, alongside the
+[self-contained initial SDK](bootstrap-client.md). Select `host-fetch` or
+`sdk-source-tools`; existing bootstrap dependencies are reused.
 The bootstrap archive is 38,862,758 bytes (117,540,506 bytes of regular files),
 including 16 whole runtime packages and the client. It requires macOS 27+,
 with no preinstalled Python, compiler or SDK. First installation, signed fetch

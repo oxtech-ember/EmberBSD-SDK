@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from emberbsd_sdk.bootstrap_bundle import unpack_package, make_relative
+from emberbsd_sdk.bootstrap_bundle import unpack_package, make_relative, _replace_file
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.host_prefix import load_host_prefix
 from emberbsd_sdk.package_install import PORTABLE_PREFIX
@@ -85,7 +85,7 @@ def main():
                         continue
                     line = 'REQUIRES=' + ' '.join(required)
                 updated.append(line)
-            info.write_text('\n'.join(updated) + '\n')
+            _replace_file(info, ('\n'.join(updated) + '\n').encode())
             for path in root.rglob('*'):
                 if path.is_file() and not path.is_symlink() and not path.is_relative_to(root / 'pkgdb'):
                     # Only a producer check; clients trust the signed qualification.
@@ -108,7 +108,8 @@ def main():
             plist.write_text('\n'.join(packing) + '\n')
             command = ['-F', 'gzip', '-f', plist, '-p', root, '-I', prefix]
             for flag, member in (('-c', '+COMMENT'), ('-d', '+DESC'), ('-B', '+BUILD_INFO'),
-                                 ('-b', '+BUILD_VERSION'), ('-s', '+SIZE_PKG'), ('-S', '+SIZE_ALL')):
+                                 ('-b', '+BUILD_VERSION'), ('-s', '+SIZE_PKG'), ('-S', '+SIZE_ALL'),
+                                 ('-n', '+PRESERVE'), ('-D', '+DISPLAY')):
                 if (database / member).exists():
                     command += [flag, database / member]
             crypto.run_package('pkg_create', [*command, args.output.absolute()])

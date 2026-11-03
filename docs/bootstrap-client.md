@@ -14,6 +14,7 @@ sh install-sdk.sh "$HOME/Downloads/ember-sdk"
 "$HOME/Downloads/ember-sdk/bin/ember-sdk" list
 "$HOME/Downloads/ember-sdk/bin/ember-sdk" plan --set host-fetch
 "$HOME/Downloads/ember-sdk/bin/ember-sdk" install --set host-fetch
+"$HOME/Downloads/ember-sdk/bin/ember-sdk" install --set sdk-source-tools
 ```
 
 The first installer uses macOS curl, LibreSSL, plutil and tar. It pins the signing
@@ -23,6 +24,11 @@ is explicit; changing that profile requires updating this installer. No Python,
 Homebrew, compiler or SDK is required beforehand. Further operations use the
 installed Python/OpenSSL and the [normal client](sdk-client.md), including its
 bounded shared cache and persistent channel generation.
+
+`sdk-source-tools` adds digest, awk, sed, patch and the Ports mktools/cwrappers
+helpers, reusing fetch and OpenSSL when present. Its roots live in Ports, without
+duplicated version pins. This prepares source handling; a compiler, make and
+target sysroot remain separate selections.
 
 Choose a path without spaces or shell metacharacters, as required by Ports.
 An archive can be installed at any such path outside its producer prefix.
@@ -69,8 +75,9 @@ payloads still containing the producer prefix. Prefix-local `REQUIRES` are repla
 by the existing package dependencies only after checking library ownership;
 system requirements stay unchanged. Packages with prefix-local `PROVIDES` still
 need their owner's relocation support. It then uses native pkg_create to
-preserve metadata and regenerate checksums. A packaging change requires a new
-Ports package revision.
+preserve metadata (including protection and display notices) and regenerate
+checksums. Changing already-published package bytes requires a new Ports package
+revision; the first publication can qualify an existing recipe's package.
 
 The signed `@comment emberbsd-prefix-independent-v1` packing-list marker permits
 host installation at another prefix. Unqualified packages retain the exact-prefix
@@ -83,3 +90,8 @@ from the producer prefix denied; Python/OpenSSL default trust paths; dynamic
 legacy-provider and CT configuration loading; package registration/checksums;
 signed component installation and repeated-install reuse. These results do not
 establish a complete compiler SDK, another host OS, or an EmberBSD device install.
+
+`tests/source-tools-runtime.py` checks signed source-tool installation, SHA256,
+text processing, patch application, buildlink symlinks and wrapper argument
+forwarding in a disposable bootstrap. It also checks package ownership,
+preservation markers and nbpatch's original redistribution notices.

@@ -34,7 +34,7 @@ class InstallTests(unittest.TestCase):
         self.cfg = dict(prefix=str(self.destination), pkgdb=str(self.destination / 'pkgdb'),
                         host=dict(os=platform.system(), arch=platform.machine(), abi='test', runtime='native'))
 
-    def package(self, *, target=False, link=None, commands='', arch='aarch64', requires_self=False):
+    def package(self, *, target=False, link=None, commands='', arch='aarch64', requires_self=False, preserve=False):
         stage = self.work / 'stage'
         stage.mkdir()
         if link:
@@ -48,7 +48,12 @@ class InstallTests(unittest.TestCase):
             (f'OPSYS=NetBSD\nMACHINE_ARCH={arch}\nOS_VERSION=11.0\n' if target else
              f'OPSYS={platform.system()}\nMACHINE_ARCH={"aarch64" if platform.machine() == "arm64" else platform.machine()}\nOS_VERSION={platform.release()}\n'))
         unsigned, signed = self.work / 'unsigned.tgz', self.work / 'fixture-1.0.tgz'
-        self.crypto.run_package('pkg_create', ['-c', '-fixture', '-d', '-fixture',
+        extra = []
+        if preserve:
+            (stage / 'PRESERVE').write_text('bootstrap tool\n')
+            (stage / 'INFO').chmod(0o444)
+            extra = ['-n', stage / 'PRESERVE']
+        self.crypto.run_package('pkg_create', [*extra, '-c', '-fixture', '-d', '-fixture',
             '-f', stage / 'PLIST', '-B', stage / 'INFO', '-p', stage, '-I', prefix, unsigned])
         self.crypto.sign_package(unsigned, signed, self.signer, self.ca.certificate)
         return signed
@@ -114,7 +119,7 @@ class InstallTests(unittest.TestCase):
 
     @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
     def test_portable_producer_omits_empty_requires_before_real_pkg_add(self):
-        package = self.package(requires_self=True)
+        package = self.package(requires_self=True, preserve=True)
         portable, signed = self.work / 'portable.tgz', self.work / 'portable-signed.tgz'
         subprocess.run([sys.executable, '-B', str(Path(__file__).resolve().parents[1] / 'scripts/package-portable.py'),
             str(package), '--host-prefix', os.environ['EMBERBSD_TEST_HOST_PREFIX'],
@@ -126,6 +131,7 @@ class InstallTests(unittest.TestCase):
         self.cfg['pkgdb'] = self.cfg['prefix'] + '/pkgdb'
         PackageInstaller(self.crypto, self.ca.certificate).install(signed, self.cfg)
         self.assertEqual((Path(self.cfg['prefix']) / 'payload').read_text(), 'installed data')
+        self.assertEqual((Path(self.cfg['pkgdb']) / 'fixture-1.0/+PRESERVE').read_text(), 'bootstrap tool\n')
 
 
 if __name__ == '__main__':
