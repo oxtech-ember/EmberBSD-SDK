@@ -6,10 +6,9 @@
 import argparse
 from pathlib import Path
 import sys
-import tarfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from emberbsd_sdk.bootstrap_bundle import prepare
+from emberbsd_sdk.bootstrap_bundle import prepare, write_archive
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.release_signing import ReleaseCrypto
 
@@ -42,13 +41,7 @@ def main():
             host=dict(os='Darwin', arch=platform.machine(), abi=args.abi, runtime='libSystem'),
             repository=args.repository, install_name_tool=args.bootstrap_install_name_tool,
             codesign=args.codesign, https_ca=args.https_ca)
-        with args.output.open('xb') as output:
-            with tarfile.open(fileobj=output, mode='w:gz', compresslevel=6, dereference=False) as archive:
-                def owner(member):
-                    member.uid = member.gid = 0
-                    member.uname = member.gname = ''
-                    return member
-                archive.add(args.stage, arcname='ember-sdk', filter=owner)
+        write_archive(args.stage, args.output, metadata['packages'])
         print(f'{len(metadata["packages"])} complete packages; {args.output.stat().st_size} archive bytes')
         return 0
     except (SDKError, OSError, ValueError) as exc:

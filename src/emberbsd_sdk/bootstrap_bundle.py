@@ -248,9 +248,52 @@ def relocate_text(content, old, new):
     return content
 
 
-def text_references(root, prefix):
+def bundle_paths(root, packages):
+    """Include every exact package spelling, even on a case-insensitive stage."""
+    paths = {path.relative_to(root).as_posix(): path for path in root.rglob('*')}
+    for package in packages:
+        ignored = False
+        for line in (root / 'pkgdb' / package / '+CONTENTS').read_text().splitlines():
+            if line == '@ignore':
+                ignored = True
+            elif line and not line.startswith('@'):
+                if ignored:
+                    ignored = False
+                    continue
+                path = _destination(root, line)
+                if not os.path.lexists(path):
+                    raise SDKError('bootstrap package member is missing: ' + line)
+                while path != root:
+                    paths[path.relative_to(root).as_posix()] = path
+                    path = path.parent
+    return [paths[name] for name in sorted(paths)]
+
+
+def write_archive(root, output, packages):
+    """Serialize package names rather than the staging filesystem's case folding."""
+    paths = [root, *bundle_paths(root, packages)]
+    with Path(output).open('xb') as stream:
+        with tarfile.open(fileobj=stream, mode='w:gz', compresslevel=6,
+                          dereference=False) as archive:
+            for path in paths:
+                relative = path.relative_to(root)
+                name = 'ember-sdk' if path == root else 'ember-sdk/' + relative.as_posix()
+                member = archive.gettarinfo(str(path), arcname=name)
+                member.uid = member.gid = 0
+                member.uname = member.gname = ''
+                if member.isreg() or member.islnk():
+                    # Case aliases must not become self-hardlinks on the consumer FS.
+                    member.type, member.linkname = tarfile.REGTYPE, ''
+                    member.size = path.stat().st_size
+                    with path.open('rb') as payload:
+                        archive.addfile(member, payload)
+                else:
+                    archive.addfile(member)
+
+
+def text_references(root, prefix, packages):
     result = []
-    for path in sorted(root.rglob('*')):
+    for path in bundle_paths(root, packages):
         if (not path.is_file() or path.is_symlink() or path.stat().st_size > 8 * 1024 * 1024 or
                 path.name in ('+BUILD_INFO', '+BUILD_VERSION') or path == root / MANIFEST):
             continue
@@ -369,7 +412,7 @@ def prepare(root, archives, crypto, *, host, repository, install_name_tool, code
             raise SDKError('bootstrap lacks ' + member)
     make_relative(root, prefix, {'os': host['os'], 'cpu': host['arch']}, install_name_tool, codesign)
     refresh_checksums(root, packages)
-    text_files = text_references(root, prefix)
+    text_files = text_references(root, prefix, packages)
     (root / 'share/emberbsd').mkdir(parents=True, exist_ok=True)
     package_client(root / 'share/emberbsd/ember-sdk.pyz', bootstrap=True)
     launcher = root / 'bin/ember-sdk'
