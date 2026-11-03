@@ -158,6 +158,12 @@ separate distribution acceptance work. pkg_add prefix relocation alone does
 not rewrite Mach-O/ELF load paths or producer paths in scripts. This client
 therefore requires the archive's declared prefix to match its destination.
 
+The first published [client artifact](https://emberbsd-pkg.oxteam.me/current/host/darwin-arm64/ember-sdk-0.1.pyz)
+is 479,369 bytes. Its hash is authenticated by the release referenced by
+[`current.p7m`](https://emberbsd-pkg.oxteam.me/current.p7m); it is a client program,
+not a self-contained Python/pkg_tools bootstrap. The Python program is portable;
+the presently published repository and native verification cover Darwin arm64.
+
 Checks cover shared dependencies, repeat installation, missing binaries versus
 broken downloads, resumed transfers, insufficient disk, wrong platforms,
 escaping archive links and target scripts. A native installation test uses real
