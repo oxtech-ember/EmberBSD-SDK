@@ -166,6 +166,29 @@ def _compatible_native_contract(old_rows, new_rows, tools, previous_flags, selec
     return all(new[key] == '-' or equivalent(key[1], new[key]) for key in added)
 
 
+def _native_tool_context_flags(old_object_record, selected_object, tools_path, old_tools, selected_tools):
+    """Use flags only from the object context that owns this exact tool tree."""
+    try:
+        if (old_object_record['format'] != 'emberbsd-sysroot-object-context' or
+                old_object_record['version'] != 1):
+            return None
+        old_object = old_object_record['signature']
+        if old_object['tools'] != tools_path or selected_object['tools'] != tools_path:
+            return None
+        roles = ('perl', 'python', 'gmake', 'autoconf')
+        previous = old_object['native_toolset']['tools']
+        selected = selected_object['native_toolset']['tools']
+        if any(previous[role] != old_tools[role] or selected[role] != selected_tools[role]
+               for role in roles):
+            return None
+        old_flags, new_flags = old_object['flags'], selected_object['flags']
+        if not isinstance(old_flags, list) or not isinstance(new_flags, list):
+            return None
+        return old_flags, new_flags
+    except (KeyError, TypeError, AttributeError):
+        return None
+
+
 class SysrootBuilder:
     TARGETS = TARGETS
     FLAGS = ('TOOLCHAIN_MISSING=yes MKGCCCMDS=no MKCOMPAT=no MKCXX=yes '
@@ -866,9 +889,22 @@ class SysrootBuilder:
                 old_rows = data.splitlines()
                 selected_contract = Path(self.native_contract).read_text(encoding='ascii')
                 new_rows = selected_contract.splitlines()
-                previous_flags = record.get('_compat_previous_flags', record['signature']['flags'])
+                previous_flags = record.get('_compat_previous_flags', record['signature'].get('flags'))
+                selected_flags = new.get('flags')
+                if (previous_flags is None or selected_flags is None) and path == self.paths['tools']:
+                    object_context = os.path.join(self.paths['objects'], self.CONTEXT)
+                    if paths.entry(object_context) is None:
+                        return False
+                    evidence = _native_tool_context_flags(
+                        jsonio.read_json(object_context), self.context_signature(self.paths['objects']),
+                        path, previous['tools'], selected['tools'])
+                    if evidence is None:
+                        return False
+                    previous_flags, selected_flags = evidence
+                if previous_flags is None or selected_flags is None:
+                    return False
                 if not _compatible_native_contract(old_rows, new_rows, selected['tools'],
-                                                   previous_flags, new['flags'], added_contract):
+                                                   previous_flags, selected_flags, added_contract):
                     return False
                 old_digest = hashlib.sha256(data.encode('ascii')).hexdigest()
                 allowed = (os.path.join(old['tools'], 'native-routing'),

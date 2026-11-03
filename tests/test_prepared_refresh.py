@@ -28,6 +28,20 @@ class PreparedRefreshTests(unittest.TestCase):
         self.assertFalse(_compatible_native_contract(old, wrong, tools, flags, flags, set()))
         self.assertFalse(_compatible_native_contract(old, new[1:], tools, flags, flags, set()))
 
+    def test_tool_context_uses_only_its_matching_recorded_object_flags(self):
+        from emberbsd_sdk.sysroot_builder import _native_tool_context_flags
+        tools = {'perl': '/p/perl', 'python': '/p/python', 'gmake': '/p/gmake', 'autoconf': '/p/autoconf'}
+        flags = ['HOST_PERL=/p/perl', 'HOST_PYTHON=/p/python', 'HOST_GMAKE=/p/gmake', 'HOST_AUTOCONF=/p/autoconf']
+        old = {'format': 'emberbsd-sysroot-object-context', 'version': 1,
+               'signature': {'tools': '/tools', 'flags': flags, 'native_toolset': {'tools': tools}}}
+        new = {'tools': '/tools', 'flags': flags, 'native_toolset': {'tools': tools}}
+        self.assertEqual(_native_tool_context_flags(old, new, '/tools', tools, tools), (flags, flags))
+        self.assertIsNone(_native_tool_context_flags(old, new, '/other-tools', tools, tools))
+        changed = dict(tools, perl='/other/perl')
+        self.assertIsNone(_native_tool_context_flags(old, new, '/tools', changed, tools))
+        missing = dict(old, signature=dict(old['signature'], flags=[]))
+        self.assertEqual(_native_tool_context_flags(missing, new, '/tools', tools, tools), ([], flags))
+
     def test_unique_flag_assignments_are_canonicalized(self):
         from emberbsd_sdk.sysroot_builder import _canonicalize_unique_flag_assignments
 
