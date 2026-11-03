@@ -122,6 +122,32 @@ class PreparedRefreshTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, 'unexpected consumer scan'):
                 prepared_refresh.plan(self.os, self.obj, {'libcbor'})
 
+    def test_explicit_recursive_producer_scope(self):
+        child = "external/cbor/child"
+        (self.os / child).mkdir()
+        (self.os / child / "Makefile").touch()
+        (self.obj / child).mkdir()
+        (self.obj / child / "x.d").write_text("x.o: /usr/include/cbor.h\n")
+        (self.obj / "other/consumer/x.d").write_text("x.o: /usr/include/cbor.h\n")
+        entry = self.contract["sources"]["EMBER_LIBCBOR_SOURCE"]
+        self.write_contract()
+        original = prepared_refresh.plan(self.os, self.obj, {"libcbor"})
+        self.assertIn(child, original)
+        entry["recursive_producer_dirs"] = ["external/cbor"]
+        self.write_contract()
+        collapsed = prepared_refresh.plan(self.os, self.obj, {"libcbor"})
+        self.assertNotIn(child, collapsed)
+        self.assertIn("external/cbor", collapsed)
+        self.assertIn("other/consumer", collapsed)
+        entry["recursive_producer_dirs"] = ["external/fido"]
+        self.write_contract()
+        with self.assertRaises(SDKError):
+            prepared_refresh.plan(self.os, self.obj, {"libcbor"})
+        entry["recursive_producer_dirs"] = ["../outside"]
+        self.write_contract()
+        with self.assertRaises(SDKError):
+            prepared_refresh.plan(self.os, self.obj, {"libcbor"})
+
     def test_changed_headers_and_unknown_objects_are_cleaned(self):
         (self.obj / 'other/consumer/test.d').write_text('test.o: /old/usr/include/cbor/data.h\n')
         (self.obj / 'other/consumer/test.o').write_bytes(b'')

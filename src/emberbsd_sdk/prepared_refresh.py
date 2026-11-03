@@ -97,11 +97,20 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
         dirs = set()
         headers = {relative(p) for p in extra_headers}
         linked = {relative(p) for p in extra_linked}
+        recursive = set()
         for name in names:
             entry = sources['EMBER_' + name.upper().replace('-', '_') + '_SOURCE']
-            if set(entry) not in ({'producer_dirs', 'consumer_dirs', 'header_prefixes', 'linked_names'},
-                                   {'producer_dirs', 'consumer_dirs', 'header_prefixes', 'linked_names', 'native_producer_dirs'}):
+            required_entry = {'producer_dirs', 'consumer_dirs', 'header_prefixes', 'linked_names'}
+            if not required_entry <= set(entry) or set(entry) - required_entry - {'native_producer_dirs', 'recursive_producer_dirs'}:
                 raise ValueError('unsupported source entry')
+            declared = {relative(p) for p in entry['producer_dirs']}
+            roots = entry.get('recursive_producer_dirs', [])
+            if not isinstance(roots, list):
+                raise ValueError('invalid recursive producers')
+            roots = {relative(p) for p in roots}
+            if not roots <= declared:
+                raise ValueError('recursive producer is not declared')
+            recursive.update(roots)
             dirs.update(relative(p) for p in entry['producer_dirs'] + entry['consumer_dirs'])
             headers.update(relative(p) for p in entry['header_prefixes'])
             linked.update(relative(p) for p in entry['linked_names'])
@@ -212,7 +221,9 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
                 result.append(name)
         if missing:
             raise ValueError('missing OS makefiles for ' + ', '.join(missing))
-        return sorted(set(result))
+        result = set(result)
+        return sorted(name for name in result if not any(
+            parent in result and name.startswith(parent + '/') for parent in recursive))
     except (OSError, ValueError, TypeError, KeyError) as exc:
         raise SDKError('cannot safely plan prepared source refresh: ' + str(exc)) from exc
 
