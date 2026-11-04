@@ -2219,6 +2219,9 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.llvm_phase = 'headers'
         header = {'signature': copy.deepcopy(builder.context_signature(objects)),
                   'sources': copy.deepcopy(builder.sources)}
+        tools = builder.paths['tools']
+        tool_record = {'signature': copy.deepcopy(builder.context_signature(tools)),
+                       'sources': copy.deepcopy(builder.sources)}
         builder.llvm_phase = 'base'
         base = {'signature': copy.deepcopy(builder.context_signature(objects)),
                 'sources': copy.deepcopy(builder.sources)}
@@ -2227,8 +2230,10 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertFalse(builder.compatible_context(base, objects))
         builder.llvm_phase = 'headers'
         self.assertTrue(builder.compatible_context(header, objects))
+        self.assertTrue(builder.compatible_context(tool_record, tools))
         builder.signature['compiler']['binaries']['objcopy']['path'] = '/changed/objcopy'
         self.assertFalse(builder.compatible_context(header, objects))
+        self.assertFalse(builder.compatible_context(tool_record, tools))
 
     def test_expat_selection_changes_headers_but_not_native_tools(self):
         builder, _ = self.builder()

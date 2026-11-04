@@ -883,18 +883,14 @@ class SysrootBuilder:
             new['python'].pop('modules', None)
             if (self.compiler_family() == 'clang' and
                     (path == self.paths['tools'] or getattr(self, 'llvm_phase', None) == 'headers')):
-                # Native tools and target headers never invoke the target linker.
-                # Keep its selected route and all compiler/ABI inputs, but do not
-                # discard these outputs solely because ld.lld bytes changed.
+                # Native tools and target headers do not execute target linker,
+                # objcopy or strip; keep their selected paths and all ABI inputs.
                 for signature in (old, new):
-                    signature['compiler']['binaries']['ld'].pop('sha256', None)
+                    for role in ('ld', 'objcopy', 'strip'):
+                        signature['compiler']['binaries'][role].pop('sha256', None)
             if (self.compiler_family() == 'clang' and
                     getattr(self, 'llvm_phase', None) == 'headers' and
                     path != self.paths['tools']):
-                # Header installation does not execute target objcopy or strip.
-                for signature in (old, new):
-                    for role in ('objcopy', 'strip'):
-                        signature['compiler']['binaries'][role].pop('sha256', None)
                 # bootstrap-headers only installs OS/libedit headers. It does
                 # not enter libc or consume the common LLVM runtime source.
                 # Source selection is still verified during preflight.
