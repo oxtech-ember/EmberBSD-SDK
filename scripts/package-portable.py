@@ -104,8 +104,15 @@ def main():
                      and not line.startswith((package_relocation.SOURCE, package_relocation.TEXT))]
             for member, source in (('+INSTALL', args.install_script), ('+DEINSTALL', args.deinstall_script)):
                 if source is not None:
-                    (database / member).write_bytes(read_bytes(source, 8 * 1024 * 1024))
-                    (database / member).chmod(0o755)
+                    destination = database / member
+                    content = read_bytes(source, 8 * 1024 * 1024)
+                    if destination.is_symlink() or (destination.exists() and not destination.is_file()):
+                        raise SDKError('package hook metadata is not a regular file: ' + member)
+                    if destination.exists():
+                        _replace_file(destination, content)
+                    else:
+                        destination.write_bytes(content)
+                    destination.chmod(0o755)
             if any(line.startswith(('@exec ', '@unexec ')) for line in lines):
                 raise SDKError('package has installation commands')
             # pkg_add's REQUIRES check uses absolute paths, even with -p.

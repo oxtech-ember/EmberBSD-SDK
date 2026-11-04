@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.package_install import PackageInstaller, inspect_install_paths, PORTABLE_PREFIX
 from emberbsd_sdk.package_updates import check_updates
+from emberbsd_sdk.binary_release import _package_payload
 from emberbsd_sdk import bootstrap_bundle, package_relocation
 
 
@@ -39,7 +40,8 @@ class InstallTests(unittest.TestCase):
                         host=dict(os=platform.system(), arch=platform.machine(), abi='test', runtime='native'))
 
     def package(self, *, target=False, link=None, commands='', arch='aarch64', requires_self=False, preserve=False,
-                payload='installed data', provides=False, install_script=None, package_name='fixture-1.0',
+                payload='installed data', provides=False, install_script=None, install_script_mode=0o755,
+                package_name='fixture-1.0',
                 payload_path='payload', executable=False, build_version=None):
         stage = self.work / 'stage'
         stage.mkdir()
@@ -70,7 +72,7 @@ class InstallTests(unittest.TestCase):
             extra = ['-n', stage / 'PRESERVE']
         if install_script is not None:
             script = stage / 'INSTALL'
-            script.write_text(install_script); script.chmod(0o755)
+            script.write_text(install_script); script.chmod(install_script_mode)
             extra += ['-i', script]
         self.crypto.run_package('pkg_create', [*extra, '-c', '-fixture', '-d', '-fixture',
             '-f', stage / 'PLIST', '-B', stage / 'INFO', '-p', stage, '-I', prefix, unsigned])
@@ -293,7 +295,13 @@ class InstallTests(unittest.TestCase):
         package = self.package(package_name='fixture-1.0nb1', payload_path='bin/fixture',
             payload='#!' + str(self.destination) + '/bin/sh\n', executable=True,
             build_version='original build provenance\n',
-            install_script='#!/bin/sh\necho old > ' + str(self.work / 'old-hook') + '\n')
+            install_script='#!/bin/sh\necho old > ' + str(self.work / 'old-hook') + '\n',
+            install_script_mode=0o555)
+        with package.open('rb') as source, tarfile.open(fileobj=_package_payload(source), mode='r|*') as archive:
+            install_member = next(member for member in archive
+                                  if member.name.removeprefix('./') == '+INSTALL' or
+                                  member.name.removeprefix('./').endswith('/+INSTALL'))
+            self.assertEqual(install_member.mode & 0o777, 0o555)
         common = [sys.executable, '-B', str(script), '--host-prefix', os.environ['EMBERBSD_TEST_HOST_PREFIX'],
             '--dependency-prefix', str(self.work / 'unused'), '--relocate-text', '--defer-hooks',
             '--bootstrap-install-name-tool', '/usr/bin/false', '--codesign', '/usr/bin/false']
