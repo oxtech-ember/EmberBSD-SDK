@@ -1890,13 +1890,13 @@ class SysrootBuilder:
                 raise SDKError('invalid sysroot update identity')
             current = jsonio.read_json(os.path.join(destination, self.RECEIPT))
             if (current.get('qualification') not in ('incomplete', 'built-and-inspected') or
-                    current.get('signature') != previous.get('signature') or
+                    not self.compatible_context(current, self.paths['objects']) or
                     current.get('workspace', {}).get('target') != self.options['target']):
                 raise SDKError('interrupted sysroot update identity differs')
         else:
             previous = jsonio.read_json(os.path.join(destination, self.RECEIPT))
         sysroot_transfer._provenance(previous, self.options['target'])
-        if previous.get('signature') != self.signature:
+        if not self.compatible_context(previous, self.paths['objects']):
             raise SDKError('sysroot stage build context differs')
         for name in ('sdk', 'destination', 'objects', 'tools', 'os', 'ports'):
             if previous.get('paths', {}).get(name) != self.paths.get(name):

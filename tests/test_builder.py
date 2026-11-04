@@ -1358,6 +1358,41 @@ class UpdateStageTests(TemporaryCase):
         self.assertEqual(result['signature'], first['signature'])
         self.assertFalse((stage / B.MARKER).exists())
 
+    def test_controller_update_and_interrupted_retry(self):
+        self.build()
+        stage = Path(self.options['destination'])
+        receipt_path = stage / B.RECEIPT
+        receipt = json.loads(receipt_path.read_text())
+        receipt['signature']['python']['modules'] = {'source_commit': 'a' * 40}
+        receipt_path.write_text(json.dumps(receipt))
+        with patch.object(B, 'build_payload', side_effect=SDKError('injected failure')):
+            with self.assertRaisesRegex(SDKError, 'injected failure'):
+                B(self.options | {'update-stage': True}).run()
+        marker = stage / B.MARKER
+        self.assertTrue(marker.exists())
+        with patch.object(B, 'dispatch'):
+            result = B(self.options | {'update-stage': True}).run()
+        self.assertEqual(result['qualification'], 'built-and-inspected')
+        self.assertFalse(marker.exists())
+
+    def test_incompatible_compiler_and_runtime_rejected(self):
+        self.build()
+        stage = Path(self.options['destination'])
+        receipt_path = stage / B.RECEIPT
+        original = json.loads(receipt_path.read_text())
+        for field in ('compiler', 'runtime'):
+            with self.subTest(field=field):
+                record = copy.deepcopy(original)
+                if field == 'compiler':
+                    role = next(iter(record['signature']['compiler']['binaries']))
+                    record['signature']['compiler']['binaries'][role]['sha256'] = 'f' * 64
+                else:
+                    record['signature']['runtime']['incompatible'] = True
+                receipt_path.write_text(json.dumps(record))
+                with self.assertRaisesRegex(SDKError, 'context differs'):
+                    B(self.options | {'update-stage': True}).run()
+        receipt_path.write_text(json.dumps(original))
+
     def test_unknown_and_mismatch_are_refused(self):
         stage = Path(self.options['destination']); stage.mkdir(parents=True)
         (stage / 'unknown').write_text('x')
