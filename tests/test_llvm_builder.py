@@ -514,6 +514,75 @@ class LLVMBuilderTests(TemporaryCase):
             self.assertIn('MKLIBCXX=no', llvm_flags(
                 selected_paths, phase=phase, base_cxx=True))
 
+    def test_coordinator_update_stage_routes_and_checks_before_build(self):
+        sdk = self.root / 'sdk'
+        (sdk / 'obj').mkdir(parents=True)
+        (sdk / 'stages').mkdir()
+        final = sdk / 'stages/final'
+        final.mkdir()
+        options = {'sdk': str(sdk), 'runtime-work': str(sdk / 'obj/runtime'),
+                   'target': 'aarch64', 'destination': str(final),
+                   'llvm-stages': str(sdk / 'stages/intermediate'),
+                   'update-stage': True}
+        coordinator = LLVMCoordinator(options, SysrootBuilder)
+        for phase in ('headers', 'base'):
+            self.assertNotIn('update-stage', coordinator.stage_options(phase))
+        self.assertTrue(coordinator.stage_options('final')['update-stage'])
+        seen = {}
+
+        class Phase:
+            def __init__(self, selected, phase, **kwargs):
+                seen[phase] = selected.copy()
+                self.tools_built_this_run = False
+            def run(self):
+                return {}
+
+        class Final:
+            def __init__(self, selected, **kwargs):
+                seen['final'] = selected.copy()
+            def run(self):
+                return {}
+
+        coordinator.builder_type = Final
+        with patch.object(coordinator, 'prepare'), patch.object(coordinator, 'lock'), \
+                patch.object(coordinator, 'record_inputs'), patch.object(coordinator, 'runtime'), \
+                patch('emberbsd_sdk.llvm_sysroot.LLVMPhaseBuilder', Phase):
+            coordinator.run()
+        for phase in ('headers', 'base'):
+            self.assertNotIn('update-stage', seen[phase])
+        self.assertTrue(seen['final']['update-stage'])
+        coordinator.builder_type = SysrootBuilder
+
+        class Header:
+            output_path = SysrootBuilder.output_path
+            def __init__(self, selected, phase, receipts=None, **selection):
+                self.logical_sdk = str(sdk)
+                self.paths = {'sdk': str(sdk)}
+                self.flags = []
+            def preflight(self):
+                pass
+            def require_prepared_sources(self, flags, traversals):
+                return {}
+
+        with patch('emberbsd_sdk.llvm_sysroot.workspace.inspect_layout', return_value={}), \
+                patch('emberbsd_sdk.llvm_sysroot.workspace.require_target'), \
+                patch('emberbsd_sdk.llvm_sysroot.LLVMPhaseBuilder', Header), \
+                patch('emberbsd_sdk.sysroot_transfer._provenance') as provenance:
+            # No receipt: fail before any intermediate or runtime stage is written.
+            with self.assertRaises((SDKError, OSError)):
+                coordinator.prepare()
+            self.assertFalse((sdk / 'stages/intermediate').exists())
+            self.assertFalse((sdk / 'obj/runtime').exists())
+            receipt = final / SysrootBuilder.RECEIPT
+            receipt.write_text('{}')
+            coordinator.prepare()
+            provenance.assert_called_with({}, 'aarch64')
+            marker = final / SysrootBuilder.MARKER
+            marker.write_text('{"format":"unrelated","version":1}')
+            with self.assertRaisesRegex(SDKError, 'not a resumable stage update'):
+                coordinator.prepare()
+            self.assertFalse((sdk / 'stages/intermediate').exists())
+
     def test_coordinator_uses_selected_stage_and_object_directories(self):
         options = {'sdk': '/sdk', 'runtime-work': '/sdk/obj/runtime', 'target': 'aarch64',
                    'llvm-objects': '/sdk/obj/alternate', 'llvm-stages': '/sdk/stages/alternate'}
