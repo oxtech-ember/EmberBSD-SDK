@@ -2212,6 +2212,98 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertTrue(builder.compatible_context(records[tools], tools))
         self.assertFalse(builder.compatible_context(records[objects], objects))
 
+    def test_explicit_target_tool_transition_is_bound_and_scoped(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'base'
+        objects = builder.paths['objects']
+        before = {'signature': copy.deepcopy(builder.context_signature(objects)),
+                  'sources': copy.deepcopy(builder.sources)}
+        old = {name: builder.signature['compiler']['binaries'][name]['sha256']
+               for name in ('objcopy', 'strip')}
+        for name in old:
+            builder.signature['compiler']['binaries'][name]['sha256'] = 'a' * 64
+        self.assertFalse(builder.compatible_context(before, objects))
+        builder.compatible_target_tools = {name: (sha, 'a' * 64) for name, sha in old.items()}
+        self.assertTrue(builder.compatible_context(before, objects))
+        self.assertEqual(set(builder.applied_target_tools), {'objcopy', 'strip'})
+        builder.compatible_target_tools['objcopy'] = ('b' * 64, 'a' * 64)
+        self.assertFalse(builder.compatible_context(before, objects))
+        builder.compatible_target_tools['objcopy'] = (old['objcopy'], 'b' * 64)
+        self.assertFalse(builder.compatible_context(before, objects))
+        builder.compatible_target_tools['objcopy'] = (old['objcopy'], 'a' * 64)
+        ld = builder.signature['compiler']['binaries']['ld']['sha256']
+        builder.signature['compiler']['binaries']['ld']['sha256'] = 'd' * 64
+        self.assertFalse(builder.compatible_context(before, objects))
+        builder.signature['compiler']['binaries']['ld']['sha256'] = ld
+        builder.signature['compiler']['binaries']['objcopy']['path'] = '/changed/objcopy'
+        self.assertFalse(builder.compatible_context(before, objects))
+
+    def test_tool_transition_preserves_prepared_source_refresh(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'base'
+        objects = builder.paths['objects']
+        before = {'signature': copy.deepcopy(builder.context_signature(objects)),
+                  'sources': copy.deepcopy(builder.sources)}
+        builder.paths['expat-source'] = '/prepared/expat'
+        builder.signature['common_sources']['expat'] = {
+            'format': 'emberbsd-prepared-source', 'version': 1,
+            'package': 'textproc/expat', 'tree_sha256': 'e' * 64}
+        builder.signature['flags'].append('EMBER_EXPAT_SOURCE=/prepared/expat')
+        old = {role: builder.signature['compiler']['binaries'][role]['sha256']
+               for role in ('objcopy', 'strip')}
+        for role in old:
+            builder.signature['compiler']['binaries'][role]['sha256'] = 'a' * 64
+        with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=['external/expat']) as plan:
+            self.assertFalse(builder.plan_prepared_refresh(before, objects))
+            builder.compatible_target_tools = {role: (sha, 'a' * 64) for role, sha in old.items()}
+            self.assertTrue(builder.plan_prepared_refresh(before, objects))
+            self.assertEqual(builder.refresh_dirs, ['external/expat'])
+            self.assertIn('expat', plan.call_args.args[2])
+
+    def test_tool_transition_context_lifecycle(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'base'
+        objects = Path(builder.paths['objects'])
+        objects.mkdir(parents=True, exist_ok=True)
+        signature = copy.deepcopy(builder.context_signature(str(objects)))
+        bindings = {}
+        for role, digit in (('objcopy', 'b'), ('strip', 'c')):
+            selected = signature['compiler']['binaries'][role]['sha256']
+            signature['compiler']['binaries'][role]['sha256'] = digit * 64
+            bindings[role] = (digit * 64, selected)
+        old = {'format': 'emberbsd-sysroot-object-context', 'version': 1,
+               'signature': signature, 'sources': copy.deepcopy(builder.sources)}
+        (objects / builder.CONTEXT).write_text(json.dumps(old))
+        builder.compatible_target_tools = bindings
+        builder.contexts = {'objects': builder.inspect_context(str(objects)), 'tools': None}
+        old_bytes = (objects / builder.CONTEXT).read_bytes()
+        self.assertEqual(builder.inspect_context(str(objects)), old)
+        self.assertEqual((objects / builder.CONTEXT).read_bytes(), old_bytes)
+        builder.prepare_contexts()
+        current = builder.inspect_context(str(objects))
+        self.assertEqual(current['signature'], builder.context_signature(str(objects)))
+        third = copy.deepcopy(current)
+        original = builder.signature['compiler']['binaries']['objcopy']['sha256']
+        builder.signature['compiler']['binaries']['objcopy']['sha256'] = 'd' * 64
+        third['signature']['compiler']['binaries']['objcopy']['sha256'] = 'd' * 64
+        self.assertFalse(builder.compatible_context(third, str(objects)))
+        builder.signature['compiler']['binaries']['objcopy']['sha256'] = original
+        builder.applied_target_tools = {}
+        with self.assertRaisesRegex(SDKError, 'incompatible object context'):
+            builder.inspect_context(str(objects))
+        builder.compatible_target_tools = {}
+        self.assertEqual(builder.inspect_context(str(objects)), current)
+
+    def test_invalid_target_tool_transition_is_refused(self):
+        for value in ('cc:' + 'a' * 64 + ':' + 'b' * 64,
+                      'objcopy:' + 'a' * 64 + ':' + 'a' * 64,
+                      'strip:not-a-sha:' + 'b' * 64):
+            with self.subTest(value=value), self.assertRaisesRegex(SDKError, 'invalid compatible target tool'):
+                SysrootBuilder({'compatible-target-tool': [value]})
+
     def test_target_objcopy_bytes_do_not_invalidate_headers(self):
         builder, _ = self.builder()
         builder.preflight()

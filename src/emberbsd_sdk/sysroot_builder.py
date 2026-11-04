@@ -241,6 +241,16 @@ class SysrootBuilder:
 
     def __init__(self, options, *, receipts=None):
         self.options = options.copy()
+        self.compatible_target_tools = {}
+        requested = self.options.get('compatible-target-tool', [])
+        if not isinstance(requested, list):
+            raise SDKError('invalid compatible target tool transition')
+        for value in requested:
+            match = re.fullmatch(r'(objcopy|strip):([0-9a-f]{64}):([0-9a-f]{64})', value) if isinstance(value, str) else None
+            if not match or match[1] in self.compatible_target_tools or match[2] == match[3]:
+                raise SDKError('invalid compatible target tool transition')
+            self.compatible_target_tools[match[1]] = (match[2], match[3])
+        self.applied_target_tools = {}
         # One run shares one set of in-memory verification receipts.
         self.verification = RunReceipts() if receipts is None else receipts
         if 'base-cxx' not in self.options:
@@ -874,7 +884,34 @@ class SysrootBuilder:
         # Routing evidence must retain bindings that phase-specific comparison
         # may later remove as irrelevant to header object contents.
         selected_binding_flags = copy.deepcopy(new.get('flags'))
+        transition = {}
+        target_transition = (self.compatible_target_tools and path == self.paths['objects'] and
+                             self.compiler_family() == 'clang' and getattr(self, 'llvm_phase', None) != 'headers')
         if old == new:
+            # A repeated check in this run can see the just-written context.
+            # A later run must omit the one-shot transition assertion.
+            if target_transition:
+                expected = {role: {'old_sha256': before, 'new_sha256': after}
+                            for role, (before, after) in self.compatible_target_tools.items()}
+                try:
+                    return (self.applied_target_tools == expected and
+                            all(new['compiler']['binaries'][role]['sha256'] == after
+                                for role, (_, after) in self.compatible_target_tools.items()))
+                except (KeyError, TypeError):
+                    return False
+            return True
+        if target_transition:
+            try:
+                for role, (before, after) in self.compatible_target_tools.items():
+                    if (old['compiler']['binaries'][role]['sha256'] != before or
+                            new['compiler']['binaries'][role]['sha256'] != after):
+                        return False
+                    old['compiler']['binaries'][role]['sha256'] = after
+                    transition[role] = {'old_sha256': before, 'new_sha256': after}
+            except (KeyError, TypeError):
+                return False
+        if old == new:
+            self.applied_target_tools.update(transition)
             return True
         try:
             # Loaded modules still match selected sources before/during a run.
@@ -1016,7 +1053,10 @@ class SysrootBuilder:
             new_env['PATH'] = old_env['PATH']
             for role in added:
                 del selected['tools'][role]
-            return old == new
+            compatible = old == new
+            if compatible:
+                self.applied_target_tools.update(transition)
+            return compatible
         except (KeyError, TypeError, AttributeError, ValueError):
             return False
 
@@ -1822,6 +1862,8 @@ class SysrootBuilder:
         self.receipt = dict(format='emberbsd-sysroot-build', version=3 if clang else 2, scope='sysroot-build', qualification='not-built', execution_acceptance='not-run', workspace=layout, paths=self.paths, sources=self.sources, previous_contexts=self.contexts, signature=self.signature, commands=self.commands, plan=[self.runtime_command, self.build_command, self.loader_command, self.install_command, self.runtime_command, self.runtime_command], working_directory=self.paths['os'], copy=dict(source=prefix, destination=os.path.join(self.paths['destination'], 'usr/pkg/llvm' if clang else 'usr/pkg/gcc16'), verification='exact pre/copy/post inventory'), not_checked=['target execution', 'ABI compatibility', 'SDK release'])
         if getattr(self, 'refresh_dirs', None):
             self.receipt['prepared_source_refresh'] = list(self.refresh_dirs)
+        if self.applied_target_tools:
+            self.receipt['compatible_target_tools'] = copy.deepcopy(self.applied_target_tools)
         return self.receipt
 
     def source_timestamp(self):

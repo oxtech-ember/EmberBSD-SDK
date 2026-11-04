@@ -317,3 +317,7 @@ such a runner exists or qualify its complete producer pipeline.
 Select the common Ports `textproc/expat` prepared source with `--expat-source`
 when the OS producer requires `EMBER_EXPAT_SOURCE`. Prepare it with the Ports
 `scripts/source-inputs/expat/source.py` owner.
+
+For a developer-reviewed target ELF object-tool transition, the same scoped
+`--compatible-target-tool ROLE:OLD_SHA256:NEW_SHA256` option documented in
+[sysroot builds](sysroot.md) is available in incremental object mode.

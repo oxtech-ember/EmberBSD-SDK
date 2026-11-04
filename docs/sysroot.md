@@ -351,3 +351,11 @@ establish a complete sysroot build on every advertised future platform.
 Select the common Ports `textproc/expat` prepared source with `--expat-source`
 when the OS producer requires `EMBER_EXPAT_SOURCE`. Prepare it with the Ports
 `scripts/source-inputs/expat/source.py` owner.
+
+For a reviewed, compatible change to target ELF object tools, an experienced
+developer can bind an explicit one-run transition to the saved object context
+and the selected tool, for example `--compatible-target-tool
+objcopy:OLD_SHA256:NEW_SHA256`. The role must be `objcopy` or `strip`; repeat
+the option for both when needed. The SDK compares both digests and keeps every
+other compiler, path, ABI and object input strict. This is an explicit
+developer assertion, not automatic proof that tool outputs are equivalent.

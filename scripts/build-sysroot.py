@@ -53,6 +53,8 @@ def main():
     for name in ('host-cc', 'host-cxx', 'python'):
         parser.add_argument('--' + name, action=UniqueOption, help='optional checked alias inside --host-prefix')
     parser.add_argument('--c-foundation', action='store_true', help='build an intermediate static C foundation, not a complete SDK')
+    parser.add_argument('--compatible-target-tool', action='append', metavar='ROLE:OLD_SHA256:NEW_SHA256',
+                        help='one-run reviewed ELF object-tool transition; objcopy or strip only')
     parser.add_argument('--plan', action='store_true', help='inspect inputs and emit commands without creating outputs')
     arguments = parser.parse_args()
     try:
