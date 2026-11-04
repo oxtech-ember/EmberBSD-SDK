@@ -1857,7 +1857,8 @@ class SysrootBuilder:
         # Commit metadata stays out of the signature: the same OS tree at a new
         # commit reuses compatible objects. build.sh derives a missing
         # MKREPRO_TIMESTAMP from VCS tools that the sanitized PATH omits.
-        for flag in self.flags + ['MKREPRO_TIMESTAMP=' + str(self.source_timestamp()),
+        for flag in self.flags + ['EMBER_SOURCE_GIT=' + self.git_command,
+                                  'MKREPRO_TIMESTAMP=' + str(self.source_timestamp()),
                                   'BUILDINFO=EmberBSD:' + self.sources['os']['commit']]:
             self.build_command.extend(('-V', flag))
         self.os_build_operations = (['libs'] if getattr(self, 'coordinator_tools_ready', False)

@@ -461,6 +461,8 @@ class BuilderTests(TemporaryCase):
         selected_git = builder.git_command
         build_path = builder.environment['PATH']
         self.assertIsNone(shutil.which('git', path=build_path))
+        self.assertIn('EMBER_SOURCE_GIT=' + selected_git, builder.build_command)
+        self.assertNotIn('EMBER_SOURCE_GIT', str(first['signature']))
         second = builder.preflight()
         self.assertEqual(builder.git_command, selected_git)
         self.assertEqual(builder.environment['PATH'], build_path)
