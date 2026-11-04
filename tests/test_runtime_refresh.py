@@ -198,6 +198,102 @@ class RuntimeRefreshTests(unittest.TestCase):
             self.assertEqual(prepared_refresh.plan(root, obj, set(), extra_headers=update['headers']), ['consumer'])
             self.assertEqual((obj / 'other/item.o').read_bytes(), b'object')
 
+    def full_contexts(self):
+        from emberbsd_sdk import llvm_runtime
+        import hashlib
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        result = []
+        for name in ('old', 'new'):
+            manifest = self.manifest()
+            archive = manifest['artifacts']['libunwind']['static']
+            bootstrap = root / name / 'bootstrap'
+            unwind = bootstrap / archive
+            unwind.parent.mkdir(parents=True)
+            unwind.write_bytes(b'unchanged bootstrap unwind')
+            digest = hashlib.sha256(unwind.read_bytes()).hexdigest()
+            manifest['bootstrap']['files'][archive] = digest
+            manifest['files'][archive] = digest
+            routes = llvm_runtime.runtime_paths(str(root / name / 'full'), manifest)
+            result.append(dict(compiler_family='clang', runtime_prefix=routes['runtime-prefix'],
+                llvm_source={'llvm_version': '23.1.4'}, common_sources={},
+                runtime={'manifest': manifest, 'inventory': {}, 'root_mode': 493},
+                flags=['CC=clang', 'CFLAGS=-O2', 'EMBER_LLVM_SOURCE=/prepared/llvm',
+                       'EMBER_EXTERNAL_LLVM_RUNTIME=' + routes['runtime-prefix'],
+                       'EMBER_LLVM_RESOURCE_DIR=' + routes['llvm-resource'],
+                       'EMBER_LIBUNWIND_ARCHIVE=' + str(unwind)]))
+        old, new = result
+        manifest = new['runtime']['manifest']
+        manifest['base']['files']['usr/include/zlib.h'] = '7' * 64
+        manifest['base']['os_revision'] = '8' * 40
+        manifest['recipe']['ports_revision'] = '9' * 40
+        manifest['bootstrap']['manifest_sha256'] = '1' * 64
+        return old, new, root / 'new' / 'bootstrap'
+
+    def test_identical_full_runtime_accepts_new_foundation_and_refreshes_moved_consumers(self):
+        old, new, _ = self.full_contexts()
+        with patch('emberbsd_sdk.inventory.snapshot_tree', side_effect=AssertionError('unexpected hash')):
+            self.assertEqual(runtime_refresh.unchanged_full_update(old, new), {
+                'headers': ('usr/pkg/llvm/include/', 'usr/include/c++/'),
+                'linked': ('libc++.so', 'libc++abi.so')})
+        same = copy.deepcopy(new)
+        same['runtime_prefix'] = old['runtime_prefix']
+        same['flags'] = copy.deepcopy(old['flags'])
+        self.assertEqual(runtime_refresh.unchanged_full_update(old, same), {'headers': (), 'linked': ()})
+        # Changed-runtime acceptance remains stricter than identical output reuse.
+        self.assertIsNone(runtime_refresh.cpp_update(old, new))
+
+    def test_identical_full_runtime_rejects_changed_payload_identity_or_binding(self):
+        old, new, _ = self.full_contexts()
+        cases = []
+        for field in ('files', 'symlinks', 'source', 'recipe', 'bootstrap', 'target'):
+            bad = copy.deepcopy(new)
+            m = bad['runtime']['manifest']
+            if field in ('recipe', 'bootstrap'):
+                m[field]['files'][next(iter(m[field]['files']))] = '8' * 64
+            elif field == 'source':
+                m[field]['sha512'] = '8' * 128
+            elif field == 'target':
+                m[field] = 'amd64'
+            else:
+                m[field][next(iter(m[field]))] = '8' * 64
+            cases.append((field, bad))
+        for field in ('inventory', 'root_mode'):
+            bad = copy.deepcopy(new)
+            bad['runtime'][field] = {'changed': True}
+            cases.append((field, bad))
+        bad = copy.deepcopy(new)
+        bad['flags'][3] += '/wrong'
+        cases.append(('runtime route', bad))
+        for name, bad in cases:
+            with self.subTest(name=name):
+                self.assertIsNone(runtime_refresh.unchanged_full_update(old, bad))
+
+    def test_identical_full_caller_checks_unwind_and_retains_other_inputs(self):
+        old, new, bootstrap = self.full_contexts()
+        old['compiler'] = {'abi': 'original'}
+        new['compiler'] = copy.deepcopy(old['compiler'])
+        fake = SimpleNamespace(
+            paths={'os': '/os', 'objects': '/obj', 'llvm-bootstrap-stage': str(bootstrap)},
+            context_signature=lambda path: new, COMMON_SOURCES=SysrootBuilder.COMMON_SOURCES,
+            reuse_signature=SysrootBuilder.reuse_signature,
+            compatible_context=lambda candidate, path: candidate['signature']['compiler'] == new['compiler'],
+            compiler_record={'binaries': {'ar': {'selected_path': '/tool/ar'}}}, environment={})
+        fake.reuse_signature = fake.reuse_signature.__get__(fake)
+        with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=[]) as plan:
+            self.assertTrue(SysrootBuilder.plan_prepared_refresh(fake, {'signature': old}, '/obj'))
+            self.assertEqual(plan.call_args.kwargs['extra_headers'], ('usr/pkg/llvm/include/', 'usr/include/c++/'))
+            new['flags'].append('CFLAGS=-unsafe')
+            self.assertFalse(SysrootBuilder.plan_prepared_refresh(fake, {'signature': old}, '/obj'))
+            new['flags'].pop()
+            new['compiler']['abi'] = 'changed'
+            self.assertFalse(SysrootBuilder.plan_prepared_refresh(fake, {'signature': old}, '/obj'))
+            new['compiler'] = copy.deepcopy(old['compiler'])
+            unwind = bootstrap / new['runtime']['manifest']['artifacts']['libunwind']['static']
+            unwind.write_bytes(b'wrong unwind')
+            self.assertFalse(SysrootBuilder.plan_prepared_refresh(fake, {'signature': old}, '/obj'))
+
     def test_recorded_locale_dso_pair_and_prefix_move_refresh_without_tree_hashing(self):
         with patch('emberbsd_sdk.inventory.snapshot_tree', side_effect=AssertionError('unexpected tree hash')):
             update = runtime_refresh.cpp_update(self.before, self.after)
