@@ -2,8 +2,10 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Compose signed package repositories from existing Ports graphs and archives."""
 
+from copy import deepcopy
 import gzip
 import hashlib
+import io
 from pathlib import Path
 import re
 import shutil
@@ -156,7 +158,8 @@ def _package_license(record):
     return values[0]
 
 
-def _prepare_repository(crypto, spec, ports_root, sources, trust):
+def _prepare_repository(crypto, spec, ports_root, sources, trust, previous=None, *, additions=False,
+                        checksums=None):
     fields = ('id', 'host', 'target', 'graph', 'packages', 'sets')
     _object(spec, (*fields, 'roots') if isinstance(spec, dict) and 'roots' in spec else fields,
             'package repository')
@@ -207,22 +210,45 @@ def _prepare_repository(crypto, spec, ports_root, sources, trust):
             raise SDKError(f'missing or ambiguous graph root: {root}')
         selected.extend(candidates)
     nodes = runtime_projection(graph, selected, role)
-    paths = []
+    previous = previous or {}
+    paths, reused = [], {}
     for identity in nodes:
-        if identity not in spec['packages']:
-            raise SDKError(f'missing runtime binary: {identity}')
+        old = previous.get(nodes[identity]['root'])
+        same_version = old is not None and old['name'].rsplit('-', 1)[-1] == nodes[identity]['version']
+        same_name = same_version and (identity not in spec['packages'] or
+                    Path(spec['packages'][identity]).name == old['name'] + '.tgz')
+        if old and not same_version and _matches(crypto,
+                old['name'].rsplit('-', 1)[0] + '>' + nodes[identity]['version'], old['name']):
+            raise SDKError('package would downgrade current: ' + nodes[identity]['root'])
+        if identity not in spec['packages'] or (additions and same_name):
+            if old is None or old['name'].rsplit('-', 1)[-1] != nodes[identity]['version']:
+                raise SDKError(f'missing runtime binary: {identity}')
+            reused[identity] = dict(old, node=nodes[identity], reused=True)
+            continue
         path = Path(spec['packages'][identity]).absolute()
-        paths.append((path, regular_file(path)))
+        before = regular_file(path)
+        if checksums and str(path) in checksums:
+            handle, before = open_regular(path)
+            with handle:
+                digest = hashlib.file_digest(handle, 'sha256').hexdigest()
+            verify_stable(path, before)
+            if digest != checksums[str(path)]:
+                raise SDKError('archive differs from successful Ports result: ' + str(path))
+        paths.append((identity, path, before))
     # Batch metadata queries, bounded below the OS argv limit.
     records = []
     for offset in range(0, len(paths), 64):
         records.extend(parse_summary(crypto.run_package('pkg_info',
-            ['-X', *(path for path, _ in paths[offset:offset + 64])])))
-    if len(records) != len(nodes):
+            ['-X', *(path for _, path, _ in paths[offset:offset + 64])])))
+    if len(records) != len(paths):
         raise SDKError('pkg_info did not return one record per archive')
-    entries, bases = {}, set()
-    for (identity, node), (path, before), record in zip(nodes.items(), paths, records):
+    entries = dict(reused)
+    bases = {item['name'].rsplit('-', 1)[0] for item in reused.values()}
+    for (identity, path, before), record in zip(paths, records):
+        node = nodes[identity]
         name, pkgpath = scalar(record, 'PKGNAME'), scalar(record, 'PKGPATH')
+        if additions and path.name != name + '.tgz':
+            raise SDKError('package publisher requires the producer filename PKGNAME.tgz: ' + str(path))
         if (not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+\-]*-[0-9][A-Za-z0-9._+]*', name) or
                 name.rsplit('-', 1)[-1] != node['version'] or
                 pkgpath != node['root'].removesuffix('@native')):
@@ -246,11 +272,24 @@ def _prepare_repository(crypto, spec, ports_root, sources, trust):
         if inspect_package(path, spec['target'], require_native_relocation=role == 'host') > size:
             raise SDKError('package payload exceeds its declared unpacked size')
         verify_stable(path, before)
+        old = previous.get(node['root'])
         entries[identity] = dict(node=node, path=path, before=before, record=record, name=name, size=size, signed=signed,
                                  license=_package_license(record),
-                                 artifact=spec['id'] + '-' + hashlib.sha256(identity.encode()).hexdigest()[:24])
+                                 artifact=old['artifact'] if old else
+                                 spec['id'] + '-' + hashlib.sha256(identity.encode()).hexdigest()[:24])
+    for item in reused.values():
+        dependencies = sorted(entries[child]['artifact'] for child in item['node']['dependencies'])
+        if dependencies != sorted(item['release_artifact']['depends']):
+            raise SDKError('reused package runtime graph changed: ' + item['name'])
+    return spec, sets, entries
+
+
+def _check_runtime(crypto, entries, role, selected):
+    """Check affected consumers against fixed producer edges, using pkg_tools versions."""
     match_cache = {}
     for identity, item in entries.items():
+        if identity not in selected:
+            continue
         providers = [entries[child]['name'] for child in item['node']['dependencies']]
         for pattern in item['record'].get('DEPENDS', []):
             count = 0
@@ -276,13 +315,56 @@ def _prepare_repository(crypto, spec, ports_root, sources, trust):
             if not changed:
                 break
         for key, item in entries.items():
+            if key not in selected:
+                continue
             for path in item['record'].get('REQUIRES', []):
                 if path.startswith('/usr/pkg/') and path not in provided[key]:
                     raise SDKError(f'package runtime file absent from dependency closure: {key}: {path}')
-    return spec, sets, entries
 
 
-def compose(crypto, spec, ports_root, output, identity, trust):
+def _snapshot(crypto, directory, trust):
+    """Read authenticated metadata only; old package payloads are never opened."""
+    directory = Path(directory)
+    release, catalogs = load_catalogs(crypto, directory / 'release.p7m', directory, trust, ())
+    artifacts = {item['id']: item for item in release['artifacts']}
+    indexes = {}
+    for item in release['artifacts']:
+        if item['kind'] != 'package-index':
+            continue
+        data = read_bytes(local_artifact(directory, item['path']))
+        if len(data) != item['size'] or hashlib.sha256(data).hexdigest() != item['sha256']:
+            raise SDKError('current index differs from signed inventory: ' + item['path'])
+        indexes[item['path']] = data
+    repositories = {}
+    for catalog in catalogs:
+        summary = artifacts[catalog['summary']]
+        with gzip.GzipFile(fileobj=io.BytesIO(indexes[summary['path']])) as stream:
+            records = parse_summary(stream.read(16 * 1024 * 1024 + 1))
+        by_name = {scalar(record, 'PKGNAME'): record for record in records}
+        if len(by_name) != len(records) or set(by_name) != {p['pkgname'] for p in catalog['packages']}:
+            raise SDKError('current summary and catalog packages differ')
+        entries = {}
+        for package in catalog['packages']:
+            record, item = by_name[package['pkgname']], artifacts[package['artifact']]
+            if (scalar(record, 'PKGPATH') != package['root'].removesuffix('@native') or
+                    scalar(record, 'FILE_NAME') != Path(item['path']).name or
+                    scalar(record, 'FILE_SIZE') != str(item['size'])):
+                raise SDKError('current package summary differs from inventory: ' + package['pkgname'])
+            entries[package['root']] = dict(name=package['pkgname'], record=record,
+                artifact=item['id'], release_artifact=item, size=item['unpacked_size'],
+                license=_package_license(record))
+        repositories[catalog['repository']] = dict(catalog=catalog, entries=entries,
+                                                   host=summary['host'], target=summary['target'])
+    return release, repositories, indexes
+
+
+def _summary_bytes(records):
+    return ''.join(''.join(key + '=' + value + '\n' for key, values in record.items()
+                           for value in values) + '\n' for record in records).encode('utf-8')
+
+
+def compose(crypto, spec, ports_root, output, identity, trust, *, current=None,
+            additions=False, statistics=None, checksums=None):
     """Sign selected packages, generate pkg_summary, then seal their release."""
     _object(spec, ('schema', 'release_id', 'created_at', 'sources', 'repositories'), 'package build')
     if spec['schema'] != 'emberbsd.package-build.v1' or not isinstance(spec['repositories'], list):
@@ -290,21 +372,50 @@ def compose(crypto, spec, ports_root, output, identity, trust):
     output = Path(output).absolute()
     if output.exists() or output.is_symlink():
         raise SDKError('release output already exists')
-    prepared = [_prepare_repository(crypto, repo, ports_root, spec['sources'], trust) for repo in spec['repositories']]
+    previous, repositories, indexes = _snapshot(crypto, current, trust) if current else (None, {}, {})
+    prepared = []
+    for repo in spec['repositories']:
+        old = repositories.get(repo['id'])
+        if old and (repo['host'], repo['target']) != (old['host'], old['target']):
+            raise SDKError('current repository platform cannot change: ' + repo['id'])
+        prepared.append(_prepare_repository(crypto, repo, ports_root, spec['sources'], trust,
+                                           old['entries'] if old else None, additions=additions, checksums=checksums))
     names = [repo['id'] for repo, _, _ in prepared]
     if len(names) != len(set(names)):
         raise SDKError('duplicate repository identity')
+    if additions and previous and all(
+            all(item.get('reused') for item in entries.values()) and
+            all(repositories[repo['id']]['catalog']['sets'].get(name) == roots for name, roots in sets.items())
+            for repo, sets, entries in prepared):
+        if statistics is not None:
+            statistics.update(_statistics(previous, previous))
+        return previous
+    if previous and spec['release_id'] == previous['release_id']:
+        raise SDKError('changed packages or sets require a new release_id')
     release = {key: spec[key] for key in ('release_id', 'created_at', 'sources')}
+    artifacts = {item['id']: deepcopy(item) for item in previous['artifacts']} if previous else {}
     release.update(schema='emberbsd.release.v1', artifacts=[])
     scratch = Path(tempfile.mkdtemp(prefix='.binary-release-', dir=output.parent))
     try:
+        for path, data in indexes.items():
+            destination = scratch / path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            write_new(destination, data)
         for repo, sets, entries in prepared:
             if not entries:
                 continue
             directory = scratch / repo['id']
-            directory.mkdir()
-            packages, signed = [], []
+            directory.mkdir(exist_ok=True)
+            old = repositories.get(repo['id'])
+            packages = {p['root']: dict(p) for p in old['catalog']['packages']} if old else {}
+            records = {root: item['record'] for root, item in old['entries'].items()} if old else {}
+            groups = dict(old['catalog']['sets']) if old else {}
+            groups.update(sets)
+            changed = set()
+            signed_paths = []
             for item in entries.values():
+                if item.get('reused'):
+                    continue
                 name = item['name'] + '.tgz'
                 destination = directory / name
                 verify_stable(item['path'], item['before'])
@@ -313,32 +424,63 @@ def compose(crypto, spec, ports_root, output, identity, trust):
                 else:
                     crypto.sign_package(item['path'], destination, identity, trust)
                 verify_stable(item['path'], item['before'])
-                signed.append(destination)
-                release['artifacts'].append(_artifact(repo, item['artifact'], repo['id'] + '/' + name,
+                signed_paths.append((item['node']['root'], destination))
+                artifacts[item['artifact']] = _artifact(repo, item['artifact'], repo['id'] + '/' + name,
                     ('host' if repo['host'] else 'target') + '-package', size=item['size'],
                     depends=[entries[dep]['artifact'] for dep in item['node']['dependencies']],
-                    licenses=[item['license']]))
-                packages.append(dict(root=item['node']['root'], pkgname=item['name'], artifact=item['artifact']))
-            summary = b''.join(crypto.run_package('pkg_info', ['-X', *signed[offset:offset + 64]])
-                               for offset in range(0, len(signed), 64))
-            write_new(directory / 'pkg_summary.gz', gzip.compress(summary, mtime=0))
+                    licenses=[item['license']])
+                packages[item['node']['root']] = dict(root=item['node']['root'], pkgname=item['name'], artifact=item['artifact'])
+                changed.add(item['artifact'])
+            for offset in range(0, len(signed_paths), 64):
+                batch = signed_paths[offset:offset + 64]
+                signed_records = parse_summary(crypto.run_package('pkg_info', ['-X', *(path for _, path in batch)]))
+                if len(signed_records) != len(batch):
+                    raise SDKError('signed packages require one summary record per archive')
+                records.update((root, record) for (root, _), record in zip(batch, signed_records))
+            # Include unchanged reverse consumers when a dependency changes.
+            checks = {p['artifact']: dict(name=p['pkgname'], record=records[root],
+                       node=dict(dependencies=artifacts[p['artifact']]['depends'])) for root, p in packages.items()}
+            affected = set(changed)
+            while True:
+                extra = {key for key, item in checks.items() if set(item['node']['dependencies']) & affected}
+                if extra <= affected:
+                    break
+                affected.update(extra)
+            _check_runtime(crypto, checks, 'host' if repo['host'] else 'target', affected)
+            summary = _summary_bytes(records[root] for root in sorted(records))
+            (directory / 'pkg_summary.gz').write_bytes(gzip.compress(summary, mtime=0))
             summary_id = repo['id'] + '-summary'
-            release['artifacts'].append(_artifact(repo, summary_id, repo['id'] + '/pkg_summary.gz',
-                                                  'package-index', size=len(summary)))
+            artifacts[summary_id] = _artifact(repo, summary_id, repo['id'] + '/pkg_summary.gz',
+                                             'package-index', size=len(summary))
             catalog = dict(schema=CATALOG_SCHEMA, repository=repo['id'], summary=summary_id,
-                           packages=packages, sets=sets)
+                           packages=[packages[root] for root in sorted(packages)], sets=groups)
             data = json_bytes(catalog)
             artifact = _artifact(repo, repo['id'] + '-catalog', repo['id'] + '/catalog.json',
                                  'package-index', size=len(data))
-            release['artifacts'].append(artifact)
+            artifacts[artifact['id']] = artifact
+            release['artifacts'] = list(artifacts.values())
             parse_catalog(data, release, artifact)
-            write_new(directory / 'catalog.json', data)
-        release = seal_release(crypto, json_bytes(release), scratch, identity, trust, scratch / 'release.p7m')
+            (directory / 'catalog.json').write_bytes(data)
+        release['artifacts'] = list(artifacts.values())
+        release = seal_release(crypto, json_bytes(release), scratch, identity, trust, scratch / 'release.p7m',
+                               reuse_current=Path(current) / 'release.p7m' if current else None)
         publish_directory_noreplace(scratch, output)
+        if statistics is not None:
+            statistics.update(_statistics(previous, release))
         return release
     finally:
         if scratch.exists():
             shutil.rmtree(scratch)
+
+
+def _statistics(previous, release):
+    old = {item['id']: item for item in previous['artifacts']} if previous else {}
+    packages = [item for item in release['artifacts'] if item['kind'] in ('host-package', 'target-package')]
+    added = [item for item in packages if item['id'] not in old]
+    replaced = [item for item in packages if item['id'] in old and item != old[item['id']]]
+    return dict(added=len(added), replaced=len(replaced), reused=len(packages) - len(added) - len(replaced),
+                uploaded_packages=len(added) + len(replaced), upload_bytes=sum(p['size'] for p in added + replaced),
+                built=0)
 
 
 def load_catalogs(crypto, envelope, directory, trust, repositories):

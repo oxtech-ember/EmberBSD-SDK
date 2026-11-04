@@ -85,7 +85,7 @@ class ProjectionTests(unittest.TestCase):
 
 
 @unittest.skipUnless(os.environ.get('EMBERBSD_TEST_HOST_PREFIX'), 'select native Ports pkg_tools')
-class BinaryReleaseTests(unittest.TestCase):
+class BinaryReleaseFixture(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from emberbsd_sdk.host_prefix import load_host_prefix
@@ -113,8 +113,8 @@ class BinaryReleaseTests(unittest.TestCase):
         self.spec = dict(schema='emberbsd.package-build.v1', release_id='test', created_at=1,
             sources={name: 'a' * 40 for name in ('os', 'ports', 'sdk')}, repositories=[])
 
-    def package(self, root, *, opsys='NetBSD', arch='aarch64', depends=(), payload=b'fixture data\n', marker='', license_value='2-clause-bsd', restriction='', extra_build_info=''):
-        name = root.rsplit('/', 1)[-1] + '-1.0'
+    def package(self, root, *, version='1.0', pkgbase=None, opsys='NetBSD', arch='aarch64', depends=(), payload=b'fixture data\n', marker='', license_value='2-clause-bsd', restriction='', extra_build_info=''):
+        name = (pkgbase or root.rsplit('/', 1)[-1]) + '-' + version
         work = self.work / (name + '-' + opsys + '-' + arch)
         work.mkdir()
         (work / 'payload').write_bytes(payload)
@@ -142,11 +142,13 @@ class BinaryReleaseTests(unittest.TestCase):
         self.spec['repositories'].append(repo)
         return repo
 
-    def compose(self):
+    def compose(self, *, current=None, output=None):
         from emberbsd_sdk.binary_release import compose
-        return compose(self.crypto, self.spec, self.ports, self.work / 'release',
-                       self.leaf, self.ca.certificate)
+        return compose(self.crypto, self.spec, self.ports, output or self.work / 'release',
+                       self.leaf, self.ca.certificate, current=current)
 
+
+class BinaryReleaseTests(BinaryReleaseFixture):
     def _assert_app_license(self, license_value, expected):
         repo = self.repository(app_options={'license_value': license_value})
         repo['sets'] = []

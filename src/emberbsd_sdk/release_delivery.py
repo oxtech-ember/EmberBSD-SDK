@@ -325,6 +325,7 @@ def _fetch_snapshot(crypto, public, trust, state, output, prefix, repositories, 
     requested, found = set(repositories), set()
     scratch = Path(tempfile.mkdtemp(prefix='.release-metadata-', dir=output.parent))
     try:
+        write_new(scratch / 'current.p7m', channel_bytes)
         write_new(scratch / 'release.p7m', envelope)
         for artifact in release['artifacts']:
             if artifact['kind'] != 'package-index':

@@ -75,7 +75,10 @@ SDK and OS inventories and channel pointers using one X.509 trust root.
 The [binary catalog](docs/binary-catalog.md) projects Ports runtime dependencies,
 signs packages before generating pkg_summary, and supports source-free selection
 of published package sets. [S3 publication and HTTPS delivery](docs/s3-distribution.md)
-maintain one current package set, remove superseded versions, and fetch authenticated metadata. Binary
+maintain one current package set, remove superseded versions, and fetch authenticated metadata.
+An [optional maintainer command](docs/s3-distribution.md#optional-maintainer-command-publish-built-additions)
+adds successful Ports packages to current, preserving other artifacts and reusing
+unchanged binaries. Ordinary builds and installs do not need publication keys. Binary
 installation uses the [minimal client](docs/sdk-client.md), with a shared cache
 and Ports builds for missing binaries. A self-contained portable bootstrap
 runtime remains separate acceptance work.
