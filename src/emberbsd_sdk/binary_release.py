@@ -249,10 +249,17 @@ def _prepare_repository(crypto, spec, ports_root, sources, trust):
         entries[identity] = dict(node=node, path=path, before=before, record=record, name=name, size=size, signed=signed,
                                  license=_package_license(record),
                                  artifact=spec['id'] + '-' + hashlib.sha256(identity.encode()).hexdigest()[:24])
+    match_cache = {}
     for identity, item in entries.items():
         providers = [entries[child]['name'] for child in item['node']['dependencies']]
         for pattern in item['record'].get('DEPENDS', []):
-            if sum(_matches(crypto, pattern, provider) for provider in providers) != 1:
+            count = 0
+            for provider in providers:
+                key = (pattern, provider)
+                if key not in match_cache:
+                    match_cache[key] = _matches(crypto, pattern, provider)
+                count += match_cache[key]
+            if count != 1:
                 raise SDKError(f'archive dependency absent or ambiguous in resolved runtime graph: {identity}: {pattern}')
     if role == 'target':
         # Resolve provided package-prefix paths through the already selected

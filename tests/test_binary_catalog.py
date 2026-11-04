@@ -243,6 +243,16 @@ class BinaryReleaseTests(unittest.TestCase):
         repo['roots'] = ['net/app']
         self.compose()
 
+    def test_repeated_dependency_matches_are_cached_per_composition(self):
+        from emberbsd_sdk import binary_release
+        repo = self.repository()
+        repo['sets'] = ['app', 'other', 'devel']
+        with patch.object(binary_release, '_matches', wraps=binary_release._matches) as matches:
+            self.compose()
+        repeated = [call for call in matches.call_args_list
+                    if call.args[1:] == ('lib>=1', 'lib-1.0')]
+        self.assertEqual(len(repeated), 1)
+
     def test_explicit_root_includes_runtime_closure_only(self):
         from emberbsd_sdk.binary_release import load_catalogs
         repo = self.repository()
