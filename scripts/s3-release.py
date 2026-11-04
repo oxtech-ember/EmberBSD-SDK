@@ -4,6 +4,7 @@
 """Publish signed releases to S3; read pinned release metadata through HTTPS."""
 
 import argparse
+from contextlib import ExitStack
 from pathlib import Path
 import sys
 
@@ -34,6 +35,8 @@ def main(argv=None):
             command.add_argument('--bucket', help='defaults to EMBERBSD_S3_BUCKET')
             command.add_argument('--ttl', type=int, default=7 * 86400, help='channel lifetime in seconds')
             command.add_argument('--refresh', action='store_true', help='refresh expiry even for the same release')
+            command.add_argument('--expected-generation', type=int,
+                                 help='refuse a changed current before uploading; 0 requires an empty repository')
             command.add_argument('--previous-channel-time', type=int,
                                  help='publisher recovery only: authenticate the old channel at this past Unix time')
         else:
@@ -42,19 +45,21 @@ def main(argv=None):
             command.add_argument('--repository', action='append', default=[])
     args = parser.parse_args(argv)
     try:
-        crypto = ReleaseCrypto.from_prefix(args.host_prefix, packages=args.command == 'publish')
-        public = HTTPStore(args.url, ca_file=args.tls_ca_file)
-        if args.command == 'publish':
-            store = S3Store.from_environment(endpoint=args.endpoint, region=args.region,
-                                            bucket=args.bucket, ca_file=args.tls_ca_file)
-            identity = SigningIdentity(args.signer_directory / 'certificate.pem',
-                                       args.signer_directory / 'private-key.pem')
-            value = publish_release(crypto, store, public, args.release, identity, args.trust_root,
-                                    prefix=args.prefix, ttl=args.ttl, refresh=args.refresh,
-                                    previous_channel_time=args.previous_channel_time)
-        else:
-            value = fetch_release(crypto, public, args.trust_root, args.state, args.output,
-                                  prefix=args.prefix, repositories=args.repository)
+        with ExitStack() as transports:
+            crypto = ReleaseCrypto.from_prefix(args.host_prefix, packages=args.command == 'publish')
+            public = transports.enter_context(HTTPStore(args.url, ca_file=args.tls_ca_file))
+            if args.command == 'publish':
+                store = transports.enter_context(S3Store.from_environment(
+                    endpoint=args.endpoint, region=args.region, bucket=args.bucket, ca_file=args.tls_ca_file))
+                identity = SigningIdentity(args.signer_directory / 'certificate.pem',
+                                           args.signer_directory / 'private-key.pem')
+                value = publish_release(crypto, store, public, args.release, identity, args.trust_root,
+                                        prefix=args.prefix, ttl=args.ttl, refresh=args.refresh,
+                                        previous_channel_time=args.previous_channel_time,
+                                        expected_generation=args.expected_generation)
+            else:
+                value = fetch_release(crypto, public, args.trust_root, args.state, args.output,
+                                      prefix=args.prefix, repositories=args.repository)
         sys.stdout.buffer.write(json_bytes(value))
         return 0
     except (SDKError, OSError, ValueError) as exc:

@@ -221,7 +221,7 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
     shutil.copytree(SDK_SOURCE / 'src', root / 'sdk-source/src', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     recipe_fixture(ports, root / 'libedit.tar.gz')
     for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'),
-                          ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd'), ('heimdal', 'security/heimdal'), ('openssh', 'security/openssh')):
+                          ('zlib', 'devel/zlib'), ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd'), ('heimdal', 'security/heimdal'), ('openssh', 'security/openssh')):
         source = root / (name + '-source')
         source.mkdir()
         write(source / 'emberbsd-prepared-source.json', json.dumps(dict(format='emberbsd-prepared-source',
@@ -266,6 +266,22 @@ class BuilderTests(TemporaryCase):
             B(self.options).preflight()
         self.control()
         B(self.options).preflight()
+
+    def test_optional_zlib_receipt_and_forwarding(self):
+        options = self.options | {'zlib-source': str(self.root / 'zlib-source')}
+        builder = B(options)
+        builder.preflight()
+        self.assertEqual(builder.common_source_records['zlib']['package'], 'devel/zlib')
+        self.assertIn('EMBER_ZLIB_SOURCE=' + options['zlib-source'], builder.flags)
+        receipt = Path(options['zlib-source']) / 'emberbsd-prepared-source.json'
+        original = receipt.read_text()
+        receipt.unlink()
+        with self.assertRaisesRegex(SDKError, 'zlib'):
+            B(options).preflight()
+        receipt.write_text(original)
+        self.control(stale_source='zlib')
+        with self.assertRaisesRegex(SDKError, 'prepared sources are stale for the selected Ports.*zlib'):
+            B(options).preflight()
 
     def test_optional_libfido2_is_verified_and_forwarded(self):
         options = self.options | {'libfido2-source': str(self.root / 'libfido2-source')}
@@ -581,6 +597,59 @@ class BuilderTests(TemporaryCase):
                 self.assertRaisesRegex(SDKError, 'stop after routing'):
             builder._run_preflighted()
         self.assertEqual(calls, ['routing', 'contexts'])
+
+    def test_full_tools_pending_survives_failure_and_retry(self):
+        osroot = Path(self.options['os'])
+        write(osroot / 'share/mk/prepared-source-refresh.json', json.dumps(
+            {'version': 1, 'sources': {'EMBER_BYACC_SOURCE': {'native_producer_dirs': ['tools/yacc']}}}))
+        write(osroot / 'tools/yacc/Makefile', '')
+        commit(osroot)
+        builder = B(self.options)
+        builder.preflight()
+        objects, tools = Path(builder.paths['objects']), Path(builder.paths['tools'])
+        objects.mkdir(parents=True, exist_ok=True)
+        tools.mkdir(parents=True, exist_ok=True)
+        old = dict(format='emberbsd-sysroot-object-context', version=1,
+                   signature=builder.context_signature(str(tools)), sources=builder.sources)
+        jsonio.write_json(str(tools / builder.CONTEXT), old, exclusive=False)
+        builder.contexts = {'objects': None, 'tools': old}
+        builder.native_refresh_dirs = ['tools/yacc']
+        builder.native_refresh_sources = ['byacc']
+        builder.os_build_operations = ['tools']
+        builder.native_makewrapper_command = lambda: ['makewrapper']
+        builder.inspect_context = lambda path: builder.contexts['objects' if path == str(objects) else 'tools']
+        builder.inspect_payload = lambda: {}
+        calls = []
+        def fail_dispatch(command):
+            calls.append(command)
+            if command != ['makewrapper']:
+                raise SDKError('synthetic tools traversal failure')
+        builder.dispatch = fail_dispatch
+        with self.assertRaisesRegex(SDKError, 'synthetic tools traversal failure'):
+            builder._run_preflighted()
+        pending = jsonio.read_json(str(tools / builder.CONTEXT))
+        self.assertEqual(pending['pending_native']['sources'], ['byacc'])
+        self.assertEqual(calls, [['makewrapper'], builder.build_command])
+
+        retry = B(self.options | {'destination': str(Path(self.options['sdk']) / 'retry-destination')})
+        retry.preflight()
+        # The new builder's real preflight recognized the interrupted record.
+        self.assertEqual(retry.contexts['tools'], pending)
+        self.assertEqual(retry.native_refresh_dirs, ['tools/yacc'])
+        retry.contexts = {'objects': jsonio.read_json(str(objects / retry.CONTEXT)), 'tools': pending}
+        retry.native_refresh_dirs = ['tools/yacc']
+        retry.native_refresh_sources = ['byacc']
+        retry.os_build_operations = ['tools']
+        retry.native_makewrapper_command = lambda: ['makewrapper']
+        retry.inspect_context = lambda path: retry.contexts['objects' if path == str(objects) else 'tools']
+        retry.inspect_payload = lambda: {}
+        retry.dispatch = lambda command: None
+        # A failed destination is intentionally not reusable; model the caller's
+        # normal next-stage destination while retaining object and tools trees.
+        retry._run_preflighted()
+        final = jsonio.read_json(str(tools / retry.CONTEXT))
+        self.assertNotIn('pending_native', final)
+        self.assertEqual(final['signature'], retry.context_signature(str(tools)))
 
     def test_ordinary_builder_plan_preflights_each_run(self):
         original = ProductionBuilder.preflight

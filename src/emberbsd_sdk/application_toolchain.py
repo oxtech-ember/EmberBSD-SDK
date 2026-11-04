@@ -120,6 +120,37 @@ def bind_clang_c_foundation_commands(destination, compiler, foundation_result, s
     return dict(commands=bound, selection=selected['selection'])
 
 
+def _release_dest_runtime(root, target):
+    """Select only the recorded dest of a completed amd64 Clang release."""
+    from . import os_release_builder
+    if target != 'amd64' or os.path.basename(root) != 'dest':
+        raise SDKError('select a completed or imported SDK sysroot')
+    parent = os.path.dirname(root)
+    if paths.entry(os.path.join(parent, sysroot_transfer.INCOMPLETE)) is not None:
+        raise SDKError('cannot select an incomplete OS release')
+    receipt_path = os.path.join(parent, sysroot_transfer.RECEIPT)
+    profile_path = os.path.join(parent, 'build-profile.json')
+    try:
+        paths.regular_file(receipt_path)
+        paths.regular_file(profile_path)
+        receipt = jsonio.read_json(receipt_path)
+        profile = jsonio.read_json(profile_path)
+        if (profile['sdk_receipt'] != receipt or receipt['paths']['destination'] != parent or
+                os.path.join(parent, 'dest') != root):
+            raise SDKError('release destination or receipt differs from profile')
+        os_release_builder.validate_profile(profile, profile['source_commit'], 'amd64')
+        if ('error' in receipt or
+                not all(row.get('status') == 'passed' for row in receipt['commands'])):
+            raise SDKError('release contains an error or incomplete command')
+        signature = receipt['signature']
+        if signature.get('compiler_family') != 'clang':
+            raise SDKError('application runtime requires an LLVM release')
+        return (signature['runtime']['manifest'],
+                llvm_runtime_install.base_cxx_enabled(signature.get('flags', [])))
+    except (KeyError, TypeError, OSError) as exc:
+        raise SDKError('invalid completed OS release') from exc
+
+
 def load_clang_runtime(sysroot, *, target):
     """Read the existing build/import record and verify its installed runtime.
 
@@ -155,7 +186,7 @@ def load_clang_runtime(sysroot, *, target):
         record = manifest['runtime']['manifest']
         base_cxx = manifest['provenance'].get('base_cxx') == 'libcxx'
     else:
-        raise SDKError('select a completed or imported SDK sysroot')
+        record, base_cxx = _release_dest_runtime(root, target)
     selected = llvm_runtime.validate_install(root, record, target=target)
     if base_cxx:
         llvm_runtime_install.validate_base_aliases(root, record)

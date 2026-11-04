@@ -3,6 +3,7 @@
 """Bind exact compiler argument vectors for executable-only consumers."""
 
 import hashlib
+from importlib import resources
 import os
 from pathlib import Path
 import re
@@ -449,8 +450,12 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
     package = Path(__file__).resolve().parent
     modules = {}
     for name in _SNAPSHOT_MODULES:
-        paths.regular_file(str(package / name))
-        modules[name] = (package / name).read_bytes()
+        if Path(__file__).is_file():
+            paths.regular_file(str(package / name))
+            modules[name] = (package / name).read_bytes()
+        else:
+            # The minimal SDK runs from its signed client zipapp.
+            modules[name] = resources.files(__package__).joinpath(name).read_bytes()
     content = {'commands.json':jsonio.json_bytes(record)}
     for role in sorted(commands):
         content[role] = (f'#!{python}\nimport sys\nsys.dont_write_bytecode=True\n'

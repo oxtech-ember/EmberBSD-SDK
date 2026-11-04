@@ -529,8 +529,9 @@ class BuilderReleaseTests(TemporaryCase):
         saved = profile['sdk_receipt']
         signature, paths = saved['signature'], saved['paths']
         paths.update({'gettext-source': '/prepared/gettext', 'libxml2-source': '/prepared/xml',
-                      'git': '/usr/bin/git'})
-        for name, package in (('gettext', 'devel/gettext'), ('libxml2', 'textproc/libxml2')):
+                      'zlib-source': '/prepared/zlib', 'git': '/usr/bin/git'})
+        for name, package in (('gettext', 'devel/gettext'), ('libxml2', 'textproc/libxml2'),
+                              ('zlib', 'devel/zlib')):
             signature['common_sources'][name] = {'format': 'emberbsd-prepared-source', 'version': 1,
                 'package': package, 'tree_sha256': 'a' * 64, 'identity': {'fixture': True}}
         native = signature['native_toolset']
@@ -542,6 +543,10 @@ class BuilderReleaseTests(TemporaryCase):
             native, signature['compiler_family'])
         saved['commands'] = [dict(argv=argv, status='passed', exit_status=0) for argv in profile['commands']]
         self.assertGreater(len(profile['commands']), 2)
+        self.assertTrue(all('EMBER_ZLIB_SOURCE=/prepared/zlib' in command
+                            for command in profile['commands']
+                            if command[0].endswith('/build.sh') or
+                            command[0].startswith(paths['tools'] + '/bin/nbmake-')))
         kit.profile_check(profile, receipt['sources']['os']['commit'], profile['product_version'])
 
     def test_network_source_paths_require_matching_receipts(self):
@@ -549,7 +554,7 @@ class BuilderReleaseTests(TemporaryCase):
         receipt = OSReleaseBuilder(options).run()
         profile = jsonio.read_json(Path(options['destination']) / 'build-profile.json')
         saved = profile['sdk_receipt']
-        for name, package in (('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd')):
+        for name, package in (('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd'), ('zlib', 'devel/zlib')):
             with self.subTest(name=name):
                 saved['paths'][name + '-source'] = '/prepared/' + name
                 with self.assertRaisesRegex(SDKError, 'Mixed ' + name + ' source selection'):
@@ -700,6 +705,24 @@ class BuilderReleaseTests(TemporaryCase):
                          ['kernel=EMBER64', 'sets'])
         self.assertEqual(commands[1][-2:], ['distribution', 'sets'])
         validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
+
+    def test_clang_release_resource_binding_matches_compiler(self):
+        class ClangRelease(OSReleaseBuilder):
+            compiler = llvm_fixtures.ClangBuilder.compiler
+        builder, _ = llvm_fixtures.LLVMBuilderTests.builder(self,
+            release_fixture(self.root, "aarch64"), ClangRelease)
+        builder.options["base-cxx"] = False
+        receipt = builder.run()
+        profile = jsonio.read_json(Path(builder.paths["destination"]) / "build-profile.json")
+        resource = receipt["signature"]["compiler"]["resource_dir"]
+        self.assertEqual(receipt["paths"]["clang-resource"], resource)
+        self.assertIn("EMBER_CLANG_RESOURCE_DIR=" + resource, receipt["signature"]["flags"])
+        sha = receipt["sources"]["os"]["commit"]
+        validate_profile(profile, sha, "aarch64")
+        forged = copy.deepcopy(profile)
+        forged["sdk_receipt"]["paths"]["clang-resource"] = "/wrong"
+        with self.assertRaisesRegex(SDKError, "Clang resource path"):
+            validate_profile(forged, sha, "aarch64")
 
     def test_clang_release_uses_versioned_runtime_and_qualification(self):
         class ClangRelease(OSReleaseBuilder):

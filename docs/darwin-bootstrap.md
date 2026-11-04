@@ -20,7 +20,10 @@ No missing command is found through the ambient PATH.
 
 Required command roles are `cc`, `cxx`, `cpp`, `make`, `gmake`, `sh`, `as`, `ld`,
 `dsymutil`, `ar`, `ranlib`, `nm`, `strip`, `uname`, `pkg_info`, `pkg_admin`,
-`pkg_add`, and `pkg_create`.
+`pkg_add`, `pkg_create`, `od`, `lipo`, and `otool`.
+The three Mach-O tools resolve runtime imports structurally, including
+`@rpath` and `@loader_path`, before library checks and package `REQUIRES` are
+written. They are explicit initial inputs; no ambient tools are substituted.
 The selected Ports profile supplies its additional early utility roster.
 The result prints these required roles and every selected role.
 Later recipes can require more tools. Their normal pkgsrc checks remain active.
@@ -84,8 +87,8 @@ The MAKECONF and utility mapping stay inside the explicit work directory.
 The prefix, package database, distfiles, and packages retain their separately selected paths.
 The renderer writes only the configuration and utility mapping.
 It does not install packages, alter the selected tools, or execute make.
-Rerunning with the same mapping replaces the configuration atomically.
-A different existing utility map fails without changing it.
+Rerunning replaces the configuration atomically and adds newly selected utility roles.
+Existing roles must remain selected with the same targets; conflicts fail without changing the mapping.
 
 The command prints the exact `initial_command` and its environment as JSON data.
 This is an invocation description, not a receipt.

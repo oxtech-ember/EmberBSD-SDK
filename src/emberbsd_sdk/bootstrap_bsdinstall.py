@@ -139,9 +139,18 @@ def validate_bsdinstall_plan(plan, descriptor, commands, flags):
     manifest = bsdinstall_manifest(plan)
     owner, _ = _tree(plan['program']['owner'], descriptor, owner=True)
     source, _ = _tree(plan['program']['source'], descriptor, owner=False)
-    _require({n for n, row in owner.items() if row['kind'] == 'file'} ==
-             {MANIFEST_RELATIVE, _PATCH, 'pkgsrc/export.conf'} and
-             {n for n, row in source.items() if row['kind'] == 'file'} == _SOURCE_FILES and
+    owner_files = {n for n, row in owner.items() if row['kind'] == 'file'}
+    source_files = {n for n, row in source.items() if row['kind'] == 'file'}
+    legacy_owner = {MANIFEST_RELATIVE, _PATCH, 'pkgsrc/export.conf'}
+    common_header = 'profiles/common-build-tools/ember-execpath.h'
+    derived_header = _DIRECTORY + '/files/ember-execpath.h'
+    legacy = owner_files == legacy_owner and source_files == _SOURCE_FILES
+    current = (owner_files == legacy_owner | {common_header} and
+               source_files == _SOURCE_FILES | {derived_header})
+    if current:
+        current = (Path(plan['program']['owner']['root'], common_header).read_bytes() ==
+                   Path(plan['program']['source']['root'], derived_header).read_bytes())
+    _require((legacy or current) and
              entry(plan['program']['source']['root']).st_mode & 0o222 == 0 and
              all(row['mode'] & 0o222 == 0 for row in source.values()),
              'BSD install needs its complete fixed owner and read-only derived source roster')

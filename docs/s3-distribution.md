@@ -4,6 +4,12 @@
 its authenticated metadata through HTTPS. It uses Python's standard library
 and the selected Ports OpenSSL/pkg_tools. Installation is a separate layer.
 
+Bodyless GET and HEAD requests make at most three connection attempts for
+transient timeouts or disconnected peers before exposing a response. TLS trust,
+HTTP status, signed-byte failures and interrupted response bodies remain errors.
+S3 writes and deletes are never automatically retried; publication recovery uses
+the existing lock, conditional operations and reconciliation.
+
 ## Layout and retention
 
 There is one `current`, with one package version per platform:
@@ -63,6 +69,12 @@ and new metadata, checks every object through public HTTPS, conditionally
 switches `current.p7m`, then removes superseded files. Existing identical
 packages are read back but not uploaded again. Repeating the same publication
 retains the generation and finishes any interrupted cleanup.
+
+When extending an existing catalog, preserve its current packages and sets in
+the candidate and pass `--expected-generation N` from the verified snapshot.
+Under the publisher lock, a changed generation stops publication before any
+artifact upload or cleanup; merge the newer catalog and retry. Use `0` only
+when the repository must still be empty. The option does not merge catalogs.
 
 A create-only `.publisher-lock` serializes publication **and cleanup** across
 publishers. Normal exit removes it. After a process crash, inspect the publisher
@@ -130,12 +142,21 @@ metadata and signer still require current validity. Readers have no such flag.
 
 HTTPS CA trust is separate from the release root. `--tls-ca-file FILE` selects
 the HTTPS CA bundle when needed, for example a host CA bundle while preparing
-the first toolset. There is no insecure TLS option.
+the first toolset. There is no insecure TLS option. Bodyless GET/HEAD requests reuse HTTPS
+connections only after successfully consuming the complete known-length response
+(or a bodyless HEAD response). Chunked and unknown-length replies remain
+supported but are not pooled. Partial reads and failed checks close the connection. Mutations use fresh
+connections and are never retried; safe reads retain their bounded retries.
+Callers close the transport after its requests complete.
 
 ## Validation boundary
 
-The current native catalog contains `fetch-1.9nb5` and `openssl-4.1.0nb2` for
-Darwin arm64, alongside the [self-contained initial SDK](bootstrap-client.md).
+The current native catalog contains fetch, OpenSSL, mksh, digest, nawk, nbsed,
+nbpatch, mktools and cwrappers for Darwin arm64, alongside the
+[self-contained initial SDK](bootstrap-client.md). Select `host-fetch` or
+`sdk-source-tools`; existing bootstrap dependencies are reused. On a fresh
+bootstrap, source tools add seven packages with a 402,470-byte download and
+1,513,876 unpacked bytes. Repeating the installation downloads nothing.
 The bootstrap archive is 38,862,758 bytes (117,540,506 bytes of regular files),
 including 16 whole runtime packages and the client. It requires macOS 27+,
 with no preinstalled Python, compiler or SDK. First installation, signed fetch

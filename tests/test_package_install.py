@@ -7,10 +7,12 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.package_install import PackageInstaller, inspect_install_paths, PORTABLE_PREFIX
+from emberbsd_sdk import bootstrap_bundle, package_relocation
 
 
 @unittest.skipUnless(os.environ.get('EMBERBSD_TEST_HOST_PREFIX'), 'select native Ports pkg_tools')
@@ -34,24 +36,42 @@ class InstallTests(unittest.TestCase):
         self.cfg = dict(prefix=str(self.destination), pkgdb=str(self.destination / 'pkgdb'),
                         host=dict(os=platform.system(), arch=platform.machine(), abi='test', runtime='native'))
 
-    def package(self, *, target=False, link=None, commands='', arch='aarch64', requires_self=False):
+    def package(self, *, target=False, link=None, commands='', arch='aarch64', requires_self=False, preserve=False,
+                payload='installed data', provides=False, install_script=None, package_name='fixture-1.0', build_version=None):
         stage = self.work / 'stage'
         stage.mkdir()
         if link:
             (stage / 'payload').symlink_to(link)
         else:
-            (stage / 'payload').write_text('installed data')
+            (stage / 'payload').write_text(payload)
         prefix = '/usr/pkg' if target else str(self.destination)
-        (stage / 'PLIST').write_text('@name fixture-1.0\npayload\n' + commands)
-        (stage / 'INFO').write_text('PKGPATH=devel/fixture\nLICENSE=2-clause-bsd\n' +
+        (stage / 'PLIST').write_text('@name ' + package_name + '\npayload\n' + commands)
+        (stage / 'INFO').write_text('PKGPATH=devel/fixture\nDISTNAME=fixture-1.0\nLICENSE=2-clause-bsd\n' +
+            f'LOCALBASE={prefix}\nCFLAGS=-I{prefix}/include\n' +
             (f'REQUIRES={prefix}/payload\n' if requires_self else '') +
+            (f'PROVIDES={prefix}/payload\n' if provides else '') +
             (f'OPSYS=NetBSD\nMACHINE_ARCH={arch}\nOS_VERSION=11.0\n' if target else
              f'OPSYS={platform.system()}\nMACHINE_ARCH={"aarch64" if platform.machine() == "arm64" else platform.machine()}\nOS_VERSION={platform.release()}\n'))
         unsigned, signed = self.work / 'unsigned.tgz', self.work / 'fixture-1.0.tgz'
-        self.crypto.run_package('pkg_create', ['-c', '-fixture', '-d', '-fixture',
+        extra = []
+        if build_version is not None:
+            (stage / 'BUILD_VERSION').write_text(build_version)
+            extra += ['-b', stage / 'BUILD_VERSION']
+        if preserve:
+            (stage / 'PRESERVE').write_text('bootstrap tool\n')
+            (stage / 'INFO').chmod(0o444)
+            extra = ['-n', stage / 'PRESERVE']
+        if install_script is not None:
+            script = stage / 'INSTALL'
+            script.write_text(install_script); script.chmod(0o755)
+            extra += ['-i', script]
+        self.crypto.run_package('pkg_create', [*extra, '-c', '-fixture', '-d', '-fixture',
             '-f', stage / 'PLIST', '-B', stage / 'INFO', '-p', stage, '-I', prefix, unsigned])
         self.crypto.sign_package(unsigned, signed, self.signer, self.ca.certificate)
         return signed
+
+    def localbase(self, database):
+        return self.crypto.run_package('pkg_info', ['-K', str(database), '-Q', 'LOCALBASE', 'fixture-1.0']).decode().strip()
 
     def test_native_package_is_owned_by_pkgdb_and_repeat_detected(self):
         installer = PackageInstaller(self.crypto, self.ca.certificate)
@@ -71,6 +91,7 @@ class InstallTests(unittest.TestCase):
         self.assertFalse(marker.exists())
         self.assertEqual((self.work / 'sysroot/usr/pkg/payload').read_text(), 'installed data')
         self.assertIn('fixture-1.0', installer.installed(self.cfg))
+        self.assertIn('LOCALBASE=/usr/pkg\n', (self.work / 'sysroot/usr/pkg/pkgdb/fixture-1.0/+BUILD_INFO').read_text())
 
     def test_escaping_link_refused_before_install(self):
         package = self.package(link='../../outside')
@@ -106,15 +127,96 @@ class InstallTests(unittest.TestCase):
         self.cfg['pkgdb'] = self.cfg['prefix'] + '/pkgdb'
         PackageInstaller(self.crypto, self.ca.certificate).install(package, self.cfg)
         self.assertEqual((Path(self.cfg['prefix']) / 'payload').read_text(), 'installed data')
+        self.assertEqual(self.localbase(self.cfg['pkgdb']), self.cfg['prefix'])
+        self.assertIn('CFLAGS=-I' + str(self.destination) + '/include',
+                      (Path(self.cfg['pkgdb']) / 'fixture-1.0/+BUILD_INFO').read_text())
+
+    def test_independent_metadata_recovery_does_not_rewrite_payload(self):
+        package = self.package(commands=PORTABLE_PREFIX + '\n')
+        destination = self.work / 'different-prefix'
+        database = destination / 'pkgdb'
+        self.cfg.update(prefix=str(destination), pkgdb=str(database))
+        installer = PackageInstaller(self.crypto, self.ca.certificate)
+        with patch.object(package_relocation, 'relocate_build_info', side_effect=OSError('interrupted')):
+            with self.assertRaisesRegex(OSError, 'interrupted'):
+                installer.install(package, self.cfg)
+        payload = destination / 'payload'
+        before = payload.stat().st_mtime_ns
+        contents = (database / 'fixture-1.0/+CONTENTS').read_bytes()
+        with patch.object(package_relocation, 'refresh_checksums', side_effect=AssertionError('payload scan')):
+            self.assertIn('fixture-1.0', installer.installed(self.cfg))
+            self.assertIn('fixture-1.0', installer.installed(self.cfg))
+        self.assertEqual(self.localbase(database), str(destination))
+        self.assertEqual(payload.stat().st_mtime_ns, before)
+        self.assertEqual((database / 'fixture-1.0/+CONTENTS').read_bytes(), contents)
+        self.crypto.run_package('pkg_admin', ['-K', database, 'check', 'fixture-1.0'])
 
     def test_prefix_independent_commands_are_refused(self):
         package = self.package(commands=PORTABLE_PREFIX + '\n@exec echo unsafe\n')
         with self.assertRaisesRegex(SDKError, 'installation commands'):
             inspect_install_paths(package, self.cfg)
 
+    def test_hooks_need_explicit_deferred_qualification(self):
+        package = self.package(commands=PORTABLE_PREFIX + '\n', install_script='#!/bin/sh\nexit 0\n')
+        with self.assertRaisesRegex(SDKError, 'installation scripts'):
+            inspect_install_paths(package, self.cfg)
+
+    @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
+    def test_signed_deferred_hook_runs_after_relocation_and_recovers(self):
+        original = str(self.destination)
+        package = self.package(payload=original + '/value', install_script='#!/bin/sh\n'
+            'if [ "$2" = POST-INSTALL ]; then\n'
+            '  test "$(cat "' + original + '/payload")" = "$PKG_PREFIX/value" || exit 9\n'
+            '  printf configured > "$PKG_METADATA_DIR/configured"\nfi\n')
+        portable, signed = self.work / 'portable.tgz', self.work / 'portable-signed.tgz'
+        subprocess.run([sys.executable, '-B', str(Path(__file__).resolve().parents[1] / 'scripts/package-portable.py'),
+            str(package), '--host-prefix', os.environ['EMBERBSD_TEST_HOST_PREFIX'],
+            '--dependency-prefix', str(self.work / 'unused'), '--output', str(portable), '--relocate-text',
+            '--defer-hooks', '--bootstrap-install-name-tool', '/usr/bin/false', '--codesign', '/usr/bin/false'],
+            check=True, capture_output=True)
+        self.crypto.sign_package(portable, signed, self.signer, self.ca.certificate)
+        self.cfg.update(prefix=str(self.work / 'relocated'), pkgdb=str(self.work / 'selected-pkgdb'))
+        installer = PackageInstaller(self.crypto, self.ca.certificate)
+        with patch.object(package_relocation, 'run_install_hooks', side_effect=SDKError('hook interrupted')):
+            with self.assertRaisesRegex(SDKError, 'hook interrupted'):
+                installer.install(signed, self.cfg)
+        self.assertIn('fixture-1.0', installer.installed(self.cfg))
+        metadata = Path(self.cfg['pkgdb']) / 'fixture-1.0'
+        self.assertEqual((metadata / 'configured').read_text(), 'configured')
+        self.assertNotIn(package_relocation.HOOKS, (metadata / '+CONTENTS').read_text())
+        self.assertFalse((metadata / package_relocation.READY).exists())
+
+    @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
+    def test_portable_package_revision_preserves_payload_and_build_provenance(self):
+        package = self.package(package_name='fixture-1.0nb2', build_version='original build provenance\n',
+                               commands='@pkgdep mksh>=59c\n')
+        script = Path(__file__).resolve().parents[1] / 'scripts/package-portable.py'
+        def command(revision, output):
+            return [sys.executable, '-B', str(script), str(package), '--host-prefix',
+                os.environ['EMBERBSD_TEST_HOST_PREFIX'], '--dependency-prefix', os.environ['EMBERBSD_TEST_HOST_PREFIX'],
+                '--output', str(output), '--package-revision', revision,
+                '--bootstrap-install-name-tool', '/usr/bin/false', '--codesign', '/usr/bin/false']
+        for revision in ('0', '2', '1', '-1', '3.0', '03', 'no'):
+            result = subprocess.run(command(revision, self.work / ('bad-' + revision + '.tgz')),
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0, revision)
+            self.assertFalse((self.work / ('bad-' + revision + '.tgz')).exists())
+        output = self.work / 'fixture-1.0nb3.tgz'
+        subprocess.run(command('3', output), check=True, capture_output=True)
+        with tarfile.open(output, 'r:gz') as archive:
+            def member(name):
+                return archive.extractfile(next(m for m in archive if m.name.removeprefix('./') == name)).read()
+            contents = member('+CONTENTS').decode()
+            self.assertIn('@name fixture-1.0nb3\n', contents)
+            self.assertNotIn('@name fixture-1.0nb2\n', contents)
+            self.assertIn('@pkgdep mksh>=59c\n', contents)
+            self.assertIn(b'DISTNAME=fixture-1.0\n', member('+BUILD_INFO'))
+            self.assertEqual(member('+BUILD_VERSION'), b'original build provenance\n')
+            self.assertEqual(member('payload'), b'installed data')
+
     @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
     def test_portable_producer_omits_empty_requires_before_real_pkg_add(self):
-        package = self.package(requires_self=True)
+        package = self.package(requires_self=True, preserve=True)
         portable, signed = self.work / 'portable.tgz', self.work / 'portable-signed.tgz'
         subprocess.run([sys.executable, '-B', str(Path(__file__).resolve().parents[1] / 'scripts/package-portable.py'),
             str(package), '--host-prefix', os.environ['EMBERBSD_TEST_HOST_PREFIX'],
@@ -126,6 +228,41 @@ class InstallTests(unittest.TestCase):
         self.cfg['pkgdb'] = self.cfg['prefix'] + '/pkgdb'
         PackageInstaller(self.crypto, self.ca.certificate).install(signed, self.cfg)
         self.assertEqual((Path(self.cfg['prefix']) / 'payload').read_text(), 'installed data')
+        self.assertEqual((Path(self.cfg['pkgdb']) / 'fixture-1.0/+PRESERVE').read_text(), 'bootstrap tool\n')
+
+    @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
+    def test_signed_text_relocation_recovers_after_pkg_add_and_keeps_checksums(self):
+        original = str(self.destination)
+        package = self.package(payload='#!' + original + '/bin/python3.15\n', provides=True)
+        portable, signed = self.work / 'portable.tgz', self.work / 'portable-signed.tgz'
+        subprocess.run([sys.executable, '-B', str(Path(__file__).resolve().parents[1] / 'scripts/package-portable.py'),
+            str(package), '--host-prefix', os.environ['EMBERBSD_TEST_HOST_PREFIX'],
+            '--dependency-prefix', str(self.work / 'unused'), '--output', str(portable), '--relocate-text',
+            '--bootstrap-install-name-tool', '/usr/bin/false', '--codesign', '/usr/bin/false'],
+            check=True, capture_output=True)
+        self.crypto.sign_package(portable, signed, self.signer, self.ca.certificate)
+        destination = self.work / 'relocated'
+        database = self.work / 'selected-pkgdb'
+        self.cfg.update(prefix=str(destination), pkgdb=str(database))
+        installer = PackageInstaller(self.crypto, self.ca.certificate)
+        replace = bootstrap_bundle._replace_file
+        def interrupted(path, data):
+            if path.name == '+BUILD_INFO':
+                raise OSError('interrupted after pkg_add')
+            return replace(path, data)
+        with patch.object(bootstrap_bundle, '_replace_file', side_effect=interrupted):
+            with self.assertRaisesRegex(OSError, 'interrupted'):
+                installer.install(signed, self.cfg)
+        self.assertEqual((destination / 'payload').read_text(), '#!' + str(destination) + '/bin/python3.15\n')
+        self.assertIn('fixture-1.0', installer.installed(self.cfg))
+        info = (database / 'fixture-1.0/+BUILD_INFO').read_text()
+        self.assertIn('PROVIDES=' + str(destination) + '/payload', info)
+        self.assertIn('CFLAGS=-I' + original + '/include', info)
+        self.assertEqual(self.localbase(database), str(destination))
+        self.assertFalse(list(package_relocation.pending(destination, database)))
+        self.crypto.run_package('pkg_admin', ['-K', database, 'check', 'fixture-1.0'])
+        with patch.object(package_relocation, 'refresh_checksums', side_effect=AssertionError('repeat payload scan')):
+            self.assertIn('fixture-1.0', installer.installed(self.cfg))
 
 
 if __name__ == '__main__':

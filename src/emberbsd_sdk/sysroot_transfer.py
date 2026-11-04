@@ -294,6 +294,17 @@ def export_sysroot(source, output, *, target):
         llvm_runtime_install.validate_base_alias_inventory(rows, receipt['signature']['runtime']['manifest'])
     if receipt.get('outputs') != rows:
         raise SDKError('sysroot differs from the completed build receipt')
+    def unchanged():
+        return (jsonio.loads_json(_read(receipt_path, MAX_MANIFEST), max_bytes=MAX_MANIFEST) == receipt
+                and paths.entry(os.path.join(source, INCOMPLETE)) is None)
+    runtime = receipt['signature']['runtime'] if receipt['version'] == 3 else None
+    return _export_tree(source, output, target=target, rows=rows,
+                        provenance=provenance, runtime=runtime, unchanged=unchanged)
+
+
+def _export_tree(source, output, *, target, rows, provenance, runtime=None, unchanged=lambda: True):
+    """Common byte transport for checked build and release-composition producers."""
+    definition = target_definition(target)
     total = _validate_rows(rows, MAX_BYTES)
     root_mode = _mode(stat.S_IMODE(os.stat(source).st_mode))
     os.mkdir(output)
@@ -321,11 +332,10 @@ def export_sysroot(source, output, *, target):
         raw.flush()
         os.fsync(raw.fileno())
     if (inventory.sysroot(source, definition['elf'], exclude=EXCLUDED) != rows
-            or jsonio.loads_json(_read(receipt_path, MAX_MANIFEST), max_bytes=MAX_MANIFEST) != receipt
-            or paths.entry(os.path.join(source, INCOMPLETE)) is not None
+            or not unchanged()
             or stat.S_IMODE(os.stat(source).st_mode) != root_mode):
         raise SDKError('sysroot changed during export')
-    manifest = dict(format=FORMAT, version=2 if receipt['version'] == 3 else 1, scope='sysroot-transfer', target=target,
+    manifest = dict(format=FORMAT, version=2 if runtime is not None else 1, scope='sysroot-transfer', target=target,
                     triplet=definition['triplet'], provenance=provenance,
                     qualification='built-and-inspected', relocation='not-assessed',
                     execution_acceptance='not-assessed', root_mode=root_mode,
@@ -335,7 +345,8 @@ def export_sysroot(source, output, *, target):
     if manifest['version'] == 2:
         # Keep the existing portable record so an imported SDK can recover its
         # measured runtime paths without guessing a resource-directory layout.
-        manifest['runtime'] = receipt['signature']['runtime']
+        manifest['runtime'] = runtime
+    validate_manifest(manifest, target=target)
     data = jsonio.json_bytes(manifest)
     if len(data) > MAX_MANIFEST:
         raise SDKError('transfer manifest exceeds size limit')
@@ -494,10 +505,9 @@ def _restore(payload, root, rows):
         path = os.path.join(root, name)
         if row['kind'] == 'link':
             os.symlink(row['target'], path)
-            if stat.S_IMODE(os.lstat(path).st_mode) != row['mode']:
-                if not hasattr(os, 'lchmod'):
-                    raise SDKError('host cannot preserve symbolic-link mode')
-                os.lchmod(path, row['mode'])
+            lchmod = getattr(os, 'lchmod', None)
+            if lchmod is not None and stat.S_IMODE(os.lstat(path).st_mode) != row['mode']:
+                lchmod(path, row['mode'])
     for name, row in sorted(rows.items(), reverse=True):
         if row['kind'] == 'directory':
             os.chmod(os.path.join(root, name), row['mode'])
@@ -515,6 +525,18 @@ def _remove_owned_stage(stage):
     shutil.rmtree(stage)
 
 
+def _host_link_modes(rows):
+    """Drop symlink modes on a host that cannot set them, such as Linux.
+
+    POSIX does not require symlink modes and Linux has no lchmod. A bundle
+    exported on Darwin still keeps its link modes in the manifest.
+    """
+    if getattr(os, 'lchmod', None) is not None:
+        return rows
+    return {name: {key: value for key, value in row.items() if key != 'mode' or row['kind'] != 'link'}
+            for name, row in rows.items()}
+
+
 def import_sysroot(bundle, destination, *, target, manifest_sha256, max_bytes=MAX_BYTES):
     """Verify a pinned bundle, then publish a new locally restored sysroot."""
     bundle, destination = _directory(bundle), _new_path(destination)
@@ -528,7 +550,8 @@ def import_sysroot(bundle, destination, *, target, manifest_sha256, max_bytes=MA
         _copy_payload(os.path.join(bundle, 'payload.tar.gz'), payload, manifest['payload'])
         os.mkdir(tree, 0o700)
         _restore(payload, tree, manifest['inventory'])
-        if inventory.sysroot(tree, target_definition(target)['elf']) != manifest['inventory']:
+        restored = inventory.sysroot(tree, target_definition(target)['elf'])
+        if _host_link_modes(restored) != _host_link_modes(manifest['inventory']):
             raise SDKError('restored inventory or filesystem metadata mismatch')
         if manifest['version'] == 2 and manifest['provenance'].get('base_cxx') == 'libcxx':
             llvm_runtime_install.validate_base_aliases(tree, manifest['runtime']['manifest'])

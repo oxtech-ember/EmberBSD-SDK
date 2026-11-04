@@ -23,6 +23,10 @@ from .package_cache import directory_lock
 MANIFEST = 'share/emberbsd/bootstrap.json'
 _SYSTEM = ('/usr/lib/', '/System/Library/')
 _MACHO = (b'\xcf\xfa\xed\xfe', b'\xfe\xed\xfa\xcf', b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf')
+_FAT_ARCHIVES = {
+    b'\xca\xfe\xba\xbe': ('>', 20),
+    b'\xca\xfe\xba\xbf': ('>', 32),
+}
 
 
 def relative_path(value):
@@ -107,6 +111,9 @@ def unpack_package(archive_path, root):
                 shutil.copy2(target, destination)
             else:
                 raise SDKError('unsupported bootstrap file: ' + name)
+            if member.isfile() or member.islnk():
+                # Python timestamp caches and build inputs retain package times.
+                os.utime(destination, (member.mtime, member.mtime))
             owned.add(destination.lstat().st_ino)
         if not package or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9+_.-]*', package):
             raise SDKError('invalid bootstrap package name')
@@ -132,6 +139,51 @@ def _local_reference(name, relative, prefix, image):
     raise SDKError('unsupported native runtime reference: ' + name)
 
 
+def _native_fat_archive(path, host):
+    """Accept one native FAT slice only when its payload is a plain ar archive."""
+    with path.open('rb') as stream:
+        before = os.fstat(stream.fileno())
+        magic = stream.read(8)
+        layout = _FAT_ARCHIVES.get(magic[:4])
+        if layout is None:
+            return False
+        if len(magic) != 8:
+            raise SDKError('truncated native static archive FAT header')
+        endian, entry_size = layout
+        count = struct.unpack_from(endian + 'I', magic, 4)[0]
+        table_end = 8 + count * entry_size
+        if count != 1 or table_end > before.st_size:
+            raise SDKError('runtime packaging requires one valid native static archive slice')
+        entry = stream.read(entry_size)
+        if len(entry) != entry_size:
+            raise SDKError('truncated native static archive slice table')
+        if entry_size == 20:
+            cpu, subtype, offset, extent, alignment = struct.unpack(endian + '5I', entry)
+        else:
+            cpu, subtype, offset, extent, alignment, reserved = struct.unpack(endian + 'IIQQII', entry)
+            if reserved != 0:
+                raise SDKError('invalid native static archive slice table')
+        expected = {'arm64': (0x100000c, 0), 'aarch64': (0x100000c, 0),
+                    'x86_64': (0x1000007, 3), 'amd64': (0x1000007, 3)}.get(host.get('cpu'))
+        if host.get('os') != 'Darwin' or expected is None or (cpu, subtype) != expected:
+            raise SDKError('static archive FAT slice does not match the native host')
+        if (alignment > 31 or offset < table_end or offset % (1 << alignment) != 0 or
+                extent < 8 or offset > before.st_size or extent > before.st_size - offset or
+                offset + extent != before.st_size):
+            raise SDKError('invalid native static archive FAT slice bounds')
+        stream.seek(offset)
+        archive_magic = stream.read(8)
+        if archive_magic != b'!<arch>\n':
+            return False
+        after = os.fstat(stream.fileno())
+        identity = lambda stat_result: (stat_result.st_dev, stat_result.st_ino,
+                                        stat_result.st_size, stat_result.st_mtime_ns,
+                                        stat_result.st_ctime_ns)
+        if identity(before) != identity(after):
+            raise SDKError('native static archive changed during inspection')
+        return True
+
+
 def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency_root=None,
                   dependency_files=None):
     """Rewrite native load commands before release signing, never on a client."""
@@ -145,6 +197,8 @@ def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency
             magic = header[:4]
         if magic not in _MACHO:
             continue
+        if magic in _FAT_ARCHIVES and _native_fat_archive(path, host):
+            continue  # Static archives have no runtime load commands to relocate.
         if magic == b'\xcf\xfa\xed\xfe' and len(header) == 16 and struct.unpack_from('<I', header, 12)[0] == 1:
             continue  # Installed development objects have no runtime load commands.
         relative = path.relative_to(root)
@@ -179,7 +233,12 @@ def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency
             if new != name:
                 options += ['-change', name, new]
         if image['install_name']:
-            options += ['-id', '@loader_path/' + path.name]
+            # Linkers copy this ID into new consumers. A loader-relative ID
+            # would then resolve against that consumer (for example bin/),
+            # rather than the provider directory supplied by its link RPATH.
+            install_name = '@rpath/' + path.name
+            if image['install_name'] != install_name:
+                options += ['-id', install_name]
         for rpath in image['rpaths']:
             if rpath.startswith(prefix + '/') or rpath == prefix:
                 options += ['-rpath', rpath, '@loader_path/' + os.path.relpath(
@@ -200,16 +259,29 @@ def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency
     return changed
 
 
-def refresh_checksums(root, packages):
+def relocate_build_info(path, old, new):
+    """Update installed lookup fields; retain compiler flags as build provenance."""
+    if not path.is_file():
+        return
+    before = path.read_bytes()
+    content = b''.join(relocate_text(line, old, new)
+        if line.startswith((b'LOCALBASE=', b'REQUIRES=', b'PROVIDES=')) else line
+        for line in before.splitlines(keepends=True))
+    if content != before:
+        _replace_file(path, content)
+
+
+def refresh_checksums(root, packages, *, database=None, selected=None):
     """Keep pkg_tools ownership and installed MD5 records after relocation."""
+    database = root / 'pkgdb' if database is None else Path(database)
     for name in packages:
-        path = root / 'pkgdb' / name / '+CONTENTS'
+        path = database / name / '+CONTENTS'
         lines, previous, ignored = [], None, False
         for line in path.read_text().splitlines():
             if line == '@ignore':
                 ignored = True
             elif line and not line.startswith('@'):
-                previous = None if ignored else _destination(root, line)
+                previous = None if ignored or (selected is not None and line not in selected) else _destination(root, line)
                 ignored = False
             elif line.startswith('@comment MD5:') and previous is not None:
                 if previous.is_symlink():
@@ -244,13 +316,75 @@ def relocate_text(content, old, new):
         raise SDKError('bootstrap text contains a NUL byte')
     if new.startswith(old + b'/'):
         raise SDKError('SDK destination must not be inside its producer prefix')
-    content = re.sub(re.escape(old) + rb'(?=$|[^A-Za-z0-9_.-])', lambda _: new, content)
+    token = re.compile(re.escape(old) + rb'(?=$|[^A-Za-z0-9_.-])')
+    if new != old and token.search(new):
+        raise SDKError('SDK destination must not repeat its producer prefix')
+    # A repeated pass must not discover the old token across either edge of
+    # the replacement, for example /opt/sdk -> /opt with a /sdk/... suffix.
+    if new != old:
+        boundaries = [index for index, byte in enumerate(old) if byte == ord('/') and index]
+        if new in old or any(new.endswith(old[:index]) or
+               re.match(re.escape(old[index:]) + rb'(?=$|[^A-Za-z0-9_.-])', new)
+               for index in boundaries):
+            raise SDKError('SDK destination overlaps its producer prefix')
+    content = token.sub(lambda _: new, content)
     return content
 
 
-def text_references(root, prefix):
+def package_paths(root, packages):
+    """Return exact owned payload paths, excluding ignored packing-list entries."""
+    paths = {}
+    for package in packages:
+        ignored = False
+        for line in (root / 'pkgdb' / package / '+CONTENTS').read_text().splitlines():
+            if line == '@ignore':
+                ignored = True
+            elif line and not line.startswith('@'):
+                if ignored:
+                    ignored = False
+                    continue
+                path = _destination(root, line)
+                if not os.path.lexists(path):
+                    raise SDKError('bootstrap package member is missing: ' + line)
+                paths[path.relative_to(root).as_posix()] = path
+    return [paths[name] for name in sorted(paths)]
+
+
+def bundle_paths(root, packages):
+    """Include every exact package spelling, even on a case-insensitive stage."""
+    paths = {path.relative_to(root).as_posix(): path for path in root.rglob('*')}
+    for path in package_paths(root, packages):
+        while path != root:
+            paths[path.relative_to(root).as_posix()] = path
+            path = path.parent
+    return [paths[name] for name in sorted(paths)]
+
+
+def write_archive(root, output, packages):
+    """Serialize package names rather than the staging filesystem's case folding."""
+    paths = [root, *bundle_paths(root, packages)]
+    with Path(output).open('xb') as stream:
+        with tarfile.open(fileobj=stream, mode='w:gz', compresslevel=6,
+                          dereference=False) as archive:
+            for path in paths:
+                relative = path.relative_to(root)
+                name = 'ember-sdk' if path == root else 'ember-sdk/' + relative.as_posix()
+                member = archive.gettarinfo(str(path), arcname=name)
+                member.uid = member.gid = 0
+                member.uname = member.gname = ''
+                if member.isreg() or member.islnk():
+                    # Case aliases must not become self-hardlinks on the consumer FS.
+                    member.type, member.linkname = tarfile.REGTYPE, ''
+                    member.size = path.stat().st_size
+                    with path.open('rb') as payload:
+                        archive.addfile(member, payload)
+                else:
+                    archive.addfile(member)
+
+
+def text_references(root, prefix, packages):
     result = []
-    for path in sorted(root.rglob('*')):
+    for path in bundle_paths(root, packages):
         if (not path.is_file() or path.is_symlink() or path.stat().st_size > 8 * 1024 * 1024 or
                 path.name in ('+BUILD_INFO', '+BUILD_VERSION') or path == root / MANIFEST):
             continue
@@ -263,6 +397,71 @@ def text_references(root, prefix):
             continue
         result.append(path.relative_to(root).as_posix())
     return result
+
+
+def run_install_hooks(root, database, name):
+    """Run qualified package configuration after its files have been relocated.
+
+    The producer must check that both phases work after extraction and may be
+    repeated. Host POSIX utilities are installation services, not build tools.
+    """
+    root, database = Path(root), Path(database)
+    metadata = database / name
+    script = metadata / '+INSTALL'
+    if not script.exists():
+        return
+    environment = {'PATH': str(root / 'bin') + ':' + str(root / 'sbin') + ':/usr/bin:/bin:/usr/sbin:/sbin',
+                   'LC_ALL': 'C', 'PKG_PREFIX': str(root), 'PKG_DBDIR': str(database),
+                   'PKG_REFCOUNT_DBDIR': str(database.parent / (database.name + '.refcount')),
+                   'PKG_REGISTER_SHELLS': 'NO', 'PKG_METADATA_DIR': str(metadata)}
+    for stage in ('PRE-INSTALL', 'POST-INSTALL'):
+        result = subprocess.run([str(script), name, stage], cwd=metadata,
+                                env=environment, capture_output=True)
+        if result.returncode:
+            raise SDKError('package configuration failed: ' + name + ': ' +
+                           result.stderr[-4096:].decode('utf-8', 'replace'))
+
+
+def refresh_bytecode(root, packages, changed_sources):
+    """Refresh owned Python caches after extraction and actual text relocation."""
+    import importlib.util
+    import py_compile
+
+    changed = set()
+    for path in package_paths(root, packages):
+        if path.suffix != '.pyc' or path.is_symlink():
+            continue
+        try:
+            source = Path(importlib.util.source_from_cache(str(path)))
+        except ValueError as exc:
+            raise SDKError('unsupported bootstrap bytecode path: ' + str(path)) from exc
+        _destination(root, source.relative_to(root).as_posix())
+        if not source.is_file() or source.is_symlink():
+            raise SDKError('bootstrap bytecode lacks its source: ' + str(path))
+        optimization = path.stem.rsplit('.opt-', 1)[1] if '.opt-' in path.stem else ''
+        if optimization not in ('', '1', '2') or Path(importlib.util.cache_from_source(
+                str(source), optimization=optimization)) != path:
+            raise SDKError('bootstrap bytecode targets a different Python: ' + str(path))
+        with path.open('rb') as cache:
+            header = cache.read(16)
+        flags = int.from_bytes(header[4:8], 'little')
+        mode = py_compile.PycInvalidationMode.TIMESTAMP
+        valid = len(header) == 16 and header[:4] == importlib.util.MAGIC_NUMBER
+        if flags in (1, 3):
+            mode = (py_compile.PycInvalidationMode.CHECKED_HASH if flags == 3 else
+                    py_compile.PycInvalidationMode.UNCHECKED_HASH)
+            valid = valid and header[8:16] == importlib.util.source_hash(source.read_bytes())
+        elif flags == 0:
+            info = source.stat()
+            valid = valid and header[8:16] == struct.pack('<II',
+                int(info.st_mtime) & 0xffffffff, info.st_size & 0xffffffff)
+        else:
+            valid = False
+        if source in changed_sources or not valid:
+            py_compile.compile(str(source), cfile=str(path), doraise=True,
+                               optimize=int(optimization or '0'), invalidation_mode=mode)
+            changed.add(path.relative_to(root).as_posix())
+    return changed
 
 
 def initialize(root):
@@ -282,6 +481,7 @@ def initialize(root):
         old = metadata['prefix'].encode()
         if str(root).startswith(metadata['prefix'] + '/'):
             raise SDKError('SDK destination must not be inside its producer prefix')
+        changed_sources = set()
         for name in metadata['text_files']:
             path = _destination(root, name)
             if path.is_symlink() or not path.is_file():
@@ -290,33 +490,18 @@ def initialize(root):
             updated = relocate_text(content, old, str(root).encode())
             if updated != content:
                 _replace_file(path, updated)
+                if path.suffix == '.py':
+                    changed_sources.add(path)
         for name in metadata['packages']:
             path = root / 'pkgdb' / name / '+BUILD_INFO'
-            if path.exists():
-                lines = path.read_bytes().splitlines(keepends=True)
-                # These two fields are active pkg_tools metadata. Other fields
-                # describe the original build and must retain its provenance.
-                content = b''.join(relocate_text(line, old, str(root).encode())
-                    if line.startswith((b'REQUIRES=', b'PROVIDES=')) else line for line in lines)
-                if content != path.read_bytes():
-                    _replace_file(path, content)
+            relocate_build_info(path, old, str(root).encode())
+        refresh_bytecode(root, metadata['packages'], changed_sources)
         refresh_checksums(root, metadata['packages'])
-        # Run the package owner's normal configuration actions. The host's
-        # POSIX utilities are installation services, not a compiler fallback.
-        environment = {'PATH': str(root / 'bin') + ':' + str(root / 'sbin') + ':/usr/bin:/bin:/usr/sbin:/sbin',
-                       'LC_ALL': 'C', 'PKG_PREFIX': str(root), 'PKG_DBDIR': str(root / 'pkgdb'),
-                       'PKG_REFCOUNT_DBDIR': str(root / 'pkgdb.refcount'), 'PKG_REGISTER_SHELLS': 'NO'}
+        # Import lazily: package relocation reuses bootstrap's file helpers.
+        from .package_relocation import complete_bootstrap
         for name in metadata['packages']:
-            database = root / 'pkgdb' / name
-            script = database / '+INSTALL'
-            if not script.exists():
-                continue
-            for stage in ('PRE-INSTALL', 'POST-INSTALL'):
-                result = subprocess.run([str(script), name, stage], cwd=database,
-                    env=dict(environment, PKG_METADATA_DIR=str(database)), capture_output=True)
-                if result.returncode:
-                    raise SDKError('bootstrap package configuration failed: ' + name + ': ' +
-                                   result.stderr.decode('utf-8', 'replace'))
+            run_install_hooks(root, root / 'pkgdb', name)
+            complete_bootstrap(root, root / 'pkgdb', name)
         command = [str(root / 'sbin/pkg_admin'), '-K', str(root / 'pkgdb')]
         for action in ('rebuild', 'rebuild-tree'):
             result = subprocess.run(command + [action], env={'PATH': str(root / 'bin') + ':' + str(root / 'sbin'),
@@ -369,7 +554,7 @@ def prepare(root, archives, crypto, *, host, repository, install_name_tool, code
             raise SDKError('bootstrap lacks ' + member)
     make_relative(root, prefix, {'os': host['os'], 'cpu': host['arch']}, install_name_tool, codesign)
     refresh_checksums(root, packages)
-    text_files = text_references(root, prefix)
+    text_files = text_references(root, prefix, packages)
     (root / 'share/emberbsd').mkdir(parents=True, exist_ok=True)
     package_client(root / 'share/emberbsd/ember-sdk.pyz', bootstrap=True)
     launcher = root / 'bin/ember-sdk'

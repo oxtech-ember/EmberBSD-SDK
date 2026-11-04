@@ -16,14 +16,14 @@ from unittest.mock import patch
 
 from test_core import TemporaryCase, SDK_SOURCE
 from emberbsd_sdk.errors import SDKError
-from emberbsd_sdk.darwin_makeconf import write_makeconf, render_variables
+from emberbsd_sdk.darwin_makeconf import write_makeconf, render_variables, _mapping
 
 
 FACTS = dict(os='Darwin', cpu='aarch64', kernel_version='25.0.0',
              product_version='26.0', pkgsrc_opsys_version='260000')
 EARLY = 'awk basename cat cut date dirname env expr grep head id pwd sed sort tail tr uname uniq wc'
 ROLES = ('cc cxx cpp make gmake sh as ld dsymutil ar ranlib nm strip '
-         'pkg_info pkg_admin pkg_add pkg_create').split() + EARLY.split()
+         'od lipo otool pkg_info pkg_admin pkg_add pkg_create').split() + EARLY.split()
 
 
 class DarwinMakeconfTests(TemporaryCase):
@@ -63,6 +63,9 @@ class DarwinMakeconfTests(TemporaryCase):
         self.assertIn('.include "' + self.options['pkgsrc'] + '/EMBERBSD-DARWIN-BOOTSTRAP-MK.CONF"', data)
         self.assertIn('LOCALBASE= ' + self.options['prefix'], data)
         self.assertIn('BATCH= yes\n', data)
+        self.assertIn('MACHO_USE_LOAD_COMMANDS= yes\n', data)
+        for variable, role in (('MACHO_OD', 'od'), ('MACHO_LIPO', 'lipo'), ('MACHO_OTOOL', 'otool')):
+            self.assertIn(variable + '= ' + self.tools[role] + '\n', data)
         self.assertNotIn('EMBERBSD_NATIVE_CXX_BINDING_RECORD=', data)
         self.assertIn('EMBERBSD_DARWIN_SOURCE_TOOLS= gunzip gzcat gzip', data)
         self.assertEqual(result['initial_command'], [self.tools['make'], '-m', self.options['makefiles'],
@@ -310,6 +313,55 @@ class DarwinMakeconfTests(TemporaryCase):
             self.render()
         self.assertEqual(os.readlink(directory / 'awk'), self.tools['sh'])
         self.assertFalse(Path(self.options['output']).exists())
+
+    def test_extend_utility_mapping_and_reuse_existing_links(self):
+        directory = Path(self.options['utility_bin'])
+        self.render()
+        existing = directory / 'awk'
+        before = existing.lstat().st_mtime_ns
+        extra = self.tools['awk']
+        tools = self.tools | {'extra': str(extra)}
+        self.render(tools=tools)
+        self.assertEqual(os.readlink(directory / 'extra'), str(extra))
+        self.assertEqual(existing.lstat().st_mtime_ns, before)
+        self.render(tools=tools)
+        self.assertEqual(existing.lstat().st_mtime_ns, before)
+
+    def test_mapping_conflict_or_removed_role_adds_nothing(self):
+        directory = Path(self.options['utility_bin'])
+        directory.mkdir()
+        (directory / 'awk').symlink_to('/wrong')
+        with self.assertRaisesRegex(SDKError, 'utility mapping'):
+            _mapping(str(directory), {'awk': '/correct', 'new': '/new'})
+        self.assertEqual(set(os.listdir(directory)), {'awk'})
+        with self.assertRaisesRegex(SDKError, 'utility mapping'):
+            _mapping(str(directory), {'new': '/new'})
+        self.assertEqual(set(os.listdir(directory)), {'awk'})
+
+    def test_mapping_addition_failure_rolls_back_new_links(self):
+        directory = Path(self.options['utility_bin'])
+        directory.mkdir()
+        (directory / 'awk').symlink_to('/old')
+        real_symlink = os.symlink
+        def fail_second(target, name):
+            if name.endswith('/z'):
+                raise OSError('fixture failure')
+            real_symlink(target, name)
+        with patch('emberbsd_sdk.darwin_makeconf.os.symlink', side_effect=fail_second):
+            with self.assertRaisesRegex(OSError, 'fixture failure'):
+                _mapping(str(directory), {'awk': '/old', 'a': '/a', 'z': '/z'})
+        self.assertEqual(set(os.listdir(directory)), {'awk'})
+        self.assertEqual(os.readlink(directory / 'awk'), '/old')
+
+    def test_extension_rolls_back_if_config_write_fails(self):
+        self.render()
+        directory = Path(self.options['utility_bin'])
+        extra = self.tools['awk']
+        with patch('emberbsd_sdk.darwin_makeconf.os.replace', side_effect=OSError('fixture failure')):
+            with self.assertRaises(OSError):
+                self.render(tools=self.tools | {'extra': str(extra)})
+        self.assertFalse((directory / 'extra').exists())
+        self.assertEqual(os.readlink(directory / 'awk'), self.tools['awk'])
 
     def test_preserves_old_config_and_removes_own_mapping_after_write_failure(self):
         output = Path(self.options['output']); output.write_text('old\n')

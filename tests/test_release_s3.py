@@ -6,13 +6,15 @@ import hashlib
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
+import socket
+import ssl
 from pathlib import Path
 import sys
 import threading
 import unittest
 from urllib.parse import urlsplit, parse_qs
 import xml.etree.ElementTree as ET
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
@@ -175,6 +177,222 @@ class HTTPTests(unittest.TestCase):
         self.store.delete('current/b')
         self.assertNotIn('/bucket/current/b', self.server.objects)
         self.assertIn('/bucket/another/keep', self.server.objects)
+
+
+class HTTPSRetryTests(unittest.TestCase):
+    def setUp(self):
+        self.store = HTTPStore('https://example.org')
+
+    def response(self, *, status=200, data=b'payload'):
+        response = Mock(status=status)
+        response.getheader.side_effect = lambda key, default=None: (
+            str(len(data)) if key == 'Content-Length' else default)
+        response.getheaders.return_value = [('Content-Length', str(len(data)))]
+        response.read.return_value = data
+        return response
+
+    def test_s3_retry_resigns_without_previous_authorization(self):
+        store = S3Store('https://example.org', 'region-1', 'bucket', 'access', 'secret')
+        failed, success = Mock(), Mock()
+        failed.getresponse.side_effect = TimeoutError()
+        success.getresponse.return_value = self.response()
+        with patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection',
+                   side_effect=[failed, success]):
+            with store.request('GET', 'object') as response:
+                self.assertEqual(response.status, 200)
+        for connection in (failed, success):
+            sent = dict(connection.request.call_args.kwargs['headers'])
+            authorization = sent.pop('authorization')
+            self.assertNotIn('authorization', authorization.split('SignedHeaders=')[1].split(',')[0].split(';'))
+            self.assertEqual(authorization, sign_request('GET', '/bucket/object', sent,
+                                                          'region-1', 'access', 'secret'))
+            connection.close.assert_called_once_with()
+
+    def test_safe_reads_retry_connection_failures_and_close_connections(self):
+        for method in ('GET', 'HEAD'):
+            for error in (TimeoutError(), ConnectionError(), http.client.RemoteDisconnected()):
+                for phase in ('request', 'getresponse'):
+                    with self.subTest(method=method, error=type(error).__name__, phase=phase):
+                        failed, success = Mock(), Mock()
+                        getattr(failed, phase).side_effect = error
+                        success.getresponse.return_value = self.response()
+                        with patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection',
+                                   side_effect=[failed, success]) as factory:
+                            with self.store.request(method, 'object') as response:
+                                self.assertEqual(response.status, 200)
+                        self.assertEqual(factory.call_count, 2)
+                        failed.close.assert_called_once_with()
+                        success.close.assert_called_once_with()
+
+    def test_safe_read_stops_after_three_failures(self):
+        connections = [Mock() for _ in range(3)]
+        for connection in connections:
+            connection.getresponse.side_effect = TimeoutError()
+        with patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection',
+                   side_effect=connections) as factory:
+            with self.assertRaises(SDKError):
+                with self.store.request('GET', 'object'):
+                    self.fail('no response expected')
+        self.assertEqual(factory.call_count, 3)
+        for connection in connections:
+            connection.close.assert_called_once_with()
+
+    def test_mutations_and_requests_with_body_are_never_retried(self):
+        for method, body in (('PUT', b'payload'), ('DELETE', None), ('GET', b'payload')):
+            with self.subTest(method=method):
+                connection = Mock()
+                connection.getresponse.side_effect = TimeoutError()
+                with patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection',
+                           return_value=connection) as factory:
+                    with self.assertRaises(SDKError):
+                        with self.store.request(method, 'object', body=body):
+                            self.fail('no response expected')
+                self.assertEqual(factory.call_count, 1)
+                connection.close.assert_called_once_with()
+
+    def test_certificate_status_integrity_and_body_failures_are_not_retried(self):
+        for failure in ('certificate', 'status', 'integrity', 'body'):
+            with self.subTest(failure=failure):
+                connection = Mock()
+                response = self.response(status=503 if failure == 'status' else 200)
+                connection.getresponse.return_value = response
+                if failure == 'certificate':
+                    connection.getresponse.side_effect = ssl.SSLCertVerificationError('invalid certificate')
+                elif failure == 'body':
+                    response.read.side_effect = TimeoutError()
+                elif failure == 'integrity':
+                    response.read.return_value = b'wrong'
+                with patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection',
+                           return_value=connection) as factory:
+                    with self.assertRaises(SDKError):
+                        if failure == 'integrity':
+                            self.store.verify('object', 7, hashlib.sha256(b'payload').hexdigest())
+                        else:
+                            self.store.read('object', 100)
+                self.assertEqual(factory.call_count, 1)
+                connection.close.assert_called_once_with()
+
+
+class KeepAliveHandler(BaseHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'
+
+    def log_message(self, *args):
+        pass
+
+    def respond(self, *, head=False):
+        self.server.seen.append((self.command, self.path, self.client_address))
+        body = b'payload'
+        self.send_response(200)
+        chunked = self.path.startswith('/chunked') and not head
+        self.send_header('Transfer-Encoding' if chunked else 'Content-Length',
+                         'chunked' if chunked else str(len(body)))
+        self.end_headers()
+        if not head:
+            self.wfile.write(b'7\r\npayload\r\n0\r\n\r\n' if chunked else body)
+            self.wfile.flush()
+        if self.path == '/stale':
+            # A server may drop an idle socket without advertising close.
+            self.connection.shutdown(socket.SHUT_RDWR)
+            self.connection.close()
+            self.close_connection = True
+
+    def do_GET(self):
+        self.respond()
+
+    def do_HEAD(self):
+        self.respond(head=True)
+
+    def do_PUT(self):
+        self.rfile.read(int(self.headers['Content-Length']))
+        self.respond()
+
+
+class HTTPConnectionReuseTests(unittest.TestCase):
+    def setUp(self):
+        self.server = ThreadingHTTPServer(('127.0.0.1', 0), KeepAliveHandler)
+        self.server.seen = []
+        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.store = HTTPStore('https://127.0.0.1:' + str(self.server.server_port))
+        self.addCleanup(self.store.close)
+        self.connections = []
+        def connection(host, **kwargs):
+            result = http.client.HTTPConnection(host, timeout=kwargs['timeout'])
+            self.connections.append(result)
+            return result
+        factory = patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection', side_effect=connection)
+        factory.start()
+        self.addCleanup(factory.stop)
+
+    def test_get_head_get_use_one_connection(self):
+        self.assertEqual(self.store.read('first', 100)[0], b'payload')
+        self.assertEqual(self.store.head('second')['content-length'], '7')
+        self.assertEqual(self.store.read('third', 100)[0], b'payload')
+        self.assertEqual([row[0] for row in self.server.seen], ['GET', 'HEAD', 'GET'])
+        self.assertEqual(len({row[2] for row in self.server.seen}), 1)
+        self.assertEqual(len(self.connections), 1)
+
+    def test_partial_body_and_exception_discard_connection(self):
+        with self.store.request('GET', 'partial') as response:
+            self.assertEqual(response.read(1), b'p')
+        self.assertEqual(self.store.read('after-partial', 100)[0], b'payload')
+        self.assertNotEqual(self.server.seen[0][2], self.server.seen[1][2])
+        with self.assertRaisesRegex(RuntimeError, 'abort'):
+            with self.store.request('GET', 'exception') as response:
+                response.read()
+                raise RuntimeError('abort')
+        self.assertEqual(self.store.read('after-exception', 100)[0], b'payload')
+        self.assertNotEqual(self.server.seen[2][2], self.server.seen[3][2])
+
+    def test_chunked_full_read_and_partial_close_both_discard(self):
+        with self.store.request('GET', 'chunked-full') as response:
+            self.assertEqual(response.read(), b'payload')
+        self.assertEqual(self.store.read('after-chunked', 100)[0], b'payload')
+        self.assertNotEqual(self.server.seen[0][2], self.server.seen[1][2])
+        with self.store.request('GET', 'chunked-partial') as response:
+            self.assertEqual(response.read(1), b'p')
+            response.close()
+        self.assertEqual(self.store.read('after-partial-chunked', 100)[0], b'payload')
+        self.assertNotEqual(self.server.seen[2][2], self.server.seen[3][2])
+
+    def test_manually_closed_partial_response_is_never_pooled(self):
+        with self.store.request('GET', 'partial-closed') as response:
+            self.assertEqual(response.read(1), b'p')
+            response.close()
+        self.assertEqual(self.store.read('after-closed', 100)[0], b'payload')
+        self.assertNotEqual(self.server.seen[0][2], self.server.seen[1][2])
+        self.assertEqual(len(self.connections), 2)
+
+    def test_stale_pooled_connection_retries_a_fresh_connection(self):
+        self.assertEqual(self.store.read('stale', 100)[0], b'payload')
+        self.assertEqual(self.store.read('fresh', 100)[0], b'payload')
+        self.assertEqual(len(self.connections), 2)
+        self.assertNotEqual(self.server.seen[0][2], self.server.seen[1][2])
+
+    def test_put_uses_fresh_connection_and_preserves_idle_get_connection(self):
+        self.assertEqual(self.store.read('before-put', 100)[0], b'payload')
+        with self.store.request('PUT', 'write', body=b'x') as response:
+            self.assertEqual(response.read(), b'payload')
+        self.assertEqual(self.store.read('after-put', 100)[0], b'payload')
+        self.assertEqual(len(self.connections), 2)
+        self.assertEqual(self.server.seen[0][2], self.server.seen[2][2])
+        self.assertNotEqual(self.server.seen[0][2], self.server.seen[1][2])
+
+    def test_put_timeout_never_retries_or_consumes_idle_connection(self):
+        self.assertEqual(self.store.read('before-error', 100)[0], b'payload')
+        failed = Mock()
+        failed.getresponse.side_effect = TimeoutError()
+        with patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection', return_value=failed) as factory:
+            with self.assertRaises(SDKError):
+                with self.store.request('PUT', 'write', body=b'x'):
+                    self.fail('no response expected')
+            self.assertEqual(factory.call_count, 1)
+            failed.close.assert_called_once_with()
+        self.assertEqual(self.store.read('after-error', 100)[0], b'payload')
+        self.assertEqual(self.server.seen[0][2], self.server.seen[1][2])
+        self.assertEqual(len(self.connections), 1)
 
 
 if __name__ == '__main__':

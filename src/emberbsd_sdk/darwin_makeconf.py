@@ -27,7 +27,8 @@ LLVM = {'LLVM_MC': 'as', 'LD64_LLD': 'ld', 'DSYMUTIL': 'dsymutil',
         'AR': 'ar', 'RANLIB': 'ranlib', 'NM': 'nm', 'STRIP': 'strip', 'UNAME': 'uname'}
 CMAKE = {'LIBTOOL': 'libtool_darwin', 'INSTALL_NAME_TOOL': 'install_name_tool', 'TAPI': 'llvm_readtapi'}
 BOUND = frozenset((*COMPILERS, 'as', 'ld', 'make', 'gmake', 'sh'))
-REQUIRED = frozenset((*BOUND, *LLVM.values(), 'pkg_info', 'pkg_admin', 'pkg_add', 'pkg_create'))
+MACHO = {'MACHO_OD': 'od', 'MACHO_LIPO': 'lipo', 'MACHO_OTOOL': 'otool'}
+REQUIRED = frozenset((*BOUND, *LLVM.values(), *MACHO.values(), 'pkg_info', 'pkg_admin', 'pkg_add', 'pkg_create'))
 ROLE = re.compile(r'[a-z][a-z0-9_.+-]*\Z')
 NATIVE_STAGE_MAKECONF_API = 1
 
@@ -197,12 +198,23 @@ def _inside(path, root):
 def _mapping(destination, tools):
     """Publish only links to explicit tools; keep a matching existing map."""
     if os.path.lexists(destination):
-        _require(os.path.isdir(destination) and not os.path.islink(destination) and
-                 set(os.listdir(destination)) == set(tools) and
-                 all(os.path.islink(os.path.join(destination, role)) and
-                     os.readlink(os.path.join(destination, role)) == path for role, path in tools.items()),
+        _require(os.path.isdir(destination) and not os.path.islink(destination),
                  'existing utility mapping differs from selected tools')
-        return False
+        existing = set(os.listdir(destination))
+        _require(existing <= set(tools) and
+                 all(os.path.islink(os.path.join(destination, role)) and
+                     os.readlink(os.path.join(destination, role)) == tools[role] for role in existing),
+                 'existing utility mapping differs from selected tools')
+        added = []
+        try:
+            for role in sorted(set(tools) - existing):
+                os.symlink(tools[role], os.path.join(destination, role))
+                added.append(role)
+        except BaseException:
+            for role in reversed(added):
+                os.unlink(os.path.join(destination, role))
+            raise
+        return False, added
     stage = tempfile.mkdtemp(prefix='.darwin-tools-', dir=os.path.dirname(destination))
     try:
         for role, path in tools.items():
@@ -211,7 +223,7 @@ def _mapping(destination, tools):
     finally:
         if os.path.isdir(stage):
             shutil.rmtree(stage)
-    return True
+    return True, []
 
 
 def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pkgdb,
@@ -335,6 +347,8 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
         variables['EMBERBSD_DARWIN_LINKER_LAUNCHER'] = recipe_linker_launcher(link)
         if compiler_family == 'gcc':
             variables['EMBERBSD_GCC16_LINKER_LAUNCHER'] = recipe_linker_launcher(link)
+    variables['MACHO_USE_LOAD_COMMANDS'] = 'yes'
+    variables.update({variable: tools[role] for variable, role in MACHO.items()})
     for role, command in commands.items():
         variables['EMBERBSD_DARWIN_SEED_' + role.upper()] = shlex.join(command)
     variables['EMBERBSD_DARWIN_SEED_AS'] = shlex.join(
@@ -350,7 +364,7 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
         variables['NATIVE_PKG_' + role[4:].upper() + '_CMD'] = tools[role]
     for role, path in utilities.items():
         variables['EMBERBSD_DARWIN_TOOL.' + role] = path
-    created = _mapping(utility_bin, utilities)
+    created, added = _mapping(utility_bin, utilities)
     temporary = None
     try:
         for selected in tools.values():
@@ -405,6 +419,9 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
     except BaseException:
         if created:
             shutil.rmtree(utility_bin)
+        else:
+            for role in reversed(added):
+                os.unlink(os.path.join(utility_bin, role))
         raise
     finally:
         if temporary and os.path.lexists(temporary):

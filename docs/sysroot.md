@@ -102,6 +102,10 @@ For OS builds using common `security/openssh`, prepare the source with the
 Ports `scripts/source-inputs/openssh/source.py` owner and select
 `--openssh-source`. The SDK forwards `EMBER_OPENSSH_SOURCE`.
 
+For OS builds using common zlib, prepare the Ports `devel/zlib` source and pass
+`--zlib-source`; the SDK forwards `EMBER_ZLIB_SOURCE`, including during header
+installation.
+
 Prepare libarchive with the Ports `scripts/libarchive-source.py prepare` command
 and libevent with `scripts/source-inputs/libevent/source.py prepare`; both use
 the selected SDK source and canonical Ports export. Pass the resulting trees
@@ -164,6 +168,17 @@ clear an incompatible context to make a build pass. When the selected OS provide
 contract, the SDK can selectively clean the affected objects under the existing
 object-tree lock before recording the new source context. Other input changes
 remain subject to the normal compatibility check.
+
+For an otherwise identical bootstrap runtime, OS and Ports commit pins may
+advance while every recorded base input, recipe file and runtime payload digest
+stays unchanged. Moving that runtime still refreshes affected header consumers.
+
+A full runtime rebuilt against updated base libraries can also reuse objects
+when its entire recorded payload, modes, links, LLVM source, recipe files and
+target identity are unchanged. Base provenance and the bootstrap manifest pin
+may advance; the bootstrap archive digests and selected unwind binding must
+still match. Base headers and libraries keep their normal OS and prepared-source
+refresh paths. A moved runtime refreshes its header and C++ link consumers.
 
 For a Clang runtime update confined to C++ headers and the shared libc++ and
 libc++abi libraries, the same planner refreshes their header and link consumers.

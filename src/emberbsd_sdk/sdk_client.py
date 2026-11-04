@@ -11,8 +11,10 @@ from pathlib import Path
 import platform
 import subprocess
 import sys
+import tarfile
 import tempfile
 
+from . import sysroot_package
 from .binary_catalog import select_packages
 from .binary_release import _arch, load_catalogs
 from .errors import SDKError
@@ -224,7 +226,11 @@ def include_source_dependencies(plan, release, catalogs, config, installer, cach
 def apply_plan(plan, config, installer, cache, store):
     _source_config(config, plan['build_roots'])
     pending = [p for p in plan['packages'] if p['action'] != 'installed']
+    sysroot = plan.get('sysroot')
+    new_sysroot = sysroot and sysroot['action'] != 'installed'
     keep = {p['artifact']['sha256'] for p in pending}
+    if new_sysroot:
+        keep.add(sysroot['artifact']['sha256'])
     cache.trim(config.get('cache_limit', 512 * 1024 * 1024), keep=keep)
     # Conservatively include download + unpacked space, without copying a prefix.
     check_space(cache.root, plan['download_size'] + plan['unpacked_size'])
@@ -238,10 +244,20 @@ def apply_plan(plan, config, installer, cache, store):
         path = cache.fetch(store, _key(config.get('url_prefix', ''), artifact_key(item, '')), item)
         installer.check(path, config['repositories'][package['repository']])
         archives[item['id']] = path
+    sysroot_archive = None
+    if new_sysroot:
+        item = sysroot['artifact']
+        check_space(Path(sysroot['destination']).parent, item['unpacked_size'])
+        sysroot_archive = cache.fetch(store, _key(config.get('url_prefix', ''), artifact_key(item, '')), item)
+        sysroot_package.check(sysroot_archive, sysroot)
     with ExitStack() as locks:
         # Same whole-build lock as cross-bulk; release before asking it to build.
-        if config.get('source') and pending:
+        if config.get('source') and (pending or new_sysroot):
             locks.enter_context(directory_lock(Path(config['source']['state']) / 'build.lock'))
+        # A target pkgdb lock can create its parent inside the sysroot. Publish
+        # the verified base first, then add target packages through pkg_tools.
+        if new_sysroot:
+            sysroot_package.install(sysroot_archive, sysroot)
         for repository in sorted({p['repository'] for p in pending}):
             _, database = install_paths(config['repositories'][repository])
             locks.enter_context(directory_lock(database.parent / (database.name + '.sdk-lock')))
@@ -260,6 +276,20 @@ def install_selection(plan, config, installer, cache, store):
         apply_plan(plan, config, installer, cache, store)
     # Compilation may be long; it must not monopolize another target's downloads.
     build_missing(config, plan['build_roots'], [(p['root'], p['pkgname']) for p in plan['packages']])
+    if plan.get('sysroot'):
+        sysroot_package.bind_compiler(config, plan['sysroot'])
+
+
+def include_sysroot(plan, release, config, cache, target):
+    if target is None:
+        return plan
+    selected = sysroot_package.selection(release, config, cache, target)
+    plan = dict(plan, sysroot=selected)
+    if selected['action'] != 'installed':
+        plan['unpacked_size'] += selected['artifact']['unpacked_size']
+        if selected['action'] == 'download':
+            plan['download_size'] += selected['artifact']['size']
+    return plan
 
 
 def load_config(path):
@@ -299,6 +329,7 @@ def main(argv=None, *, default_config=None):
     parser.add_argument('command', choices=('list', 'show', 'plan', 'install', 'cache-clean'))
     parser.add_argument('--set', action='append', default=[], dest='sets')
     parser.add_argument('--package', action='append', default=[], dest='roots')
+    parser.add_argument('--target', help='also acquire the application sysroot for this target')
     args = parser.parse_args(argv)
     try:
         config = load_config(args.config) if args.config else validate_config(default_config)
@@ -310,7 +341,7 @@ def main(argv=None, *, default_config=None):
                 with directory_lock(cache.root / '.lock'):
                     print(f'Removed {cache.trim(0)} cached bytes; installed packages are unchanged.')
                 return 0
-            if args.command in ('plan', 'install') and not args.sets and not args.roots:
+            if args.command in ('plan', 'install') and not args.sets and not args.roots and not args.target:
                 print('Nothing selected; no download, install or build requested.')
                 return 0
             roles = ('openssl', 'pkg_info', 'pkg_admin', 'pkg_add')
@@ -319,7 +350,8 @@ def main(argv=None, *, default_config=None):
             if 'trust_root' not in config and not trust.is_file():
                 trust = temporary.enter_context(resources.as_file(
                     resources.files('emberbsd_sdk').joinpath('emberbsd-release-root.pem')))
-            store = HTTPStore(config.get('url', DEFAULT_URL), ca_file=config.get('https_ca'))
+            store = temporary.enter_context(HTTPStore(config.get('url', DEFAULT_URL),
+                                                      ca_file=config.get('https_ca')))
             installer = PackageInstaller(crypto, trust)
             previous = None
             for attempt in range(2):
@@ -342,10 +374,12 @@ def main(argv=None, *, default_config=None):
                     plan = installation_plan(release, catalogs, config, installer, cache,
                                              sets=args.sets, roots=args.roots)
                     plan = include_source_dependencies(plan, release, catalogs, config, installer, cache)
+                    plan = include_sysroot(plan, release, config, cache, args.target)
                     if args.command == 'plan':
                         sys.stdout.buffer.write(json_bytes(plan))
                         return 0
                     print(f"Install: {sum(p['action'] != 'installed' for p in plan['packages'])} binary packages; "
+                          f"{int(bool(plan.get('sysroot')) and plan['sysroot']['action'] != 'installed')} sysroots; "
                           f"download {plan['download_size']} bytes; unpack {plan['unpacked_size']} bytes; "
                           f"build {len(plan['build_roots'])} roots", file=sys.stderr)
                     try:
@@ -360,7 +394,7 @@ def main(argv=None, *, default_config=None):
                     write_json(selected, {'roots': sorted(set(old['roots']) | set(plan['roots']))}, exclusive=False)
                     print('Selected components installed; package databases own installed versions.')
                     return 0
-    except (SDKError, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as exc:
+    except (SDKError, OSError, ValueError, KeyError, tarfile.TarError, subprocess.TimeoutExpired) as exc:
         print(f'sdk-client: {exc}', file=sys.stderr)
         return 1
 

@@ -29,9 +29,70 @@ def _matches(text, roots):
                for root in roots)
 
 
-def plan(objects, old, new):
+def _dependency_tokens(data):
+    """Parse literal make dependency words; reject dynamic or malformed input."""
+    words = []
+    for line in data.replace("\\\n", " ").splitlines():
+        if not line.strip():
+            continue
+        if " : " in line or ":" not in line:
+            raise SDKError("unsupported LLVM dependency rule")
+        _, values = line.split(":", 1)
+        token = ""
+        escaped = False
+        for char in values:
+            if escaped:
+                token += char
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char in "$#":
+                raise SDKError("dynamic LLVM dependency token")
+            elif char.isspace():
+                if token:
+                    words.append(token)
+                    token = ""
+            else:
+                token += char
+        if escaped:
+            raise SDKError("incomplete LLVM dependency escape")
+        if token:
+            words.append(token)
+    return words
+
+
+def plan(objects, old, new, changed_relative_paths=None):
     """Return metadata and outputs to delete; no build output is modified."""
     roots = tuple(dict.fromkeys((_root(old), _root(new))))
+    changed = None
+    if changed_relative_paths is not None:
+        if not isinstance(changed_relative_paths, (list, tuple)):
+            raise SDKError('invalid changed LLVM source paths')
+        changed = set()
+        for name in changed_relative_paths:
+            if (not isinstance(name, str) or not name or name.startswith('/') or
+                    any(x in ('', '.', '..') for x in name.split('/')) or
+                    re.fullmatch(r'[A-Za-z0-9_./+\-]+', name) is None):
+                raise SDKError('invalid changed LLVM source path')
+            changed.add(name)
+    canonical_cache = {}
+    def canonical(path):
+        if path not in canonical_cache:
+            try:
+                canonical_cache[path] = os.path.realpath(path, strict=True)
+            except OSError:
+                canonical_cache[path] = None
+        return canonical_cache[path]
+
+    changed_absolute = set()
+    if changed is not None:
+        for name in changed:
+            candidates = [canonical(root_path + '/' + name) for root_path in roots]
+            if not any(candidates):
+                # Missing proof for a changed input cannot justify preserving outputs.
+                changed = None
+                break
+            changed_absolute.update(path for path in candidates if path is not None)
     root = os.path.abspath(objects)
     if os.path.realpath(root) != root:
         raise SDKError('LLVM object root must not be a symlink')
@@ -89,6 +150,24 @@ def plan(objects, old, new):
                 depends.add(parent_depend)
         outputs = []
         for dep in sorted(matched):
+            if changed is not None:
+                tokens = _dependency_tokens(_read(dep))
+                affected = False
+                for token in tokens:
+                    path = token if os.path.isabs(token) else os.path.join(os.path.dirname(dep), token)
+                    resolved = canonical(path)
+                    if resolved in changed_absolute:
+                        affected = True
+                        break
+                    if resolved is None:
+                        lexical = os.path.normpath(path)
+                        if (not os.path.isabs(token) or any(
+                                lexical == root_path or lexical.startswith(root_path + '/')
+                                for root_path in roots)):
+                            affected = True
+                            break
+                if not affected:
+                    continue
             stem = dep[:-2]
             for suffix in _SUFFIXES:
                 path = stem + suffix
@@ -100,9 +179,9 @@ def plan(objects, old, new):
         raise SDKError('cannot safely inspect LLVM dependencies: ' + str(exc)) from exc
 
 
-def apply(objects, expected, old, new):
+def apply(objects, expected, old, new, changed_relative_paths=None):
     """Replan under the lease and delete in retry-safe order."""
-    actual = plan(objects, old, new)
+    actual = plan(objects, old, new, changed_relative_paths)
     if actual != expected:
         raise SDKError('LLVM dependency metadata changed after preflight')
     for category in ('depends', 'outputs', 'metadata'):

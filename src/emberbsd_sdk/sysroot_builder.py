@@ -48,6 +48,40 @@ def _canonicalize_unique_flag_assignments(flags):
     return [name + '=' + value for name, value in sorted(assignments)]
 
 
+def _canonicalize_native_sources(signature):
+    """Fold the former byacc field into the common native-source mapping."""
+    if 'byacc_source' not in signature:
+        return signature
+    legacy = signature.pop('byacc_source')
+    native = signature.setdefault('native_sources', {})
+    if (not isinstance(legacy, dict) or not isinstance(native, dict) or
+            ('byacc' in native and native['byacc'] != legacy)):
+        raise SDKError('conflicting or malformed native byacc source context')
+    native['byacc'] = legacy
+    return signature
+
+
+def _match_clang_resource_binding(old, new):
+    """Account for the newly explicit binding to an unchanged compiler resource."""
+    try:
+        prefix = 'EMBER_CLANG_RESOURCE_DIR='
+        old_compiler, new_compiler = old['compiler'], new['compiler']
+        if old_compiler['family'] != 'clang' or new_compiler['family'] != 'clang':
+            return
+        resource = old_compiler['resource_dir']
+        if not isinstance(resource, str) or not resource or resource != new_compiler['resource_dir']:
+            return
+        old_flags, new_flags = old['flags'], new['flags']
+        if not isinstance(old_flags, list) or not isinstance(new_flags, list):
+            return
+        old_values = [f for f in old_flags if isinstance(f, str) and f.startswith(prefix)]
+        new_values = [f for f in new_flags if isinstance(f, str) and f.startswith(prefix)]
+        if not old_values and new_values == [prefix + resource]:
+            old_flags.append(prefix + resource)
+    except (KeyError, TypeError):
+        return
+
+
 class BuildInterrupted(KeyboardInterrupt):
     pass
 
@@ -559,11 +593,33 @@ class SysrootBuilder:
         except (KeyError, TypeError, AttributeError, OSError, UnicodeError):
             return False
 
+    def llvm_changed_paths(self, before, selected):
+        """Use owner proof when available; otherwise retain conservative refresh."""
+        stage = self.paths.get('pkgsrc-export')
+        if not stage:
+            return None
+        script = os.path.join(self.paths['ports'], 'pkgsrc/lang/compiler-rt/files/refresh-profile-source.py')
+        if not os.path.isfile(script):
+            return None
+        command = [self.paths['python'], '-B', script, '--sdk-source', self.paths['sdk-source'],
+                   '--ports', self.paths['ports'], '--pkgsrc-root', os.path.join(stage, 'pkgsrc'),
+                   '--git', self.git_command, '--before', before, '--source', selected, '--list-changes']
+        try:
+            result = jsonio.loads_json(process.capture(command, env=self.environment).stdout)
+        except (CommandError, SDKError, OSError, ValueError):
+            return None
+        if (not isinstance(result, dict) or set(result) != {'version', 'changed_paths'} or
+                type(result['version']) is not int or result['version'] != 1 or
+                not isinstance(result['changed_paths'], list)):
+            return None
+        return result['changed_paths']
+
     def plan_prepared_refresh(self, record, path):
         """Refresh declared source consumers and compatible C++ runtime users."""
         try:
             old = copy.deepcopy(record['signature'])
             new = copy.deepcopy(self.context_signature(path))
+            _match_clang_resource_binding(old, new)
             before, after = old['common_sources'], new['common_sources']
             if not isinstance(before, dict) or not isinstance(after, dict) or set(before) - set(after):
                 return False
@@ -607,10 +663,14 @@ class SysrootBuilder:
             if llvm_changed and (len(llvm_old) != 1 or len(llvm_new) != 1):
                 return False
             if llvm_changed or any(old.get(key) != new.get(key) for key in ('runtime', 'runtime_prefix')):
-                runtime = runtime_refresh.cpp_update(old, new)
-                if runtime is not None:
-                    runtime_kind = 'cpp'
-                else:
+                for kind, matcher in (('bootstrap', runtime_refresh.bootstrap_update),
+                                      ('unchanged-full', runtime_refresh.unchanged_full_update),
+                                      ('cpp', runtime_refresh.cpp_update)):
+                    runtime = matcher(old, new)
+                    if runtime is not None:
+                        runtime_kind = kind
+                        break
+                if runtime is None:
                     runtime = runtime_refresh.builtins_update(old, new, recipe_guard=recipe_guard)
                     if runtime is not None:
                         runtime_kind = 'builtins'
@@ -649,7 +709,10 @@ class SysrootBuilder:
                              for name in changed | moved if name in common_packages)
             if runtime is not None:
                 prefixes += ('EMBER_EXTERNAL_LLVM_RUNTIME=', 'EMBER_LLVM_RESOURCE_DIR=', 'EMBER_LLVM_SOURCE=')
-            if runtime_kind == 'builtins':
+            if runtime_kind == 'bootstrap':
+                # bootstrap_update checked both bindings against the manifests.
+                prefixes += ('EMBER_LIBUNWIND_ARCHIVE=',)
+            if runtime_kind in ('builtins', 'unchanged-full'):
                 binding = 'EMBER_LIBUNWIND_ARCHIVE='
                 previous = [f[len(binding):] for f in old_flags if f.startswith(binding)]
                 selected = [f[len(binding):] for f in new_flags if f.startswith(binding)]
@@ -694,7 +757,9 @@ class SysrootBuilder:
             self.refresh_nested_outputs = []
             if llvm_changed and runtime_kind == 'cpp':
                 self.llvm_refresh_roots = (llvm_old[0], llvm_new[0])
-                self.llvm_refresh_plan = llvm_source_refresh.plan(path, *self.llvm_refresh_roots)
+                self.llvm_changed_source_paths = SysrootBuilder.llvm_changed_paths(self, *self.llvm_refresh_roots)
+                self.llvm_refresh_plan = llvm_source_refresh.plan(
+                    path, *self.llvm_refresh_roots, self.llvm_changed_source_paths)
             else:
                 self.llvm_refresh_plan = None
             if runtime_kind == 'builtins':
@@ -707,7 +772,10 @@ class SysrootBuilder:
                 self.runtime_refresh_source = checked['selected']
                 self.runtime_refresh_changed = checked['changed']
             extra = (dict(extra_headers=runtime['headers'], extra_linked=runtime['linked'])
-                     if runtime_kind == 'cpp' else {})
+                     if runtime_kind in ('cpp', 'bootstrap', 'unchanged-full') else {})
+            if getattr(self, 'llvm_phase', None) == 'headers' and self.compiler_family() == 'clang':
+                # Native producers have their own tools-context refresh.
+                extra['scan_consumers'] = False
             source_roots = set()
             for name in before.keys() | after.keys():
                 if name not in common_packages:
@@ -717,9 +785,11 @@ class SysrootBuilder:
                     bindings = [flag[len(prefix):] for flag in flags if flag.startswith(prefix)]
                     if len(bindings) == 1 and os.path.isabs(bindings[0]):
                         source_roots.add(bindings[0])
+            self.refresh_file_outputs = []
             self.refresh_dirs = prepared_refresh.plan(self.paths['os'], path, changed, members,
                                                       self.refresh_nested_outputs,
-                                                      allowed_source_roots=sorted(source_roots), **extra)
+                                                      allowed_source_roots=sorted(source_roots),
+                                                      file_outputs=self.refresh_file_outputs, **extra)
             return bool(self.refresh_dirs) or runtime is not None or bool(changed)
         except (KeyError, TypeError, AttributeError):
             return False
@@ -732,6 +802,8 @@ class SysrootBuilder:
             pending_record = record.get('pending_native')
             pending = copy.deepcopy(pending_record['signature'] if pending_record else old)
             pending_names = set(pending_record['sources']) if pending_record else set()
+            for signature in (old, new, pending):
+                _canonicalize_native_sources(signature)
             before = old.pop('native_sources', {})
             after = new.pop('native_sources', {})
             interrupted = pending.pop('native_sources', {})
@@ -772,6 +844,7 @@ class SysrootBuilder:
 
     def reuse_signature(self, signature):
         """Compare compiled payload, keeping provenance in the saved context."""
+        _canonicalize_native_sources(signature)
         def payload(name, record):
             if (name != 'x11' and isinstance(record, dict) and
                     record.get('format') == 'emberbsd-prepared-source' and
@@ -795,8 +868,12 @@ class SysrootBuilder:
         """Compare compiled inputs, allowing controller updates and new utilities."""
         old = self.reuse_signature(copy.deepcopy(record['signature']))
         new = self.reuse_signature(copy.deepcopy(self.context_signature(path)))
+        _match_clang_resource_binding(old, new)
         old['flags'] = _canonicalize_unique_flag_assignments(old.get('flags'))
         new['flags'] = _canonicalize_unique_flag_assignments(new.get('flags'))
+        # Routing evidence must retain bindings that phase-specific comparison
+        # may later remove as irrelevant to header object contents.
+        selected_binding_flags = copy.deepcopy(new.get('flags'))
         if old == new:
             return True
         try:
@@ -840,6 +917,8 @@ class SysrootBuilder:
                         signature['header_mdns_source'] = common_sources['mdns']
                     if 'heimdal' in common_sources:
                         signature['header_heimdal_source'] = common_sources['heimdal']
+                    if 'zlib' in common_sources:
+                        signature['header_zlib_source'] = common_sources['zlib']
                     if 'tdb' in common_sources:
                         signature['header_tdb_source'] = common_sources['tdb']
                     if 'iscsi' in common_sources:
@@ -901,7 +980,7 @@ class SysrootBuilder:
                 selected_contract = Path(self.native_contract).read_text(encoding='ascii')
                 new_rows = selected_contract.splitlines()
                 previous_flags = record.get('_compat_previous_flags', record['signature'].get('flags'))
-                selected_flags = new.get('flags')
+                selected_flags = selected_binding_flags
                 if (previous_flags is None or selected_flags is None) and path == self.paths['tools']:
                     object_context = os.path.join(self.paths['objects'], self.CONTEXT)
                     if paths.entry(object_context) is None:
@@ -984,10 +1063,10 @@ class SysrootBuilder:
                     **{name: self.signature[name] for name in
             ('host', 'target', 'compiler', 'host_tools', 'native_toolset', 'native_inputs',
              'environment', 'tools', 'python', 'process_backend')})
+        native_sources = set(prepared_refresh.native_sources(self.paths['os']))
         if 'byacc-source' in self.paths:
-            signature['byacc_source'] = {'path': self.paths['byacc-source'],
-                                         'record': self.signature['common_sources']['byacc']}
-        native_sources = prepared_refresh.native_sources(self.paths['os'])
+            # Retain this input even for OS contracts predating native producers.
+            native_sources.add('byacc')
         selected = {name: {'path': self.paths[name + '-source'],
                            'record': self.signature['common_sources'][name]}
                     for name in native_sources if name + '-source' in self.paths}
@@ -1027,7 +1106,7 @@ class SysrootBuilder:
         ('nvi', 'editors/nvi'), ('top', 'sysutils/top'), ('iscsi', 'devel/netbsd-iscsi-lib'),
         ('ntp', 'net/ntp4'), ('libopts', 'devel/autogen'), ('libpcap', 'net/libpcap'),
         ('tcpdump', 'net/tcpdump'), ('tcp-wrappers', 'security/tcp_wrappers'),
-        ('gettext', 'devel/gettext'), ('libxml2', 'textproc/libxml2'), ('ppp', 'net/pppd'),
+        ('gettext', 'devel/gettext'), ('libxml2', 'textproc/libxml2'), ('zlib', 'devel/zlib'), ('ppp', 'net/pppd'),
         ('tdb', 'databases/tdb'), ('x11', 'netbsd/xsrc'))
 
     def verify_common_sources(self):
@@ -1562,7 +1641,7 @@ class SysrootBuilder:
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
-        input_names += [name for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'libfido2-source', 'libcbor-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'mdns-source', 'dhcpcd-source', 'heimdal-source', 'openssh-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'x11-source') if self.options.get(name)]
+        input_names += [name for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'libfido2-source', 'libcbor-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'mdns-source', 'dhcpcd-source', 'heimdal-source', 'openssh-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'zlib-source', 'x11-source') if self.options.get(name)]
         if clang and self.llvm_phase != 'headers' and self.options.get('llvm-runtime-original-source'):
             input_names.append('llvm-runtime-original-source')
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
@@ -1646,6 +1725,8 @@ class SysrootBuilder:
         self.git(self.paths['ports'], 'ls-files', '--error-unmatch', verifier)
         self.git(self.paths['ports'], 'ls-files', '--error-unmatch', PRODUCER)
         self.compiler_record = self.compiler()
+        if clang:
+            self.paths['clang-resource'] = self.compiler_record['resource_dir']
         producer = [self.paths['python'], '-B', os.path.join(self.paths['ports'], PRODUCER),
                     '--sdk-source', self.paths['sdk-source']]
         self.llvm_source_command = producer + ['verify-source', '--source', self.paths['llvm-source'],
@@ -1691,7 +1772,7 @@ class SysrootBuilder:
         self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}',
                        f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
         self.flags += [f'EMBER_{name.upper().replace("-", "_")}_SOURCE={self.paths[name + "-source"]}'
-                       for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'wpa', 'mdns', 'dhcpcd', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2') if name + '-source' in self.paths]
+                       for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'wpa', 'mdns', 'dhcpcd', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'zlib') if name + '-source' in self.paths]
         if 'openssl-source' in self.paths or 'openssh-source' in self.paths:
             self.flags.append('HOST_PERL=' + self.native.tool('perl'))
         if 'openssh-source' in self.paths:
@@ -1772,7 +1853,10 @@ class SysrootBuilder:
         # Hold the existing object-tree lease throughout cleanup and context update.
         llvm_plan = getattr(self, 'llvm_refresh_plan', None)
         if llvm_plan is not None:
-            llvm_source_refresh.apply(self.paths['objects'], llvm_plan, *self.llvm_refresh_roots)
+            llvm_source_refresh.apply(self.paths['objects'], llvm_plan, *self.llvm_refresh_roots,
+                                      getattr(self, 'llvm_changed_source_paths', None))
+        if getattr(self, 'refresh_file_outputs', None):
+            prepared_refresh.remove_lint_outputs(self.paths['objects'], self.refresh_file_outputs)
         if hasattr(self, 'runtime_refresh_files'):
             self.begin_runtime_refresh()
         native_dirs = getattr(self, 'native_refresh_dirs', [])
@@ -1809,18 +1893,29 @@ class SysrootBuilder:
                                      'sources': self.native_refresh_sources}
             jsonio.write_json(os.path.join(self.paths['tools'], self.CONTEXT), old, exclusive=False)
             pending_written = True
+            if 'tools' in self.os_build_operations:
+                self.pending_native_refresh = old
+        # A selected tools traversal creates object directories and builds the
+        # shared native prerequisites before its producers. Do not run a leaf
+        # producer early when resuming an incomplete initial tools build.
+        install_native_now = bool(native_dirs) and 'tools' not in self.os_build_operations
         for directory in native_dirs:
+            expected = os.path.join(self.paths['objects'], directory)
+            if not install_native_now and paths.entry(expected) is None:
+                continue
             wrapper = os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine'])
             base = [wrapper, '-C', os.path.join(self.paths['os'], directory),
                     'DESTDIR=' + self.paths['destination'],
                     'EMBER_NATIVE_TOOLS=' + self.paths['native-routing'], *self.flags]
             selected = process.capture(base + ['-V', '${.OBJDIR}'], env=self.environment).stdout.decode('utf-8').strip()
-            expected = os.path.join(self.paths['objects'], directory)
             if selected != expected or os.path.realpath(selected) != expected:
                 raise SDKError('native source refresh selected the wrong object directory: ' + directory)
             self.dispatch(base + ['MKCLEANSRC=no', 'cleandir'])
-            self.dispatch(base + ['-j' + self.options['jobs'], 'dependall', 'install'])
+            if install_native_now:
+                self.dispatch(base + ['-j' + self.options['jobs'], 'dependall', 'install'])
         for name in ('objects', 'tools'):
+            if name == 'tools' and getattr(self, 'pending_native_refresh', None) is not None:
+                continue
             if name == 'objects' and hasattr(self, 'runtime_refresh_files'):
                 # Old context stays authoritative until rebuilt archives pass.
                 continue
@@ -1829,6 +1924,20 @@ class SysrootBuilder:
                           signature=self.context_signature(path), sources=self.sources)
             self.mkdirs(path, os.path.join(self.paths['sdk'], 'obj'))
             jsonio.write_json(os.path.join(path, self.CONTEXT), record, exclusive=self.contexts[name] is None)
+
+    def finish_native_refresh(self):
+        """Commit a deferred native-source context only after tools succeeded."""
+        pending = getattr(self, 'pending_native_refresh', None)
+        if pending is None:
+            return
+        path = self.paths['tools']
+        context = os.path.join(path, self.CONTEXT)
+        if jsonio.read_json(context) != pending:
+            raise SDKError('native source context changed during tools build')
+        record = dict(format='emberbsd-sysroot-object-context', version=1,
+                      signature=self.context_signature(path), sources=self.sources)
+        jsonio.write_json(context, record, exclusive=False)
+        del self.pending_native_refresh
 
     def begin_runtime_refresh(self):
         if not hasattr(self, 'runtime_refresh_files'):
@@ -2075,6 +2184,7 @@ class SysrootBuilder:
             # Preflight fixes the selected inputs for this run. Reuse their
             # records instead of probing tools and hashing inputs again.
             self.build_payload()
+            self.finish_native_refresh()
             self.receipt['outputs'] = self.inspect_payload()
             self.interrupted()
             if hasattr(self, 'runtime_refresh_files'):

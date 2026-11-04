@@ -25,6 +25,8 @@ def llvm_flags(selected, *, phase, base_cxx=False):
              'EMBER_LLVM_SOURCE=' + selected['llvm-source'],
              'MKCXX=' + ('yes' if phase == 'final' else 'no'),
              'MKLIBCXX=' + ('yes' if phase == 'final' and base_cxx else 'no')]
+    if 'clang-resource' in selected:
+        flags.append('EMBER_CLANG_RESOURCE_DIR=' + selected['clang-resource'])
     if phase != 'headers':
         flags += ['EMBER_LIBUNWIND_ARCHIVE=' + (selected.get('llvm-libc-unwind', selected['llvm-unwind'])
                                                if phase == 'final' else selected['llvm-unwind']),

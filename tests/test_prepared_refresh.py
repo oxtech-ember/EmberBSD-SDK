@@ -12,6 +12,30 @@ from emberbsd_sdk.errors import SDKError
 
 
 class PreparedRefreshTests(unittest.TestCase):
+    def test_derived_clang_resource_binding_requires_matching_compilers(self):
+        from copy import deepcopy
+        from emberbsd_sdk.sysroot_builder import _match_clang_resource_binding
+        old = {"compiler": {"family": "clang", "resource_dir": "/sdk/lib/clang"}, "flags": []}
+        new = deepcopy(old)
+        new["flags"] = ["EMBER_CLANG_RESOURCE_DIR=/sdk/lib/clang"]
+        candidate = deepcopy(old)
+        _match_clang_resource_binding(candidate, new)
+        self.assertEqual(candidate["flags"], new["flags"])
+        for field, value in (("resource_dir", "/other"), ("family", "gcc")):
+            candidate = deepcopy(old)
+            candidate["compiler"][field] = value
+            _match_clang_resource_binding(candidate, new)
+            self.assertEqual(candidate["flags"], [])
+        candidate = deepcopy(old)
+        candidate["flags"] = ["EMBER_CLANG_RESOURCE_DIR=/wrong"]
+        _match_clang_resource_binding(candidate, new)
+        self.assertEqual(candidate["flags"], ["EMBER_CLANG_RESOURCE_DIR=/wrong"])
+        candidate = deepcopy(old)
+        wrong = deepcopy(new)
+        wrong["flags"] = ["EMBER_CLANG_RESOURCE_DIR=/wrong"]
+        _match_clang_resource_binding(candidate, wrong)
+        self.assertEqual(candidate["flags"], [])
+
     def test_native_binding_transition_requires_original_selected_paths(self):
         from emberbsd_sdk.sysroot_builder import _compatible_native_contract
         old = ['EmberBSD-native-tools 2', 'perl perl -']
@@ -48,6 +72,36 @@ class PreparedRefreshTests(unittest.TestCase):
         self.assertEqual(_canonicalize_unique_flag_assignments(['B=2', 'A=1']), ['A=1', 'B=2'])
         duplicates = ['A=1', 'B=2', 'A=3']
         self.assertEqual(_canonicalize_unique_flag_assignments(duplicates), duplicates)
+
+    def test_first_zlib_selection_uses_declared_scoped_refresh(self):
+        from copy import deepcopy
+        from types import SimpleNamespace
+        from emberbsd_sdk.sysroot_builder import SysrootBuilder
+
+        self.contract['sources']['EMBER_ZLIB_SOURCE'] = {
+            'producer_dirs': ['external/cbor'], 'consumer_dirs': [],
+            'header_prefixes': ['usr/include/zlib.h'], 'linked_names': ['libz.so']}
+        self.write_contract()
+        (self.obj / 'other/consumer/unit.d').write_text('unit.o: /old/usr/include/zlib.h\n')
+        (self.obj / 'other/consumer/unit.o').write_bytes(b'object')
+        (self.obj / 'external/fido/keep.o').write_bytes(b'object')
+        (self.obj / 'external/fido/keep.d').write_text('keep.o: /old/usr/include/other.h\n')
+        old = {'flags': [], 'common_sources': {}}
+        new = deepcopy(old)
+        new['flags'] = ['EMBER_ZLIB_SOURCE=/prepared/zlib']
+        new['common_sources']['zlib'] = {
+            'format': 'emberbsd-prepared-source', 'version': 1,
+            'package': 'devel/zlib', 'tree_sha256': 'a' * 64}
+        fake = SimpleNamespace(COMMON_SOURCES=SysrootBuilder.COMMON_SOURCES,
+            paths={'os': str(self.os), 'objects': str(self.obj), 'tools': '/tools',
+                   'zlib-source': '/prepared/zlib'},
+            context_signature=lambda path: new,
+            compatible_context=lambda record, path: record['signature'] == new)
+        fake.reuse_signature = lambda signature: SysrootBuilder.reuse_signature(fake, signature)
+        self.assertTrue(SysrootBuilder.plan_prepared_refresh(fake, {'signature': old}, str(self.obj)))
+        self.assertEqual(fake.refresh_dirs, ['external/cbor', 'other/consumer'])
+        self.assertTrue((self.obj / 'external/fido/keep.o').exists())
+        self.assertEqual(old, {'flags': [], 'common_sources': {}})
 
     def test_release_objects_are_not_reused_as_sysroot_source_refresh(self):
         from copy import deepcopy
@@ -108,9 +162,92 @@ class PreparedRefreshTests(unittest.TestCase):
             (self.os / name).mkdir(parents=True)
             (self.os / name / 'Makefile').write_text('')
             (self.obj / name).mkdir(parents=True)
+            (self.obj / name / '.fixture').touch()
 
     def write_contract(self):
         (self.os / prepared_refresh.CONTRACT).write_text(json.dumps(self.contract))
+
+    def test_empty_refresh_owner_is_skipped_but_outputs_are_kept(self):
+        owner = self.obj / "external/cbor"
+        (owner / ".fixture").unlink()
+        self.assertNotIn("external/cbor", prepared_refresh.plan(
+            self.os, self.obj, {"libcbor"}, scan_consumers=False))
+        (owner / "generated.h").touch()
+        self.assertIn("external/cbor", prepared_refresh.plan(
+            self.os, self.obj, {"libcbor"}, scan_consumers=False))
+        (owner / "generated.h").unlink()
+        (owner / "child").mkdir()
+        self.contract["sources"]["EMBER_LIBCBOR_SOURCE"]["recursive_producer_dirs"] = ["external/cbor"]
+        self.write_contract()
+        self.assertIn("external/cbor", prepared_refresh.plan(
+            self.os, self.obj, {"libcbor"}, scan_consumers=False))
+
+    def test_missing_lint_metadata_is_a_scoped_file_plan(self):
+        directory = self.obj / "other/consumer"
+        lint = directory / "unit.ln"
+        lint.touch()
+        outputs = []
+        dirs = prepared_refresh.plan(self.os, self.obj, {"libcbor"}, file_outputs=outputs)
+        self.assertNotIn("other/consumer", dirs)
+        self.assertEqual(outputs, ["other/consumer/unit.ln"])
+        self.assertIn("other/consumer", prepared_refresh.plan(self.os, self.obj, {"libcbor"}))
+        obj = directory / "unit.o"
+        obj.touch()
+        outputs = []
+        self.assertIn("other/consumer", prepared_refresh.plan(self.os, self.obj, {"libcbor"}, file_outputs=outputs))
+        prepared_refresh.remove_lint_outputs(self.obj, outputs)
+        self.assertFalse(lint.exists())
+        self.assertTrue(obj.exists())
+        lint.write_text("rebuilt lint output")
+        self.assertTrue(lint.is_file())
+        with self.assertRaises(SDKError):
+            prepared_refresh.remove_lint_outputs(self.obj, ["../outside.ln"])
+        alias = self.obj.parent / "obj-alias"
+        alias.symlink_to(self.obj, target_is_directory=True)
+        with self.assertRaises(SDKError):
+            prepared_refresh.remove_lint_outputs(alias, ["other/consumer/unit.ln"])
+        lint.unlink()
+        lint.symlink_to(obj)
+        with self.assertRaises(SDKError):
+            prepared_refresh.remove_lint_outputs(self.obj, ["other/consumer/unit.ln"])
+        with self.assertRaises(SDKError):
+            prepared_refresh.plan(self.os, self.obj, {"libcbor"}, file_outputs=[])
+
+    def test_headers_skip_consumer_walk_keep_declared_owners(self):
+        from unittest.mock import patch
+        with patch('emberbsd_sdk.prepared_refresh.os.walk',
+                   side_effect=AssertionError('unexpected consumer scan')):
+            self.assertEqual(prepared_refresh.plan(self.os, self.obj, {'libcbor'},
+                                                   scan_consumers=False),
+                             ['external/cbor', 'external/fido'])
+            with self.assertRaisesRegex(AssertionError, 'unexpected consumer scan'):
+                prepared_refresh.plan(self.os, self.obj, {'libcbor'})
+
+    def test_explicit_recursive_producer_scope(self):
+        child = "external/cbor/child"
+        (self.os / child).mkdir()
+        (self.os / child / "Makefile").touch()
+        (self.obj / child).mkdir()
+        (self.obj / child / "x.d").write_text("x.o: /usr/include/cbor.h\n")
+        (self.obj / "other/consumer/x.d").write_text("x.o: /usr/include/cbor.h\n")
+        entry = self.contract["sources"]["EMBER_LIBCBOR_SOURCE"]
+        self.write_contract()
+        original = prepared_refresh.plan(self.os, self.obj, {"libcbor"})
+        self.assertIn(child, original)
+        entry["recursive_producer_dirs"] = ["external/cbor"]
+        self.write_contract()
+        collapsed = prepared_refresh.plan(self.os, self.obj, {"libcbor"})
+        self.assertNotIn(child, collapsed)
+        self.assertIn("external/cbor", collapsed)
+        self.assertIn("other/consumer", collapsed)
+        entry["recursive_producer_dirs"] = ["external/fido"]
+        self.write_contract()
+        with self.assertRaises(SDKError):
+            prepared_refresh.plan(self.os, self.obj, {"libcbor"})
+        entry["recursive_producer_dirs"] = ["../outside"]
+        self.write_contract()
+        with self.assertRaises(SDKError):
+            prepared_refresh.plan(self.os, self.obj, {"libcbor"})
 
     def test_changed_headers_and_unknown_objects_are_cleaned(self):
         (self.obj / 'other/consumer/test.d').write_text('test.o: /old/usr/include/cbor/data.h\n')
@@ -314,11 +451,12 @@ class TransitionTests(unittest.TestCase):
             refreshed = SysrootBuilder.plan_prepared_refresh(
                 fake, {'signature': old_signature}, '/objects')
         self.assertTrue(refreshed)
-        llvm_plan.assert_called_once_with('/objects', '/llvm', '/llvm')
+        llvm_plan.assert_called_once_with('/objects', '/llvm', '/llvm', None)
         self.assertEqual(fake.refresh_dirs, ['lib/libcxx'])
         self.assertEqual(plan.call_args.args[2], {'openssl'})
         self.assertEqual(plan.call_args.kwargs,
                          {'allowed_source_roots': ['/new/openssl', '/old/openssl'],
+                          'file_outputs': [],
                           'extra_headers': ['usr/include/c++/v1'],
                           'extra_linked': ['libc++.so.1']})
         for flag in ('EMBER_HOST_ABI_CFLAGS=-mabi=other', 'UNRELATED_FLAG=yes'):
@@ -328,6 +466,71 @@ class TransitionTests(unittest.TestCase):
                 fake.context_signature = lambda path, value=invalid: value
                 self.assertFalse(SysrootBuilder.plan_prepared_refresh(
                     fake, {'signature': old_signature}, '/objects'))
+
+    def test_legacy_byacc_context_reuses_and_refreshes_only_native_producers(self):
+        from copy import deepcopy
+        from types import SimpleNamespace, MethodType
+        from unittest.mock import patch
+        from emberbsd_sdk.sysroot_builder import SysrootBuilder
+        byacc = {'path': '/byacc', 'record': {'tree_sha256': 'old'}}
+        selected = {'compiler': 'same', 'native_sources': {'heimdal': 'same'}}
+        fake = SimpleNamespace(paths={'os': '/os', 'objects': '/obj', 'tools': '/tools'},
+                               context_signature=lambda p: selected)
+        fake.reuse_signature = MethodType(SysrootBuilder.reuse_signature, fake)
+        fake.compatible_context = MethodType(SysrootBuilder.compatible_context, fake)
+        record = {'signature': deepcopy(selected)}
+        selected['native_sources']['byacc'] = byacc
+        with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan_native',
+                   return_value=['tools/yacc']) as plan:
+            # Adding byacc to a retained tools tree follows the OS owner contract.
+            self.assertTrue(SysrootBuilder.plan_native_refresh(fake, record, '/tools'))
+            plan.assert_called_once_with('/os', '/obj', {'byacc'})
+            plan.reset_mock()
+            for dual in (False, True):
+                with self.subTest(dual=dual):
+                    legacy = deepcopy(selected)
+                    legacy['byacc_source'] = deepcopy(byacc)
+                    if not dual:
+                        del legacy['native_sources']['byacc']
+                    prior = {'signature': legacy}
+                    saved = deepcopy(prior)
+                    self.assertTrue(fake.compatible_context(prior, '/tools'))
+                    self.assertFalse(SysrootBuilder.plan_native_refresh(fake, prior, '/tools'))
+                    self.assertEqual(prior, saved)
+            plan.assert_not_called()
+            for source in ({'path': '/new-byacc', 'record': {'tree_sha256': 'new'}}, None):
+                with self.subTest(source=source):
+                    changed = deepcopy(selected)
+                    if source is None:
+                        del changed['native_sources']['byacc']
+                    else:
+                        changed['native_sources']['byacc'] = source
+                    fake.context_signature = lambda p, value=changed: value
+                    self.assertTrue(SysrootBuilder.plan_native_refresh(fake, prior, '/tools'))
+                    plan.assert_called_with('/os', '/obj', {'byacc'})
+            fake.context_signature = lambda p: selected
+            # Interrupted legacy refreshes can retry, but ABI/compiler changes cannot.
+            record['pending_native'] = {'signature': legacy, 'sources': ['byacc']}
+            self.assertTrue(SysrootBuilder.plan_native_refresh(fake, record, '/tools'))
+            for key in ('compiler', 'host', 'target', 'native_inputs'):
+                with self.subTest(input=key):
+                    changed = deepcopy(selected)
+                    changed[key] = 'incompatible'
+                    fake.context_signature = lambda p, value=changed: value
+                    self.assertFalse(SysrootBuilder.plan_native_refresh(fake, record, '/tools'))
+            fake.context_signature = lambda p: selected
+            bad = deepcopy(legacy)
+            bad['byacc_source']['path'] = '/conflicting'
+            for position in ('old', 'selected', 'pending'):
+                with self.subTest(conflict=position):
+                    candidate = deepcopy(record)
+                    if position == 'old':
+                        candidate['signature'] = bad
+                    elif position == 'pending':
+                        candidate['pending_native']['signature'] = bad
+                    fake.context_signature = lambda p: bad if position == 'selected' else selected
+                    with self.assertRaisesRegex(SDKError, 'conflicting or malformed'):
+                        SysrootBuilder.plan_native_refresh(fake, candidate, '/tools')
 
     def test_pending_native_refresh_accepts_repaired_source_not_toolchain(self):
         from types import SimpleNamespace
@@ -351,6 +554,58 @@ class TransitionTests(unittest.TestCase):
             self.assertTrue(SysrootBuilder.plan_native_refresh(fake, record, '/tools'))
             selected = {'compiler': 'changed', 'native_sources': {'demo': {'path': 'fixed'}}}
             self.assertFalse(SysrootBuilder.plan_native_refresh(fake, record, '/tools'))
+
+    def test_full_tools_traversal_owns_native_refresh_build_order(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from emberbsd_sdk.sysroot_builder import SysrootBuilder
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            for directory in ('obj/tools/existing', 'tools', 'os/tools/existing',
+                              'os/tools/new', 'dest'):
+                (root/directory).mkdir(parents=True)
+            survivor = root/'obj/unrelated.o'
+            survivor.write_bytes(b'compatible object')
+            old = {'format': 'emberbsd-sysroot-object-context', 'version': 1,
+                   'signature': {}, 'sources': {}}
+            selected = {'native_sources': {'byacc': 'new'}}
+            calls = []
+            fake = SimpleNamespace(paths={'objects': str(root/'obj'), 'tools': str(root/'tools'),
+                         'os': str(root/'os'), 'destination': str(root/'dest'),
+                         'native-routing': str(root/'tools/routing'), 'sdk': str(root)},
+                         contexts={'objects': old, 'tools': old},
+                         native_refresh_dirs=['tools/existing', 'tools/new'],
+                         native_refresh_sources=['byacc'], target={'machine': 'amd64'},
+                         flags=[], environment={}, os_build_operations=['tools', 'bootstrap-headers'],
+                         inspect_context=lambda p: old, dispatch=calls.append,
+                         native_makewrapper_command=lambda: ['build.sh', 'makewrapper'],
+                         context_signature=lambda p: selected, sources={}, mkdirs=lambda *args: None,
+                         options={'jobs': '4'}, CONTEXT='.prebuild-sdk-context.json')
+            def capture(command, **kwargs):
+                directory = Path(command[command.index('-C')+1]).name
+                self.assertEqual(directory, 'existing')
+                return SimpleNamespace(stdout=(str(root/'obj/tools'/directory)+'\n').encode())
+            with patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=capture):
+                SysrootBuilder.prepare_contexts(fake)
+            self.assertEqual(calls[0], ['build.sh', 'makewrapper'])
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[1][-2:], ['MKCLEANSRC=no', 'cleandir'])
+            self.assertEqual(calls[1][calls[1].index('-C')+1], str(root/'os/tools/existing'))
+            self.assertEqual(survivor.read_bytes(), b'compatible object')
+            self.assertFalse((root/'obj/tools/new').exists())
+            context = root/'tools'/fake.CONTEXT
+            pending = json.loads(context.read_text())
+            self.assertEqual(pending['signature'], old['signature'])
+            self.assertEqual(pending['pending_native'], {'signature': selected, 'sources': ['byacc']})
+            # Completion cannot overwrite another writer's changed context.
+            context.write_text('{}')
+            with self.assertRaisesRegex(SDKError, 'context changed'):
+                SysrootBuilder.finish_native_refresh(fake)
+            context.write_text(json.dumps(pending))
+            SysrootBuilder.finish_native_refresh(fake)
+            final = json.loads(context.read_text())
+            self.assertNotIn('pending_native', final)
+            self.assertEqual(final['signature'], selected)
 
     def test_native_partial_install_is_pending_and_retries_same_inputs(self):
         from types import SimpleNamespace
@@ -387,8 +642,8 @@ class TransitionTests(unittest.TestCase):
                          target={'machine': 'evbarm'}, flags=[], environment={},
                          build_command=['/bin/sh', str(root/'os/build.sh'), '-O', str(root/'obj'),
                                         '-T', str(root/'tools'), '-D', str(root/'dest'),
-                                        '-V', 'FLAG=current', 'tools', 'libs'],
-                         os_build_operations=['tools', 'libs'],
+                                        '-V', 'FLAG=current', 'libs'],
+                         os_build_operations=['libs'],
                          inspect_context=lambda p: old, dispatch=dispatch,
                          context_signature=lambda p: selected, sources={},
                          options={'jobs': '4'}, CONTEXT='.prebuild-sdk-context.json',

@@ -1,25 +1,48 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-"""Qualify a simple Darwin package for installation into any SDK prefix.
+"""Qualify a Darwin package for installation into another SDK prefix.
 
-Whole packages only. Packages with hooks or remaining embedded paths require
-their owner's relocation support and are deliberately rejected here.
+Whole packages only. Text relocation and deferred hooks are explicit;
+retaining binary build paths requires a relocated runtime check.
 """
 import argparse
 from pathlib import Path
 import platform
+import re
 import subprocess
 import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from emberbsd_sdk.bootstrap_bundle import unpack_package, make_relative
+from emberbsd_sdk.bootstrap_bundle import unpack_package, make_relative, _replace_file, text_references
+from emberbsd_sdk import package_relocation
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.host_prefix import load_host_prefix
 from emberbsd_sdk.package_install import PORTABLE_PREFIX
 from emberbsd_sdk.release_signing import ReleaseCrypto
-from emberbsd_sdk.binary_release import _matches
+
+
+def dependency_files(crypto, prefix, patterns):
+    """Inspect pkg_tools' installed closure; do not solve or install versions."""
+    pending, selected, seen, files = list(patterns), set(), set(), set()
+    database = Path(prefix) / 'pkgdb'
+    while pending:
+        pattern = pending.pop()
+        if pattern in seen:
+            continue
+        seen.add(pattern)
+        names = crypto.run_package('pkg_info', ['-K', database, '-e', pattern]).decode().splitlines()
+        if len(names) != 1 or Path(names[0]).name != names[0]:
+            raise SDKError('dependency must select one installed provider: ' + pattern)
+        name = names[0]
+        if name in selected:
+            continue
+        selected.add(name)
+        lines = (database / name / '+CONTENTS').read_text().splitlines()
+        files.update(line for line in lines if line and not line.startswith(('@', '+')))
+        pending.extend(line[8:] for line in lines if line.startswith('@pkgdep '))
+    return files
 
 
 def main():
@@ -30,20 +53,41 @@ def main():
     parser.add_argument('--dependency-prefix', type=Path, required=True)
     parser.add_argument('--bootstrap-install-name-tool', type=Path, required=True)
     parser.add_argument('--codesign', type=Path, required=True)
+    parser.add_argument('--relocate-text', action='store_true',
+        help='declare first-install relocation for text files and library-provider metadata')
+    parser.add_argument('--allow-binary-prefix', action='store_true',
+        help='retain binary build-path strings; requires relocation testing by the producer')
+    parser.add_argument('--package-revision', metavar='N',
+        help='increase the pkgsrc nb revision after the matching Ports recipe bump')
+    parser.add_argument('--defer-hooks', action='store_true',
+        help='qualify repeatable hooks that run after extraction and text relocation')
     args = parser.parse_args()
     try:
         if platform.system() != 'Darwin' or args.output.exists():
             raise SDKError('select a new output on a Darwin producer')
+        if args.allow_binary_prefix and not args.relocate_text:
+            raise SDKError('--allow-binary-prefix requires --relocate-text')
+        if args.defer_hooks and not args.relocate_text:
+            raise SDKError('--defer-hooks requires --relocate-text')
         for tool in (args.bootstrap_install_name_tool, args.codesign):
             if not tool.is_absolute() or not tool.is_file():
                 raise SDKError('select explicit absolute packaging tools')
-        crypto = ReleaseCrypto(load_host_prefix(args.host_prefix, required_roles=('pkg_create', 'pkg_admin')))
+        crypto = ReleaseCrypto(load_host_prefix(args.host_prefix, required_roles=('pkg_create', 'pkg_admin', 'pkg_info')))
         with tempfile.TemporaryDirectory(prefix='ember-portable-') as directory:
             root = Path(directory) / 'payload'
             root.mkdir()
             name, prefix = unpack_package(args.package, root)
             database = root / 'pkgdb' / name
-            if any((database / script).exists() for script in ('+INSTALL', '+DEINSTALL')):
+            new_name = name
+            if args.package_revision is not None:
+                revision = args.package_revision
+                if re.fullmatch(r'[1-9][0-9]*', revision) is None:
+                    raise SDKError('package revision must be a positive decimal integer')
+                match = re.fullmatch(r'(.+-[0-9][A-Za-z0-9._+]*?)(?:nb([0-9]+))?', name)
+                if match is None or int(revision) <= int(match.group(2) or '0'):
+                    raise SDKError('package revision must increase the existing nb revision')
+                new_name = match.group(1) + 'nb' + revision
+            if not args.defer_hooks and any((database / script).exists() for script in ('+INSTALL', '+DEINSTALL')):
                 raise SDKError('package has installation scripts')
             lines = (database / '+CONTENTS').read_text().splitlines()
             if any(line.startswith(('@exec ', '@unexec ')) for line in lines):
@@ -52,18 +96,17 @@ def main():
             # Replace qualified prefix-local library requirements with the
             # existing pkgdep contracts; keep all system requirements intact.
             dependencies = [line[8:] for line in lines if line.startswith('@pkgdep ')]
-            providers = set()
-            for contents in (args.dependency_prefix / 'pkgdb').glob('*/+CONTENTS'):
-                if any(_matches(crypto, pattern, contents.parent.name) for pattern in dependencies):
-                    providers.update(line for line in contents.read_text().splitlines()
-                                     if line and not line.startswith(('@', '+')))
+            providers = dependency_files(crypto, args.dependency_prefix, dependencies)
             make_relative(root, prefix, dict(os='Darwin', cpu=platform.machine()),
                           args.bootstrap_install_name_tool, args.codesign,
                           dependency_root=args.dependency_prefix, dependency_files=providers)
             info = database / '+BUILD_INFO'
             updated = []
             for line in info.read_text().splitlines():
-                if line.startswith('PROVIDES=') and prefix + '/' in line:
+                if args.package_revision is not None and line.split('=', 1)[0] in (
+                        'PKGNAME', 'PKGVERSION', 'PKGREVISION'):
+                    raise SDKError('package build metadata contains a package identity field')
+                if line.startswith('PROVIDES=') and prefix + '/' in line and not args.relocate_text:
                     raise SDKError('portable library providers require package-owner relocation support')
                 if line.startswith('REQUIRES='):
                     required = []
@@ -85,19 +128,35 @@ def main():
                         continue
                     line = 'REQUIRES=' + ' '.join(required)
                 updated.append(line)
-            info.write_text('\n'.join(updated) + '\n')
+            _replace_file(info, ('\n'.join(updated) + '\n').encode())
+            texts = [relative for relative in text_references(root, prefix, [name])
+                     if not relative.startswith('pkgdb/')]
             for path in root.rglob('*'):
                 if path.is_file() and not path.is_symlink() and not path.is_relative_to(root / 'pkgdb'):
+                    if args.relocate_text and path.relative_to(root).as_posix() in texts:
+                        continue
                     # Only a producer check; clients trust the signed qualification.
                     with path.open('rb') as source:
                         tail = b''
                         while chunk := source.read(1024 * 1024):
                             chunk = tail + chunk
                             if prefix.encode() in chunk:
-                                raise SDKError('payload still embeds its producer prefix: ' + str(path.relative_to(root)))
+                                source.seek(0)
+                                if not args.allow_binary_prefix or b'\0' not in source.read(8192):
+                                    raise SDKError('payload still embeds its producer prefix: ' + str(path.relative_to(root)))
+                                break
                             tail = chunk[-len(prefix):]
-            packing, ignored = [PORTABLE_PREFIX], False
+            packing = ([package_relocation.MARKER, package_relocation.SOURCE + prefix,
+                        *[package_relocation.TEXT + name for name in texts]]
+                       if args.relocate_text else [PORTABLE_PREFIX])
+            if args.defer_hooks:
+                packing.append(package_relocation.HOOKS)
+            ignored = False
             for line in lines:
+                if args.package_revision is not None and line.startswith('@name '):
+                    if line != '@name ' + name:
+                        raise SDKError('package has inconsistent names')
+                    line = '@name ' + new_name
                 if ignored:
                     ignored = False
                 elif line == '@ignore':
@@ -108,9 +167,14 @@ def main():
             plist.write_text('\n'.join(packing) + '\n')
             command = ['-F', 'gzip', '-f', plist, '-p', root, '-I', prefix]
             for flag, member in (('-c', '+COMMENT'), ('-d', '+DESC'), ('-B', '+BUILD_INFO'),
-                                 ('-b', '+BUILD_VERSION'), ('-s', '+SIZE_PKG'), ('-S', '+SIZE_ALL')):
+                                 ('-b', '+BUILD_VERSION'), ('-s', '+SIZE_PKG'), ('-S', '+SIZE_ALL'),
+                                 ('-n', '+PRESERVE'), ('-D', '+DISPLAY')):
                 if (database / member).exists():
                     command += [flag, database / member]
+            if args.defer_hooks:
+                for flag, member in (('-i', '+INSTALL'), ('-k', '+DEINSTALL')):
+                    if (database / member).exists():
+                        command += [flag, database / member]
             crypto.run_package('pkg_create', [*command, args.output.absolute()])
         print(args.output)
         return 0

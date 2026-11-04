@@ -153,6 +153,44 @@ class BSDInstallTests(unittest.TestCase):
     def validate(self):
         return validate_producer_plan(self.plan, self.descriptor, self.commands, self.flags)
 
+    def test_legacy_and_helper_rosters_bind_complete_trees(self):
+        before = copy.deepcopy(self.plan)
+        self.assertIs(self.validate(), self.plan)
+        self.assertEqual(self.plan, before)
+        owner_header = 'profiles/common-build-tools/ember-execpath.h'
+        source_header = 'sysutils/bsdinstall/files/ember-execpath.h'
+
+        def add(root, name, content):
+            for directory, _, files in os.walk(root):
+                os.chmod(directory, 0o755)
+                for file in files:
+                    Path(directory, file).chmod(0o644)
+            self.put(root / name, content)
+            self.readonly(self.source)
+
+        def reseal():
+            self.plan['program']['source'] = self.tree(self.source, owner=False)
+            self.plan['program']['owner'] = self.tree(self.owner, owner=True)
+
+        add(self.owner, owner_header, b'canonical helper')
+        reseal()
+        with self.assertRaises(SDKError):
+            self.validate()
+        add(self.source, source_header, b'canonical helper')
+        reseal()
+        accepted = copy.deepcopy(self.plan)
+        self.assertIs(self.validate(), self.plan)
+        self.assertEqual(self.plan, accepted)
+        add(self.source, source_header, b'other helper')
+        reseal()
+        with self.assertRaises(SDKError):
+            self.validate()
+        add(self.source, source_header, b'canonical helper')
+        add(self.source, 'sysutils/bsdinstall/files/extra.h', b'extra')
+        reseal()
+        with self.assertRaises(SDKError):
+            self.validate()
+
     def test_exact_tuple_flags_static_library_and_fixed_cases(self):
         with patch('subprocess.Popen', side_effect=AssertionError('no child is permitted')):
             self.assertIs(self.validate(), self.plan)

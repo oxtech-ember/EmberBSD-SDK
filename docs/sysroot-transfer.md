@@ -52,6 +52,30 @@ caller-owned output before retrying,
 or select a new ID. Never merge exports or overwrite an accepted version.
 When copying a bundle with another tool, copy `READY` last.
 
+## Compose from release sets
+
+`scripts/compose-release-sysroot.py --help` creates the same transfer bundle
+from an explicitly pinned EmberBSD release kit and a current Ports LLVM runtime
+stage. This path reuses the release's headers, CRT, libraries and loader; it
+does not rebuild libc or treat the release as a new SDK source build.
+
+Select `--release-kit`, its trusted `--manifest-sha256`, `--runtime-stage`,
+`--ports-source`, `--host-prefix`, `--target`, `--git` and a new `--output`.
+The producer checks the base/comp archives against the pin and uses Ports'
+existing set extractor. It verifies the new runtime's C inputs against those
+sets, retains headers, libraries, loader and legal notices, and replaces the
+old runtime's declared C++ aliases. Temporary extracted sets are removed after
+export. The bundle contains `usr/share/emberbsd/sysroot-origin.json` with the
+base pins and current runtime/compiler provenance, without a fabricated
+`.prebuild-sdk-build.json` receipt.
+In this bundle, the transfer provenance fields `build_context_sha256` and
+`build_receipt_sha256` both identify that composition origin record.
+
+This producer consumes the pinned set format, independently of historical
+host tool bindings in the original release metadata. Its output still needs
+the normal compiler/link and target execution checks before claiming those
+acceptance levels; the old release's execution results are not inherited.
+
 ## Import into a new local directory
 
 Select the target explicitly. Supply the pin recorded at export.
@@ -73,15 +97,18 @@ validated inventory. It does not call `tar.extract` or `extractall`.
 Archive names are fixed ordinals, never filesystem destinations.
 
 The restored inventory must match the manifest, including permissions and ELF
-architecture. The importer adds `.prebuild-sdk-import.json` with portable
-provenance. It then uses the SDK's native no-replace directory publication.
+architecture. On a host without symbolic-link modes, such as Linux, links are
+always 0777; the importer then compares link targets but not link modes. A
+bundle exported on Darwin keeps its link modes in the manifest. The importer
+adds `.prebuild-sdk-import.json` with portable provenance. It then uses the
+SDK's native no-replace directory publication.
 A concurrent destination is never replaced. Caught failures and interrupts
 remove only the private stage. SIGKILL or power loss can leave a
 `.sysroot-import-*` sibling for manual inspection. No automatic stale cleanup
 is performed. This protocol does not claim crash durability.
 
-The destination filesystem must preserve the selected payload's names, modes
-and links, and support no-replace publication. A local filesystem is
+The destination filesystem must preserve the selected payload's names, file and
+directory modes and link targets, and support no-replace publication. A local filesystem is
 recommended. Builds must work on case-insensitive filesystems. SMB can store the bundle even when it cannot host the restored
 tree. A successful file transfer does not establish network-filesystem support
 for live build objects or distributed locks.
@@ -139,6 +166,22 @@ object and external source roots to canonical paths such as
 `/usr/src/external/libedit`.
 
 ## Shared store for a team
+
+For the signed binary channel, wrap a completed transfer in one uncompressed
+tar container (the payload is already compressed):
+
+```sh
+python3 scripts/package-sysroot.py /absolute/transfer-bundle \
+  --target aarch64 --manifest-sha256 MANIFEST_SHA256 \
+  --output /absolute/emberbsd-sysroot-aarch64.tar
+```
+
+The container has exactly three regular members: `manifest.json`, `READY`, and
+`payload.tar.gz`. Publish it as a `sysroot` artifact in the existing signed release,
+using the reported unpacked size and explicit target/ABI/runtime. The
+[SDK client](sdk-client.md#application-compiler-and-sysroot) restores it with
+the same transfer verifier. Temporary payload copies are removed after import;
+the compressed artifact shares the bounded package cache.
 
 Use this directory convention on a mounted share:
 

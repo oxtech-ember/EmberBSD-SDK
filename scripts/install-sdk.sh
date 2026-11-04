@@ -20,7 +20,11 @@ destination=$parent/${destination##*/}
 temporary=$(/usr/bin/mktemp -d "$parent/.ember-install.XXXXXX")
 trap '/bin/rm -rf "$temporary"' EXIT HUP INT TERM
 base=https://emberbsd-pkg.oxteam.me
-get() { /usr/bin/curl --fail --location --proto '=https' --proto-redir '=https' --silent --show-error "$1" -o "$2"; }
+get() {
+    /usr/bin/curl --fail --location --proto '=https' --proto-redir '=https' \
+        --connect-timeout 15 --max-time 600 --retry 3 --retry-delay 2 \
+        --retry-max-time 900 --silent --show-error "$1" -o "$2"
+}
 field() { /usr/bin/plutil -extract "$2" raw -o - "$1"; }
 verify() {
     /usr/bin/openssl cms -verify -binary -inform DER -in "$1" -CAfile "$temporary/root.pem" \

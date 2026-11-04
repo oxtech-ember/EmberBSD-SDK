@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 import re
 
 from .errors import SDKError
+from . import paths
 
 CONTRACT = 'share/mk/prepared-source-refresh.json'
 RUNTIME_ARCHIVES = {'lib/libc': ('libc.a', 'libc_pic.a'),
@@ -68,7 +69,8 @@ def plan_native(os_root, objects, names):
 
 
 def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
-         extra_headers=(), extra_linked=(), allowed_source_roots=()):
+         extra_headers=(), extra_linked=(), allowed_source_roots=(), scan_consumers=True,
+         file_outputs=None):
     root, obj = Path(os_root), Path(objects)
     try:
         root_resolved, obj_resolved = root.resolve(), obj.resolve()
@@ -97,11 +99,20 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
         dirs = set()
         headers = {relative(p) for p in extra_headers}
         linked = {relative(p) for p in extra_linked}
+        recursive = set()
         for name in names:
             entry = sources['EMBER_' + name.upper().replace('-', '_') + '_SOURCE']
-            if set(entry) not in ({'producer_dirs', 'consumer_dirs', 'header_prefixes', 'linked_names'},
-                                   {'producer_dirs', 'consumer_dirs', 'header_prefixes', 'linked_names', 'native_producer_dirs'}):
+            required_entry = {'producer_dirs', 'consumer_dirs', 'header_prefixes', 'linked_names'}
+            if not required_entry <= set(entry) or set(entry) - required_entry - {'native_producer_dirs', 'recursive_producer_dirs'}:
                 raise ValueError('unsupported source entry')
+            declared = {relative(p) for p in entry['producer_dirs']}
+            roots = entry.get('recursive_producer_dirs', [])
+            if not isinstance(roots, list):
+                raise ValueError('invalid recursive producers')
+            roots = {relative(p) for p in roots}
+            if not roots <= declared:
+                raise ValueError('recursive producer is not declared')
+            recursive.update(roots)
             dirs.update(relative(p) for p in entry['producer_dirs'] + entry['consumer_dirs'])
             headers.update(relative(p) for p in entry['header_prefixes'])
             linked.update(relative(p) for p in entry['linked_names'])
@@ -127,7 +138,7 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
             raise error
         # A source with no installed headers or linked libraries affects only
         # its declared producers and consumers; no global object scan is needed.
-        walk = os.walk(obj, followlinks=False, onerror=walk_error) if headers or linked else ()
+        walk = os.walk(obj, followlinks=False, onerror=walk_error) if scan_consumers and (headers or linked) else ()
         for directory, subdirs, files in walk:
             base = Path(directory)
             subdirs[:] = [name for name in subdirs if base / name not in nested_prune]
@@ -181,7 +192,12 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
                     relpath = PurePosixPath(rel)
                     independent = any(len(relpath.parts) == len(PurePosixPath(p).parts) and relpath.match(p) for p in patterns)
                     if not independent:
-                        dirs.add(base.relative_to(obj).as_posix())
+                        if file_outputs is not None and path.suffix == '.ln':
+                            if path.is_symlink() or not path.is_file():
+                                raise ValueError('invalid lint output ' + str(path))
+                            file_outputs.append(rel)
+                        else:
+                            dirs.add(base.relative_to(obj).as_posix())
         result = []
         missing = []
         for name in sorted(dirs):
@@ -209,12 +225,36 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
             if built.exists():
                 if built.is_symlink() or not built.is_dir():
                     raise ValueError('invalid object directory ' + name)
-                result.append(name)
+                with os.scandir(built) as entries:
+                    if next(entries, None) is not None:
+                        result.append(name)
         if missing:
             raise ValueError('missing OS makefiles for ' + ', '.join(missing))
-        return sorted(set(result))
+        result = set(result)
+        return sorted(name for name in result if not any(
+            parent in result and name.startswith(parent + '/') for parent in recursive))
     except (OSError, ValueError, TypeError, KeyError) as exc:
         raise SDKError('cannot safely plan prepared source refresh: ' + str(exc)) from exc
+
+
+def remove_lint_outputs(objects, outputs):
+    """Remove planned lint outputs under the caller's object-tree lease."""
+    root = Path(os.path.abspath(objects))
+    if str(root) == '/' or os.path.realpath(root) != str(root):
+        raise SDKError('lint object root must not be a symlink')
+    paths.real_directory(str(root))
+    selected = []
+    for name in outputs:
+        relative(name)
+        path = root / name
+        if path.suffix != '.ln' or path.is_symlink() or path.resolve() != path:
+            raise SDKError('invalid planned lint output: ' + str(path))
+        if path.exists():
+            if not path.is_file():
+                raise SDKError('invalid planned lint output: ' + str(path))
+            selected.append(path)
+    for path in selected:
+        path.unlink()
 
 
 def runtime_independent_patterns(os_root):

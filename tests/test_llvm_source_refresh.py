@@ -26,6 +26,53 @@ class LLVMSourceRefreshTests(unittest.TestCase):
         (self.obj/'unrelated.o').write_text('keep')
         (self.obj/'.depend').write_text('changed.d changed.ln changed.go changed.pico changed.po changed.o: \\\n /old/llvm/compiler-rt/a.c\nunrelated.o: /usr/include/header.h\n')
 
+    def test_changed_paths_resolve_dot_and_symlink_aliases(self):
+        source = Path(self.tmp.name).resolve() / "llvm"
+        lib = source / "compiler-rt"
+        lib.mkdir(parents=True)
+        (lib / "a.c").touch()
+        (lib / "headers.h").touch()
+        (lib / "headers.h.bak").touch()
+        (lib / "alias.h").symlink_to(lib / "headers.h")
+        (lib / "child").mkdir()
+        self.old = self.new = str(source)
+        for name, header in (("changed", "headers.h"), ("stable", "headers.h.bak"),
+                             ("dot", "child/../headers.h"), ("alias", "alias.h")):
+            (self.obj / (name + ".d")).write_text(
+                f"{name}.o: {lib}/a.c {lib}/{header}\n")
+            (self.obj / (name + ".o")).touch()
+        (self.obj / "alias.ln").touch()
+        (self.obj / ".depend").write_text(".include \"changed.d\"\n")
+        changed = ["compiler-rt/headers.h"]
+        plan = llvm_source_refresh.plan(str(self.root), self.old, self.new, changed)
+        self.assertEqual(set(plan["outputs"]), {str(self.obj / name) for name in
+                         ("changed.o", "changed.po", "changed.pico", "changed.go", "changed.ln", "dot.o", "alias.o", "alias.ln")})
+        llvm_source_refresh.apply(str(self.root), plan, self.old, self.new, changed)
+        self.assertTrue((self.obj / "stable.o").exists())
+        self.assertFalse((self.obj / "dot.o").exists())
+        with self.assertRaises(SDKError):
+            llvm_source_refresh.plan(str(self.root), self.old, self.new, ["../escape"])
+
+    def test_missing_external_header_preserves_source_unaffected_object(self):
+        source = Path(self.tmp.name).resolve() / "llvm"
+        source.mkdir()
+        (source / "changed.h").touch()
+        (source / "stable.c").touch()
+        missing = Path(self.tmp.name).resolve() / "destination/usr/include/header.h"
+        (self.obj / "changed.d").write_text(f"changed.o: {source}/stable.c {missing}\n")
+        (self.obj / ".depend").write_text(".include \"changed.d\"\n")
+        plan = llvm_source_refresh.plan(str(self.root), str(source), str(source), ["changed.h"])
+        self.assertNotIn(str(self.obj / "changed.o"), plan["outputs"])
+
+    def test_unresolvable_alias_keeps_conservative_output(self):
+        source = Path(self.tmp.name).resolve() / "llvm"
+        source.mkdir()
+        (source / "changed.h").touch()
+        (self.obj / "changed.d").write_text(f"changed.o: {source}/missing.h\n")
+        (self.obj / ".depend").write_text(".include \"changed.d\"\n")
+        plan = llvm_source_refresh.plan(str(self.root), str(source), str(source), ["changed.h"])
+        self.assertIn(str(self.obj / "changed.o"), plan["outputs"])
+
     def test_moved_source_preserves_unrelated(self):
         plan = llvm_source_refresh.plan(str(self.root), self.old, self.new)
         self.assertEqual((len(plan['metadata']), len(plan['outputs']), len(plan['depends'])), (1, 5, 1))
@@ -88,6 +135,18 @@ class LLVMSourceRefreshTests(unittest.TestCase):
 
 
 class BuilderIntegrationTests(unittest.TestCase):
+    def test_owner_changed_paths_requires_valid_proof(self):
+        from types import SimpleNamespace
+        from emberbsd_sdk.sysroot_builder import SysrootBuilder
+        fake = SimpleNamespace(paths={"pkgsrc-export": "/stage", "ports": "/ports", "python": "/python", "sdk-source": "/sdk"}, git_command="/git", environment={})
+        with patch("os.path.isfile", return_value=True), patch("emberbsd_sdk.process.capture") as capture:
+            capture.return_value.stdout = b'{"version":1,"changed_paths":["compiler-rt/a.c"]}'
+            self.assertEqual(SysrootBuilder.llvm_changed_paths(fake, "/old", "/new"), ["compiler-rt/a.c"])
+            capture.return_value.stdout = b'{"version":2,"changed_paths":[]}'
+            self.assertIsNone(SysrootBuilder.llvm_changed_paths(fake, "/old", "/new"))
+            capture.return_value.stdout = b'not json'
+            self.assertIsNone(SysrootBuilder.llvm_changed_paths(fake, "/old", "/new"))
+
     def test_owner_compatible_llvm_source_change_plans_precise_refresh(self):
         import copy
         from types import SimpleNamespace
@@ -155,7 +214,7 @@ class BuilderIntegrationTests(unittest.TestCase):
         with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=[]), \
              patch('emberbsd_sdk.sysroot_builder.llvm_source_refresh.plan', return_value={}) as planned:
             self.assertTrue(SysrootBuilder.plan_prepared_refresh(fake, {'signature': old}, '/obj'))
-        planned.assert_called_once_with('/obj', '/old/llvm', '/new/llvm')
+        planned.assert_called_once_with('/obj', '/old/llvm', '/new/llvm', None)
 
     def test_apply_precedes_context_write(self):
         from types import SimpleNamespace
