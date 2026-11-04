@@ -437,6 +437,71 @@ class TransitionTests(unittest.TestCase):
                 self.assertFalse(SysrootBuilder.plan_prepared_refresh(
                     fake, {'signature': old_signature}, '/objects'))
 
+    def test_legacy_byacc_context_reuses_and_refreshes_only_native_producers(self):
+        from copy import deepcopy
+        from types import SimpleNamespace, MethodType
+        from unittest.mock import patch
+        from emberbsd_sdk.sysroot_builder import SysrootBuilder
+        byacc = {'path': '/byacc', 'record': {'tree_sha256': 'old'}}
+        selected = {'compiler': 'same', 'native_sources': {'heimdal': 'same'}}
+        fake = SimpleNamespace(paths={'os': '/os', 'objects': '/obj', 'tools': '/tools'},
+                               context_signature=lambda p: selected)
+        fake.reuse_signature = MethodType(SysrootBuilder.reuse_signature, fake)
+        fake.compatible_context = MethodType(SysrootBuilder.compatible_context, fake)
+        record = {'signature': deepcopy(selected)}
+        selected['native_sources']['byacc'] = byacc
+        with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan_native',
+                   return_value=['tools/yacc']) as plan:
+            # Adding byacc to a retained tools tree follows the OS owner contract.
+            self.assertTrue(SysrootBuilder.plan_native_refresh(fake, record, '/tools'))
+            plan.assert_called_once_with('/os', '/obj', {'byacc'})
+            plan.reset_mock()
+            for dual in (False, True):
+                with self.subTest(dual=dual):
+                    legacy = deepcopy(selected)
+                    legacy['byacc_source'] = deepcopy(byacc)
+                    if not dual:
+                        del legacy['native_sources']['byacc']
+                    prior = {'signature': legacy}
+                    saved = deepcopy(prior)
+                    self.assertTrue(fake.compatible_context(prior, '/tools'))
+                    self.assertFalse(SysrootBuilder.plan_native_refresh(fake, prior, '/tools'))
+                    self.assertEqual(prior, saved)
+            plan.assert_not_called()
+            for source in ({'path': '/new-byacc', 'record': {'tree_sha256': 'new'}}, None):
+                with self.subTest(source=source):
+                    changed = deepcopy(selected)
+                    if source is None:
+                        del changed['native_sources']['byacc']
+                    else:
+                        changed['native_sources']['byacc'] = source
+                    fake.context_signature = lambda p, value=changed: value
+                    self.assertTrue(SysrootBuilder.plan_native_refresh(fake, prior, '/tools'))
+                    plan.assert_called_with('/os', '/obj', {'byacc'})
+            fake.context_signature = lambda p: selected
+            # Interrupted legacy refreshes can retry, but ABI/compiler changes cannot.
+            record['pending_native'] = {'signature': legacy, 'sources': ['byacc']}
+            self.assertTrue(SysrootBuilder.plan_native_refresh(fake, record, '/tools'))
+            for key in ('compiler', 'host', 'target', 'native_inputs'):
+                with self.subTest(input=key):
+                    changed = deepcopy(selected)
+                    changed[key] = 'incompatible'
+                    fake.context_signature = lambda p, value=changed: value
+                    self.assertFalse(SysrootBuilder.plan_native_refresh(fake, record, '/tools'))
+            fake.context_signature = lambda p: selected
+            bad = deepcopy(legacy)
+            bad['byacc_source']['path'] = '/conflicting'
+            for position in ('old', 'selected', 'pending'):
+                with self.subTest(conflict=position):
+                    candidate = deepcopy(record)
+                    if position == 'old':
+                        candidate['signature'] = bad
+                    elif position == 'pending':
+                        candidate['pending_native']['signature'] = bad
+                    fake.context_signature = lambda p: bad if position == 'selected' else selected
+                    with self.assertRaisesRegex(SDKError, 'conflicting or malformed'):
+                        SysrootBuilder.plan_native_refresh(fake, candidate, '/tools')
+
     def test_pending_native_refresh_accepts_repaired_source_not_toolchain(self):
         from types import SimpleNamespace
         from unittest.mock import patch

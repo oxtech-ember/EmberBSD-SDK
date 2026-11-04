@@ -48,6 +48,19 @@ def _canonicalize_unique_flag_assignments(flags):
     return [name + '=' + value for name, value in sorted(assignments)]
 
 
+def _canonicalize_native_sources(signature):
+    """Fold the former byacc field into the common native-source mapping."""
+    if 'byacc_source' not in signature:
+        return signature
+    legacy = signature.pop('byacc_source')
+    native = signature.setdefault('native_sources', {})
+    if (not isinstance(legacy, dict) or not isinstance(native, dict) or
+            ('byacc' in native and native['byacc'] != legacy)):
+        raise SDKError('conflicting or malformed native byacc source context')
+    native['byacc'] = legacy
+    return signature
+
+
 def _match_clang_resource_binding(old, new):
     """Account for the newly explicit binding to an unchanged compiler resource."""
     try:
@@ -782,6 +795,8 @@ class SysrootBuilder:
             pending_record = record.get('pending_native')
             pending = copy.deepcopy(pending_record['signature'] if pending_record else old)
             pending_names = set(pending_record['sources']) if pending_record else set()
+            for signature in (old, new, pending):
+                _canonicalize_native_sources(signature)
             before = old.pop('native_sources', {})
             after = new.pop('native_sources', {})
             interrupted = pending.pop('native_sources', {})
@@ -822,6 +837,7 @@ class SysrootBuilder:
 
     def reuse_signature(self, signature):
         """Compare compiled payload, keeping provenance in the saved context."""
+        _canonicalize_native_sources(signature)
         def payload(name, record):
             if (name != 'x11' and isinstance(record, dict) and
                     record.get('format') == 'emberbsd-prepared-source' and
@@ -1038,10 +1054,10 @@ class SysrootBuilder:
                     **{name: self.signature[name] for name in
             ('host', 'target', 'compiler', 'host_tools', 'native_toolset', 'native_inputs',
              'environment', 'tools', 'python', 'process_backend')})
+        native_sources = set(prepared_refresh.native_sources(self.paths['os']))
         if 'byacc-source' in self.paths:
-            signature['byacc_source'] = {'path': self.paths['byacc-source'],
-                                         'record': self.signature['common_sources']['byacc']}
-        native_sources = prepared_refresh.native_sources(self.paths['os'])
+            # Retain this input even for OS contracts predating native producers.
+            native_sources.add('byacc')
         selected = {name: {'path': self.paths[name + '-source'],
                            'record': self.signature['common_sources'][name]}
                     for name in native_sources if name + '-source' in self.paths}
