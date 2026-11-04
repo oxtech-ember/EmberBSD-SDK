@@ -159,6 +159,10 @@ Select an explicit new destination stage. A nonempty destination
 is rejected before build writes. For an update, select a new stage
 such as `--destination /absolute/prebuild-sdk-aarch64/stages/sysroot-next` inside the
 same shared workspace. A destination inside the active `sysroot` is rejected.
+For an exclusively owned, completed SDK work stage, `--update-stage` reuses
+its original destination and compatible objects. The builder marks the stage
+incomplete during the update; a later invocation with the same option resumes
+an interrupted update. Do not use the stage as a consumer input while updating.
 Keep the active sysroot unchanged while other consumers use it.
 
 `--objects` and `--tools` can select existing compatible component paths under

@@ -55,6 +55,7 @@ def main():
     parser.add_argument('--c-foundation', action='store_true', help='build an intermediate static C foundation, not a complete SDK')
     parser.add_argument('--compatible-target-tool', action='append', metavar='ROLE:OLD_SHA256:NEW_SHA256',
                         help='one-run reviewed ELF object-tool transition; objcopy or strip only')
+    parser.add_argument('--update-stage', action='store_true', help='incrementally update an existing completed matching work stage')
     parser.add_argument('--plan', action='store_true', help='inspect inputs and emit commands without creating outputs')
     arguments = parser.parse_args()
     try:

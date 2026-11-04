@@ -1335,3 +1335,63 @@ for _failure in ('build_fail', 'loader_fail', 'missing_header', 'wrong_elf', 'ab
 def runtime_required(self):
     self.control(runtime_fail=True); self.refusal_unchanged('Injected verifier failure')
 BuilderTests.test_normal_runtime_check_is_mandatory = runtime_required
+
+
+class UpdateStageTests(TemporaryCase):
+    def setUp(self):
+        super().setUp()
+        self.options = fixture(self.root)
+        self.options['destination'] = str(Path(self.options['sdk']) / 'stages' / 'work')
+
+    def build(self):
+        return B(self.options).run()
+
+    def test_update_success_noop_and_new_receipt(self):
+        first = self.build()
+        stage = Path(self.options['destination'])
+        old = (stage / 'usr/include/stdio.h').stat().st_mtime_ns
+        with patch.object(B, 'dispatch') as dispatch:
+            result = B(self.options | {'update-stage': True}).run()
+        self.assertEqual(dispatch.call_count, 3)
+        self.assertEqual(result['qualification'], 'built-and-inspected')
+        self.assertEqual((stage / 'usr/include/stdio.h').stat().st_mtime_ns, old)
+        self.assertEqual(result['signature'], first['signature'])
+        self.assertFalse((stage / B.MARKER).exists())
+
+    def test_unknown_and_mismatch_are_refused(self):
+        stage = Path(self.options['destination']); stage.mkdir(parents=True)
+        (stage / 'unknown').write_text('x')
+        with self.assertRaises((SDKError, OSError)):
+            B(self.options | {'update-stage': True}).run()
+        (stage / 'unknown').unlink(); stage.rmdir()
+        self.build()
+        import json
+        receipt_path = stage / B.RECEIPT
+        record = json.loads(receipt_path.read_text())
+        record['workspace']['target'] = 'amd64'
+        receipt_path.write_text(json.dumps(record))
+        with self.assertRaises(SDKError):
+            B(self.options | {'update-stage': True}).run()
+
+    def test_failure_retains_incomplete_marker(self):
+        self.build()
+        with patch.object(B, 'build_payload', side_effect=SDKError('injected failure')):
+            with self.assertRaisesRegex(SDKError, 'injected failure'):
+                B(self.options | {'update-stage': True}).run()
+        stage = Path(self.options['destination'])
+        self.assertTrue((stage / B.MARKER).exists())
+        with patch.object(B, 'dispatch'):
+            result = B(self.options | {'update-stage': True}).run()
+        self.assertEqual(result['qualification'], 'built-and-inspected')
+        self.assertFalse((stage / B.MARKER).exists())
+
+    def test_runtime_corruption_rejected(self):
+        self.build()
+        stage = Path(self.options['destination'])
+        runtime = stage / 'usr/pkg/gcc16'
+        item = next(p for p in runtime.rglob('*') if p.is_file() and not p.is_symlink())
+        item.write_bytes(b'corrupt')
+        with patch.object(B, 'dispatch'):
+            with self.assertRaises(SDKError):
+                B(self.options | {'update-stage': True}).run()
+        self.assertTrue((stage / B.MARKER).exists())

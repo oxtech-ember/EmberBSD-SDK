@@ -392,7 +392,12 @@ class SysrootBuilder:
         if paths.entry(destination) is not None:
             paths.real_directory(destination)
             if os.listdir(destination):
+                if self.options.get('update-stage'):
+                    paths.regular_file(os.path.join(destination, self.RECEIPT))
+                    return
                 raise SDKError('destination must be new or empty; active sysroot is never overwritten')
+        if self.options.get('update-stage'):
+            raise SDKError('update requires an existing completed sysroot stage')
 
     def compiler(self):
         prefix, triplet = self.paths['compiler'], self.target['triplet']
@@ -1712,6 +1717,8 @@ class SysrootBuilder:
         self.paths['destination'] = self.output_path(self.options.get('destination', os.path.join(sdk, 'sysroot')), sdk)
         if paths.inside(self.paths['destination'], os.path.join(sdk, 'sysroot')):
             raise SDKError('destination must not be below the active sysroot; use SDK/stages/NAME')
+        if self.options.get('update-stage') and not paths.inside(self.paths['destination'], os.path.join(sdk, 'stages')):
+            raise SDKError('update requires a work stage inside SDK/stages')
         for name, directory in (('objects', 'os'), ('tools', 'tools')):
             self.paths[name] = self.output_path(self.options.get(name, os.path.join(sdk, 'obj', directory, profile)), os.path.join(sdk, 'obj'))
         self.paths['native-routing'] = os.path.join(
@@ -1864,7 +1871,52 @@ class SysrootBuilder:
             self.receipt['prepared_source_refresh'] = list(self.refresh_dirs)
         if self.applied_target_tools:
             self.receipt['compatible_target_tools'] = copy.deepcopy(self.applied_target_tools)
+        if self.options.get('update-stage') and self.options.get('plan'):
+            self.validate_update_stage()
         return self.receipt
+
+    def validate_update_stage(self):
+        # A claimed update retains its original identity in the marker.  An
+        # interrupted run is never exportable but can be resumed by its owner.
+        from . import sysroot_transfer
+        destination = self.paths['destination']
+        marker = os.path.join(destination, self.MARKER)
+        if paths.entry(marker) is not None:
+            record = jsonio.read_json(marker)
+            if record.get('format') != 'emberbsd-sysroot-stage-update' or record.get('version') != 1:
+                raise SDKError('incomplete sysroot is not a resumable stage update')
+            previous = record.get('previous')
+            if not isinstance(previous, dict):
+                raise SDKError('invalid sysroot update identity')
+            current = jsonio.read_json(os.path.join(destination, self.RECEIPT))
+            if (current.get('qualification') not in ('incomplete', 'built-and-inspected') or
+                    current.get('signature') != previous.get('signature') or
+                    current.get('workspace', {}).get('target') != self.options['target']):
+                raise SDKError('interrupted sysroot update identity differs')
+        else:
+            previous = jsonio.read_json(os.path.join(destination, self.RECEIPT))
+        sysroot_transfer._provenance(previous, self.options['target'])
+        if previous.get('signature') != self.signature:
+            raise SDKError('sysroot stage build context differs')
+        for name in ('sdk', 'destination', 'objects', 'tools', 'os', 'ports'):
+            if previous.get('paths', {}).get(name) != self.paths.get(name):
+                raise SDKError('sysroot stage path context differs: ' + name)
+        for relative in ('usr/pkg/pkgdb', 'var/db/pkg'):
+            if paths.entry(os.path.join(destination, relative)) is not None:
+                raise SDKError('sysroot stage contains an installed package database')
+        return previous
+
+    def validate_updated_runtime(self, outputs):
+        prefix = 'usr/pkg/llvm' if self.compiler_family() == 'clang' else 'usr/pkg/gcc16'
+        root = outputs.get(prefix)
+        expected_root = dict(kind='directory', mode=self.runtime_record['root_mode'])
+        if root != expected_root:
+            raise SDKError('updated sysroot runtime root differs')
+        prefix += '/'
+        actual = {name[len(prefix):]: row for name, row in outputs.items()
+                  if name.startswith(prefix)}
+        if actual != self.runtime_record['inventory']:
+            raise SDKError('updated sysroot runtime differs from selected runtime')
 
     def source_timestamp(self):
         return int(self.git(self.paths['os'], 'show', '-s', '--format=%ct', self.sources['os']['commit']))
@@ -1884,6 +1936,9 @@ class SysrootBuilder:
         return handle
 
     def save_receipt(self):
+        if self.options.get('update-stage'):
+            jsonio.write_json(os.path.join(self.paths['destination'], self.RECEIPT), self.receipt, exclusive=False)
+            return
         self.receipt_file.seek(0)
         self.receipt_file.write(jsonio.json_bytes(self.receipt))
         self.receipt_file.truncate()
@@ -2173,7 +2228,8 @@ class SysrootBuilder:
         """Run the producer sequence under the shared ownership contract."""
         for command in (self.build_command, self.loader_command, self.install_command):
             self.dispatch(command)
-        self.copy_runtime()
+        if not self.options.get('update-stage'):
+            self.copy_runtime()
 
     def inspect_payload(self):
         self.receipt['libedit_installation'] = libedit.validate_installation(
@@ -2204,15 +2260,31 @@ class SysrootBuilder:
             self.interrupted()
             self.locks = process.ContextLocks([self.paths[name] for name in ('objects', 'tools')], os.path.join(self.paths['sdk'], 'obj')).acquire()
             self.empty_destination()
+            updating = self.options.get('update-stage', False)
+            if updating:
+                previous = self.validate_update_stage()
             self.mkdirs(self.paths['destination'], self.paths['sdk'])
             marker = os.path.join(self.paths['destination'], self.MARKER)
-            handle = self.exclusive_file(marker)
-            handle.write(b'This sysroot build is incomplete. Do not accept this payload.\n')
-            handle.flush()
-            if os.listdir(self.paths['destination']) != [self.MARKER]:
+            if updating and paths.entry(marker) is not None:
+                paths.regular_file(marker)
+            else:
+                handle = self.exclusive_file(marker)
+                if updating:
+                    handle.write(jsonio.json_bytes(dict(format='emberbsd-sysroot-stage-update',
+                        version=1, previous=previous)))
+                else:
+                    handle.write(b'This sysroot build is incomplete. Do not accept this payload.\n')
+                handle.flush()
+                os.fsync(handle.fileno())
+            if not updating and os.listdir(self.paths['destination']) != [self.MARKER]:
                 raise SDKError('destination changed during claim')
-            self.receipt_file = self.exclusive_file(os.path.join(self.paths['destination'], self.RECEIPT))
-            self.log = self.exclusive_file(os.path.join(self.paths['destination'], self.LOG))
+            if updating:
+                self.receipt_file = os.path.join(self.paths['destination'], self.RECEIPT)
+                self.log = open(os.path.join(self.paths['destination'], self.LOG), 'ab')
+                self.handles.append(self.log)
+            else:
+                self.receipt_file = self.exclusive_file(os.path.join(self.paths['destination'], self.RECEIPT))
+                self.log = self.exclusive_file(os.path.join(self.paths['destination'], self.LOG))
             self.receipt['qualification'] = 'incomplete'
             self.save_receipt()
             refresh = bool(getattr(self, 'refresh_dirs', None) or
@@ -2230,6 +2302,8 @@ class SysrootBuilder:
             self.build_payload()
             self.finish_native_refresh()
             self.receipt['outputs'] = self.inspect_payload()
+            if updating:
+                self.validate_updated_runtime(self.receipt['outputs'])
             self.interrupted()
             if hasattr(self, 'runtime_refresh_files'):
                 self.finish_runtime_refresh()
