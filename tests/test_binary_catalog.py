@@ -75,6 +75,10 @@ class ProjectionTests(unittest.TestCase):
         value = b'PKGNAME=app-1.0\nDEPENDS=lib>=1\nDEPENDS=tls>=2\nDESCRIPTION=\n\n'
         self.assertEqual(catalog.parse_summary(value)[0]['DEPENDS'], ['lib>=1', 'tls>=2'])
 
+    def test_pkg_summary_rejects_duplicate_license(self):
+        with self.assertRaises(SDKError):
+            catalog.parse_summary(b'LICENSE=mit\nLICENSE=isc\n\n')
+
     def test_pkg_summary_rejects_duplicate_identity(self):
         with self.assertRaises(SDKError):
             catalog.parse_summary(b'PKGNAME=a-1\nPKGNAME=b-1\n\n')
@@ -109,14 +113,14 @@ class BinaryReleaseTests(unittest.TestCase):
         self.spec = dict(schema='emberbsd.package-build.v1', release_id='test', created_at=1,
             sources={name: 'a' * 40 for name in ('os', 'ports', 'sdk')}, repositories=[])
 
-    def package(self, root, *, opsys='NetBSD', arch='aarch64', depends=(), payload=b'fixture data\n', marker=''):
+    def package(self, root, *, opsys='NetBSD', arch='aarch64', depends=(), payload=b'fixture data\n', marker='', license_value='2-clause-bsd', restriction=''):
         name = root.rsplit('/', 1)[-1] + '-1.0'
         work = self.work / (name + '-' + opsys + '-' + arch)
         work.mkdir()
         (work / 'payload').write_bytes(payload)
         (work / 'PLIST').write_text(f'@name {name}\n{marker}payload\n')
         (work / 'BUILD_INFO').write_text(f'PKGPATH={root}\nOPSYS={opsys}\nMACHINE_ARCH={arch}\n'
-                                       'OS_VERSION=11.0\nLICENSE=2-clause-bsd\n')
+                                       'OS_VERSION=11.0\n' + ('' if license_value is None else f'LICENSE={license_value}\n') + restriction)
         (work / 'SIZE').write_text(str(len(payload)))
         output = work / (name + '.tgz')
         args = ['-c', '-fixture', '-d', '-fixture', '-f', work / 'PLIST', '-p', work,
@@ -126,13 +130,14 @@ class BinaryReleaseTests(unittest.TestCase):
         self.crypto.run_package('pkg_create', [*args, output])
         return str(output)
 
-    def repository(self, name='arm64', *, arch='aarch64'):
+    def repository(self, name='arm64', *, arch='aarch64', app_options=None):
         repo = dict(id=name, host=None, target=dict(arch=arch, triplet=arch + '--netbsd',
                     abi='netbsd-11', runtime='libc++'), graph=str(self.graph_path),
                     sets=['app', 'other', 'devel'], packages={})
         for root in ('net/app', 'net/other', 'devel/lib', 'devel/lib-devel'):
             repo['packages']['target:' + root] = self.package(root, arch=arch,
-                depends=('lib>=1',) if root != 'devel/lib' else ())
+                depends=('lib>=1',) if root != 'devel/lib' else (),
+                **((app_options or {}) if root == 'net/app' else {}))
         self.spec['repositories'].append(repo)
         return repo
 
@@ -140,6 +145,50 @@ class BinaryReleaseTests(unittest.TestCase):
         from emberbsd_sdk.binary_release import compose
         return compose(self.crypto, self.spec, self.ports, self.work / 'release',
                        self.leaf, self.ca.certificate)
+
+    def _assert_app_license(self, license_value, expected):
+        repo = self.repository(app_options={'license_value': license_value})
+        repo['sets'] = []
+        repo['roots'] = ['net/app']
+        release = self.compose()
+        app_id = next(item for item in release['artifacts']
+                      if item['path'].endswith('/app-1.0.tgz'))
+        self.assertEqual(app_id['licenses'], [expected])
+
+    def test_missing_license_in_actual_package_is_noassertion(self):
+        self._assert_app_license(None, 'NOASSERTION')
+
+    def test_empty_license_in_actual_package_is_noassertion(self):
+        self._assert_app_license('', 'NOASSERTION')
+
+    def test_declared_license_in_actual_package_is_preserved(self):
+        self._assert_app_license('mit AND modified-bsd', 'mit AND modified-bsd')
+
+    def test_whitespace_only_license_is_rejected(self):
+        repo = self.repository(app_options={'license_value': '   '})
+        repo['sets'] = []
+        repo['roots'] = ['net/app']
+        with self.assertRaisesRegex(SDKError, 'malformed LICENSE'):
+            self.compose()
+        self.assertFalse((self.work / 'release').exists())
+
+    def test_restricted_package_still_cannot_be_composed(self):
+        repo = self.repository(app_options={'license_value': '',
+                                            'restriction': 'RESTRICTED=no redistribution\n'})
+        repo['sets'] = []
+        repo['roots'] = ['net/app']
+        with self.assertRaisesRegex(SDKError, 'redistribut'):
+            self.compose()
+        self.assertFalse((self.work / 'release').exists())
+
+    def test_no_bin_on_ftp_package_still_cannot_be_composed(self):
+        repo = self.repository(app_options={'license_value': '',
+                                            'restriction': 'NO_BIN_ON_FTP=no redistribution\n'})
+        repo['sets'] = []
+        repo['roots'] = ['net/app']
+        with self.assertRaisesRegex(SDKError, 'redistribut'):
+            self.compose()
+        self.assertFalse((self.work / 'release').exists())
 
     def test_explicit_root_includes_runtime_closure_only(self):
         from emberbsd_sdk.binary_release import load_catalogs

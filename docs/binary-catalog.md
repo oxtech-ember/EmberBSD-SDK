@@ -95,9 +95,12 @@ the same source again can change the signature container. A rebuilt or changed
 package needs the appropriate version/revision before replacing its predecessor.
 Both unsigned TARs and signed BSD-ar containers undergo the same payload checks.
 
-Missing LICENSE, nonempty NO_BIN_ON_FTP/RESTRICTED and payload size exceeding
-SIZE_PKG are rejected. Declared redistribution checks do not replace license
-review. Target payloads are inspected without extraction: direct little-endian
+A missing or empty LICENSE is represented in the signed release as SPDX
+[`NOASSERTION`](https://spdx.github.io/spdx-spec/v2.3/package-information/#713-concluded-license-field): no license terms are asserted. This identifier does not grant
+redistribution rights. Declared nonempty LICENSE values are preserved. Duplicate
+or malformed metadata, nonempty NO_BIN_ON_FTP/RESTRICTED and payload size
+exceeding SIZE_PKG are rejected. Declared redistribution checks do not replace
+license review. Target payloads are inspected without extraction: direct little-endian
 ELF headers must match the CPU; ordinary Mach-O/PE host files are rejected.
 Native package composition requires exactly one qualified prefix-independent or
 text relocation declaration in the packing list. This declaration does not

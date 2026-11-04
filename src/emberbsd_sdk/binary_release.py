@@ -144,6 +144,18 @@ def _matches(crypto, pattern, name):
     return result.returncode == 0
 
 
+def _package_license(record):
+    """Represent omitted package metadata without asserting license terms."""
+    values = record.get('LICENSE', [])
+    if len(values) > 1:
+        raise SDKError('pkg_summary has duplicate LICENSE')
+    if not values or values[0] == '':
+        return 'NOASSERTION'
+    if not values[0].strip():
+        raise SDKError('pkg_summary has malformed LICENSE')
+    return values[0]
+
+
 def _prepare_repository(crypto, spec, ports_root, sources, trust):
     fields = ('id', 'host', 'target', 'graph', 'packages', 'sets')
     _object(spec, (*fields, 'roots') if isinstance(spec, dict) and 'roots' in spec else fields,
@@ -235,7 +247,7 @@ def _prepare_repository(crypto, spec, ports_root, sources, trust):
             raise SDKError('package payload exceeds its declared unpacked size')
         verify_stable(path, before)
         entries[identity] = dict(node=node, path=path, before=before, record=record, name=name, size=size, signed=signed,
-                                 license=scalar(record, 'LICENSE'),
+                                 license=_package_license(record),
                                  artifact=spec['id'] + '-' + hashlib.sha256(identity.encode()).hexdigest()[:24])
     for identity, item in entries.items():
         providers = [entries[child]['name'] for child in item['node']['dependencies']]
