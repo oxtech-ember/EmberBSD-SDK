@@ -505,10 +505,9 @@ def _restore(payload, root, rows):
         path = os.path.join(root, name)
         if row['kind'] == 'link':
             os.symlink(row['target'], path)
-            if stat.S_IMODE(os.lstat(path).st_mode) != row['mode']:
-                if not hasattr(os, 'lchmod'):
-                    raise SDKError('host cannot preserve symbolic-link mode')
-                os.lchmod(path, row['mode'])
+            lchmod = getattr(os, 'lchmod', None)
+            if lchmod is not None and stat.S_IMODE(os.lstat(path).st_mode) != row['mode']:
+                lchmod(path, row['mode'])
     for name, row in sorted(rows.items(), reverse=True):
         if row['kind'] == 'directory':
             os.chmod(os.path.join(root, name), row['mode'])
@@ -526,6 +525,18 @@ def _remove_owned_stage(stage):
     shutil.rmtree(stage)
 
 
+def _host_link_modes(rows):
+    """Drop symlink modes on a host that cannot set them, such as Linux.
+
+    POSIX does not require symlink modes and Linux has no lchmod. A bundle
+    exported on Darwin still keeps its link modes in the manifest.
+    """
+    if getattr(os, 'lchmod', None) is not None:
+        return rows
+    return {name: {key: value for key, value in row.items() if key != 'mode' or row['kind'] != 'link'}
+            for name, row in rows.items()}
+
+
 def import_sysroot(bundle, destination, *, target, manifest_sha256, max_bytes=MAX_BYTES):
     """Verify a pinned bundle, then publish a new locally restored sysroot."""
     bundle, destination = _directory(bundle), _new_path(destination)
@@ -539,7 +550,8 @@ def import_sysroot(bundle, destination, *, target, manifest_sha256, max_bytes=MA
         _copy_payload(os.path.join(bundle, 'payload.tar.gz'), payload, manifest['payload'])
         os.mkdir(tree, 0o700)
         _restore(payload, tree, manifest['inventory'])
-        if inventory.sysroot(tree, target_definition(target)['elf']) != manifest['inventory']:
+        restored = inventory.sysroot(tree, target_definition(target)['elf'])
+        if _host_link_modes(restored) != _host_link_modes(manifest['inventory']):
             raise SDKError('restored inventory or filesystem metadata mismatch')
         if manifest['version'] == 2 and manifest['provenance'].get('base_cxx') == 'libcxx':
             llvm_runtime_install.validate_base_aliases(tree, manifest['runtime']['manifest'])

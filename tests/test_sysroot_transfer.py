@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 from test_core import SDK_SOURCE, TemporaryCase
 from test_builder import fixture, write
-from emberbsd_sdk import inventory, publication, sysroot_transfer as transfer
+from emberbsd_sdk import inventory, jsonio, publication, sysroot_transfer as transfer
 from emberbsd_sdk.errors import SDKError
 from test_builder import B as Builder
 from emberbsd_sdk.targets import TARGETS
@@ -161,6 +161,32 @@ class SysrootTransferTests(TemporaryCase):
                     self.assertFalse((destination / excluded).exists())
                 self.assertEqual((destination / 'usr/include/alias.h').read_bytes(),
                                  (source / 'usr/include/alias.h').read_bytes())
+
+    def test_import_on_host_without_symlink_modes_keeps_other_metadata(self):
+        # A Darwin bundle on a host without lchmod, such as Linux.
+        target = 'amd64'
+        bundle = self.root / 'bundle-no-lchmod'
+        destination = self.root / 'destination-no-lchmod'
+        transfer.export_sysroot(self.accepted[target], bundle, target=target)
+        manifest = json.loads((bundle / 'manifest.json').read_text())
+        rows = manifest['inventory']
+        # The source host recorded link modes that no new link gets here.
+        for name in ('usr/include/alias.h', 'include-alias'):
+            self.assertEqual(rows[name]['kind'], 'link')
+            rows[name]['mode'] = 0o700
+        data = jsonio.json_bytes(manifest)
+        (bundle / 'manifest.json').write_bytes(data)
+        pin = hashlib.sha256(data).hexdigest()
+        (bundle / 'READY').write_text(pin + '\n')
+        with patch.dict(os.__dict__):
+            os.__dict__.pop('lchmod', None)
+            transfer.import_sysroot(bundle, destination, target=target, manifest_sha256=pin)
+        actual = inventory.sysroot(destination, TARGETS[target]['elf'])
+        for name, row in rows.items():
+            if row['kind'] == 'link':
+                self.assertEqual(os.readlink(destination / name), row['target'])
+            else:
+                self.assertEqual(actual[name], row)
 
     def test_manifest_does_not_publish_private_build_paths_or_environment(self):
         sentinel = 'private-auth-token-never-export'

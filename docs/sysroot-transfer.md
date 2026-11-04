@@ -97,15 +97,18 @@ validated inventory. It does not call `tar.extract` or `extractall`.
 Archive names are fixed ordinals, never filesystem destinations.
 
 The restored inventory must match the manifest, including permissions and ELF
-architecture. The importer adds `.prebuild-sdk-import.json` with portable
-provenance. It then uses the SDK's native no-replace directory publication.
+architecture. On a host without symbolic-link modes, such as Linux, links are
+always 0777; the importer then compares link targets but not link modes. A
+bundle exported on Darwin keeps its link modes in the manifest. The importer
+adds `.prebuild-sdk-import.json` with portable provenance. It then uses the
+SDK's native no-replace directory publication.
 A concurrent destination is never replaced. Caught failures and interrupts
 remove only the private stage. SIGKILL or power loss can leave a
 `.sysroot-import-*` sibling for manual inspection. No automatic stale cleanup
 is performed. This protocol does not claim crash durability.
 
-The destination filesystem must preserve the selected payload's names, modes
-and links, and support no-replace publication. A local filesystem is
+The destination filesystem must preserve the selected payload's names, file and
+directory modes and link targets, and support no-replace publication. A local filesystem is
 recommended. Builds must work on case-insensitive filesystems. SMB can store the bundle even when it cannot host the restored
 tree. A successful file transfer does not establish network-filesystem support
 for live build objects or distributed locks.
