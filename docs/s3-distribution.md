@@ -101,7 +101,10 @@ merge the latest snapshot and retry with its generation.
 When extending an existing catalog, preserve its current packages and sets in
 the candidate and pass `--expected-generation N` from the verified snapshot.
 Under the publisher lock, a changed generation stops publication before any
-artifact upload or cleanup; merge the newer catalog and retry. Use `0` only
+artifact upload or cleanup; merge the newer catalog and retry. An exact retry
+of the already-current signed release can retain its original expected
+generation to finish public verification and cleanup, while the pointer is
+unexpired. It cannot refresh expiry or create a new generation. Use `0` only
 when the repository must still be empty. The option does not merge catalogs.
 
 A create-only `.publisher-lock` serializes publication **and cleanup** across

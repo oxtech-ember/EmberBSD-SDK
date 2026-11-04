@@ -166,7 +166,10 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
                 previous['release']['sha256'] != hashlib.sha256(envelope).hexdigest()):
             raise SDKError('current release ID already has different metadata; choose a new ID')
     generation = previous['generation'] if previous else 0
-    if expected_generation is not None and generation != expected_generation:
+    identical_current = (previous is not None and not refresh and previous['expires_at'] > now and
+                         previous['release']['id'] == release['release_id'] and
+                         previous['release']['sha256'] == hashlib.sha256(envelope).hexdigest())
+    if expected_generation is not None and generation != expected_generation and not identical_current:
         raise SDKError(f'current changed: expected generation {expected_generation}, found {generation}; '
                        'merge the latest current before publishing')
     if reuse_current:
@@ -213,6 +216,11 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
         public.verify(channel_key, **_digest(old_envelope))
         _clean_current(store, prefix, keep)
         return previous
+    # An identical retry may finish verification/cleanup with its original
+    # generation, but may not refresh a pointer that expired during uploads.
+    if expected_generation is not None and generation != expected_generation:
+        raise SDKError(f'current changed: expected generation {expected_generation}, found {generation}; '
+                       'merge the latest current before publishing')
     pointer = dict(schema='emberbsd.channel.v1', channel=CHANNEL,
                    generation=previous['generation'] + 1 if previous else 1,
                    issued_at=now, expires_at=now + ttl, release=reference)
