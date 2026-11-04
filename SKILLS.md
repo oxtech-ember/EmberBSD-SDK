@@ -35,3 +35,25 @@ git hash or input key already identifies.
 Treat workspace structure, completed sysroot, installed package closure and
 target execution as separate evidence. Use the
 [distribution boundary](docs/distribution.md) for future SDK releases.
+
+Keep operation recovery separate from package identity. Retrying a build,
+upload or cleanup after a transport error does not itself require a version,
+package revision or release ID change. Inspect the committed state first and
+reuse the exact signed archives and release envelope for publication recovery.
+Change package identity when installed payload or package metadata changes;
+derive exact dependencies and revision checks from the owning declarations.
+Keep ABI/API compatibility floors explicit; they need not equal today's revision.
+
+Pin the SDK, OS and Ports commits for one build and its recovery. Updating those
+inputs starts a changed-input operation, with compatible reuse decided by the
+existing input-key contracts. Do not update tools used by an active build.
+Before an expensive build, evaluate the selected dependency plan and check
+unsatisfied version patterns together through the owning Ports checks.
+
+For changes to resumable operations, test first use, unchanged repeat,
+compatible changed inputs, interruption before and after commit, recovery with
+the same arguments, and a competing incompatible operation. Use representative
+metadata, including read-only hooks, prior schemas and exact dependencies when
+relevant. Keep state-machine regressions runnable without a production SDK;
+native signing, package lifecycle and target tests remain separate evidence.
+Report executed and skipped checks, including missing integration prerequisites.

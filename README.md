@@ -177,6 +177,12 @@ The selector follows imports between SDK modules, scripts and test helpers,
 and tests that name a changed file. It runs the whole suite when a change
 touches the shared core (a module that at least half of the tests use) or
 cannot be mapped. CI runs the whole suite on every push and pull request.
+Tests requiring native OpenSSL/pkg_tools are gated by
+`EMBERBSD_TEST_HOST_PREFIX`; the ordinary CI job reports this missing
+prerequisite. Its green result covers the tests actually executed, not native
+signing, package lifecycle or a complete SDK build. Publication recovery and
+generation-conflict tests also run autonomously with an authentication double
+and the real local conditional object server.
 
 The tests use temporary filesystem trees and build-command fixtures. Their
 results do not establish a real sysroot build or target execution.
