@@ -525,6 +525,58 @@ class TransitionTests(unittest.TestCase):
             selected = {'compiler': 'changed', 'native_sources': {'demo': {'path': 'fixed'}}}
             self.assertFalse(SysrootBuilder.plan_native_refresh(fake, record, '/tools'))
 
+    def test_full_tools_traversal_owns_native_refresh_build_order(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from emberbsd_sdk.sysroot_builder import SysrootBuilder
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            for directory in ('obj/tools/existing', 'tools', 'os/tools/existing',
+                              'os/tools/new', 'dest'):
+                (root/directory).mkdir(parents=True)
+            survivor = root/'obj/unrelated.o'
+            survivor.write_bytes(b'compatible object')
+            old = {'format': 'emberbsd-sysroot-object-context', 'version': 1,
+                   'signature': {}, 'sources': {}}
+            selected = {'native_sources': {'byacc': 'new'}}
+            calls = []
+            fake = SimpleNamespace(paths={'objects': str(root/'obj'), 'tools': str(root/'tools'),
+                         'os': str(root/'os'), 'destination': str(root/'dest'),
+                         'native-routing': str(root/'tools/routing'), 'sdk': str(root)},
+                         contexts={'objects': old, 'tools': old},
+                         native_refresh_dirs=['tools/existing', 'tools/new'],
+                         native_refresh_sources=['byacc'], target={'machine': 'amd64'},
+                         flags=[], environment={}, os_build_operations=['tools', 'bootstrap-headers'],
+                         inspect_context=lambda p: old, dispatch=calls.append,
+                         native_makewrapper_command=lambda: ['build.sh', 'makewrapper'],
+                         context_signature=lambda p: selected, sources={}, mkdirs=lambda *args: None,
+                         options={'jobs': '4'}, CONTEXT='.prebuild-sdk-context.json')
+            def capture(command, **kwargs):
+                directory = Path(command[command.index('-C')+1]).name
+                self.assertEqual(directory, 'existing')
+                return SimpleNamespace(stdout=(str(root/'obj/tools'/directory)+'\n').encode())
+            with patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=capture):
+                SysrootBuilder.prepare_contexts(fake)
+            self.assertEqual(calls[0], ['build.sh', 'makewrapper'])
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[1][-2:], ['MKCLEANSRC=no', 'cleandir'])
+            self.assertEqual(calls[1][calls[1].index('-C')+1], str(root/'os/tools/existing'))
+            self.assertEqual(survivor.read_bytes(), b'compatible object')
+            self.assertFalse((root/'obj/tools/new').exists())
+            context = root/'tools'/fake.CONTEXT
+            pending = json.loads(context.read_text())
+            self.assertEqual(pending['signature'], old['signature'])
+            self.assertEqual(pending['pending_native'], {'signature': selected, 'sources': ['byacc']})
+            # Completion cannot overwrite another writer's changed context.
+            context.write_text('{}')
+            with self.assertRaisesRegex(SDKError, 'context changed'):
+                SysrootBuilder.finish_native_refresh(fake)
+            context.write_text(json.dumps(pending))
+            SysrootBuilder.finish_native_refresh(fake)
+            final = json.loads(context.read_text())
+            self.assertNotIn('pending_native', final)
+            self.assertEqual(final['signature'], selected)
+
     def test_native_partial_install_is_pending_and_retries_same_inputs(self):
         from types import SimpleNamespace
         from unittest.mock import patch
@@ -560,8 +612,8 @@ class TransitionTests(unittest.TestCase):
                          target={'machine': 'evbarm'}, flags=[], environment={},
                          build_command=['/bin/sh', str(root/'os/build.sh'), '-O', str(root/'obj'),
                                         '-T', str(root/'tools'), '-D', str(root/'dest'),
-                                        '-V', 'FLAG=current', 'tools', 'libs'],
-                         os_build_operations=['tools', 'libs'],
+                                        '-V', 'FLAG=current', 'libs'],
+                         os_build_operations=['libs'],
                          inspect_context=lambda p: old, dispatch=dispatch,
                          context_signature=lambda p: selected, sources={},
                          options={'jobs': '4'}, CONTEXT='.prebuild-sdk-context.json',

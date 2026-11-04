@@ -1884,18 +1884,29 @@ class SysrootBuilder:
                                      'sources': self.native_refresh_sources}
             jsonio.write_json(os.path.join(self.paths['tools'], self.CONTEXT), old, exclusive=False)
             pending_written = True
+            if 'tools' in self.os_build_operations:
+                self.pending_native_refresh = old
+        # A selected tools traversal creates object directories and builds the
+        # shared native prerequisites before its producers. Do not run a leaf
+        # producer early when resuming an incomplete initial tools build.
+        install_native_now = bool(native_dirs) and 'tools' not in self.os_build_operations
         for directory in native_dirs:
+            expected = os.path.join(self.paths['objects'], directory)
+            if not install_native_now and paths.entry(expected) is None:
+                continue
             wrapper = os.path.join(self.paths['tools'], 'bin', 'nbmake-' + self.target['machine'])
             base = [wrapper, '-C', os.path.join(self.paths['os'], directory),
                     'DESTDIR=' + self.paths['destination'],
                     'EMBER_NATIVE_TOOLS=' + self.paths['native-routing'], *self.flags]
             selected = process.capture(base + ['-V', '${.OBJDIR}'], env=self.environment).stdout.decode('utf-8').strip()
-            expected = os.path.join(self.paths['objects'], directory)
             if selected != expected or os.path.realpath(selected) != expected:
                 raise SDKError('native source refresh selected the wrong object directory: ' + directory)
             self.dispatch(base + ['MKCLEANSRC=no', 'cleandir'])
-            self.dispatch(base + ['-j' + self.options['jobs'], 'dependall', 'install'])
+            if install_native_now:
+                self.dispatch(base + ['-j' + self.options['jobs'], 'dependall', 'install'])
         for name in ('objects', 'tools'):
+            if name == 'tools' and getattr(self, 'pending_native_refresh', None) is not None:
+                continue
             if name == 'objects' and hasattr(self, 'runtime_refresh_files'):
                 # Old context stays authoritative until rebuilt archives pass.
                 continue
@@ -1904,6 +1915,20 @@ class SysrootBuilder:
                           signature=self.context_signature(path), sources=self.sources)
             self.mkdirs(path, os.path.join(self.paths['sdk'], 'obj'))
             jsonio.write_json(os.path.join(path, self.CONTEXT), record, exclusive=self.contexts[name] is None)
+
+    def finish_native_refresh(self):
+        """Commit a deferred native-source context only after tools succeeded."""
+        pending = getattr(self, 'pending_native_refresh', None)
+        if pending is None:
+            return
+        path = self.paths['tools']
+        context = os.path.join(path, self.CONTEXT)
+        if jsonio.read_json(context) != pending:
+            raise SDKError('native source context changed during tools build')
+        record = dict(format='emberbsd-sysroot-object-context', version=1,
+                      signature=self.context_signature(path), sources=self.sources)
+        jsonio.write_json(context, record, exclusive=False)
+        del self.pending_native_refresh
 
     def begin_runtime_refresh(self):
         if not hasattr(self, 'runtime_refresh_files'):
@@ -2150,6 +2175,7 @@ class SysrootBuilder:
             # Preflight fixes the selected inputs for this run. Reuse their
             # records instead of probing tools and hashing inputs again.
             self.build_payload()
+            self.finish_native_refresh()
             self.receipt['outputs'] = self.inspect_payload()
             self.interrupted()
             if hasattr(self, 'runtime_refresh_files'):
