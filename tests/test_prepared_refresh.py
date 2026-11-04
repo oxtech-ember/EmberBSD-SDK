@@ -73,6 +73,36 @@ class PreparedRefreshTests(unittest.TestCase):
         duplicates = ['A=1', 'B=2', 'A=3']
         self.assertEqual(_canonicalize_unique_flag_assignments(duplicates), duplicates)
 
+    def test_first_zlib_selection_uses_declared_scoped_refresh(self):
+        from copy import deepcopy
+        from types import SimpleNamespace
+        from emberbsd_sdk.sysroot_builder import SysrootBuilder
+
+        self.contract['sources']['EMBER_ZLIB_SOURCE'] = {
+            'producer_dirs': ['external/cbor'], 'consumer_dirs': [],
+            'header_prefixes': ['usr/include/zlib.h'], 'linked_names': ['libz.so']}
+        self.write_contract()
+        (self.obj / 'other/consumer/unit.d').write_text('unit.o: /old/usr/include/zlib.h\n')
+        (self.obj / 'other/consumer/unit.o').write_bytes(b'object')
+        (self.obj / 'external/fido/keep.o').write_bytes(b'object')
+        (self.obj / 'external/fido/keep.d').write_text('keep.o: /old/usr/include/other.h\n')
+        old = {'flags': [], 'common_sources': {}}
+        new = deepcopy(old)
+        new['flags'] = ['EMBER_ZLIB_SOURCE=/prepared/zlib']
+        new['common_sources']['zlib'] = {
+            'format': 'emberbsd-prepared-source', 'version': 1,
+            'package': 'devel/zlib', 'tree_sha256': 'a' * 64}
+        fake = SimpleNamespace(COMMON_SOURCES=SysrootBuilder.COMMON_SOURCES,
+            paths={'os': str(self.os), 'objects': str(self.obj), 'tools': '/tools',
+                   'zlib-source': '/prepared/zlib'},
+            context_signature=lambda path: new,
+            compatible_context=lambda record, path: record['signature'] == new)
+        fake.reuse_signature = lambda signature: SysrootBuilder.reuse_signature(fake, signature)
+        self.assertTrue(SysrootBuilder.plan_prepared_refresh(fake, {'signature': old}, str(self.obj)))
+        self.assertEqual(fake.refresh_dirs, ['external/cbor', 'other/consumer'])
+        self.assertTrue((self.obj / 'external/fido/keep.o').exists())
+        self.assertEqual(old, {'flags': [], 'common_sources': {}})
+
     def test_release_objects_are_not_reused_as_sysroot_source_refresh(self):
         from copy import deepcopy
         from types import SimpleNamespace

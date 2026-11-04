@@ -2136,6 +2136,21 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.llvm_phase = 'base'
         self.assertFalse(builder.compatible_context(records[objects], objects))
 
+    def test_zlib_selection_changes_headers_but_not_native_tools(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        tools, objects = builder.paths['tools'], builder.paths['objects']
+        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+        builder.paths['zlib-source'] = '/prepared/zlib'
+        builder.signature['common_sources']['zlib'] = {'tree_sha256': 'a' * 64}
+        builder.signature['flags'].append('EMBER_ZLIB_SOURCE=/prepared/zlib')
+        self.assertTrue(builder.compatible_context(records[tools], tools))
+        self.assertFalse(builder.compatible_context(records[objects], objects))
+        builder.signature['common_sources']['zlib']['tree_sha256'] = 'b' * 64
+        self.assertFalse(builder.compatible_context(records[objects], objects))
+
     def test_openssl_selection_changes_headers_but_not_native_tools(self):
         builder, _ = self.builder()
         builder.preflight()

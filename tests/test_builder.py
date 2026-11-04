@@ -221,7 +221,7 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
     shutil.copytree(SDK_SOURCE / 'src', root / 'sdk-source/src', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     recipe_fixture(ports, root / 'libedit.tar.gz')
     for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'),
-                          ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd'), ('heimdal', 'security/heimdal'), ('openssh', 'security/openssh')):
+                          ('zlib', 'devel/zlib'), ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd'), ('heimdal', 'security/heimdal'), ('openssh', 'security/openssh')):
         source = root / (name + '-source')
         source.mkdir()
         write(source / 'emberbsd-prepared-source.json', json.dumps(dict(format='emberbsd-prepared-source',
@@ -266,6 +266,22 @@ class BuilderTests(TemporaryCase):
             B(self.options).preflight()
         self.control()
         B(self.options).preflight()
+
+    def test_optional_zlib_receipt_and_forwarding(self):
+        options = self.options | {'zlib-source': str(self.root / 'zlib-source')}
+        builder = B(options)
+        builder.preflight()
+        self.assertEqual(builder.common_source_records['zlib']['package'], 'devel/zlib')
+        self.assertIn('EMBER_ZLIB_SOURCE=' + options['zlib-source'], builder.flags)
+        receipt = Path(options['zlib-source']) / 'emberbsd-prepared-source.json'
+        original = receipt.read_text()
+        receipt.unlink()
+        with self.assertRaisesRegex(SDKError, 'zlib'):
+            B(options).preflight()
+        receipt.write_text(original)
+        self.control(stale_source='zlib')
+        with self.assertRaisesRegex(SDKError, 'prepared sources are stale for the selected Ports.*zlib'):
+            B(options).preflight()
 
     def test_optional_libfido2_is_verified_and_forwarded(self):
         options = self.options | {'libfido2-source': str(self.root / 'libfido2-source')}
