@@ -36,6 +36,10 @@ producer. Without `--llvm-runtime-stage`, the [LLVM coordinator](llvm-runtime.md
 builds headers, the initial runtime, C base and full C++ runtime before the
 release. An explicitly supplied full stage is checked against these same inputs. When selecting a full stage directly, also pass `--llvm-bootstrap-stage` for the exact bootstrap stage recorded by that full runtime. For a separate recorded foundation, select `--llvm-runtime-base` as described in [the runtime guide](llvm-runtime.md). The OS embeds its checked static libunwind archive into libc; the full runtime remains the application runtime.
 
+When the selected OS consumes common Ports zlib, pass its prepared tree as
+`--zlib-source`; its receipt is validated and `EMBER_ZLIB_SOURCE` is forwarded
+to the OS.
+
 When the selected OS consumes the common Ports OpenSSL source, pass the
 prepared tree with `--openssl-source`. The optional input is identified by its
 preparation receipt and recorded with the other common source inputs; it is forwarded

@@ -102,6 +102,10 @@ For OS builds using common `security/openssh`, prepare the source with the
 Ports `scripts/source-inputs/openssh/source.py` owner and select
 `--openssh-source`. The SDK forwards `EMBER_OPENSSH_SOURCE`.
 
+For OS builds using common zlib, prepare the Ports `devel/zlib` source and pass
+`--zlib-source`; the SDK forwards `EMBER_ZLIB_SOURCE`, including during header
+installation.
+
 Prepare libarchive with the Ports `scripts/libarchive-source.py prepare` command
 and libevent with `scripts/source-inputs/libevent/source.py prepare`; both use
 the selected SDK source and canonical Ports export. Pass the resulting trees
