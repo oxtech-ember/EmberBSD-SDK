@@ -79,7 +79,7 @@ def _package_payload(stream):
             return _PayloadReader(stream, size)
 
 
-def inspect_package(path, target):
+def inspect_package(path, target, *, require_native_relocation=False):
     """Inspect producer tar payloads without extracting or executing them.
 
     Header checks catch foreign dynamic payloads. They do not replace the recipe's
@@ -87,13 +87,26 @@ def inspect_package(path, target):
     """
     handle, before = open_regular(path)
     payload_size = 0
+    contents_seen = False
     try:
         with handle, tarfile.open(fileobj=_package_payload(handle), mode='r|*') as archive:
             for member in archive:
+                name = member.name.removeprefix('./')
+                if require_native_relocation and name == '+CONTENTS':
+                    if contents_seen or not member.isfile() or member.size > 8 * 1024 * 1024:
+                        raise SDKError('invalid or duplicate native package packing list')
+                    contents_seen = True
+                    from . import package_relocation
+                    lines = archive.extractfile(member).read().decode('utf-8').splitlines()
+                    independent = lines.count(package_relocation.INDEPENDENT)
+                    markers = lines.count(package_relocation.MARKER)
+                    declaration = package_relocation.declaration(lines)
+                    if independent + markers != 1 or (markers == 1 and declaration is None):
+                        raise SDKError('native package requires one qualified relocation declaration')
+                    continue
                 if not member.isfile():
                     continue
                 stream = archive.extractfile(member)
-                name = member.name.removeprefix('./')
                 if name == '+BUILD_INFO':
                     if member.size > 1024 * 1024:
                         raise SDKError('package build info exceeds size limit')
@@ -115,6 +128,8 @@ def inspect_package(path, target):
                             parse_elf_header(header, label=name, machine=machine)
     except (tarfile.TarError, UnicodeError) as exc:
         raise SDKError(f'expected a pkg_tools producer archive: {path}: {exc}') from exc
+    if require_native_relocation and not contents_seen:
+        raise SDKError('native package missing packing list')
     verify_stable(path, before)
     return payload_size
 
@@ -216,7 +231,7 @@ def _prepare_repository(crypto, spec, ports_root, sources, trust):
             signed = stream.read(8) == b'!<arch>\n'
         if signed:
             crypto.verify_package(path, trust)
-        if inspect_package(path, spec['target']) > size:
+        if inspect_package(path, spec['target'], require_native_relocation=role == 'host') > size:
             raise SDKError('package payload exceeds its declared unpacked size')
         verify_stable(path, before)
         entries[identity] = dict(node=node, path=path, before=before, record=record, name=name, size=size, signed=signed,
