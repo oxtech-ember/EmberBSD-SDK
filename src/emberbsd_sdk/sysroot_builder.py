@@ -663,13 +663,17 @@ class SysrootBuilder:
             if llvm_changed and (len(llvm_old) != 1 or len(llvm_new) != 1):
                 return False
             if llvm_changed or any(old.get(key) != new.get(key) for key in ('runtime', 'runtime_prefix')):
-                runtime = runtime_refresh.cpp_update(old, new)
+                runtime = runtime_refresh.bootstrap_update(old, new)
                 if runtime is not None:
-                    runtime_kind = 'cpp'
+                    runtime_kind = 'bootstrap'
                 else:
-                    runtime = runtime_refresh.builtins_update(old, new, recipe_guard=recipe_guard)
+                    runtime = runtime_refresh.cpp_update(old, new)
                     if runtime is not None:
-                        runtime_kind = 'builtins'
+                        runtime_kind = 'cpp'
+                    else:
+                        runtime = runtime_refresh.builtins_update(old, new, recipe_guard=recipe_guard)
+                        if runtime is not None:
+                            runtime_kind = 'builtins'
                 if runtime is not None:
                     for key in ('runtime', 'runtime_prefix', 'llvm_source'):
                         old[key] = copy.deepcopy(new[key])
@@ -705,6 +709,9 @@ class SysrootBuilder:
                              for name in changed | moved if name in common_packages)
             if runtime is not None:
                 prefixes += ('EMBER_EXTERNAL_LLVM_RUNTIME=', 'EMBER_LLVM_RESOURCE_DIR=', 'EMBER_LLVM_SOURCE=')
+            if runtime_kind == 'bootstrap':
+                # bootstrap_update checked both bindings against the manifests.
+                prefixes += ('EMBER_LIBUNWIND_ARCHIVE=',)
             if runtime_kind == 'builtins':
                 binding = 'EMBER_LIBUNWIND_ARCHIVE='
                 previous = [f[len(binding):] for f in old_flags if f.startswith(binding)]
@@ -765,7 +772,7 @@ class SysrootBuilder:
                 self.runtime_refresh_source = checked['selected']
                 self.runtime_refresh_changed = checked['changed']
             extra = (dict(extra_headers=runtime['headers'], extra_linked=runtime['linked'])
-                     if runtime_kind == 'cpp' else {})
+                     if runtime_kind in ('cpp', 'bootstrap') else {})
             if getattr(self, 'llvm_phase', None) == 'headers' and self.compiler_family() == 'clang':
                 # Native producers have their own tools-context refresh.
                 extra['scan_consumers'] = False
