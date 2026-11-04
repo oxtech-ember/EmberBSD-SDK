@@ -221,7 +221,7 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
     shutil.copytree(SDK_SOURCE / 'src', root / 'sdk-source/src', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     recipe_fixture(ports, root / 'libedit.tar.gz')
     for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'),
-                          ('zlib', 'devel/zlib'), ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd'), ('heimdal', 'security/heimdal'), ('openssh', 'security/openssh')):
+                          ('zlib', 'devel/zlib'), ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('expat', 'textproc/expat'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd'), ('heimdal', 'security/heimdal'), ('openssh', 'security/openssh')):
         source = root / (name + '-source')
         source.mkdir()
         write(source / 'emberbsd-prepared-source.json', json.dumps(dict(format='emberbsd-prepared-source',
@@ -307,6 +307,19 @@ class BuilderTests(TemporaryCase):
         record['package'] = 'wrong/package'
         receipt.write_text(json.dumps(record))
         with self.assertRaisesRegex(SDKError, 'invalid libcbor'):
+            B(options).preflight()
+
+    def test_optional_expat_is_verified_and_forwarded(self):
+        options = self.options | {'expat-source': str(self.root / 'expat-source')}
+        builder = B(options)
+        builder.preflight()
+        self.assertEqual(builder.common_source_records['expat']['package'], 'textproc/expat')
+        self.assertIn('EMBER_EXPAT_SOURCE=' + options['expat-source'], builder.flags)
+        receipt = Path(options['expat-source']) / 'emberbsd-prepared-source.json'
+        record = json.loads(receipt.read_text())
+        record['package'] = 'wrong/package'
+        receipt.write_text(json.dumps(record))
+        with self.assertRaisesRegex(SDKError, 'invalid expat'):
             B(options).preflight()
 
     def test_optional_libfetch_is_verified_and_forwarded(self):

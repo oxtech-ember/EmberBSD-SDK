@@ -907,6 +907,8 @@ class SysrootBuilder:
                         signature['header_libfido2_source'] = common_sources['libfido2']
                     if 'libcbor' in common_sources:
                         signature['header_libcbor_source'] = common_sources['libcbor']
+                    if 'expat' in common_sources:
+                        signature['header_expat_source'] = common_sources['expat']
                     if 'libfetch' in common_sources:
                         signature['header_libfetch_source'] = common_sources['libfetch']
                     if 'openldap' in common_sources:
@@ -1101,7 +1103,7 @@ class SysrootBuilder:
     # inputs and the digest of the tree it published.
     COMMON_SOURCES = (
         ('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'),
-        ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd'), ('heimdal', 'security/heimdal'), ('openssh', 'security/openssh'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'),
+        ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('expat', 'textproc/expat'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd'), ('heimdal', 'security/heimdal'), ('openssh', 'security/openssh'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'),
         ('diffutils', 'devel/diffutils'), ('grep', 'textproc/grep'), ('ekermit', 'comms/ekermit'),
         ('nvi', 'editors/nvi'), ('top', 'sysutils/top'), ('iscsi', 'devel/netbsd-iscsi-lib'),
         ('ntp', 'net/ntp4'), ('libopts', 'devel/autogen'), ('libpcap', 'net/libpcap'),
@@ -1641,7 +1643,7 @@ class SysrootBuilder:
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
-        input_names += [name for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'libfido2-source', 'libcbor-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'mdns-source', 'dhcpcd-source', 'heimdal-source', 'openssh-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'zlib-source', 'x11-source') if self.options.get(name)]
+        input_names += [name for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'libfido2-source', 'libcbor-source', 'expat-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'mdns-source', 'dhcpcd-source', 'heimdal-source', 'openssh-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'zlib-source', 'x11-source') if self.options.get(name)]
         if clang and self.llvm_phase != 'headers' and self.options.get('llvm-runtime-original-source'):
             input_names.append('llvm-runtime-original-source')
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
@@ -1772,7 +1774,7 @@ class SysrootBuilder:
         self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}',
                        f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
         self.flags += [f'EMBER_{name.upper().replace("-", "_")}_SOURCE={self.paths[name + "-source"]}'
-                       for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'wpa', 'mdns', 'dhcpcd', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'zlib') if name + '-source' in self.paths]
+                       for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'expat', 'libfetch', 'openldap', 'unbound', 'wpa', 'mdns', 'dhcpcd', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'zlib') if name + '-source' in self.paths]
         if 'openssl-source' in self.paths or 'openssh-source' in self.paths:
             self.flags.append('HOST_PERL=' + self.native.tool('perl'))
         if 'openssh-source' in self.paths:

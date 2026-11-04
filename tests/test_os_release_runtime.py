@@ -424,7 +424,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
     def test_common_sources_reach_release_and_direct_make_commands(self):
         paths = {name: '/sdk/' + name for name in (
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
-            'libedit-source', 'libarchive-source', 'libevent-source', 'libfido2-source', 'libcbor-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'mdns-source', 'dhcpcd-source', 'heimdal-source', 'openssh-source', 'objects', 'tools', 'destination', 'os')}
+            'libedit-source', 'libarchive-source', 'libevent-source', 'libfido2-source', 'libcbor-source', 'expat-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'mdns-source', 'dhcpcd-source', 'heimdal-source', 'openssh-source', 'objects', 'tools', 'destination', 'os')}
         host = {'cc': {'path': '/sdk/host/bin/clang'}, 'c++': {'path': '/sdk/host/bin/clang++'}}
         _, commands = producer_commands('aarch64', paths, host, 'a' * 40, 1, '2',
                                         '/sdk/host/bin/sh', compiler_family='clang', base_cxx=True)
@@ -433,6 +433,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             self.assertIn('EMBER_LIBEVENT_SOURCE=/sdk/libevent-source', command)
             self.assertIn('EMBER_LIBFIDO2_SOURCE=/sdk/libfido2-source', command)
             self.assertIn('EMBER_LIBCBOR_SOURCE=/sdk/libcbor-source', command)
+            self.assertIn('EMBER_EXPAT_SOURCE=/sdk/expat-source', command)
             self.assertIn('EMBER_LIBFETCH_SOURCE=/sdk/libfetch-source', command)
             self.assertIn('EMBER_OPENLDAP_SOURCE=/sdk/openldap-source', command)
             self.assertIn('EMBER_UNBOUND_SOURCE=/sdk/unbound-source', command)

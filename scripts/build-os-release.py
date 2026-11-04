@@ -51,6 +51,7 @@ def main():
     parser.add_argument('--openssl-source', action=UniqueOption, help='prepared common Ports OpenSSL source')
     parser.add_argument('--libfido2-source', action=UniqueOption, help='prepared common Ports libfido2 source')
     parser.add_argument('--libcbor-source', action=UniqueOption, help='prepared common Ports libcbor source')
+    parser.add_argument('--expat-source', action=UniqueOption, help='prepared common Ports expat source')
     parser.add_argument('--libfetch-source', action=UniqueOption, help='prepared common Ports libfetch source')
     parser.add_argument('--openldap-source', action=UniqueOption, help='prepared common Ports OpenLDAP source')
     parser.add_argument('--unbound-source', action=UniqueOption, help='prepared common Ports Unbound source')

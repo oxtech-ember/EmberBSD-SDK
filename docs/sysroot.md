@@ -347,3 +347,7 @@ restore a pinned copy into a new local directory on a developer host.
 A releasable SDK also needs the [distribution checks](distribution.md), including
 host-platform and relocation acceptance. The initial workspace tests do not
 establish a complete sysroot build on every advertised future platform.
+
+Select the common Ports `textproc/expat` prepared source with `--expat-source`
+when the OS producer requires `EMBER_EXPAT_SOURCE`. Prepare it with the Ports
+`scripts/source-inputs/expat/source.py` owner.
