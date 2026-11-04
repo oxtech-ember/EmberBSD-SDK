@@ -169,6 +169,10 @@ contract, the SDK can selectively clean the affected objects under the existing
 object-tree lock before recording the new source context. Other input changes
 remain subject to the normal compatibility check.
 
+For an otherwise identical bootstrap runtime, OS and Ports commit pins may
+advance while every recorded base input, recipe file and runtime payload digest
+stays unchanged. Moving that runtime still refreshes affected header consumers.
+
 For a Clang runtime update confined to C++ headers and the shared libc++ and
 libc++abi libraries, the same planner refreshes their header and link consumers.
 The LLVM release, target C ABI, artifact names, symlinks, builtins, unwinder and

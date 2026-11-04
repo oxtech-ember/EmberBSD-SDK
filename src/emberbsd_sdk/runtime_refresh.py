@@ -74,11 +74,14 @@ def bootstrap_update(before, after):
             llvm_runtime.validate_identity(manifest)
             if set(manifest['components']) != {'builtins', 'libunwind-static'}:
                 return None
-        # Compare every producer input and payload digest. Only the source pin
-        # of an otherwise identical, owner-verified header base may differ.
+        # Compare every recorded producer input and payload digest. Repository
+        # commits may advance without changing the selected base or recipe files.
         def comparable(manifest):
-            return dict(manifest, base={k: v for k, v in manifest['base'].items()
-                                        if k != 'os_revision'})
+            return dict(manifest,
+                        base={k: v for k, v in manifest['base'].items()
+                              if k != 'os_revision'},
+                        recipe={k: v for k, v in manifest['recipe'].items()
+                                if k != 'ports_revision'})
         if comparable(old) != comparable(new):
             return None
         if ({k: v for k, v in before['runtime'].items() if k != 'manifest'} !=
