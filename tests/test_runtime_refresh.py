@@ -76,6 +76,121 @@ class RuntimeRefreshTests(unittest.TestCase):
                       'EMBER_LLVM_RESOURCE_DIR=/previous/resource'],
         }
 
+    def bootstrap_contexts(self):
+        import shutil
+        from test_llvm_runtime import LLVMRuntimeFixture
+        from emberbsd_sdk import llvm_runtime
+        fixture = LLVMRuntimeFixture()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.static_unwind()
+        llvm_runtime.validate_identity(fixture.record)
+        second = fixture.root / 'second'
+        shutil.copytree(fixture.stage, second)
+        def context(stage):
+            routes = llvm_runtime.runtime_paths(str(stage), fixture.record)
+            return {'compiler_family': 'clang', 'runtime_prefix': routes['runtime-prefix'],
+                    'llvm_source': {'llvm_version': '23.1.4'}, 'common_sources': {},
+                    'runtime': {'manifest': copy.deepcopy(fixture.record)},
+                    'flags': ['CC=clang', 'CFLAGS=-O2', 'EMBER_LLVM_SOURCE=/prepared/llvm',
+                              'EMBER_EXTERNAL_LLVM_RUNTIME=' + routes['runtime-prefix'],
+                              'EMBER_LLVM_RESOURCE_DIR=' + routes['llvm-resource'],
+                              'EMBER_LIBUNWIND_ARCHIVE=' + routes['llvm-unwind']]}
+        return context(fixture.stage), context(second), fixture
+
+    def test_bootstrap_manifest_identity_and_relocated_unwind(self):
+        old, new, fixture = self.bootstrap_contexts()
+        metadata = copy.deepcopy(old)
+        metadata['runtime']['manifest']['base']['os_revision'] = '9' * 40
+        self.assertEqual(runtime_refresh.bootstrap_update(old, metadata), {'headers': (), 'linked': ()})
+        self.assertEqual(runtime_refresh.bootstrap_update(old, new),
+                         {'headers': ('usr/pkg/llvm/include/',), 'linked': ()})
+        unwind = Path(new['flags'][-1].split('=', 1)[1])
+        unwind.write_bytes(b'wrong unwind')
+        self.assertIsNone(runtime_refresh.bootstrap_update(old, new))
+        unwind.write_bytes(Path(old['flags'][-1].split('=', 1)[1]).read_bytes())
+        Path(old['flags'][-1].split('=', 1)[1]).unlink()
+        self.assertIsNone(runtime_refresh.bootstrap_update(old, new))
+
+    def test_bootstrap_rejects_incompatible_manifest_and_bindings(self):
+        old, new, fixture = self.bootstrap_contexts()
+        cases = []
+        for field in ('source', 'recipe', 'target', 'compiler_family'):
+            bad = copy.deepcopy(new)
+            bad['runtime']['manifest'][field] = 'changed'
+            cases.append((field, bad))
+        for field in ('files', 'base'):
+            bad = copy.deepcopy(new)
+            target = bad['runtime']['manifest'][field]
+            if field == 'base': target = target['files']
+            target[next(iter(target))] = '9' * 64
+            cases.append((field, bad))
+        for field, value in (('inventory', {'changed': True}), ('root_mode', 448)):
+            bad = copy.deepcopy(new)
+            bad['runtime'][field] = value
+            cases.append(('runtime ' + field, bad))
+        bad = copy.deepcopy(new)
+        bad['runtime']['manifest']['symlinks']['usr/pkg/llvm/lib/alias'] = 'other'
+        cases.append(('symlinks', bad))
+        for index in (-1, -2, -3):
+            bad = copy.deepcopy(new)
+            bad['flags'][index] += '-wrong'
+            cases.append(('bad binding ' + str(index), bad))
+            bad = copy.deepcopy(new)
+            bad['flags'].append(bad['flags'][index])
+            cases.append(('duplicate binding ' + str(index), bad))
+        bad = copy.deepcopy(new)
+        bad['llvm_source']['llvm_version'] = '24.0.0'
+        cases.append(('llvm source record', bad))
+        for mode in ('changed', 'duplicate', 'missing'):
+            bad = copy.deepcopy(new)
+            flag = 'EMBER_LLVM_SOURCE=/prepared/llvm'
+            if mode == 'changed': bad['flags'][bad['flags'].index(flag)] = flag + '-other'
+            elif mode == 'duplicate': bad['flags'].append(flag)
+            else: bad['flags'].remove(flag)
+            cases.append(('llvm selector ' + mode, bad))
+        for name, bad in cases:
+            with self.subTest(name=name):
+                self.assertIsNone(runtime_refresh.bootstrap_update(old, bad))
+
+    def test_bootstrap_caller_retains_unrelated_compiler_and_flags(self):
+        old, new, fixture = self.bootstrap_contexts()
+        old['compiler'] = {'family': 'clang', 'abi': 'original'}
+        new['compiler'] = copy.deepcopy(old['compiler'])
+        fake = SimpleNamespace(
+            paths={'os': '/os', 'objects': '/obj'}, context_signature=lambda path: new,
+            COMMON_SOURCES=SysrootBuilder.COMMON_SOURCES,
+            reuse_signature=SysrootBuilder.reuse_signature,
+            compatible_context=lambda candidate, path: candidate['signature']['compiler'] == new['compiler'],
+            compiler_record={'binaries': {'ar': {'selected_path': '/tool/ar'}}}, environment={},
+        )
+        fake.reuse_signature = fake.reuse_signature.__get__(fake)
+        with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=[]):
+            self.assertTrue(SysrootBuilder.plan_prepared_refresh(fake, {'signature': old}, '/obj'))
+            new['flags'].append('CFLAGS=-unsafe')
+            self.assertFalse(SysrootBuilder.plan_prepared_refresh(fake, {'signature': old}, '/obj'))
+            new['flags'].pop()
+            new['compiler']['abi'] = 'changed'
+            self.assertFalse(SysrootBuilder.plan_prepared_refresh(fake, {'signature': old}, '/obj'))
+
+    def test_bootstrap_moved_headers_plan_preserves_unrelated_objects(self):
+        old, new, fixture = self.bootstrap_contexts()
+        update = runtime_refresh.bootstrap_update(old, new)
+        with tempfile.TemporaryDirectory() as temp:
+            root, obj = Path(temp) / 'os', Path(temp) / 'obj'
+            (root / 'share/mk').mkdir(parents=True)
+            (root / 'share/mk/prepared-source-refresh.json').write_text(json.dumps({
+                'version': 1, 'sources': {}, 'header_independent_object_patterns': [],
+                'header_independent_archive_patterns': []}))
+            for name, dep in (('consumer', '/usr/pkg/llvm/include/unwind.h'), ('other', '/usr/include/stdio.h')):
+                (root / name).mkdir(parents=True)
+                (root / name / 'Makefile').touch()
+                (obj / name).mkdir(parents=True)
+                (obj / name / 'item.o').write_bytes(b'object')
+                (obj / name / 'item.d').write_text('item.o: ' + dep + '\n')
+            self.assertEqual(prepared_refresh.plan(root, obj, set(), extra_headers=update['headers']), ['consumer'])
+            self.assertEqual((obj / 'other/item.o').read_bytes(), b'object')
+
     def test_recorded_locale_dso_pair_and_prefix_move_refresh_without_tree_hashing(self):
         with patch('emberbsd_sdk.inventory.snapshot_tree', side_effect=AssertionError('unexpected tree hash')):
             update = runtime_refresh.cpp_update(self.before, self.after)
