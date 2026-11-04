@@ -13,7 +13,7 @@ import subprocess
 import tarfile
 import tempfile
 
-from .binary_catalog import (CATALOG_SCHEMA, node_root, parse_catalog, parse_summary,
+from .binary_catalog import (CATALOG_SCHEMA, load_release_catalogs, node_root, parse_catalog, parse_summary,
                              runtime_projection, scalar)
 from .elf import parse_elf_header
 from .errors import SDKError
@@ -484,23 +484,6 @@ def _statistics(previous, release):
 
 
 def load_catalogs(crypto, envelope, directory, trust, repositories):
-    """Load only selected small metadata files; package payloads can be remote."""
+    """Authenticate the release and load its selected catalog metadata."""
     release = parse_release(crypto.verify_cms(read_bytes(envelope), trust))
-    catalogs = []
-    requested = set(repositories)
-    for artifact in release['artifacts']:
-        if artifact['kind'] != 'package-index' or not artifact['path'].endswith('/catalog.json'):
-            continue
-        repository = artifact['path'].split('/')[0]
-        if requested and repository not in requested:
-            continue
-        data = read_bytes(local_artifact(directory, artifact['path']))
-        if len(data) != artifact['size'] or hashlib.sha256(data).hexdigest() != artifact['sha256']:
-            raise SDKError('binary catalog size or SHA256 differs from signed release')
-        catalog = parse_catalog(data, release, artifact)
-        if catalog['repository'] != repository:
-            raise SDKError('catalog repository differs from its signed path')
-        catalogs.append(catalog)
-    if requested - {catalog['repository'] for catalog in catalogs}:
-        raise SDKError('requested binary repository is missing')
-    return release, catalogs
+    return release, load_release_catalogs(release, directory, repositories)

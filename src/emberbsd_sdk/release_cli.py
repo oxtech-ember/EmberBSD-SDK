@@ -7,6 +7,7 @@ import hashlib
 from pathlib import Path
 import sys
 
+from .binary_catalog import load_release_catalogs
 from .errors import SDKError
 from .jsonio import json_bytes, loads_json
 from .paths import regular_file, verify_stable
@@ -24,6 +25,7 @@ def _check_packages(crypto, release, directory, trust):
 def verify_release(crypto, envelope, directory, trust):
     release = parse_release(crypto.verify_cms(envelope, trust))
     verify_payloads(release, directory)
+    load_release_catalogs(release, directory)
     _check_packages(crypto, release, directory, trust)
     return release
 
@@ -60,6 +62,7 @@ def seal_release(crypto, draft, directory, identity, trust, output, *, reuse_cur
         artifact.update(file_reference(path))
     content = json_bytes(value)
     release = parse_release(content)
+    load_release_catalogs(release, directory)
     local_ids = {relative for relative, _, _ in inputs}
     local_release = dict(release, artifacts=[item for item in release['artifacts']
                                              if item['path'] in local_ids])

@@ -9,6 +9,9 @@ The [release format](signed-releases.md) remains the trust and artifact format.
 One release can include native and target repositories. One native tool archive
 serves all targets on that host. Each repository has exactly one host or target
 identity, including the declared ABI/runtime.
+Sealing, offline verification and sparse publication validate each catalog against
+the complete release inventory, including exact repository platform identities.
+Correcting metadata does not require rebuilding unchanged package payloads.
 
 ## Produce a catalog
 

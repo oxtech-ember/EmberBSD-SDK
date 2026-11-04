@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import time
 
+from .binary_catalog import load_release_catalogs
 from .errors import SDKError
 from .jsonio import json_bytes, loads_json
 from .paths import open_regular, verify_stable
@@ -121,6 +122,8 @@ def publish_release(crypto, store, public, envelope_path, identity, trust,
     envelope = read_bytes(envelope_path)
     release = (parse_release(crypto.verify_cms(envelope, trust)) if reuse_current else
                verify_release(crypto, envelope, envelope_path.parent, trust))
+    if reuse_current:
+        load_release_catalogs(release, envelope_path.parent)
     base = 'current/metadata/' + hashlib.sha256(envelope).hexdigest()
     keys = [artifact_key(item, base) for item in release['artifacts']]
     if len({key.casefold() for key in keys}) != len(keys):
