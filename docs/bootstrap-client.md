@@ -44,8 +44,9 @@ SDK. `--config /absolute/client.json` selects an explicit configuration, includi
 the common Ports source-build inputs. A missing binary without those inputs
 reports what needs to be prepared. With a published compiler set and target
 sysroot, `ember-sdk install --set sdk-c --target aarch64` acquires both and
-creates the target compiler commands. Coherent installed-component updates
-and additional host platforms remain separate work.
+creates the target compiler commands. Repeating `install` also applies compatible
+component updates; see the [client update boundary](sdk-client.md#cache-and-interruption).
+Coordinated ABI transitions and additional host platforms remain separate work.
 
 ## Producing the archive
 

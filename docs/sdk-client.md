@@ -57,7 +57,9 @@ python3 scripts/packages.py --config /work/client.json cache-clean
 
 Empty `plan`/`install` does nothing. Plans show roots, exact package names,
 dependencies, `installed`/`cache`/`download` actions, bytes to download/unpack,
-and roots requiring compilation. Successful installs remember the union of
+replaced package names, and roots requiring compilation. Installation reports
+reuse, additions, replacements, cache hits, download bytes and source roots.
+Successful installs remember the union of
 explicit roots in `selection.json`; pkg_tools remains the version/file owner.
 No packages are removed merely because a later task selects fewer roots.
 
@@ -169,12 +171,30 @@ it; older archives are removed first and the budget is restored after success.
 pkgdb, incremental build objects and remembered roots. Writer locks fail quickly
 instead of waiting indefinitely; after a crash, remove a named lock only after
 confirming its owner stopped. Re-running a partially completed install reads
-pkgdb and continues the missing packages. pkg_add does not provide an atomic
+pkgdb and continues the missing packages. Qualified native package hooks are
+deferred until all selected package payloads have been installed and relocated;
+this lets one package's configuration use tools delivered by another selected
+package. If a hook fails, its package remains registered and pending. The next
+selection reads pkgdb without rerunning hooks, installs any missing packages,
+then retries pending configuration. pkg_add does not provide an atomic
 multi-package rollback, and the client does not claim one.
-This first installer adds missing components and reuses exact installed versions.
-Replacing a different installed binary version is refused before mutation;
-coherent updates including installed reverse dependencies belong to the update
-path. Existing Ports source builds retain their owner-defined replacement rules.
+Re-running `install` selects the current versions of the requested components
+and their dependencies. Exact installed versions are reused. Compatible
+replacements use `pkg_add -U`, preserving the package database and reverse
+dependencies. Before the first package changes, the client checks the installed
+state under its database lock and checks every replacement against installed
+consumers using pkg_tools dependency patterns. A library replacement must retain
+its old providers while installed consumers exist; `REQUIRES` alone does not
+describe all dynamically loaded libraries. Native provider paths are compared
+relative to their package prefixes.
+
+This supports in-place component and package revision updates. It deliberately
+refuses transitions which require removing library providers or replacing an
+installed consumer before its dependency can change. Such coordinated ABI
+transitions, sysroot replacement and updating tools during an active build remain
+separate work. Do not update a prefix while a build uses it. A configured Ports
+source build and binary installation share the existing build lock. Existing
+Ports source builds retain their owner-defined replacement rules.
 
 ## Client artifact and validation boundary
 

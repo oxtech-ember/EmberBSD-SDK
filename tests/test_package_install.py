@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -12,6 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.package_install import PackageInstaller, inspect_install_paths, PORTABLE_PREFIX
+from emberbsd_sdk.package_updates import check_updates
 from emberbsd_sdk import bootstrap_bundle, package_relocation
 
 
@@ -37,15 +39,20 @@ class InstallTests(unittest.TestCase):
                         host=dict(os=platform.system(), arch=platform.machine(), abi='test', runtime='native'))
 
     def package(self, *, target=False, link=None, commands='', arch='aarch64', requires_self=False, preserve=False,
-                payload='installed data', provides=False, install_script=None, package_name='fixture-1.0', build_version=None):
+                payload='installed data', provides=False, install_script=None, package_name='fixture-1.0',
+                payload_path='payload', executable=False, build_version=None):
         stage = self.work / 'stage'
         stage.mkdir()
+        payload_file = stage / payload_path
+        payload_file.parent.mkdir(parents=True, exist_ok=True)
         if link:
-            (stage / 'payload').symlink_to(link)
+            payload_file.symlink_to(link)
         else:
-            (stage / 'payload').write_text(payload)
+            payload_file.write_text(payload)
+        if executable:
+            payload_file.chmod(0o755)
         prefix = '/usr/pkg' if target else str(self.destination)
-        (stage / 'PLIST').write_text('@name ' + package_name + '\npayload\n' + commands)
+        (stage / 'PLIST').write_text('@name ' + package_name + '\n' + payload_path + '\n' + commands)
         (stage / 'INFO').write_text('PKGPATH=devel/fixture\nDISTNAME=fixture-1.0\nLICENSE=2-clause-bsd\n' +
             f'LOCALBASE={prefix}\nCFLAGS=-I{prefix}/include\n' +
             (f'REQUIRES={prefix}/payload\n' if requires_self else '') +
@@ -79,6 +86,38 @@ class InstallTests(unittest.TestCase):
         installer.install(package, self.cfg)
         self.assertEqual((self.destination / 'payload').read_text(), 'installed data')
         self.assertIn('fixture-1.0', installer.installed(self.cfg))
+
+    def test_signed_pkg_tools_replacement_preserves_installed_consumer(self):
+        installer = PackageInstaller(self.crypto, self.ca.certificate)
+        original = self.package(package_name='fixture-1.0', provides=True)
+        installer.install(original, self.cfg)
+        original = original.with_name('original.tgz')
+        (self.work / 'fixture-1.0.tgz').replace(original)
+        shutil.rmtree(self.work / 'stage')
+        consumer = self.package(package_name='consumer-1.0', payload_path='share/consumer',
+                                commands='@pkgdep fixture>=1\n')
+        installer.install(consumer, self.cfg)
+        consumer = consumer.with_name('consumer.tgz')
+        (self.work / 'fixture-1.0.tgz').replace(consumer)
+        shutil.rmtree(self.work / 'stage')
+
+        old_required_by = self.destination / 'pkgdb/fixture-1.0/+REQUIRED_BY'
+        self.assertIn('consumer-1.0', old_required_by.read_text().splitlines())
+        replacement = self.package(package_name='fixture-2.0', provides=True,
+                                   payload='replacement data')
+        packages = [dict(pkgname='fixture-2.0', replaces=['fixture-1.0'],
+                         artifact={'id': 'replacement'}, action='download')]
+        check_updates(self.crypto, self.destination / 'pkgdb', packages,
+                      {'replacement': replacement}, installer.installed(self.cfg))
+        installer.install(replacement, self.cfg)
+
+        self.assertEqual((self.destination / 'payload').read_text(), 'replacement data')
+        self.assertNotIn('fixture-1.0', installer.installed(self.cfg))
+        self.assertIn('fixture-2.0', installer.installed(self.cfg))
+        self.assertIn('consumer-1.0',
+                      (self.destination / 'pkgdb/fixture-2.0/+REQUIRED_BY').read_text().splitlines())
+        self.assertIn('@pkgdep fixture>=1',
+                      (self.destination / 'pkgdb/consumer-1.0/+CONTENTS').read_text())
 
     def test_target_scripts_do_not_run_on_host(self):
         marker = self.work / 'executed'
@@ -185,6 +224,40 @@ class InstallTests(unittest.TestCase):
         self.assertEqual((metadata / 'configured').read_text(), 'configured')
         self.assertNotIn(package_relocation.HOOKS, (metadata / '+CONTENTS').read_text())
         self.assertFalse((metadata / package_relocation.READY).exists())
+
+    @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
+    def test_batch_defers_hook_until_later_tool_is_installed_and_retries(self):
+        hook = self.package(package_name='hook-1.0', install_script='#!/bin/sh\n'
+            'if [ "$2" = POST-INSTALL ]; then\n'
+            '  test -x "$PKG_PREFIX/bin/later-tool" || exit 9\n'
+            '  printf configured > "$PKG_METADATA_DIR/configured"\n'
+            'fi\n')
+        portable, signed = self.work / 'hook-portable.tgz', self.work / 'hook-signed.tgz'
+        subprocess.run([sys.executable, '-B', str(Path(__file__).resolve().parents[1] / 'scripts/package-portable.py'),
+            str(hook), '--host-prefix', os.environ['EMBERBSD_TEST_HOST_PREFIX'],
+            '--dependency-prefix', str(self.work / 'unused'), '--output', str(portable), '--relocate-text',
+            '--defer-hooks', '--bootstrap-install-name-tool', '/usr/bin/false', '--codesign', '/usr/bin/false'],
+            check=True, capture_output=True)
+        self.crypto.sign_package(portable, signed, self.signer, self.ca.certificate)
+        hook.unlink()
+        installer = PackageInstaller(self.crypto, self.ca.certificate)
+        installer.install(signed, self.cfg, configure=False)
+        self.assertEqual(list(package_relocation.pending(self.destination, self.destination / 'pkgdb')),
+                         ['hook-1.0'])
+
+        # Configuration failure leaves the signed package registered and pending.
+        with self.assertRaisesRegex(SDKError, 'package configuration failed: hook-1.0'):
+            installer.configure(self.cfg)
+        self.assertIn('hook-1.0', installer.installed(self.cfg, recover=False))
+
+        shutil.rmtree(self.work / 'stage')
+        tool = self.package(package_name='later-tool-1', payload_path='bin/later-tool', executable=True)
+        installer.install(tool, self.cfg)
+        self.assertTrue((self.destination / 'bin/later-tool').is_file())
+        installer.configure(self.cfg)
+        metadata = self.destination / 'pkgdb/hook-1.0'
+        self.assertEqual((metadata / 'configured').read_text(), 'configured')
+        self.assertEqual(list(package_relocation.pending(self.destination, self.destination / 'pkgdb')), [])
 
     @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
     def test_portable_package_revision_preserves_payload_and_build_provenance(self):

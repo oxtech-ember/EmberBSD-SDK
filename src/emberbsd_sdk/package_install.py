@@ -125,11 +125,11 @@ class PackageInstaller:
         self.crypto, self.trust = crypto, Path(trust)
         self._checked = {}
 
-    def installed(self, config):
+    def installed(self, config, *, recover=True):
         prefix, database = install_paths(config)
         if not database.exists():
             return set()
-        if not config.get('target') and list(package_relocation.pending(prefix, database)):
+        if recover and not config.get('target') and list(package_relocation.pending(prefix, database)):
             with directory_lock(database.parent / (database.name + '.sdk-lock')):
                 for name in package_relocation.pending(prefix, database):
                     package_relocation.finish(prefix, database, name)
@@ -139,13 +139,29 @@ class PackageInstaller:
             raise SDKError('cannot read installed package database: ' + result.stderr.decode('utf-8', 'replace'))
         return set(result.stdout.decode('utf-8').splitlines())
 
+    def configure(self, config):
+        """Finish deferred native package hooks after the selected batch is installed.
+
+        The caller holds the selected repository's SDK pkgdb lock.
+        """
+        if config.get('target'):
+            return
+        prefix, database = install_paths(config)
+        for name in package_relocation.pending(prefix, database):
+            package_relocation.finish(prefix, database, name)
+
     def check(self, package, config):
         self.crypto.verify_package(package, self.trust)
         result = inspect_install_paths(package, config)
         self._checked[str(Path(package).absolute())] = result
         return result
 
-    def install(self, package, config, *, checked=False):
+    def check_updates(self, packages, archives, config):
+        from .package_updates import check_updates
+        _, database = install_paths(config)
+        check_updates(self.crypto, database, packages, archives, self.installed(config, recover=False))
+
+    def install(self, package, config, *, checked=False, configure=True):
         if not checked:
             self.check(package, config)
         key = str(Path(package).absolute())
@@ -174,4 +190,4 @@ class PackageInstaller:
                 name, relocation, deferred_hooks = selected
                 if relocation is not None and (relocation[0] != str(prefix) or deferred_hooks):
                     (database / name / package_relocation.READY).write_text(relocation[0] + '\n')
-                package_relocation.finish(prefix, database, name)
+                package_relocation.finish(prefix, database, name, configure=configure)
