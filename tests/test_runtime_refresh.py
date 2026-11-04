@@ -102,7 +102,9 @@ class RuntimeRefreshTests(unittest.TestCase):
         old, new, fixture = self.bootstrap_contexts()
         metadata = copy.deepcopy(old)
         metadata['runtime']['manifest']['base']['os_revision'] = '9' * 40
+        metadata['runtime']['manifest']['recipe']['ports_revision'] = '8' * 40
         self.assertEqual(runtime_refresh.bootstrap_update(old, metadata), {'headers': (), 'linked': ()})
+        new['runtime']['manifest']['recipe']['ports_revision'] = '8' * 40
         self.assertEqual(runtime_refresh.bootstrap_update(old, new),
                          {'headers': ('usr/pkg/llvm/include/',), 'linked': ()})
         unwind = Path(new['flags'][-1].split('=', 1)[1])
@@ -125,6 +127,11 @@ class RuntimeRefreshTests(unittest.TestCase):
             if field == 'base': target = target['files']
             target[next(iter(target))] = '9' * 64
             cases.append((field, bad))
+        bad = copy.deepcopy(new)
+        recipe = bad['runtime']['manifest']['recipe']
+        recipe['ports_revision'] = '8' * 40
+        recipe['files'][next(iter(recipe['files']))] = '9' * 64
+        cases.append(('changed recipe file with new commit', bad))
         for field, value in (('inventory', {'changed': True}), ('root_mode', 448)):
             bad = copy.deepcopy(new)
             bad['runtime'][field] = value
