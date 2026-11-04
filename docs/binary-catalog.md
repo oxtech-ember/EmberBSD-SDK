@@ -99,6 +99,10 @@ Missing LICENSE, nonempty NO_BIN_ON_FTP/RESTRICTED and payload size exceeding
 SIZE_PKG are rejected. Declared redistribution checks do not replace license
 review. Target payloads are inspected without extraction: direct little-endian
 ELF headers must match the CPU; ordinary Mach-O/PE host files are rejected.
+Native package composition requires exactly one qualified prefix-independent or
+text relocation declaration in the packing list. This declaration does not
+prove that binaries work after relocation; producers still run relocated runtime
+checks. Target packages are unaffected.
 Nested static archives, universal Mach-O, foreign ELF OS ABI, linkage and
 runtime behavior remain package-producer checks, not catalog guarantees.
 

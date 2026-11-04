@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
@@ -108,12 +109,12 @@ class BinaryReleaseTests(unittest.TestCase):
         self.spec = dict(schema='emberbsd.package-build.v1', release_id='test', created_at=1,
             sources={name: 'a' * 40 for name in ('os', 'ports', 'sdk')}, repositories=[])
 
-    def package(self, root, *, opsys='NetBSD', arch='aarch64', depends=(), payload=b'fixture data\n'):
+    def package(self, root, *, opsys='NetBSD', arch='aarch64', depends=(), payload=b'fixture data\n', marker=''):
         name = root.rsplit('/', 1)[-1] + '-1.0'
         work = self.work / (name + '-' + opsys + '-' + arch)
         work.mkdir()
         (work / 'payload').write_bytes(payload)
-        (work / 'PLIST').write_text(f'@name {name}\npayload\n')
+        (work / 'PLIST').write_text(f'@name {name}\n{marker}payload\n')
         (work / 'BUILD_INFO').write_text(f'PKGPATH={root}\nOPSYS={opsys}\nMACHINE_ARCH={arch}\n'
                                        'OS_VERSION=11.0\nLICENSE=2-clause-bsd\n')
         (work / 'SIZE').write_text(str(len(payload)))
@@ -188,6 +189,53 @@ class BinaryReleaseTests(unittest.TestCase):
         compose(self.crypto, self.spec, self.ports, self.work / 'next', self.leaf, self.ca.certificate)
         for name, data in expected.items():
             self.assertEqual((self.work / 'next/arm64' / name).read_bytes(), data)
+
+    def test_native_compose_requires_qualified_relocation(self):
+        from emberbsd_sdk.binary_release import compose, inspect_package
+        from emberbsd_sdk.package_relocation import INDEPENDENT, MARKER, SOURCE, TEXT
+        repo = dict(id='host', host=dict(os='Darwin', arch='arm64', abi='macos-27',
+                    runtime='libSystem'), target=None, graph=str(self.graph_path),
+                    sets=['kernel'], packages={})
+        self.spec['repositories'].append(repo)
+        raw = self.package('devel/generator', opsys='Darwin')
+        repo['packages']['host:devel/generator'] = raw
+        with patch.object(self.crypto, 'sign_package', wraps=self.crypto.sign_package) as sign:
+            with self.assertRaisesRegex(SDKError, 'qualified relocation'):
+                self.compose()
+            sign.assert_not_called()
+        self.assertFalse((self.work / 'release').exists())
+        # Inspection of target and raw producer remains available.
+        inspect_package(raw, None)
+        with self.assertRaisesRegex(SDKError, 'qualified relocation'):
+            inspect_package(raw, None, require_native_relocation=True)
+        signed = self.work / 'signed-raw.tgz'
+        self.crypto.sign_package(raw, signed, self.leaf, self.ca.certificate)
+        with self.assertRaisesRegex(SDKError, 'qualified relocation'):
+            inspect_package(signed, None, require_native_relocation=True)
+        for index, declaration in enumerate((INDEPENDENT, MARKER + '\n' + SOURCE + str(self.work / 'generator-1-1.0-Darwin-aarch64') + '\n' + TEXT + 'payload')):
+            path = self.package('devel/generator-' + str(index), opsys='Darwin', marker=declaration + '\n')
+            inspect_package(path, None, require_native_relocation=True)
+            signed_path = self.work / ('qualified-' + str(index) + '.tgz')
+            self.crypto.sign_package(path, signed_path, self.leaf, self.ca.certificate)
+            inspect_package(signed_path, None, require_native_relocation=True)
+        for index, declaration in enumerate((INDEPENDENT + '\n' + INDEPENDENT,
+                                               INDEPENDENT + '\n' + MARKER,
+                                               MARKER + '\n' + SOURCE + 'relative')):
+            path = self.package('devel/invalid-' + str(index), opsys='Darwin', marker=declaration + '\n')
+            with self.subTest(declaration=declaration), self.assertRaises(SDKError):
+                inspect_package(path, None, require_native_relocation=True)
+
+    def test_text_relocation_host_compose(self):
+        from emberbsd_sdk.package_relocation import MARKER, SOURCE, TEXT
+        prefix = self.work / 'generator-1.0-Darwin-aarch64'
+        marker = '\n'.join((MARKER, SOURCE + str(prefix), TEXT + 'payload')) + '\n'
+        package = self.package('devel/generator', opsys='Darwin', marker=marker)
+        self.spec['repositories'].append(dict(id='host',
+            host=dict(os='Darwin', arch='arm64', abi='macos-27', runtime='libSystem'),
+            target=None, graph=str(self.graph_path), sets=['kernel'],
+            packages={'host:devel/generator': package}))
+        self.compose()
+        self.assertTrue((self.work / 'release/host/generator-1.0.tgz').exists())
 
     def test_signed_foreign_binary_does_not_bypass_target_inspection(self):
         repo = self.repository()
@@ -289,7 +337,7 @@ class BinaryReleaseTests(unittest.TestCase):
         self.spec['repositories'].append(dict(id='host',
             host=dict(os='Darwin', arch='arm64', abi='macos-27', runtime='libSystem'), target=None,
             graph=str(self.graph_path), sets=['kernel'],
-            packages={'host:devel/generator': self.package('devel/generator', opsys='Darwin')}))
+            packages={'host:devel/generator': self.package('devel/generator', opsys='Darwin', marker='@comment emberbsd-prefix-independent-v1\n')}))
         self.compose()
         directory = self.work / 'release'
         release, catalogs = load_catalogs(self.crypto, directory / 'release.p7m', directory,
