@@ -99,7 +99,10 @@ A missing or empty LICENSE is represented in the signed release as SPDX
 [`NOASSERTION`](https://spdx.github.io/spdx-spec/v2.3/package-information/#713-concluded-license-field): no license terms are asserted. This identifier does not grant
 redistribution rights. Declared nonempty LICENSE values are preserved. Duplicate
 or malformed metadata, nonempty NO_BIN_ON_FTP/RESTRICTED and payload size
-exceeding SIZE_PKG are rejected. Declared redistribution checks do not replace
+exceeding SIZE_PKG are rejected. For target packages, each `/usr/pkg/` REQUIRES path must be present in
+PROVIDES of the package itself or its reachable runtime dependency closure.
+Requirements outside `/usr/pkg/` belong to the target base and are not verified
+by this package-only check. Declared redistribution checks do not replace
 license review. Target payloads are inspected without extraction: direct little-endian
 ELF headers must match the CPU; ordinary Mach-O/PE host files are rejected.
 Native package composition requires exactly one qualified prefix-independent or

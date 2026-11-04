@@ -254,6 +254,24 @@ def _prepare_repository(crypto, spec, ports_root, sources, trust):
         for pattern in item['record'].get('DEPENDS', []):
             if sum(_matches(crypto, pattern, provider) for provider in providers) != 1:
                 raise SDKError(f'archive dependency absent or ambiguous in resolved runtime graph: {identity}: {pattern}')
+    if role == 'target':
+        # Resolve provided package-prefix paths through the already selected
+        # runtime graph.  A separate root cannot satisfy this consumer.
+        provided = {key: set(item['record'].get('PROVIDES', []))
+                    for key, item in entries.items()}
+        while True:
+            changed = False
+            for key, item in entries.items():
+                before = len(provided[key])
+                for child in item['node']['dependencies']:
+                    provided[key].update(provided[child])
+                changed |= len(provided[key]) != before
+            if not changed:
+                break
+        for key, item in entries.items():
+            for path in item['record'].get('REQUIRES', []):
+                if path.startswith('/usr/pkg/') and path not in provided[key]:
+                    raise SDKError(f'package runtime file absent from dependency closure: {key}: {path}')
     return spec, sets, entries
 
 
