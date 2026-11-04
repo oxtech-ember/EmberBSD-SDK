@@ -214,6 +214,7 @@ class LLVMCoordinator:
                                   'tools': self.tools}
         options.pop('llvm-runtime-stage', None)
         if phase != 'final':
+            options.pop('update-stage', None)
             options['base-cxx'] = False
         if phase == 'base':
             options['llvm-runtime-stage'] = os.path.join(self.runtime_root, 'bootstrap-stage')
@@ -253,7 +254,11 @@ class LLVMCoordinator:
             raise SDKError('destination must not be below the active sysroot; use SDK/stages/NAME')
         paths.reject_overlap(final, self.work)
         paths.reject_overlap(final, self.stage_root)
-        if paths.entry(final) is not None and os.listdir(final):
+        if self.options.get('update-stage'):
+            if not paths.inside(final, os.path.join(self.headers.paths['sdk'], 'stages')):
+                raise SDKError('update destination must be inside SDK/stages')
+            self.builder_type.validate_update_stage_structure(final, self.options['target'])
+        elif paths.entry(final) is not None and os.listdir(final):
             raise SDKError('destination must be new or empty; active sysroot is never overwritten')
         # The OS phases build the shared tools first; a fresh release needs
         # them new at the start of the run. Its objects are checked by the

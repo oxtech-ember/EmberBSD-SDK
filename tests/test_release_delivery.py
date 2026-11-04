@@ -5,6 +5,7 @@
 import hashlib
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import sys
 import tempfile
 import time
@@ -151,6 +152,109 @@ class DeliveryTests(unittest.TestCase):
                                          reuse_current=True), result)
         self.assertEqual(self.public.head('current/host/darwin-arm64/payload')['content-length'],
                          str(len(b'payload' * 1000)))
+
+    def _sparse_addition(self, name):
+        first = self.release()
+        self.publish(first)
+        with patch.object(self.crypto, 'verify_package'):
+            sparse = self.sparse_release(name, first,
+                                         extra=('newpkg-1.0.tgz', b'signed package fixture'))
+        return sparse
+
+    def test_sparse_retry_same_generation_after_current_verify_failure(self):
+        sparse = self._sparse_addition('current-verify-retry')
+        self.server.objects['/bucket/current/obsolete.bin'] = b'obsolete'
+        original_verify = self.public.verify
+        failed = False
+
+        def fail_once(key, *args, **kwargs):
+            nonlocal failed
+            if key == 'current.p7m' and not failed:
+                failed = True
+                raise SDKError('injected current verification failure')
+            return original_verify(key, *args, **kwargs)
+
+        with patch.object(self.crypto, 'verify_package'), \
+                patch.object(self.public, 'verify', side_effect=fail_once):
+            with self.assertRaisesRegex(SDKError, 'injected current verification failure'):
+                publish_release(self.crypto, self.store, self.public, sparse, self.signer,
+                                self.ca.certificate, expected_generation=1, reuse_current=True)
+        committed = self.server.objects['/bucket/current.p7m']
+        with patch.object(self.crypto, 'verify_package'):
+            retried = publish_release(self.crypto, self.store, self.public, sparse, self.signer,
+                                      self.ca.certificate, expected_generation=1, reuse_current=True)
+        self.assertEqual(retried['generation'], 2)
+        self.assertEqual(self.server.objects['/bucket/current.p7m'], committed)
+        self.assertNotIn('/bucket/current/obsolete.bin', self.server.objects)
+
+    def test_sparse_retry_same_generation_after_cleanup_failure(self):
+        sparse = self._sparse_addition('current-cleanup-retry')
+        self.server.objects['/bucket/current/obsolete.bin'] = b'obsolete'
+        with patch.object(release_delivery, '_clean_current',
+                          side_effect=SDKError('injected cleanup failure')), \
+                patch.object(self.crypto, 'verify_package'):
+            with self.assertRaisesRegex(SDKError, 'injected cleanup failure'):
+                publish_release(self.crypto, self.store, self.public, sparse, self.signer,
+                                self.ca.certificate, expected_generation=1, reuse_current=True)
+        committed = self.server.objects['/bucket/current.p7m']
+        with patch.object(self.crypto, 'verify_package'):
+            retried = publish_release(self.crypto, self.store, self.public, sparse, self.signer,
+                                      self.ca.certificate, expected_generation=1, reuse_current=True)
+        self.assertEqual(retried['generation'], 2)
+        self.assertEqual(self.server.objects['/bucket/current.p7m'], committed)
+        self.assertNotIn('/bucket/current/obsolete.bin', self.server.objects)
+
+    def test_identical_release_refresh_does_not_bypass_generation_check(self):
+        release = self.release()
+        self.publish(release)
+        before = dict(self.server.objects)
+        with self.assertRaisesRegex(SDKError, 'expected generation 0, found 1'):
+            publish_release(self.crypto, self.store, self.public, release, self.signer,
+                            self.ca.certificate, expected_generation=0, refresh=True)
+        self.assertEqual(self.server.objects, before)
+
+    def test_identical_expired_release_does_not_bypass_generation_check(self):
+        release = self.release()
+        with patch.object(release_delivery.time, 'time', return_value=100000):
+            publish_release(self.crypto, self.store, self.public, release, self.signer,
+                            self.ca.certificate, ttl=1, expected_generation=0)
+        before = dict(self.server.objects)
+        with self.assertRaisesRegex(SDKError, 'expected generation 0, found 1'):
+            publish_release(self.crypto, self.store, self.public, release, self.signer,
+                            self.ca.certificate, expected_generation=0)
+        self.assertEqual(self.server.objects, before)
+
+    def test_identical_retry_expiring_during_publish_does_not_advance_pointer(self):
+        release = self.release()
+        base = int(time.time())
+        with patch.object(release_delivery, 'time', SimpleNamespace(time=lambda: base)):
+            first = publish_release(self.crypto, self.store, self.public, release, self.signer,
+                                    self.ca.certificate, ttl=60)
+        pointer = self.server.objects['/bucket/current.p7m']
+        self.assertEqual(first['generation'], 1)
+
+        reads = 0
+        def advancing_clock():
+            nonlocal reads
+            reads += 1
+            return base + 30 if reads <= 2 else base + 61
+
+        current_puts = []
+        original_put = self.store.put
+        def count_current_put(key, *args, **kwargs):
+            if key == 'current.p7m':
+                current_puts.append(key)
+            return original_put(key, *args, **kwargs)
+
+        with patch.object(release_delivery, 'time', SimpleNamespace(time=advancing_clock)), \
+                patch.object(self.store, 'put', side_effect=count_current_put):
+            with self.assertRaisesRegex(SDKError, 'expected generation 0, found 1'):
+                publish_release(self.crypto, self.store, self.public, release, self.signer,
+                                self.ca.certificate, expected_generation=0)
+
+        self.assertGreaterEqual(reads, 3)
+        self.assertEqual(current_puts, [])
+        self.assertEqual(self.server.objects['/bucket/current.p7m'], pointer)
 
     def test_sparse_publish_rejects_unknown_or_changed_missing_record(self):
         first = self.release()
@@ -436,6 +540,26 @@ class PublicationRetryTests(unittest.TestCase):
             self.publish(release)
         self.assertEqual(self.server.objects, before)
 
+    def test_stale_retry_requires_the_complete_authenticated_reference(self):
+        release = self.release()
+        self.publish(release)
+        key = '/bucket/current.p7m'
+        envelope = self.server.objects[key]
+        from emberbsd_sdk.jsonio import loads_json
+        pointer = loads_json(self.crypto.verify_cms(envelope, self.ca.certificate))
+        for field, value in (('path', 'current/metadata/other/release.p7m'),
+                             ('size', pointer['release']['size'] + 1)):
+            with self.subTest(field=field):
+                changed = dict(pointer, release=dict(pointer['release'], **{field: value}))
+                self.server.objects[key] = self.crypto.sign_cms(json_bytes(changed), self.signer,
+                                                                 self.ca.certificate)
+                before = dict(self.server.objects)
+                with patch.object(release_delivery, '_immutable') as upload:
+                    with self.assertRaisesRegex(SDKError, 'current changed'):
+                        self.publish(release)
+                upload.assert_not_called()
+                self.assertEqual(self.server.objects, before)
+
     def test_future_generation_and_refresh_still_require_current_generation(self):
         release = self.release()
         self.publish(release)
@@ -466,7 +590,7 @@ class PublicationRetryTests(unittest.TestCase):
         before = dict(self.server.objects)
         with patch.object(release_delivery.time, 'time', side_effect=lambda: now[0]), \
                 patch.object(self.public, 'verify', side_effect=expire):
-            with self.assertRaisesRegex(SDKError, 'expired during retry'):
+            with self.assertRaisesRegex(SDKError, 'expected generation 0, found 1; current expired during retry'):
                 self.publish(release)
         self.assertEqual(self.server.objects, before)
 

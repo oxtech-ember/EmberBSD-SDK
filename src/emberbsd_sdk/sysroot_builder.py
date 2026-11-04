@@ -1857,7 +1857,8 @@ class SysrootBuilder:
         # Commit metadata stays out of the signature: the same OS tree at a new
         # commit reuses compatible objects. build.sh derives a missing
         # MKREPRO_TIMESTAMP from VCS tools that the sanitized PATH omits.
-        for flag in self.flags + ['MKREPRO_TIMESTAMP=' + str(self.source_timestamp()),
+        for flag in self.flags + ['EMBER_SOURCE_GIT=' + self.git_command,
+                                  'MKREPRO_TIMESTAMP=' + str(self.source_timestamp()),
                                   'BUILDINFO=EmberBSD:' + self.sources['os']['commit']]:
             self.build_command.extend(('-V', flag))
         self.os_build_operations = (['libs'] if getattr(self, 'coordinator_tools_ready', False)
@@ -1875,12 +1876,13 @@ class SysrootBuilder:
             self.validate_update_stage()
         return self.receipt
 
-    def validate_update_stage(self):
+    @classmethod
+    def validate_update_stage_structure(cls, destination, target):
         # A claimed update retains its original identity in the marker.  An
         # interrupted run is never exportable but can be resumed by its owner.
         from . import sysroot_transfer
-        destination = self.paths['destination']
-        marker = os.path.join(destination, self.MARKER)
+        marker = os.path.join(destination, cls.MARKER)
+        current = None
         if paths.entry(marker) is not None:
             record = jsonio.read_json(marker)
             if record.get('format') != 'emberbsd-sysroot-stage-update' or record.get('version') != 1:
@@ -1888,22 +1890,28 @@ class SysrootBuilder:
             previous = record.get('previous')
             if not isinstance(previous, dict):
                 raise SDKError('invalid sysroot update identity')
-            current = jsonio.read_json(os.path.join(destination, self.RECEIPT))
+            current = jsonio.read_json(os.path.join(destination, cls.RECEIPT))
             if (current.get('qualification') not in ('incomplete', 'built-and-inspected') or
-                    not self.compatible_context(current, self.paths['objects']) or
-                    current.get('workspace', {}).get('target') != self.options['target']):
+                    current.get('workspace', {}).get('target') != target):
                 raise SDKError('interrupted sysroot update identity differs')
         else:
-            previous = jsonio.read_json(os.path.join(destination, self.RECEIPT))
-        sysroot_transfer._provenance(previous, self.options['target'])
+            previous = jsonio.read_json(os.path.join(destination, cls.RECEIPT))
+        sysroot_transfer._provenance(previous, target)
+        for relative in ('usr/pkg/pkgdb', 'var/db/pkg'):
+            if paths.entry(os.path.join(destination, relative)) is not None:
+                raise SDKError('sysroot stage contains an installed package database')
+        return previous, current
+
+    def validate_update_stage(self):
+        previous, current = self.validate_update_stage_structure(
+            self.paths['destination'], self.options['target'])
+        if current is not None and not self.compatible_context(current, self.paths['objects']):
+            raise SDKError('interrupted sysroot update identity differs')
         if not self.compatible_context(previous, self.paths['objects']):
             raise SDKError('sysroot stage build context differs')
         for name in ('sdk', 'destination', 'objects', 'tools', 'os', 'ports'):
             if previous.get('paths', {}).get(name) != self.paths.get(name):
                 raise SDKError('sysroot stage path context differs: ' + name)
-        for relative in ('usr/pkg/pkgdb', 'var/db/pkg'):
-            if paths.entry(os.path.join(destination, relative)) is not None:
-                raise SDKError('sysroot stage contains an installed package database')
         return previous
 
     def validate_updated_runtime(self, outputs):

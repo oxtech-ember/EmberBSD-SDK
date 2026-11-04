@@ -222,7 +222,8 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
     if stale_generation:
         # Payload verification can outlive the pointer. A retry with an old
         # generation must never turn into an unguarded expiry refresh.
-        raise SDKError('current expired during retry; read its generation before refreshing')
+        raise SDKError(f'current changed: expected generation {expected_generation}, found {generation}; '
+                       'current expired during retry; read its generation before refreshing')
     pointer = dict(schema='emberbsd.channel.v1', channel=CHANNEL,
                    generation=previous['generation'] + 1 if previous else 1,
                    issued_at=now, expires_at=now + ttl, release=reference)
