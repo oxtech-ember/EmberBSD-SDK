@@ -117,6 +117,57 @@ def bootstrap_update(before, after):
         return None
 
 
+def unchanged_full_update(before, after):
+    """Rebind identical full runtime outputs after rebuilding their foundation.
+
+    The base is a producer input, not an extra runtime payload. Its own headers
+    and libraries are refreshed by OS make and the prepared-source planner.
+    This case requires every runtime output and its ABI/source/recipe identity
+    to remain identical; it does not relax the changed-runtime ABI checks.
+    """
+    try:
+        if before.get('compiler_family') != 'clang' or after.get('compiler_family') != 'clang':
+            return None
+        selector = 'EMBER_LLVM_SOURCE='
+        previous = [flag for flag in before['flags'] if flag.startswith(selector)]
+        selected = [flag for flag in after['flags'] if flag.startswith(selector)]
+        if before['llvm_source'] != after['llvm_source'] or len(previous) != 1 or previous != selected:
+            return None
+        old, new = before['runtime']['manifest'], after['runtime']['manifest']
+        for manifest in (old, new):
+            llvm_runtime.validate_identity(manifest, required_components=llvm_runtime.FULL_COMPONENTS)
+            bootstrap = manifest['bootstrap']['files']
+            expected = (manifest['artifacts']['builtins'], manifest['artifacts']['libunwind']['static'])
+            if set(bootstrap) != set(expected):
+                return None
+        def comparable(manifest):
+            return {key: (dict(files=value['files']) if key in ('recipe', 'bootstrap') else value)
+                    for key, value in manifest.items() if key != 'base'}
+        if comparable(old) != comparable(new):
+            return None
+        if ({key: value for key, value in before['runtime'].items() if key != 'manifest'} !=
+                {key: value for key, value in after['runtime'].items() if key != 'manifest'}):
+            return None
+        for context, manifest in ((before, old), (after, new)):
+            stage = Path(context['runtime_prefix'])
+            if not stage.is_absolute():
+                return None
+            for part in reversed(Path(manifest['prefix']).parts):
+                if stage.name != part:
+                    return None
+                stage = stage.parent
+            routes = llvm_runtime.runtime_paths(str(stage), manifest)
+            for binding, role in (('EMBER_EXTERNAL_LLVM_RUNTIME=', 'runtime-prefix'),
+                                  ('EMBER_LLVM_RESOURCE_DIR=', 'llvm-resource')):
+                if [flag for flag in context['flags'] if flag.startswith(binding)] != [binding + routes[role]]:
+                    return None
+        moved = before['runtime_prefix'] != after['runtime_prefix']
+        return dict(headers=(new['prefix'] + '/include/', 'usr/include/c++/') if moved else (),
+                    linked=('libc++.so', 'libc++abi.so') if moved else ())
+    except (SDKError, KeyError, TypeError, AttributeError, ValueError):
+        return None
+
+
 def cpp_update(before, after):
     """Return header/link inputs to refresh, or None for incompatible changes.
 

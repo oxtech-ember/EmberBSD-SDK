@@ -173,6 +173,13 @@ For an otherwise identical bootstrap runtime, OS and Ports commit pins may
 advance while every recorded base input, recipe file and runtime payload digest
 stays unchanged. Moving that runtime still refreshes affected header consumers.
 
+A full runtime rebuilt against updated base libraries can also reuse objects
+when its entire recorded payload, modes, links, LLVM source, recipe files and
+target identity are unchanged. Base provenance and the bootstrap manifest pin
+may advance; the bootstrap archive digests and selected unwind binding must
+still match. Base headers and libraries keep their normal OS and prepared-source
+refresh paths. A moved runtime refreshes its header and C++ link consumers.
+
 For a Clang runtime update confined to C++ headers and the shared libc++ and
 libc++abi libraries, the same planner refreshes their header and link consumers.
 The LLVM release, target C ABI, artifact names, symlinks, builtins, unwinder and

@@ -663,17 +663,17 @@ class SysrootBuilder:
             if llvm_changed and (len(llvm_old) != 1 or len(llvm_new) != 1):
                 return False
             if llvm_changed or any(old.get(key) != new.get(key) for key in ('runtime', 'runtime_prefix')):
-                runtime = runtime_refresh.bootstrap_update(old, new)
-                if runtime is not None:
-                    runtime_kind = 'bootstrap'
-                else:
-                    runtime = runtime_refresh.cpp_update(old, new)
+                for kind, matcher in (('bootstrap', runtime_refresh.bootstrap_update),
+                                      ('unchanged-full', runtime_refresh.unchanged_full_update),
+                                      ('cpp', runtime_refresh.cpp_update)):
+                    runtime = matcher(old, new)
                     if runtime is not None:
-                        runtime_kind = 'cpp'
-                    else:
-                        runtime = runtime_refresh.builtins_update(old, new, recipe_guard=recipe_guard)
-                        if runtime is not None:
-                            runtime_kind = 'builtins'
+                        runtime_kind = kind
+                        break
+                if runtime is None:
+                    runtime = runtime_refresh.builtins_update(old, new, recipe_guard=recipe_guard)
+                    if runtime is not None:
+                        runtime_kind = 'builtins'
                 if runtime is not None:
                     for key in ('runtime', 'runtime_prefix', 'llvm_source'):
                         old[key] = copy.deepcopy(new[key])
@@ -712,7 +712,7 @@ class SysrootBuilder:
             if runtime_kind == 'bootstrap':
                 # bootstrap_update checked both bindings against the manifests.
                 prefixes += ('EMBER_LIBUNWIND_ARCHIVE=',)
-            if runtime_kind == 'builtins':
+            if runtime_kind in ('builtins', 'unchanged-full'):
                 binding = 'EMBER_LIBUNWIND_ARCHIVE='
                 previous = [f[len(binding):] for f in old_flags if f.startswith(binding)]
                 selected = [f[len(binding):] for f in new_flags if f.startswith(binding)]
@@ -772,7 +772,7 @@ class SysrootBuilder:
                 self.runtime_refresh_source = checked['selected']
                 self.runtime_refresh_changed = checked['changed']
             extra = (dict(extra_headers=runtime['headers'], extra_linked=runtime['linked'])
-                     if runtime_kind in ('cpp', 'bootstrap') else {})
+                     if runtime_kind in ('cpp', 'bootstrap', 'unchanged-full') else {})
             if getattr(self, 'llvm_phase', None) == 'headers' and self.compiler_family() == 'clang':
                 # Native producers have their own tools-context refresh.
                 extra['scan_consumers'] = False
