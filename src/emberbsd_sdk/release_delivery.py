@@ -145,6 +145,7 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
                      identity, trust, prefix, ttl, refresh, previous_channel_time, expected_generation,
                      reuse_current):
     release_key = _key(prefix, base + '/release.p7m')
+    reference = dict(id=release['release_id'], path=base + '/release.p7m', **_digest(envelope))
     channel_key = _key(prefix, 'current.p7m')
     old_envelope, old_headers = _optional_read(store, channel_key)
     now, previous = int(time.time()), None
@@ -166,10 +167,13 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
                 previous['release']['sha256'] != hashlib.sha256(envelope).hexdigest()):
             raise SDKError('current release ID already has different metadata; choose a new ID')
     generation = previous['generation'] if previous else 0
-    identical_current = (previous is not None and not refresh and previous['expires_at'] > now and
-                         previous['release']['id'] == release['release_id'] and
-                         previous['release']['sha256'] == hashlib.sha256(envelope).hexdigest())
-    if expected_generation is not None and generation != expected_generation and not identical_current:
+    stale_generation = expected_generation is not None and generation != expected_generation
+    # The previous attempt may have switched current before losing its response
+    # or failing verification/cleanup. Only the exact authenticated envelope can
+    # reconcile that attempt; a refresh is a new conditional channel write.
+    current_retry = (previous is not None and previous['release'] == reference and
+                     previous['expires_at'] > now and not refresh)
+    if stale_generation and not (expected_generation < generation and current_retry):
         raise SDKError(f'current changed: expected generation {expected_generation}, found {generation}; '
                        'merge the latest current before publishing')
     if reuse_current:
@@ -207,7 +211,6 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
         verify_stable(path, before)
     _immutable(store, public, release_key, io.BytesIO(envelope), **_digest(envelope),
                content_type='application/pkcs7-mime')
-    reference = dict(id=release['release_id'], path=base + '/release.p7m', **_digest(envelope))
     # Upload/verification time must not consume the new channel's validity window.
     now = int(time.time())
     if previous and previous['issued_at'] > now:
@@ -216,11 +219,11 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
         public.verify(channel_key, **_digest(old_envelope))
         _clean_current(store, prefix, keep)
         return previous
-    # An identical retry may finish verification/cleanup with its original
-    # generation, but may not refresh a pointer that expired during uploads.
-    if expected_generation is not None and generation != expected_generation:
+    if stale_generation:
+        # Payload verification can outlive the pointer. A retry with an old
+        # generation must never turn into an unguarded expiry refresh.
         raise SDKError(f'current changed: expected generation {expected_generation}, found {generation}; '
-                       'merge the latest current before publishing')
+                       'current expired during retry; read its generation before refreshing')
     pointer = dict(schema='emberbsd.channel.v1', channel=CHANNEL,
                    generation=previous['generation'] + 1 if previous else 1,
                    issued_at=now, expires_at=now + ttl, release=reference)

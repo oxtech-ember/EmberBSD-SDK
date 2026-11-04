@@ -88,9 +88,12 @@ class DeliveryTests(unittest.TestCase):
 
     def test_publish_fetch_and_same_release_retry(self):
         release = self.release()
-        first = self.publish(release)
+        def publish():
+            return publish_release(self.crypto, self.store, self.public, release, self.signer,
+                                   self.ca.certificate, expected_generation=0)
+        first = publish()
         pointer = self.server.objects['/bucket/current.p7m']
-        self.assertEqual(self.publish(release), first)
+        self.assertEqual(publish(), first)
         self.assertEqual(self.server.objects['/bucket/current.p7m'], pointer)
         fetched = self.fetch()
         self.assertEqual(fetched['release_id'], 'one')
@@ -412,6 +415,218 @@ class DeliveryTests(unittest.TestCase):
             second = publish_release(self.crypto, self.store, self.public, release, self.signer,
                 self.ca.certificate, previous_channel_time=first['issued_at'])
         self.assertEqual(second['generation'], 2)
+
+
+class PublicationRetryTests(unittest.TestCase):
+    """Exercise recovery in ordinary CI; CMS is an explicit test double.
+
+    The conditional HTTP store, inventory hashes, publication lock and channel
+    state machine are real. DeliveryTests separately covers native CMS/tools.
+    """
+    release = DeliveryTests.release
+    sparse_release = DeliveryTests.sparse_release
+
+    def setUp(self):
+        http_fixture.HTTPTests.setUp(self)
+        self.temporary = tempfile.TemporaryDirectory(prefix='publication-retry-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = self.work = Path(self.temporary.name)
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        marker = b'fixture-cms\0'
+        def verify(envelope, trust, **kwargs):
+            if not envelope.startswith(marker):
+                raise SDKError('unauthenticated fixture envelope')
+            return envelope[len(marker):]
+        self.crypto = Mock()
+        self.crypto.sign_cms.side_effect = lambda data, *_: marker + data
+        self.crypto.verify_cms.side_effect = verify
+        self.signer = object()
+        self.ca = SimpleNamespace(certificate=object())
+
+    def publish(self, release, generation=0, **kwargs):
+        return publish_release(self.crypto, self.store, self.public, release, self.signer,
+                               self.ca.certificate, expected_generation=generation, **kwargs)
+
+    def test_exact_retry_keeps_pointer_and_does_not_sign(self):
+        release = self.release()
+        first = self.publish(release)
+        before = dict(self.server.objects)
+        self.crypto.sign_cms.reset_mock()
+        self.assertEqual(self.publish(release), first)
+        self.assertEqual(self.server.objects, before)
+        self.crypto.sign_cms.assert_not_called()
+
+    def test_retry_after_lost_switch_acknowledgement(self):
+        release = self.release()
+        put = self.store.put
+        def lose_ack(key, *args, **kwargs):
+            put(key, *args, **kwargs)
+            if key == 'current.p7m':
+                raise SDKError('lost switch acknowledgement')
+        with patch.object(self.store, 'put', side_effect=lose_ack):
+            with self.assertRaisesRegex(SDKError, 'lost switch acknowledgement'):
+                self.publish(release)
+        before = dict(self.server.objects)
+        self.assertEqual(self.publish(release)['generation'], 1)
+        self.assertEqual(self.server.objects, before)
+
+    def test_retry_after_upload_failure_keeps_original_generation_expectation(self):
+        release = self.release()
+        put = self.store.put
+        def fail_index(key, *args, **kwargs):
+            if key.endswith('/host/pkg_summary.gz'):
+                raise SDKError('index upload interrupted')
+            return put(key, *args, **kwargs)
+        with patch.object(self.store, 'put', side_effect=fail_index):
+            with self.assertRaisesRegex(SDKError, 'index upload interrupted'):
+                self.publish(release)
+        self.assertNotIn('/bucket/current.p7m', self.server.objects)
+        self.assertEqual(self.publish(release)['generation'], 1)
+
+    def test_retry_after_public_channel_verification_failure(self):
+        release = self.release()
+        verify = self.public.verify
+        def fail(key, *args, **kwargs):
+            if key == 'current.p7m':
+                raise SDKError('public verification interrupted')
+            return verify(key, *args, **kwargs)
+        with patch.object(self.public, 'verify', side_effect=fail):
+            with self.assertRaisesRegex(SDKError, 'verification interrupted'):
+                self.publish(release)
+        pointer = self.server.objects['/bucket/current.p7m']
+        self.assertEqual(self.publish(release)['generation'], 1)
+        self.assertEqual(self.server.objects['/bucket/current.p7m'], pointer)
+
+    def test_sparse_retry_finishes_interrupted_cleanup(self):
+        first = self.release()
+        self.publish(first)
+        sparse = self.sparse_release('addition', first)
+        obsolete = ('/bucket/current/abandoned-a', '/bucket/current/abandoned-b')
+        for key in obsolete:
+            self.server.objects[key] = b'abandoned upload'
+        delete = self.store.delete
+        def interrupt_cleanup(key):
+            if key == 'current/abandoned-b':
+                raise SDKError('cleanup interrupted')
+            return delete(key)
+        with patch.object(self.store, 'delete', side_effect=interrupt_cleanup):
+            with self.assertRaisesRegex(SDKError, 'cleanup interrupted'):
+                self.publish(sparse, 1, reuse_current=True)
+        self.assertNotIn(obsolete[0], self.server.objects)
+        self.assertIn(obsolete[1], self.server.objects)
+        pointer = self.server.objects['/bucket/current.p7m']
+        self.crypto.sign_cms.reset_mock()
+        self.assertEqual(self.publish(sparse, 1, reuse_current=True)['generation'], 2)
+        self.assertEqual(self.server.objects['/bucket/current.p7m'], pointer)
+        for key in obsolete:
+            self.assertNotIn(key, self.server.objects)
+        self.crypto.sign_cms.assert_not_called()
+
+    def test_foreign_stale_release_stops_before_upload_or_cleanup(self):
+        self.publish(self.release())
+        other = self.release('other')
+        before = dict(self.server.objects)
+        with self.assertRaisesRegex(SDKError, 'expected generation 0, found 1'):
+            self.publish(other)
+        self.assertEqual(self.server.objects, before)
+
+    def test_equal_content_with_different_envelope_is_not_a_retry(self):
+        release = self.release()
+        self.publish(release)
+        release.write_bytes(release.read_bytes() + b'\n')
+        before = dict(self.server.objects)
+        with self.assertRaisesRegex(SDKError, 'different metadata'):
+            self.publish(release)
+        self.assertEqual(self.server.objects, before)
+
+    def test_stale_retry_requires_the_complete_authenticated_reference(self):
+        release = self.release()
+        self.publish(release)
+        key = '/bucket/current.p7m'
+        envelope = self.server.objects[key]
+        from emberbsd_sdk.jsonio import loads_json
+        pointer = loads_json(self.crypto.verify_cms(envelope, self.ca.certificate))
+        for field, value in (('path', 'current/metadata/other/release.p7m'),
+                             ('size', pointer['release']['size'] + 1)):
+            with self.subTest(field=field):
+                changed = dict(pointer, release=dict(pointer['release'], **{field: value}))
+                self.server.objects[key] = self.crypto.sign_cms(json_bytes(changed), self.signer,
+                                                                 self.ca.certificate)
+                before = dict(self.server.objects)
+                with patch.object(release_delivery, '_immutable') as upload:
+                    with self.assertRaisesRegex(SDKError, 'current changed'):
+                        self.publish(release)
+                upload.assert_not_called()
+                self.assertEqual(self.server.objects, before)
+
+    def test_future_generation_and_refresh_still_require_current_generation(self):
+        release = self.release()
+        self.publish(release)
+        before = dict(self.server.objects)
+        for generation, refresh in ((2, False), (0, True)):
+            with self.subTest(generation=generation, refresh=refresh):
+                with self.assertRaisesRegex(SDKError, 'current changed'):
+                    self.publish(release, generation, refresh=refresh)
+                self.assertEqual(self.server.objects, before)
+        self.assertEqual(self.publish(release, 1, refresh=True)['generation'], 2)
+
+    def test_expired_pointer_requires_a_new_generation_check(self):
+        release = self.release()
+        first = self.publish(release, ttl=10)
+        with patch.object(release_delivery.time, 'time', return_value=first['expires_at']):
+            with self.assertRaisesRegex(SDKError, 'current changed'):
+                self.publish(release)
+            self.assertEqual(self.publish(release, 1)['generation'], 2)
+
+    def test_pointer_expiring_during_retry_does_not_advance_generation(self):
+        release = self.release()
+        first = self.publish(release, ttl=10)
+        now = [first['issued_at']]
+        verify = self.public.verify
+        def expire(*args, **kwargs):
+            now[0] = first['expires_at']
+            return verify(*args, **kwargs)
+        before = dict(self.server.objects)
+        with patch.object(release_delivery.time, 'time', side_effect=lambda: now[0]), \
+                patch.object(self.public, 'verify', side_effect=expire):
+            with self.assertRaisesRegex(SDKError, 'expected generation 0, found 1; current expired during retry'):
+                self.publish(release)
+        self.assertEqual(self.server.objects, before)
+
+    def test_retry_still_authenticates_candidate_and_checks_payload(self):
+        release = self.release()
+        self.publish(release)
+        before = dict(self.server.objects)
+        envelope = release.read_bytes()
+        release.write_bytes(envelope.removeprefix(b'fixture-cms\0'))
+        with self.assertRaisesRegex(SDKError, 'unauthenticated'):
+            self.publish(release)
+        release.write_bytes(envelope)
+        (release.parent / 'payload').write_bytes(b'corrupt payload')
+        with self.assertRaisesRegex(SDKError, 'size or SHA256 mismatch'):
+            self.publish(release)
+        self.assertEqual(self.server.objects, before)
+
+    def test_retry_checks_public_bytes_before_cleanup(self):
+        release = self.release()
+        self.publish(release)
+        key = '/bucket/current/host/darwin-arm64/payload'
+        self.server.objects[key] = b'corrupt public payload'
+        self.server.objects['/bucket/current/abandoned'] = b'keep until verified'
+        before = dict(self.server.objects)
+        with self.assertRaises(SDKError):
+            self.publish(release)
+        self.assertEqual(self.server.objects, before)
+
+    def test_retry_respects_publisher_lock(self):
+        release = self.release()
+        self.publish(release)
+        self.server.objects['/bucket/.publisher-lock'] = b'another publisher'
+        before = dict(self.server.objects)
+        with self.assertRaisesRegex(SDKError, 'publisher is busy'):
+            self.publish(release)
+        self.assertEqual(self.server.objects, before)
 
 
 if __name__ == '__main__':

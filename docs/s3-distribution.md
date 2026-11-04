@@ -68,6 +68,10 @@ The publisher verifies local signatures and hashes, uploads missing packages
 and new metadata, verifies new objects through public HTTPS, conditionally
 switches `current.p7m`, then removes superseded files. Repeating the same
 publication retains the generation and finishes any interrupted cleanup.
+Keep the exact signed release envelope and archives after a failed attempt;
+resealing equivalent metadata creates different bytes and is not recovery of
+that publication. A transport, verification or cleanup failure alone requires
+no package revision or release ID change.
 
 For an add-only catalog update, `release.py seal-release --reuse-current
 CURRENT_RELEASE.p7m` may fill a missing **non-index** artifact from an exact
@@ -100,12 +104,17 @@ merge the latest snapshot and retry with its generation.
 
 When extending an existing catalog, preserve its current packages and sets in
 the candidate and pass `--expected-generation N` from the verified snapshot.
-Under the publisher lock, a changed generation stops publication before any
-artifact upload or cleanup; merge the newer catalog and retry. An exact retry
-of the already-current signed release can retain its original expected
-generation to finish public verification and cleanup, while the pointer is
-unexpired. It cannot refresh expiry or create a new generation. Use `0` only
-when the repository must still be empty. The option does not merge catalogs.
+Under the publisher lock, a changed generation stops a different candidate
+before any artifact upload or cleanup; merge the newer catalog and retry.
+There is one recovery exception: an older expected generation may finish the
+exact authenticated release already selected by an unexpired current pointer.
+Its release ID, path, size and envelope SHA256 must all match. It verifies the
+objects and finishes cleanup without signing or advancing the pointer. This
+covers a lost switch acknowledgement or a failure after switching. A future
+expected generation, `--refresh`, or an expired pointer still requires the
+actual current generation; expiry during verification also stops a stale retry.
+Use `0` for an initially empty repository and retain it for recovery of that
+same publication. The option does not merge catalogs.
 
 A create-only `.publisher-lock` serializes publication **and cleanup** across
 publishers. Normal exit removes it. After a process crash, inspect the publisher

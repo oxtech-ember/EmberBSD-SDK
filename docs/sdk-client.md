@@ -195,6 +195,13 @@ transitions, sysroot replacement and updating tools during an active build remai
 separate work. Do not update a prefix while a build uses it. A configured Ports
 source build and binary installation share the existing build lock. Existing
 Ports source builds retain their owner-defined replacement rules.
+An exact runtime/devel dependency can require such a coordinated transition
+even when both new packages appear in the selection. Checking only the final
+dependency graph would leave the old consumer incompatible between individual
+`pkg_add -U` calls and after a partial failure. Increasing either revision does
+not resolve that ordering constraint. Preserve the accepted prefix and prepare
+the changed stack alongside it through the owning producer until a coordinated
+update contract is available.
 
 ## Client artifact and validation boundary
 
