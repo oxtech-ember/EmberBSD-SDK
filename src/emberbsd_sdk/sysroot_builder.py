@@ -891,6 +891,10 @@ class SysrootBuilder:
             if (self.compiler_family() == 'clang' and
                     getattr(self, 'llvm_phase', None) == 'headers' and
                     path != self.paths['tools']):
+                # Header installation does not execute target objcopy or strip.
+                for signature in (old, new):
+                    for role in ('objcopy', 'strip'):
+                        signature['compiler']['binaries'][role].pop('sha256', None)
                 # bootstrap-headers only installs OS/libedit headers. It does
                 # not enter libc or consume the common LLVM runtime source.
                 # Source selection is still verified during preflight.

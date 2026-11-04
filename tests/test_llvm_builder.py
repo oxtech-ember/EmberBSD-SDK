@@ -2212,6 +2212,24 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertTrue(builder.compatible_context(records[tools], tools))
         self.assertFalse(builder.compatible_context(records[objects], objects))
 
+    def test_target_objcopy_bytes_do_not_invalidate_headers(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        objects = builder.paths['objects']
+        builder.llvm_phase = 'headers'
+        header = {'signature': copy.deepcopy(builder.context_signature(objects)),
+                  'sources': copy.deepcopy(builder.sources)}
+        builder.llvm_phase = 'base'
+        base = {'signature': copy.deepcopy(builder.context_signature(objects)),
+                'sources': copy.deepcopy(builder.sources)}
+        for role in ('objcopy', 'strip'):
+            builder.signature['compiler']['binaries'][role]['sha256'] = 'a' * 64
+        self.assertFalse(builder.compatible_context(base, objects))
+        builder.llvm_phase = 'headers'
+        self.assertTrue(builder.compatible_context(header, objects))
+        builder.signature['compiler']['binaries']['objcopy']['path'] = '/changed/objcopy'
+        self.assertFalse(builder.compatible_context(header, objects))
+
     def test_expat_selection_changes_headers_but_not_native_tools(self):
         builder, _ = self.builder()
         builder.preflight()
