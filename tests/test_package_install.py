@@ -288,6 +288,61 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(member('payload'), b'installed data')
 
     @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
+    def test_repackage_portable_payload_with_replacement_hook(self):
+        script = Path(__file__).resolve().parents[1] / 'scripts/package-portable.py'
+        package = self.package(package_name='fixture-1.0nb1', payload_path='bin/fixture',
+            payload='#!' + str(self.destination) + '/bin/sh\n', executable=True,
+            build_version='original build provenance\n',
+            install_script='#!/bin/sh\necho old > ' + str(self.work / 'old-hook') + '\n')
+        common = [sys.executable, '-B', str(script), '--host-prefix', os.environ['EMBERBSD_TEST_HOST_PREFIX'],
+            '--dependency-prefix', str(self.work / 'unused'), '--relocate-text', '--defer-hooks',
+            '--bootstrap-install-name-tool', '/usr/bin/false', '--codesign', '/usr/bin/false']
+        first = self.work / 'fixture-portable1.tgz'
+        subprocess.run([*common, str(package), '--output', str(first)], check=True, capture_output=True)
+        replacement_hook = self.work / 'replacement-install'
+        replacement_hook.write_text('#!/bin/sh\necho new > ' + str(self.work / 'new-hook') + '\n')
+        replacement_hook.chmod(0o755)
+        portable2 = self.work / 'fixture-1.0nb2.tgz'
+        result = subprocess.run([*common, str(first), '--output', str(portable2),
+            '--package-revision', '2', '--install-script', str(replacement_hook)],
+            check=True, capture_output=True)
+
+        def members(archive_path):
+            with tarfile.open(archive_path, 'r:gz') as archive:
+                return {member.name.removeprefix('./'): archive.extractfile(member).read()
+                        for member in archive if member.isfile()}
+        first_members = members(first)
+        second_members = members(portable2)
+        contents = second_members['+CONTENTS'].decode().splitlines()
+        self.assertIn('@name fixture-1.0nb2', contents)
+        self.assertEqual(sum(line.startswith(package_relocation.SOURCE) for line in contents), 1)
+        self.assertEqual(sum(line.startswith(package_relocation.TEXT) for line in contents), 1)
+        self.assertIn(package_relocation.MARKER, contents)
+        self.assertIn(package_relocation.HOOKS, contents)
+        self.assertEqual(second_members['bin/fixture'], first_members['bin/fixture'])
+        self.assertEqual(second_members['+BUILD_VERSION'], b'original build provenance\n')
+        self.assertNotIn('+DEINSTALL', second_members)
+        self.assertEqual(second_members['+INSTALL'], replacement_hook.read_bytes())
+        self.assertNotIn(str(self.work / 'old-hook').encode(), second_members['+INSTALL'])
+
+        unsigned, signed = self.work / 'signed-input.tgz', self.work / 'signed-portable2.tgz'
+        shutil.copyfile(portable2, unsigned)
+        self.crypto.sign_package(unsigned, signed, self.signer, self.ca.certificate)
+        install_prefix = self.work / 'fresh-prefix'
+        cfg = dict(self.cfg, prefix=str(install_prefix), pkgdb=str(install_prefix / 'pkgdb'))
+        PackageInstaller(self.crypto, self.ca.certificate).install(signed, cfg)
+        self.assertEqual((self.work / 'new-hook').read_text(), 'new\n')
+        self.assertFalse((self.work / 'old-hook').exists())
+        self.assertEqual((install_prefix / 'bin/fixture').read_text(), '#!' + str(install_prefix) + '/bin/sh\n')
+
+        refused = self.work / 'revision-required.tgz'
+        result = subprocess.run([*common, str(first), '--output', str(refused),
+            '--install-script', str(replacement_hook)], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('--package-revision and --defer-hooks', result.stderr)
+        self.assertFalse(refused.exists())
+
+    @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
     def test_portable_producer_omits_empty_requires_before_real_pkg_add(self):
         package = self.package(requires_self=True, preserve=True)
         portable, signed = self.work / 'portable.tgz', self.work / 'portable-signed.tgz'
