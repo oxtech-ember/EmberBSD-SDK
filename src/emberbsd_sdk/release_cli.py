@@ -28,11 +28,15 @@ def verify_release(crypto, envelope, directory, trust):
     return release
 
 
-def seal_release(crypto, draft, directory, identity, trust, output):
-    """Hash complete payloads before signing; the draft is a current-format inventory."""
+def seal_release(crypto, draft, directory, identity, trust, output, *, reuse_current=None):
+    """Hash local payloads, optionally inheriting missing records from a signed snapshot."""
     value = loads_json(draft)
     if not isinstance(value, dict) or not isinstance(value.get('artifacts'), list):
         raise SDKError('release inventory requires an artifacts array')
+    snapshot = None
+    if reuse_current is not None:
+        snapshot = parse_release(crypto.verify_cms(read_bytes(reuse_current), trust))
+    snapshot_by_id = {item['id']: item for item in snapshot['artifacts']} if snapshot else {}
     for artifact in value['artifacts']:
         if not isinstance(artifact, dict):
             raise SDKError('release inventory artifact must be an object')
@@ -41,12 +45,25 @@ def seal_release(crypto, draft, directory, identity, trust, output):
     parse_release(json_bytes(value))
     inputs = []
     for artifact in value['artifacts']:
+        if not _has_local_entry(directory, artifact['path']):
+            if artifact['kind'] == 'package-index':
+                raise SDKError(f'package indexes must be present locally: {artifact["id"]}')
+            previous = snapshot_by_id.get(artifact['id'])
+            fields = set(artifact) - {'size', 'sha256'}
+            if previous is None or fields != set(previous) - {'size', 'sha256'} or any(
+                    artifact[key] != previous[key] for key in fields):
+                raise SDKError(f'missing artifact is not an exact signed-snapshot match: {artifact["id"]}')
+            artifact.update(size=previous['size'], sha256=previous['sha256'])
+            continue
         path = local_artifact(directory, artifact['path'])
         inputs.append((artifact['path'], path, regular_file(path)))
         artifact.update(file_reference(path))
     content = json_bytes(value)
     release = parse_release(content)
-    _check_packages(crypto, release, directory, trust)
+    local_ids = {relative for relative, _, _ in inputs}
+    local_release = dict(release, artifacts=[item for item in release['artifacts']
+                                             if item['path'] in local_ids])
+    _check_packages(crypto, local_release, directory, trust)
     signed = crypto.sign_cms(content, identity, trust)
     # Hash once; detect changes across signing without rereading every payload.
     for relative, path, before in inputs:
@@ -54,6 +71,21 @@ def seal_release(crypto, draft, directory, identity, trust, output):
         verify_stable(path, before)
     write_new(output, signed)
     return release
+
+
+def _has_local_entry(root, relative):
+    path = Path(root)
+    parts = relative.split('/')
+    for part in parts[:-1]:
+        path /= part
+        if path.is_symlink():
+            return True
+        if not path.exists():
+            return False
+        if not path.is_dir():
+            return True
+    path /= parts[-1]
+    return path.exists() or path.is_symlink()
 
 
 def _referenced_release(crypto, channel, directory, trust):
@@ -113,6 +145,9 @@ def parser():
         if command.endswith(('release', 'channel')):
             sub.add_argument('--directory', type=Path, required=True,
                              help='release payload directory, or repository root for channels')
+        if command == 'seal-release':
+            sub.add_argument('--reuse-current', type=Path,
+                             help='signed release snapshot whose exact records may fill missing payloads')
         if command == 'verify-channel':
             sub.add_argument('--channel', required=True)
             sub.add_argument('--state', type=Path, required=True,
@@ -146,8 +181,9 @@ def main(argv=None):
             content = read_bytes(args.input)
             if args.command in ('seal-release', 'seal-channel'):
                 operation = seal_release if args.command == 'seal-release' else seal_channel
+                options = {'reuse_current': args.reuse_current} if args.command == 'seal-release' else {}
                 value = operation(crypto, content, args.directory, _identity(args.signer_directory),
-                                  args.trust_root, args.output)
+                                  args.trust_root, args.output, **options)
             elif args.command == 'verify-release':
                 value = verify_release(crypto, content, args.directory, args.trust_root)
             else:

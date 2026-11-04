@@ -16,6 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.jsonio import json_bytes
 from emberbsd_sdk.release_cli import seal_release
+from emberbsd_sdk.release_catalog import parse_release
+import emberbsd_sdk.release_delivery as release_delivery
 from emberbsd_sdk.release_signing import ReleaseCrypto
 from emberbsd_sdk.release_delivery import publish_release, fetch_release
 
@@ -57,6 +59,27 @@ class DeliveryTests(unittest.TestCase):
     def publish(self, release):
         return publish_release(self.crypto, self.store, self.public, release, self.signer,
                                self.ca.certificate)
+
+    def sparse_release(self, name, snapshot, *, extra=None):
+        previous = parse_release(self.crypto.verify_cms(snapshot.read_bytes(), self.ca.certificate))
+        directory = self.work / (name + '-sparse')
+        directory.mkdir()
+        (directory / 'host').mkdir()
+        (directory / 'host/pkg_summary.gz').write_bytes(
+            (snapshot.parent / 'host/pkg_summary.gz').read_bytes())
+        artifacts = [dict(item) for item in previous['artifacts']]
+        if extra is not None:
+            path, data = extra
+            (directory / path).write_bytes(data)
+            artifacts.append(dict(id='new-package', path=path, kind='host-package',
+                                  host=artifacts[0]['host'], target=None,
+                                  unpacked_size=len(data), depends=[], licenses=['2-clause-bsd']))
+        draft = dict(schema='emberbsd.release.v1', release_id=name, created_at=int(time.time()),
+                     sources=previous['sources'], artifacts=artifacts)
+        output = directory / 'release.p7m'
+        seal_release(self.crypto, json_bytes(draft), directory, self.signer, self.ca.certificate,
+                     output, reuse_current=snapshot)
+        return output
 
     def fetch(self, directory='snapshot'):
         return fetch_release(self.crypto, self.public, self.ca.certificate,
@@ -105,6 +128,96 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(self.server.objects, before)
         self.assertEqual(publish_release(self.crypto, self.store, self.public, new, self.signer,
                                        self.ca.certificate, expected_generation=1)['generation'], 2)
+
+    def test_sparse_publish_reuses_exact_current_without_reading_payloads(self):
+        first = self.release()
+        self.publish(first)
+        sparse = self.sparse_release('sparse', first)
+        original_verify = self.public.verify
+        verified = []
+        def track(key, *args, **kwargs):
+            verified.append(key)
+            return original_verify(key, *args, **kwargs)
+        with patch.object(self.public, 'verify', side_effect=track):
+            result = publish_release(self.crypto, self.store, self.public, sparse, self.signer,
+                                     self.ca.certificate, expected_generation=1, reuse_current=True)
+        self.assertEqual(result['generation'], 2)
+        self.assertNotIn('current/host/darwin-arm64/payload', verified)
+        self.assertEqual(publish_release(self.crypto, self.store, self.public, sparse, self.signer,
+                                         self.ca.certificate, expected_generation=2,
+                                         reuse_current=True), result)
+        self.assertEqual(self.public.head('current/host/darwin-arm64/payload')['content-length'],
+                         str(len(b'payload' * 1000)))
+
+    def test_sparse_publish_rejects_unknown_or_changed_missing_record(self):
+        first = self.release()
+        self.publish(first)
+        sparse = self.sparse_release('sparse-mismatch', first)
+        content = self.crypto.verify_cms(sparse.read_bytes(), self.ca.certificate)
+        candidate = parse_release(content)
+        candidate['artifacts'][0]['unpacked_size'] += 1
+        sparse.write_bytes(self.crypto.sign_cms(json_bytes(candidate), self.signer,
+                                                self.ca.certificate))
+        with self.assertRaisesRegex(SDKError, 'not an exact current match'):
+            publish_release(self.crypto, self.store, self.public, sparse, self.signer,
+                            self.ca.certificate, expected_generation=1, reuse_current=True)
+
+    def test_sparse_publish_requires_generation_and_existing_object(self):
+        first = self.release()
+        self.publish(first)
+        sparse = self.sparse_release('sparse', first)
+        with self.assertRaisesRegex(SDKError, 'requires --expected-generation'):
+            publish_release(self.crypto, self.store, self.public, sparse, self.signer,
+                            self.ca.certificate, reuse_current=True)
+        self.server.objects.pop('/bucket/current/host/darwin-arm64/payload')
+        with self.assertRaisesRegex(SDKError, 'HTTP 404'):
+            publish_release(self.crypto, self.store, self.public, sparse, self.signer,
+                            self.ca.certificate, expected_generation=1, reuse_current=True)
+
+    def test_sparse_publish_refuses_stale_generation_before_reuse(self):
+        first = self.release()
+        publish_release(self.crypto, self.store, self.public, first, self.signer,
+                        self.ca.certificate, expected_generation=0)
+        sparse = self.sparse_release('sparse-stale', first)
+        publish_release(self.crypto, self.store, self.public, self.release('intervening'),
+                        self.signer, self.ca.certificate, expected_generation=1)
+        before = dict(self.server.objects)
+        with self.assertRaisesRegex(SDKError, 'expected generation 1, found 2'):
+            publish_release(self.crypto, self.store, self.public, sparse, self.signer,
+                            self.ca.certificate, expected_generation=1, reuse_current=True)
+        self.assertEqual(self.server.objects, before)
+
+    def test_sparse_publish_verifies_new_local_package(self):
+        first = self.release()
+        self.publish(first)
+        with patch.object(self.crypto, 'verify_package') as verifier:
+            sparse = self.sparse_release('sparse-package', first,
+                                         extra=('newpkg-1.0.tgz', b'signed package fixture'))
+            publish_release(self.crypto, self.store, self.public, sparse, self.signer,
+                            self.ca.certificate, expected_generation=1, reuse_current=True)
+        verifier.assert_called()
+
+    def test_sparse_publish_refuses_new_payload_disappearing_after_preflight(self):
+        first = self.release()
+        self.publish(first)
+        payload = b'signed package fixture'
+        with patch.object(self.crypto, 'verify_package'):
+            sparse = self.sparse_release('sparse-race', first,
+                                         extra=('newpkg-1.0.tgz', payload))
+        key = '/bucket/current/host/darwin-arm64/newpkg-1.0.tgz'
+        self.server.objects[key] = payload
+        pointer = self.server.objects['/bucket/current.p7m']
+        original = release_delivery._verify_sparse_local
+        def remove_new_payload(*args):
+            reusable = original(*args)
+            (sparse.parent / 'newpkg-1.0.tgz').unlink()
+            return reusable
+        with patch.object(release_delivery, '_verify_sparse_local', side_effect=remove_new_payload), \
+                patch.object(self.crypto, 'verify_package'):
+            with self.assertRaisesRegex(SDKError, 'disappeared before upload: new-package'):
+                publish_release(self.crypto, self.store, self.public, sparse, self.signer,
+                                self.ca.certificate, expected_generation=1, reuse_current=True)
+        self.assertEqual(self.server.objects['/bucket/current.p7m'], pointer)
 
     def test_release_identity_cannot_change(self):
         release = self.release()

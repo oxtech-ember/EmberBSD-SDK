@@ -65,10 +65,38 @@ python3 scripts/s3-release.py --host-prefix /work/host-pkg-llvm publish \
 ```
 
 The publisher verifies local signatures and hashes, uploads missing packages
-and new metadata, checks every object through public HTTPS, conditionally
-switches `current.p7m`, then removes superseded files. Existing identical
-packages are read back but not uploaded again. Repeating the same publication
-retains the generation and finishes any interrupted cleanup.
+and new metadata, verifies new objects through public HTTPS, conditionally
+switches `current.p7m`, then removes superseded files. Repeating the same
+publication retains the generation and finishes any interrupted cleanup.
+
+For an add-only catalog update, `release.py seal-release --reuse-current
+CURRENT_RELEASE.p7m` may fill a missing **non-index** artifact from an exact
+record in that signed snapshot. The new draft still supplies the complete
+merged inventory; every new or changed artifact must be local, and package
+archives are verified with pkg_tools before signing. Indexes remain local so
+the publisher can prepare the new catalog beside the release.
+
+Publish that sparse release with both `--reuse-current` and the generation from
+the snapshot:
+
+```sh
+python3 scripts/s3-release.py --host-prefix /work/host-pkg-llvm publish \
+  /work/prepared-release/release.p7m --url https://emberbsd-pkg.oxteam.me \
+  --trust-root trust/emberbsd-release-root.pem --signer-directory /private/release-signer \
+  --expected-generation 12 --reuse-current
+```
+
+Under the publisher lock, the tool authenticates current and its release
+inventory, requires every prior artifact ID/platform to remain in the candidate,
+and accepts a missing non-index payload only when its complete signed record
+matches current. New and changed local objects receive normal size/SHA checks
+and package signature checks; their public bytes are read back before switching.
+For a reused object, HTTPS HEAD confirms that it is present with the signed
+size. Its body is not downloaded or rehashed: the authenticated current record
+is the reuse evidence, keeping large unchanged archives off the publisher's
+disk and avoiding their transfer. Consumers verify downloaded bytes against the
+signed SHA before installation. A missing reused object stops publication;
+merge the latest snapshot and retry with its generation.
 
 When extending an existing catalog, preserve its current packages and sets in
 the candidate and pass `--expected-generation N` from the verified snapshot.
