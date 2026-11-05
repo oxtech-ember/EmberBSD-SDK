@@ -2,10 +2,16 @@
 # Origin: EmberBSD contributors (AI-assisted).
 """ZIP source extraction follows the same archive safety contract as tar."""
 import stat
+import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+
+sys.dont_write_bytecode = True
+SDK_SOURCE = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SDK_SOURCE / 'src'))
+
 from emberbsd_sdk import sourceprep as sp
 from emberbsd_sdk.errors import SDKError
 
