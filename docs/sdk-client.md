@@ -126,6 +126,17 @@ selection; ordinary explicit source builds keep their existing behavior.
 Version mismatches remain source work. Runtime dependency selection in the
 binary catalog and build dependency resolution in Ports remain separate.
 
+`install` reads signed current again before each ready wave of source
+packages. The wave is every closure package whose dependencies are already
+installed; Ports still builds that wave together. When current advances and
+a package that has not started has the Ports graph's exact PKGNAME, the
+client downloads and verifies it instead of compiling it. A package already
+handed to the running wave finishes on the path that started it. Rollback
+and equivocation stop the install. An expired, unreachable, or otherwise
+rejected refresh keeps the last verified catalog and does not cancel the
+remaining source build. `plan` reports one snapshot. A Ports state without
+an order file cannot be split, so that build finishes before the next read.
+
 Compilation requires its usual prepared compiler/sysroot inputs. It may download
 upstream sources, but it does not upload locally built packages or need a release
 signing key. Use the existing source `packages.py build` command for an explicit
@@ -162,7 +173,9 @@ Archives are stored once as `SHA256.tgz`, with partial downloads as `SHA256.part
 The complete selection is downloaded and verified before the first pkg_add.
 Sizes and SHA256 come from the signed release; pkg_admin also authenticates each
 package. A displaced current archive causes one metadata reread/replan, only
-when the current release changed. Corruption and an unchanged missing archive
+when the current release changed. A newer signed generation is also adopted
+between source-build waves, as described above, without waiting for that
+failure. Corruption and an unchanged missing archive
 are errors, never source fallbacks.
 
 The default cache budget is 512 MiB. The active selection may temporarily exceed

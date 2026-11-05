@@ -178,6 +178,181 @@ def build_missing(config, roots, binaries=()):
         run_source(config, roots, 'build', binaries=binaries)
 
 
+def _package_role(root):
+    return 'host' if root.endswith('@native') else 'target'
+
+
+def _installed_by_role(config, installer):
+    found = {'host': set(), 'target': set()}
+    for cfg in config['repositories'].values():
+        found['host' if cfg.get('host') else 'target'].update(installer.installed(cfg, recover=False))
+    return found
+
+
+def _read_source_graph(state):
+    """Return the Ports closure order and dependency edges, if this run wrote them."""
+    state = Path(state)
+    order_path, edges_path = state / 'order', state / 'edges'
+    if not order_path.is_file() or not edges_path.is_file():
+        return None
+    order = []
+    for line in order_path.read_text(encoding='utf-8').splitlines():
+        if not line.strip():
+            continue
+        fields = line.split()
+        if len(fields) != 1:
+            raise SDKError('invalid Ports order row')
+        order.append(_parse_root(fields[0], 'Ports order'))
+    dependencies = {}
+    for line in edges_path.read_text(encoding='utf-8').splitlines():
+        if not line.strip():
+            continue
+        fields = line.split()
+        if len(fields) != 2:
+            raise SDKError('invalid Ports dependency row')
+        dep = _parse_root(fields[0], 'Ports edges')
+        node = _parse_root(fields[1], 'Ports edges')
+        if dep != node:
+            dependencies.setdefault(node, []).append(dep)
+    return list(dict.fromkeys(order)), dependencies
+
+
+def _closure_matches(root, source_names, release, catalogs):
+    selected = [catalog for catalog in catalogs if any(
+        package['root'] == root for package in catalog['packages'])]
+    if not selected:
+        return False
+    closure = select_packages(release, catalogs, roots=[root])['packages']
+    records = {package['artifact']: package for catalog in catalogs for package in catalog['packages']}
+    return all(records.get(package['id']) and
+               source_names.get(records[package['id']]['root']) == records[package['id']]['pkgname']
+               for package in closure)
+
+
+def _adoption_plan(source_names, pending, release, catalogs, config, installer, cache, satisfied):
+    """Exact catalog hits for packages that have not started building."""
+    candidates = []
+    for root in pending:
+        if satisfied(root) or source_names.get(root) is None:
+            continue
+        if not any(package['root'] == root and package['pkgname'] == source_names[root]
+                   for catalog in catalogs if catalog['repository'] in config['repositories']
+                   for package in catalog['packages']):
+            continue
+        if not _closure_matches(root, source_names, release,
+                                [catalog for catalog in catalogs
+                                 if catalog['repository'] in config['repositories']]):
+            continue
+        one = installation_plan(release, catalogs, config, installer, cache, roots=[root])
+        if one['build_roots'] or any(package['replaces'] for package in one['packages']):
+            continue
+        candidates.append(root)
+    if not candidates:
+        return None
+    plan = installation_plan(release, catalogs, config, installer, cache, roots=candidates)
+    fresh = [package for package in plan['packages'] if package['action'] != 'installed']
+    if plan['build_roots'] or any(package['replaces'] for package in plan['packages']) or not fresh:
+        return None
+    return plan
+
+
+def _binary_pairs(packages):
+    return [(package['root'], package['pkgname']) for package in packages]
+
+
+def _refresh_snapshot(refresh_current):
+    if refresh_current is None:
+        return None
+    snapshot = refresh_current()
+    if snapshot is None:
+        return None
+    release, catalogs, generation = snapshot
+    if type(generation) is not int or generation < 0:
+        raise SDKError('channel generation must be a nonnegative integer')
+    return release, catalogs, generation
+
+
+def _install_source_waves(plan, config, installer, cache, store, refresh_current, accepted_generation):
+    """Build ready Ports waves, adopting a newer signed current between them.
+
+    A wave is every still-uninstalled closure package whose dependencies are
+    already installed. Ports may compile that wave in parallel. Current is
+    re-read only while no package build is running. An exact PKGNAME that is
+    not installed is downloaded. A different installed version stays on the
+    Ports path; this boundary does not replace packages already in the prefix,
+    and it does not change a package the current wave has already started.
+    """
+    binaries = _binary_pairs(plan['packages'])
+    if not plan['build_roots']:
+        return
+    if refresh_current is None or not plan.get('source_packages') or not config.get('source'):
+        build_missing(config, plan['build_roots'], binaries)
+        return
+    source_names = {_parse_root(root, 'Ports graph'): name
+                    for root, name in plan['source_packages'].items()}
+    graph = _read_source_graph(config['source']['state'])
+    if graph is None:
+        # No saved Ports order, so this build has no interior boundary.
+        build_missing(config, plan['build_roots'], binaries)
+        return
+    order, dependencies = graph
+    selected = [root for root in order if root in source_names]
+    for root in plan['build_roots']:
+        root = _parse_root(root, 'selection')
+        if root not in selected:
+            if root not in source_names:
+                raise SDKError(f'Ports order is missing a package name: {root}')
+            selected.append(root)
+    adopted = {'host': set(), 'target': set()}
+    floor = accepted_generation
+
+    def satisfied(root):
+        installed = _installed_by_role(config, installer)
+        role = _package_role(root)
+        name = source_names.get(root)
+        return bool(name) and (name in installed[role] or name in adopted[role])
+
+    while True:
+        pending = [root for root in selected if not satisfied(root)]
+        if not pending:
+            return
+        snapshot = _refresh_snapshot(refresh_current)
+        if snapshot is not None:
+            release, catalogs, generation = snapshot
+            if floor is not None and generation < floor:
+                raise SDKError('channel rollback: generation is below the accepted floor')
+            if floor is not None and generation > floor:
+                print(f'Current advanced to generation {generation}.', file=sys.stderr)
+            if floor is None or generation > floor:
+                floor = generation
+            pending = [root for root in selected if not satisfied(root)]
+            adoption = _adoption_plan(source_names, pending, release, catalogs, config,
+                                      installer, cache, satisfied)
+            if adoption is not None:
+                fresh = [package for package in adoption['packages'] if package['action'] != 'installed']
+                print(f"Current generation {generation} supplies {len(fresh)} packages "
+                      f"({sum(package['artifact']['size'] for package in fresh)} bytes); "
+                      f"downloading them instead of building.", file=sys.stderr)
+                with directory_lock(cache.root / '.lock'):
+                    apply_plan(adoption, config, installer, cache, store)
+                binaries.extend(_binary_pairs(adoption['packages']))
+                for package in adoption['packages']:
+                    adopted[_package_role(package['root'])].add(package['pkgname'])
+                pending = [root for root in selected if not satisfied(root)]
+                if not pending:
+                    return
+        pending_set = set(pending)
+        ready = [root for root in pending
+                 if not any(dep in pending_set for dep in dependencies.get(root, ()) if dep != root)]
+        if not ready:
+            raise SDKError('source build has no ready package; dependencies are not installed: ' +
+                           ', '.join(pending))
+        build_missing(config, ready, binaries)
+        missing = [root for root in ready if not satisfied(root)]
+        if missing:
+            raise SDKError('Ports build finished without installing: ' + ', '.join(missing))
+
+
 def include_source_dependencies(plan, release, catalogs, config, installer, cache):
     """Read the owner's resolved graph once, selecting exact available binaries."""
     if not plan['build_roots'] or not config.get('source'):
@@ -282,13 +457,27 @@ def apply_plan(plan, config, installer, cache, store):
     cache.trim(config.get('cache_limit', 512 * 1024 * 1024))
 
 
-def install_selection(plan, config, installer, cache, store):
+def install_selection(plan, config, installer, cache, store, *, refresh_current=None,
+                      accepted_generation=None):
     with directory_lock(cache.root / '.lock'):
         apply_plan(plan, config, installer, cache, store)
     # Compilation may be long; it must not monopolize another target's downloads.
-    build_missing(config, plan['build_roots'], [(p['root'], p['pkgname']) for p in plan['packages']])
+    # Re-read signed current between ready waves, not while a package is building.
+    _install_source_waves(plan, config, installer, cache, store, refresh_current, accepted_generation)
     if plan.get('sysroot'):
         sysroot_package.bind_compiler(config, plan['sysroot'])
+
+
+def _read_current(crypto, store, trust, state, config):
+    """Authenticate current and return its release, catalogs, generation and bytes."""
+    with tempfile.TemporaryDirectory(prefix='.metadata-', dir=state) as directory:
+        snapshot = Path(directory) / 'snapshot'
+        fetch_release(crypto, store, trust, state / 'channel.json', snapshot,
+                      prefix=config.get('url_prefix', ''))
+        identity = hashlib.sha256((snapshot / 'release.p7m').read_bytes()).hexdigest()
+        release, catalogs = load_catalogs(crypto, snapshot / 'release.p7m', snapshot, trust, ())
+        generation = read_json(state / 'channel.json')['generation']
+        return release, catalogs, generation, identity
 
 
 def include_sysroot(plan, release, config, cache, target):
@@ -366,48 +555,65 @@ def main(argv=None, *, default_config=None):
             installer = PackageInstaller(crypto, trust)
             previous = None
             for attempt in range(2):
-                with tempfile.TemporaryDirectory(prefix='.metadata-', dir=state) as directory:
-                    snapshot = Path(directory) / 'snapshot'
-                    fetch_release(crypto, store, trust, state / 'channel.json', snapshot,
-                                  prefix=config.get('url_prefix', ''))
-                    identity = hashlib.sha256((snapshot / 'release.p7m').read_bytes()).hexdigest()
-                    if previous == identity:
-                        raise SDKError('published package is missing from unchanged current; retry after publisher repair')
-                    release, catalogs = load_catalogs(crypto, snapshot / 'release.p7m', snapshot, trust, ())
-                    if args.command in ('list', 'show'):
-                        sets = available_sets(catalogs, config)
-                        if args.command == 'show':
-                            if set(args.sets) - sets.keys():
-                                raise SDKError('unknown package set')
-                            sets = {k: v for k, v in sets.items() if not args.sets or k in args.sets}
-                        sys.stdout.buffer.write(json_bytes(sets))
-                        return 0
-                    plan = installation_plan(release, catalogs, config, installer, cache,
-                                             sets=args.sets, roots=args.roots)
-                    plan = include_source_dependencies(plan, release, catalogs, config, installer, cache)
-                    plan = include_sysroot(plan, release, config, cache, args.target)
-                    if args.command == 'plan':
-                        sys.stdout.buffer.write(json_bytes(plan))
-                        return 0
-                    print(f"Install: reuse {sum(p['action'] == 'installed' for p in plan['packages'])}; "
-                          f"add {sum(p['action'] != 'installed' and not p['replaces'] for p in plan['packages'])}; "
-                          f"replace {sum(bool(p['replaces']) for p in plan['packages'])}; "
-                          f"cached {sum(p['action'] == 'cache' for p in plan['packages'])}; "
-                          f"{int(bool(plan.get('sysroot')) and plan['sysroot']['action'] != 'installed')} sysroots; "
-                          f"download {plan['download_size']} bytes; unpack {plan['unpacked_size']} bytes; "
-                          f"build {len(plan['build_roots'])} roots", file=sys.stderr)
-                    try:
-                        install_selection(plan, config, installer, cache, store)
-                    except HTTPStatusError as exc:
-                        if exc.status != 404 or attempt:
-                            raise
-                        previous = identity
-                        continue
-                    selected = state / 'selection.json'
-                    old = read_json(selected) if selected.exists() else {'roots': []}
-                    write_json(selected, {'roots': sorted(set(old['roots']) | set(plan['roots']))}, exclusive=False)
-                    print('Selected components installed; package databases own installed versions.')
+                release, catalogs, generation, identity = _read_current(crypto, store, trust, state, config)
+                if previous == identity:
+                    raise SDKError('published package is missing from unchanged current; retry after publisher repair')
+                if args.command in ('list', 'show'):
+                    sets = available_sets(catalogs, config)
+                    if args.command == 'show':
+                        if set(args.sets) - sets.keys():
+                            raise SDKError('unknown package set')
+                        sets = {k: v for k, v in sets.items() if not args.sets or k in args.sets}
+                    sys.stdout.buffer.write(json_bytes(sets))
                     return 0
+                plan = installation_plan(release, catalogs, config, installer, cache,
+                                         sets=args.sets, roots=args.roots)
+                plan = include_source_dependencies(plan, release, catalogs, config, installer, cache)
+                plan = include_sysroot(plan, release, config, cache, args.target)
+                if args.command == 'plan':
+                    sys.stdout.buffer.write(json_bytes(plan))
+                    return 0
+                print(f"Install: reuse {sum(p['action'] == 'installed' for p in plan['packages'])}; "
+                      f"add {sum(p['action'] != 'installed' and not p['replaces'] for p in plan['packages'])}; "
+                      f"replace {sum(bool(p['replaces']) for p in plan['packages'])}; "
+                      f"cached {sum(p['action'] == 'cache' for p in plan['packages'])}; "
+                      f"{int(bool(plan.get('sysroot')) and plan['sysroot']['action'] != 'installed')} sysroots; "
+                      f"download {plan['download_size']} bytes; unpack {plan['unpacked_size']} bytes; "
+                      f"build {len(plan['build_roots'])} roots", file=sys.stderr)
+
+                def refresh_current():
+                    try:
+                        refreshed, refreshed_catalogs, refreshed_generation, _refreshed_identity = _read_current(
+                            crypto, store, trust, state, config)
+                    except HTTPStatusError as exc:
+                        print(f'sdk-client: current refresh failed ({exc}); '
+                              'continuing with the last verified catalog', file=sys.stderr)
+                        return None
+                    except SDKError as exc:
+                        if 'rollback' in str(exc) or 'equivocation' in str(exc):
+                            raise
+                        print(f'sdk-client: current refresh was not accepted ({exc}); '
+                              'continuing with the last verified catalog', file=sys.stderr)
+                        return None
+                    except OSError as exc:
+                        print(f'sdk-client: current refresh failed ({exc}); '
+                              'continuing with the last verified catalog', file=sys.stderr)
+                        return None
+                    return refreshed, refreshed_catalogs, refreshed_generation
+
+                try:
+                    install_selection(plan, config, installer, cache, store,
+                                      refresh_current=refresh_current, accepted_generation=generation)
+                except HTTPStatusError as exc:
+                    if exc.status != 404 or attempt:
+                        raise
+                    previous = identity
+                    continue
+                selected = state / 'selection.json'
+                old = read_json(selected) if selected.exists() else {'roots': []}
+                write_json(selected, {'roots': sorted(set(old['roots']) | set(plan['roots']))}, exclusive=False)
+                print('Selected components installed; package databases own installed versions.')
+                return 0
     except (SDKError, OSError, ValueError, KeyError, tarfile.TarError, subprocess.TimeoutExpired) as exc:
         print(f'sdk-client: {exc}', file=sys.stderr)
         return 1

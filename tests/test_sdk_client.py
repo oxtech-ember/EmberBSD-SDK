@@ -9,7 +9,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
-from emberbsd_sdk.sdk_client import installation_plan, apply_plan, include_source_dependencies, install_selection
+from emberbsd_sdk.sdk_client import (installation_plan, apply_plan, include_source_dependencies,
+                                     install_selection)
 from emberbsd_sdk.package_cache import PackageCache
 from test_package_cache import Store
 
@@ -194,6 +195,142 @@ class ClientTests(unittest.TestCase):
                                                   self.installer, self.cache)
         self.assertEqual(result['packages'], [])
         self.assertEqual(set(result['build_roots']), {'net/app@native', 'devel/missing@native'})
+
+    def source_plan(self, names, order, edges):
+        state = self.root / 'state'
+        state.mkdir(parents=True, exist_ok=True)
+        (state / 'order').write_text(''.join(root + '\n' for root in order))
+        (state / 'edges').write_text(''.join(f'{dep} {node}\n' for dep, node in edges))
+        (state / 'packages').write_text(''.join(f'{root} {name}\n' for root, name in names.items()))
+        self.cfg['source'] = {key: str(self.root / key) for key in ('ports_root', 'pkgsrc', 'makeconf', 'state')}
+        (self.root / 'ports_root/profiles/package-sets').mkdir(parents=True)
+        return dict(release_id='gen-n', roots=list(order), packages=[], build_roots=list(order),
+                    source_packages=dict(names), download_size=0, unpacked_size=0)
+
+    def catalog_release(self, packages):
+        digest = hashlib.sha256(self.store.payload).hexdigest()
+        artifacts, entries = [], []
+        for root, pkgname, depends in packages:
+            identity = pkgname.split('-', 1)[0]
+            artifacts.append(dict(id=identity, path=f'native/{pkgname}.tgz', kind='host-package', host=self.host,
+                                  target=None, size=13, sha256=digest, unpacked_size=20, depends=depends,
+                                  licenses=['2-clause-bsd']))
+            entries.append(dict(root=root, pkgname=pkgname, artifact=identity))
+        release = dict(release_id='catalog', artifacts=artifacts)
+        catalogs = [dict(repository='native', sets={}, packages=entries)]
+        return release, catalogs
+
+    def test_running_install_adopts_newer_generation_between_source_packages(self):
+        names = {'devel/lib@native': 'lib-1', 'devel/app@native': 'app-1'}
+        plan = self.source_plan(names, ['devel/lib@native', 'devel/app@native'], [
+            ('devel/lib@native', 'devel/lib@native'),
+            ('devel/app@native', 'devel/app@native'),
+            ('devel/lib@native', 'devel/app@native')])
+        older = (dict(release_id='gen-41', artifacts=[]),
+                 [dict(repository='native', sets={}, packages=[])], 41)
+        newer = (*self.catalog_release([
+            ('devel/lib@native', 'lib-1', []),
+            ('devel/app@native', 'app-1', ['lib'])]), 42)
+        snapshots = iter((older, newer))
+        built = []
+
+        def build(config, roots, binaries):
+            built.append(list(roots))
+            for root in roots:
+                self.installer.present.add(names[root])
+
+        with patch('emberbsd_sdk.sdk_client.build_missing', side_effect=build):
+            install_selection(plan, self.cfg, self.installer, self.cache, self.store,
+                              refresh_current=lambda: next(snapshots))
+        self.assertEqual(built, [['devel/lib@native']])
+        self.assertEqual([call[1] for call in self.store.calls],
+                         ['current/host/darwin-arm64/app-1.tgz'])
+        self.assertTrue(any(action[0] == 'install' for action in self.installer.actions))
+
+    def test_generation_rollback_stops_before_the_next_source_package(self):
+        names = {'devel/lib@native': 'lib-1', 'devel/app@native': 'app-1'}
+        plan = self.source_plan(names, ['devel/lib@native', 'devel/app@native'], [
+            ('devel/lib@native', 'devel/lib@native'),
+            ('devel/app@native', 'devel/app@native'),
+            ('devel/lib@native', 'devel/app@native')])
+        empty = (dict(release_id='gen', artifacts=[]),
+                 [dict(repository='native', sets={}, packages=[])])
+        snapshots = iter(((*empty, 42), (*empty, 41)))
+        built = []
+
+        def build(config, roots, binaries):
+            built.append(list(roots))
+            for root in roots:
+                self.installer.present.add(names[root])
+
+        with patch('emberbsd_sdk.sdk_client.build_missing', side_effect=build):
+            with self.assertRaisesRegex(SDKError, 'rollback'):
+                install_selection(plan, self.cfg, self.installer, self.cache, self.store,
+                                  refresh_current=lambda: next(snapshots))
+        self.assertEqual(built, [['devel/lib@native']])
+        self.assertNotIn('devel/app@native', [root for wave in built for root in wave])
+
+    def test_pkgname_mismatch_stays_on_the_source_wave(self):
+        names = {'devel/lib@native': 'lib-1', 'devel/app@native': 'app-1'}
+        plan = self.source_plan(names, ['devel/lib@native', 'devel/app@native'], [
+            ('devel/lib@native', 'devel/lib@native'),
+            ('devel/app@native', 'devel/app@native'),
+            ('devel/lib@native', 'devel/app@native')])
+        older = (dict(release_id='gen-41', artifacts=[]),
+                 [dict(repository='native', sets={}, packages=[])], 41)
+        newer = (*self.catalog_release([
+            ('devel/lib@native', 'lib-1', []),
+            ('devel/app@native', 'app-2', ['lib'])]), 42)
+        snapshots = iter((older, newer))
+        built = []
+
+        def build(config, roots, binaries):
+            built.append(list(roots))
+            for root in roots:
+                self.installer.present.add(names[root])
+
+        with patch('emberbsd_sdk.sdk_client.build_missing', side_effect=build):
+            install_selection(plan, self.cfg, self.installer, self.cache, self.store,
+                              refresh_current=lambda: next(snapshots))
+        self.assertEqual(built, [['devel/lib@native'], ['devel/app@native']])
+        self.assertFalse(any(call[1].endswith('/app-2.tgz') for call in self.store.calls))
+
+    def test_newer_generation_does_not_replace_an_installed_package(self):
+        names = {'devel/lib@native': 'lib-1'}
+        plan = self.source_plan(names, ['devel/lib@native'], [
+            ('devel/lib@native', 'devel/lib@native')])
+        self.installer.present.add('lib-0')
+        release, catalogs = self.catalog_release([('devel/lib@native', 'lib-1', [])])
+        built = []
+
+        def build(config, roots, binaries):
+            built.append(list(roots))
+            self.installer.present.add(names[roots[0]])
+
+        with patch('emberbsd_sdk.sdk_client.build_missing', side_effect=build):
+            install_selection(plan, self.cfg, self.installer, self.cache, self.store,
+                              refresh_current=lambda: (release, catalogs, 42))
+        self.assertEqual(built, [['devel/lib@native']])
+        self.assertEqual(self.store.calls, [])
+
+    def test_independent_source_packages_share_one_build_wave(self):
+        names = {'devel/lib@native': 'lib-1', 'devel/tool@native': 'tool-1'}
+        plan = self.source_plan(names, ['devel/lib@native', 'devel/tool@native'], [
+            ('devel/lib@native', 'devel/lib@native'),
+            ('devel/tool@native', 'devel/tool@native')])
+        empty = (dict(release_id='gen-41', artifacts=[]),
+                 [dict(repository='native', sets={}, packages=[])], 41)
+        built = []
+
+        def build(config, roots, binaries):
+            built.append(list(roots))
+            for root in roots:
+                self.installer.present.add(names[root])
+
+        with patch('emberbsd_sdk.sdk_client.build_missing', side_effect=build):
+            install_selection(plan, self.cfg, self.installer, self.cache, self.store,
+                              refresh_current=lambda: empty)
+        self.assertEqual(built, [['devel/lib@native', 'devel/tool@native']])
 
 
 if __name__ == '__main__':
