@@ -97,6 +97,10 @@ The OS and packages have their own versions. The channel's `generation` is
 only persistent replay protection and publisher coordination. It is never an
 installed-system version or an input that invalidates every package.
 The signed format and replay-state schema remain compatible with older clients.
+Existing bootstrap archives retain their embedded client. Repackage the zipapp
+from this SDK revision to use these commands with an existing configured prefix;
+this does not rebuild installed packages. Source publication does not update
+the client already installed on another host.
 
 ## Application compiler and sysroot
 
