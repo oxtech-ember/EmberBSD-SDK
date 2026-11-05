@@ -70,6 +70,11 @@ Use [release preparation and tags](docs/release-tags.md) to set the source
 product version before building and tag the checked OS, Ports, and SDK commits.
 Use [OS release composition](docs/os-release.md) for complete OS producer orchestration,
 kit verification and immutable GitHub publication.
+Use [private root personalization](docs/os-release.md#private-root-personalization)
+to assemble an individual FFS image from a ready runtime tree and overlay,
+with a fresh SSH identity, confirmation nonce and entropy. Its private output
+stays separate from publishable release kits. Installation and boot remain
+caller-owned operations.
 The [signed release tools](docs/signed-releases.md) seal and verify package,
 SDK and OS inventories and channel pointers using one X.509 trust root.
 The [binary catalog](docs/binary-catalog.md) projects Ports runtime dependencies,
