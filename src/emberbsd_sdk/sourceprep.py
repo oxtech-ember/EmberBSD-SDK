@@ -2,6 +2,8 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Shared safe archive and patch operations for Ports source preparation."""
 
+import calendar
+import datetime
 import hashlib
 import os
 import posixpath
@@ -13,6 +15,7 @@ import stat
 import tarfile
 import time
 import unicodedata
+import zipfile
 
 from . import process
 from .errors import SDKError
@@ -24,6 +27,7 @@ SOURCE_PREPARATION_API = 2
 ARCHIVE_SKIP_DIRECTORIES_API = 1
 ARCHIVE_FLAT_LAYOUT_API = 1
 ARCHIVE_INTERNAL_SYMLINKS_API = 1
+ZIP_ARCHIVE_API = 1
 
 
 def archive_hashes(data):
@@ -31,6 +35,74 @@ def archive_hashes(data):
     return dict(sha256=hashlib.sha256(data).hexdigest(),
                 sha512=hashlib.sha512(data).hexdigest(),
                 blake2s=hashlib.blake2s(data).hexdigest(), size=len(data))
+
+
+class _ZipMember:
+    """Adapt ZIP member metadata to the common archive validation loop."""
+    def __init__(self, archive, info, label):
+        self.archive = archive
+        self.info = info
+        self.label = label
+        self.name = info.orig_filename
+        self.size = info.file_size
+        self.mode = info.external_attr >> 16 if info.create_system == 3 else 0
+        kind = stat.S_IFMT(self.mode)
+        if info.is_dir() and kind in (0, stat.S_IFDIR):
+            self.kind = 'directory'
+        elif not info.is_dir() and kind in (0, stat.S_IFREG):
+            self.kind = 'file'
+        elif not info.is_dir() and kind == stat.S_IFLNK:
+            self.kind = 'link'
+        else:
+            self.kind = 'special'
+
+    @property
+    def mtime(self):
+        try:
+            return calendar.timegm(datetime.datetime(*self.info.date_time).timetuple())
+        except (ValueError, OverflowError) as exc:
+            raise SDKError(f'invalid {self.label} archive timestamp') from exc
+
+    @property
+    def linkname(self):
+        if self.size > 4096:
+            raise SDKError(f'unsafe {self.label} archive symlink')
+        try:
+            return self.archive.read(self.info).decode('utf-8', 'strict')
+        except (OSError, UnicodeError, RuntimeError, zipfile.BadZipFile) as exc:
+            raise SDKError(f'invalid {self.label} archive symlink') from exc
+
+    def isdir(self):
+        return self.kind == 'directory'
+
+    def isreg(self):
+        return self.kind == 'file'
+
+    def issym(self):
+        return self.kind == 'link'
+
+
+class _ZipArchive:
+    def __init__(self, archive, label):
+        self.archive = zipfile.ZipFile(archive, 'r')
+        self.label = label
+
+    def __enter__(self):
+        self.archive.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        return self.archive.__exit__(*args)
+
+    def __iter__(self):
+        for info in self.archive.infolist():
+            yield _ZipMember(self.archive, info, self.label)
+
+    def extractfile(self, member):
+        try:
+            return self.archive.open(member.info, 'r')
+        except (OSError, RuntimeError, NotImplementedError, zipfile.BadZipFile) as exc:
+            raise SDKError(f'{self.label} archive member cannot be opened') from exc
 
 
 def extract_archive(archive, destination, root_name, label, *, components=None,
@@ -87,8 +159,9 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
             current.mkdir(exist_ok=True)
 
     try:
-        packed = tarfile.open(archive, 'r:*')
-    except (OSError, tarfile.TarError) as exc:
+        packed = (_ZipArchive(archive, label) if zipfile.is_zipfile(archive)
+                  else tarfile.open(archive, 'r:*'))
+    except (OSError, tarfile.TarError, zipfile.BadZipFile) as exc:
         raise SDKError(f'{label} archive cannot be opened: {exc}') from exc
     with packed:
         for number, member in enumerate(packed, 1):
@@ -142,8 +215,13 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
                 source = packed.extractfile(member)
                 if source is None:
                     raise SDKError(f'{label} archive member has no data')
-                with source, path.open('xb') as output:
-                    shutil.copyfileobj(source, output)
+                try:
+                    with source, path.open('xb') as output:
+                        shutil.copyfileobj(source, output)
+                except (OSError, RuntimeError, NotImplementedError, zipfile.BadZipFile, EOFError) as exc:
+                    if not isinstance(packed, _ZipArchive):
+                        raise
+                    raise SDKError(f'{label} archive member cannot be extracted') from exc
                 path.chmod(0o755 if member.mode & 0o111 else 0o644)
                 try:
                     os.utime(path, (member.mtime, member.mtime))
