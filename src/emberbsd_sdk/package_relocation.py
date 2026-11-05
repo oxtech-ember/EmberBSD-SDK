@@ -65,7 +65,7 @@ def complete_bootstrap(prefix, database, name):
         complete(prefix, metadata, lines)
 
 
-def finish(prefix, database, name):
+def finish(prefix, database, name, *, configure=True):
     """Idempotent: the source-prefix comment changes only after all file edits."""
     prefix, database = Path(prefix), Path(database)
     metadata = database / name
@@ -97,7 +97,7 @@ def finish(prefix, database, name):
         if content != updated:
             _replace_file(path, updated)
     relocate_build_info(metadata / '+BUILD_INFO', original.encode(), str(prefix).encode())
-    if HOOKS in lines:
+    if HOOKS in lines and configure:
         for member in ('+INSTALL', '+DEINSTALL'):
             path = metadata / member
             if path.is_symlink():
@@ -111,6 +111,8 @@ def finish(prefix, database, name):
                     _replace_file(path, updated)
         run_install_hooks(prefix, database, metadata.name)
     refresh_checksums(prefix, [metadata.name], database=database, selected=set(names))
+    if HOOKS in lines and not configure:
+        return
     lines = contents.read_text().splitlines()
     complete(prefix, metadata, lines)
 

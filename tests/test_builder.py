@@ -221,7 +221,7 @@ wrapper.parent.mkdir(parents=True, exist_ok=True); wrapper.write_text({wrapper!r
     shutil.copytree(SDK_SOURCE / 'src', root / 'sdk-source/src', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     recipe_fixture(ports, root / 'libedit.tar.gz')
     for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'),
-                          ('zlib', 'devel/zlib'), ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd'), ('heimdal', 'security/heimdal'), ('openssh', 'security/openssh')):
+                          ('zlib', 'devel/zlib'), ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('expat', 'textproc/expat'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd'), ('heimdal', 'security/heimdal'), ('openssh', 'security/openssh')):
         source = root / (name + '-source')
         source.mkdir()
         write(source / 'emberbsd-prepared-source.json', json.dumps(dict(format='emberbsd-prepared-source',
@@ -307,6 +307,19 @@ class BuilderTests(TemporaryCase):
         record['package'] = 'wrong/package'
         receipt.write_text(json.dumps(record))
         with self.assertRaisesRegex(SDKError, 'invalid libcbor'):
+            B(options).preflight()
+
+    def test_optional_expat_is_verified_and_forwarded(self):
+        options = self.options | {'expat-source': str(self.root / 'expat-source')}
+        builder = B(options)
+        builder.preflight()
+        self.assertEqual(builder.common_source_records['expat']['package'], 'textproc/expat')
+        self.assertIn('EMBER_EXPAT_SOURCE=' + options['expat-source'], builder.flags)
+        receipt = Path(options['expat-source']) / 'emberbsd-prepared-source.json'
+        record = json.loads(receipt.read_text())
+        record['package'] = 'wrong/package'
+        receipt.write_text(json.dumps(record))
+        with self.assertRaisesRegex(SDKError, 'invalid expat'):
             B(options).preflight()
 
     def test_optional_libfetch_is_verified_and_forwarded(self):
@@ -448,6 +461,8 @@ class BuilderTests(TemporaryCase):
         selected_git = builder.git_command
         build_path = builder.environment['PATH']
         self.assertIsNone(shutil.which('git', path=build_path))
+        self.assertIn('EMBER_SOURCE_GIT=' + selected_git, builder.build_command)
+        self.assertNotIn('EMBER_SOURCE_GIT', str(first['signature']))
         second = builder.preflight()
         self.assertEqual(builder.git_command, selected_git)
         self.assertEqual(builder.environment['PATH'], build_path)
@@ -1322,3 +1337,98 @@ for _failure in ('build_fail', 'loader_fail', 'missing_header', 'wrong_elf', 'ab
 def runtime_required(self):
     self.control(runtime_fail=True); self.refusal_unchanged('Injected verifier failure')
 BuilderTests.test_normal_runtime_check_is_mandatory = runtime_required
+
+
+class UpdateStageTests(TemporaryCase):
+    def setUp(self):
+        super().setUp()
+        self.options = fixture(self.root)
+        self.options['destination'] = str(Path(self.options['sdk']) / 'stages' / 'work')
+
+    def build(self):
+        return B(self.options).run()
+
+    def test_update_success_noop_and_new_receipt(self):
+        first = self.build()
+        stage = Path(self.options['destination'])
+        old = (stage / 'usr/include/stdio.h').stat().st_mtime_ns
+        with patch.object(B, 'dispatch') as dispatch:
+            result = B(self.options | {'update-stage': True}).run()
+        self.assertEqual(dispatch.call_count, 3)
+        self.assertEqual(result['qualification'], 'built-and-inspected')
+        self.assertEqual((stage / 'usr/include/stdio.h').stat().st_mtime_ns, old)
+        self.assertEqual(result['signature'], first['signature'])
+        self.assertFalse((stage / B.MARKER).exists())
+
+    def test_controller_update_and_interrupted_retry(self):
+        self.build()
+        stage = Path(self.options['destination'])
+        receipt_path = stage / B.RECEIPT
+        receipt = json.loads(receipt_path.read_text())
+        receipt['signature']['python']['modules'] = {'source_commit': 'a' * 40}
+        receipt_path.write_text(json.dumps(receipt))
+        with patch.object(B, 'build_payload', side_effect=SDKError('injected failure')):
+            with self.assertRaisesRegex(SDKError, 'injected failure'):
+                B(self.options | {'update-stage': True}).run()
+        marker = stage / B.MARKER
+        self.assertTrue(marker.exists())
+        with patch.object(B, 'dispatch'):
+            result = B(self.options | {'update-stage': True}).run()
+        self.assertEqual(result['qualification'], 'built-and-inspected')
+        self.assertFalse(marker.exists())
+
+    def test_incompatible_compiler_and_runtime_rejected(self):
+        self.build()
+        stage = Path(self.options['destination'])
+        receipt_path = stage / B.RECEIPT
+        original = json.loads(receipt_path.read_text())
+        for field in ('compiler', 'runtime'):
+            with self.subTest(field=field):
+                record = copy.deepcopy(original)
+                if field == 'compiler':
+                    role = next(iter(record['signature']['compiler']['binaries']))
+                    record['signature']['compiler']['binaries'][role]['sha256'] = 'f' * 64
+                else:
+                    record['signature']['runtime']['incompatible'] = True
+                receipt_path.write_text(json.dumps(record))
+                with self.assertRaisesRegex(SDKError, 'context differs'):
+                    B(self.options | {'update-stage': True}).run()
+        receipt_path.write_text(json.dumps(original))
+
+    def test_unknown_and_mismatch_are_refused(self):
+        stage = Path(self.options['destination']); stage.mkdir(parents=True)
+        (stage / 'unknown').write_text('x')
+        with self.assertRaises((SDKError, OSError)):
+            B(self.options | {'update-stage': True}).run()
+        (stage / 'unknown').unlink(); stage.rmdir()
+        self.build()
+        import json
+        receipt_path = stage / B.RECEIPT
+        record = json.loads(receipt_path.read_text())
+        record['workspace']['target'] = 'amd64'
+        receipt_path.write_text(json.dumps(record))
+        with self.assertRaises(SDKError):
+            B(self.options | {'update-stage': True}).run()
+
+    def test_failure_retains_incomplete_marker(self):
+        self.build()
+        with patch.object(B, 'build_payload', side_effect=SDKError('injected failure')):
+            with self.assertRaisesRegex(SDKError, 'injected failure'):
+                B(self.options | {'update-stage': True}).run()
+        stage = Path(self.options['destination'])
+        self.assertTrue((stage / B.MARKER).exists())
+        with patch.object(B, 'dispatch'):
+            result = B(self.options | {'update-stage': True}).run()
+        self.assertEqual(result['qualification'], 'built-and-inspected')
+        self.assertFalse((stage / B.MARKER).exists())
+
+    def test_runtime_corruption_rejected(self):
+        self.build()
+        stage = Path(self.options['destination'])
+        runtime = stage / 'usr/pkg/gcc16'
+        item = next(p for p in runtime.rglob('*') if p.is_file() and not p.is_symlink())
+        item.write_bytes(b'corrupt')
+        with patch.object(B, 'dispatch'):
+            with self.assertRaises(SDKError):
+                B(self.options | {'update-stage': True}).run()
+        self.assertTrue((stage / B.MARKER).exists())

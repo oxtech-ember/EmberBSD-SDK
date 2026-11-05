@@ -83,7 +83,7 @@ class SysrootPackageTests(TemporaryCase):
         plan = dict(build_roots=[], sysroot=selected, download_size=item['size'],
             unpacked_size=item['unpacked_size'] * 2,
             packages=[dict(artifact=item, repository='target', action='download')])
-        def install(path, config, *, checked):
+        def install(path, config, *, checked, configure=True):
             self.assertTrue((destination / sysroot_package.RECEIPT).is_file())
             self.assertTrue((destination / 'usr/include/stdio.h').is_file())
             self.assertTrue((destination / 'usr/pkg/pkgdb.sdk-lock').is_dir())

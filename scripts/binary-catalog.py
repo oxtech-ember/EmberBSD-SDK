@@ -28,6 +28,8 @@ def main(argv=None):
     producer.add_argument('--output', required=True, type=Path)
     producer.add_argument('--signer-directory', required=True, type=Path)
     producer.add_argument('--trust-root', required=True, type=Path)
+    producer.add_argument('--current', type=Path,
+                          help='authenticated snapshot directory; reuse its packages by metadata and merge additions')
     for name in ('list', 'show', 'plan'):
         command = commands.add_parser(name)
         command.add_argument('--release', required=True, type=Path)
@@ -44,7 +46,8 @@ def main(argv=None):
         crypto = ReleaseCrypto(load_host_prefix(args.host_prefix, required_roles=roles))
         if args.command == 'compose':
             signer = SigningIdentity(args.signer_directory / 'certificate.pem', args.signer_directory / 'private-key.pem')
-            value = compose(crypto, read_json(args.input), args.ports_root, args.output, signer, args.trust_root)
+            value = compose(crypto, read_json(args.input), args.ports_root, args.output, signer, args.trust_root,
+                            current=args.current)
         else:
             if args.command == 'plan' and not args.repository:
                 raise SDKError('plan requires explicit --repository selections (host and/or targets)')

@@ -159,6 +159,10 @@ Select an explicit new destination stage. A nonempty destination
 is rejected before build writes. For an update, select a new stage
 such as `--destination /absolute/prebuild-sdk-aarch64/stages/sysroot-next` inside the
 same shared workspace. A destination inside the active `sysroot` is rejected.
+For an exclusively owned, completed SDK work stage, `--update-stage` reuses
+its original destination and compatible objects. The builder marks the stage
+incomplete during the update; a later invocation with the same option resumes
+an interrupted update. Do not use the stage as a consumer input while updating.
 Keep the active sysroot unchanged while other consumers use it.
 
 `--objects` and `--tools` can select existing compatible component paths under
@@ -347,3 +351,15 @@ restore a pinned copy into a new local directory on a developer host.
 A releasable SDK also needs the [distribution checks](distribution.md), including
 host-platform and relocation acceptance. The initial workspace tests do not
 establish a complete sysroot build on every advertised future platform.
+
+Select the common Ports `textproc/expat` prepared source with `--expat-source`
+when the OS producer requires `EMBER_EXPAT_SOURCE`. Prepare it with the Ports
+`scripts/source-inputs/expat/source.py` owner.
+
+For a reviewed, compatible change to target ELF object tools, an experienced
+developer can bind an explicit one-run transition to the saved object context
+and the selected tool, for example `--compatible-target-tool
+objcopy:OLD_SHA256:NEW_SHA256`. The role must be `objcopy` or `strip`; repeat
+the option for both when needed. The SDK compares both digests and keeps every
+other compiler, path, ABI and object input strict. This is an explicit
+developer assertion, not automatic proof that tool outputs are equivalent.

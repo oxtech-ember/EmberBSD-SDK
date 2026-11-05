@@ -75,7 +75,10 @@ SDK and OS inventories and channel pointers using one X.509 trust root.
 The [binary catalog](docs/binary-catalog.md) projects Ports runtime dependencies,
 signs packages before generating pkg_summary, and supports source-free selection
 of published package sets. [S3 publication and HTTPS delivery](docs/s3-distribution.md)
-maintain one current package set, remove superseded versions, and fetch authenticated metadata. Binary
+maintain one current package set, remove superseded versions, and fetch authenticated metadata.
+An [optional maintainer command](docs/s3-distribution.md#optional-maintainer-command-publish-built-additions)
+adds successful Ports packages to current, preserving other artifacts and reusing
+unchanged binaries. Ordinary builds and installs do not need publication keys. Binary
 installation uses the [minimal client](docs/sdk-client.md), with a shared cache
 and Ports builds for missing binaries. A self-contained portable bootstrap
 runtime remains separate acceptance work.
@@ -177,6 +180,12 @@ The selector follows imports between SDK modules, scripts and test helpers,
 and tests that name a changed file. It runs the whole suite when a change
 touches the shared core (a module that at least half of the tests use) or
 cannot be mapped. CI runs the whole suite on every push and pull request.
+Tests requiring native OpenSSL/pkg_tools are gated by
+`EMBERBSD_TEST_HOST_PREFIX`; the ordinary CI job reports this missing
+prerequisite. Its green result covers the tests actually executed, not native
+signing, package lifecycle or a complete SDK build. Publication recovery and
+generation-conflict tests also run autonomously with an authentication double
+and the real local conditional object server.
 
 The tests use temporary filesystem trees and build-command fixtures. Their
 results do not establish a real sysroot build or target execution.

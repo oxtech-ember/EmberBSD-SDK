@@ -13,6 +13,26 @@ from emberbsd_sdk.errors import SDKError
 
 
 class RelocationTests(unittest.TestCase):
+    def test_deferred_finish_can_relocate_before_later_configuration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / 'pkgdb/fixture-1'; package.mkdir(parents=True)
+            contents = package / '+CONTENTS'
+            contents.write_text('@name fixture-1\n@cwd ' + str(root) + '\n' + relocation.MARKER + '\n' +
+                                relocation.SOURCE + str(root) + '\n' + relocation.HOOKS + '\n')
+            (package / relocation.READY).write_text(str(root) + '\n')
+            with patch.object(relocation, 'run_install_hooks') as run:
+                relocation.finish(root, root / 'pkgdb', 'fixture-1', configure=False)
+                run.assert_not_called()
+                self.assertEqual(list(relocation.pending(root, root / 'pkgdb')), ['fixture-1'])
+                self.assertTrue((package / relocation.READY).exists())
+                self.assertIn(relocation.HOOKS, contents.read_text())
+
+                relocation.finish(root, root / 'pkgdb', 'fixture-1')
+                run.assert_called_once()
+            self.assertEqual(list(relocation.pending(root, root / 'pkgdb')), [])
+            self.assertFalse((package / relocation.READY).exists())
+
     def test_deferred_hook_at_original_prefix_needs_completion_and_retries(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

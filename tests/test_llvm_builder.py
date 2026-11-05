@@ -514,6 +514,75 @@ class LLVMBuilderTests(TemporaryCase):
             self.assertIn('MKLIBCXX=no', llvm_flags(
                 selected_paths, phase=phase, base_cxx=True))
 
+    def test_coordinator_update_stage_routes_and_checks_before_build(self):
+        sdk = self.root / 'sdk'
+        (sdk / 'obj').mkdir(parents=True)
+        (sdk / 'stages').mkdir()
+        final = sdk / 'stages/final'
+        final.mkdir()
+        options = {'sdk': str(sdk), 'runtime-work': str(sdk / 'obj/runtime'),
+                   'target': 'aarch64', 'destination': str(final),
+                   'llvm-stages': str(sdk / 'stages/intermediate'),
+                   'update-stage': True}
+        coordinator = LLVMCoordinator(options, SysrootBuilder)
+        for phase in ('headers', 'base'):
+            self.assertNotIn('update-stage', coordinator.stage_options(phase))
+        self.assertTrue(coordinator.stage_options('final')['update-stage'])
+        seen = {}
+
+        class Phase:
+            def __init__(self, selected, phase, **kwargs):
+                seen[phase] = selected.copy()
+                self.tools_built_this_run = False
+            def run(self):
+                return {}
+
+        class Final:
+            def __init__(self, selected, **kwargs):
+                seen['final'] = selected.copy()
+            def run(self):
+                return {}
+
+        coordinator.builder_type = Final
+        with patch.object(coordinator, 'prepare'), patch.object(coordinator, 'lock'), \
+                patch.object(coordinator, 'record_inputs'), patch.object(coordinator, 'runtime'), \
+                patch('emberbsd_sdk.llvm_sysroot.LLVMPhaseBuilder', Phase):
+            coordinator.run()
+        for phase in ('headers', 'base'):
+            self.assertNotIn('update-stage', seen[phase])
+        self.assertTrue(seen['final']['update-stage'])
+        coordinator.builder_type = SysrootBuilder
+
+        class Header:
+            output_path = SysrootBuilder.output_path
+            def __init__(self, selected, phase, receipts=None, **selection):
+                self.logical_sdk = str(sdk)
+                self.paths = {'sdk': str(sdk)}
+                self.flags = []
+            def preflight(self):
+                pass
+            def require_prepared_sources(self, flags, traversals):
+                return {}
+
+        with patch('emberbsd_sdk.llvm_sysroot.workspace.inspect_layout', return_value={}), \
+                patch('emberbsd_sdk.llvm_sysroot.workspace.require_target'), \
+                patch('emberbsd_sdk.llvm_sysroot.LLVMPhaseBuilder', Header), \
+                patch('emberbsd_sdk.sysroot_transfer._provenance') as provenance:
+            # No receipt: fail before any intermediate or runtime stage is written.
+            with self.assertRaises((SDKError, OSError)):
+                coordinator.prepare()
+            self.assertFalse((sdk / 'stages/intermediate').exists())
+            self.assertFalse((sdk / 'obj/runtime').exists())
+            receipt = final / SysrootBuilder.RECEIPT
+            receipt.write_text('{}')
+            coordinator.prepare()
+            provenance.assert_called_with({}, 'aarch64')
+            marker = final / SysrootBuilder.MARKER
+            marker.write_text('{"format":"unrelated","version":1}')
+            with self.assertRaisesRegex(SDKError, 'not a resumable stage update'):
+                coordinator.prepare()
+            self.assertFalse((sdk / 'stages/intermediate').exists())
+
     def test_coordinator_uses_selected_stage_and_object_directories(self):
         options = {'sdk': '/sdk', 'runtime-work': '/sdk/obj/runtime', 'target': 'aarch64',
                    'llvm-objects': '/sdk/obj/alternate', 'llvm-stages': '/sdk/stages/alternate'}
@@ -2209,6 +2278,134 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.paths['libcbor-source'] = '/prepared/libcbor'
         builder.signature['common_sources']['libcbor'] = {'tree_sha256': 'a' * 64}
         builder.signature['flags'].append('EMBER_LIBCBOR_SOURCE=/prepared/libcbor')
+        self.assertTrue(builder.compatible_context(records[tools], tools))
+        self.assertFalse(builder.compatible_context(records[objects], objects))
+
+    def test_explicit_target_tool_transition_is_bound_and_scoped(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'base'
+        objects = builder.paths['objects']
+        before = {'signature': copy.deepcopy(builder.context_signature(objects)),
+                  'sources': copy.deepcopy(builder.sources)}
+        old = {name: builder.signature['compiler']['binaries'][name]['sha256']
+               for name in ('objcopy', 'strip')}
+        for name in old:
+            builder.signature['compiler']['binaries'][name]['sha256'] = 'a' * 64
+        self.assertFalse(builder.compatible_context(before, objects))
+        builder.compatible_target_tools = {name: (sha, 'a' * 64) for name, sha in old.items()}
+        self.assertTrue(builder.compatible_context(before, objects))
+        self.assertEqual(set(builder.applied_target_tools), {'objcopy', 'strip'})
+        builder.compatible_target_tools['objcopy'] = ('b' * 64, 'a' * 64)
+        self.assertFalse(builder.compatible_context(before, objects))
+        builder.compatible_target_tools['objcopy'] = (old['objcopy'], 'b' * 64)
+        self.assertFalse(builder.compatible_context(before, objects))
+        builder.compatible_target_tools['objcopy'] = (old['objcopy'], 'a' * 64)
+        ld = builder.signature['compiler']['binaries']['ld']['sha256']
+        builder.signature['compiler']['binaries']['ld']['sha256'] = 'd' * 64
+        self.assertFalse(builder.compatible_context(before, objects))
+        builder.signature['compiler']['binaries']['ld']['sha256'] = ld
+        builder.signature['compiler']['binaries']['objcopy']['path'] = '/changed/objcopy'
+        self.assertFalse(builder.compatible_context(before, objects))
+
+    def test_tool_transition_preserves_prepared_source_refresh(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'base'
+        objects = builder.paths['objects']
+        before = {'signature': copy.deepcopy(builder.context_signature(objects)),
+                  'sources': copy.deepcopy(builder.sources)}
+        builder.paths['expat-source'] = '/prepared/expat'
+        builder.signature['common_sources']['expat'] = {
+            'format': 'emberbsd-prepared-source', 'version': 1,
+            'package': 'textproc/expat', 'tree_sha256': 'e' * 64}
+        builder.signature['flags'].append('EMBER_EXPAT_SOURCE=/prepared/expat')
+        old = {role: builder.signature['compiler']['binaries'][role]['sha256']
+               for role in ('objcopy', 'strip')}
+        for role in old:
+            builder.signature['compiler']['binaries'][role]['sha256'] = 'a' * 64
+        with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=['external/expat']) as plan:
+            self.assertFalse(builder.plan_prepared_refresh(before, objects))
+            builder.compatible_target_tools = {role: (sha, 'a' * 64) for role, sha in old.items()}
+            self.assertTrue(builder.plan_prepared_refresh(before, objects))
+            self.assertEqual(builder.refresh_dirs, ['external/expat'])
+            self.assertIn('expat', plan.call_args.args[2])
+
+    def test_tool_transition_context_lifecycle(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'base'
+        objects = Path(builder.paths['objects'])
+        objects.mkdir(parents=True, exist_ok=True)
+        signature = copy.deepcopy(builder.context_signature(str(objects)))
+        bindings = {}
+        for role, digit in (('objcopy', 'b'), ('strip', 'c')):
+            selected = signature['compiler']['binaries'][role]['sha256']
+            signature['compiler']['binaries'][role]['sha256'] = digit * 64
+            bindings[role] = (digit * 64, selected)
+        old = {'format': 'emberbsd-sysroot-object-context', 'version': 1,
+               'signature': signature, 'sources': copy.deepcopy(builder.sources)}
+        (objects / builder.CONTEXT).write_text(json.dumps(old))
+        builder.compatible_target_tools = bindings
+        builder.contexts = {'objects': builder.inspect_context(str(objects)), 'tools': None}
+        old_bytes = (objects / builder.CONTEXT).read_bytes()
+        self.assertEqual(builder.inspect_context(str(objects)), old)
+        self.assertEqual((objects / builder.CONTEXT).read_bytes(), old_bytes)
+        builder.prepare_contexts()
+        current = builder.inspect_context(str(objects))
+        self.assertEqual(current['signature'], builder.context_signature(str(objects)))
+        third = copy.deepcopy(current)
+        original = builder.signature['compiler']['binaries']['objcopy']['sha256']
+        builder.signature['compiler']['binaries']['objcopy']['sha256'] = 'd' * 64
+        third['signature']['compiler']['binaries']['objcopy']['sha256'] = 'd' * 64
+        self.assertFalse(builder.compatible_context(third, str(objects)))
+        builder.signature['compiler']['binaries']['objcopy']['sha256'] = original
+        builder.applied_target_tools = {}
+        with self.assertRaisesRegex(SDKError, 'incompatible object context'):
+            builder.inspect_context(str(objects))
+        builder.compatible_target_tools = {}
+        self.assertEqual(builder.inspect_context(str(objects)), current)
+
+    def test_invalid_target_tool_transition_is_refused(self):
+        for value in ('cc:' + 'a' * 64 + ':' + 'b' * 64,
+                      'objcopy:' + 'a' * 64 + ':' + 'a' * 64,
+                      'strip:not-a-sha:' + 'b' * 64):
+            with self.subTest(value=value), self.assertRaisesRegex(SDKError, 'invalid compatible target tool'):
+                SysrootBuilder({'compatible-target-tool': [value]})
+
+    def test_target_objcopy_bytes_do_not_invalidate_headers(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        objects = builder.paths['objects']
+        builder.llvm_phase = 'headers'
+        header = {'signature': copy.deepcopy(builder.context_signature(objects)),
+                  'sources': copy.deepcopy(builder.sources)}
+        tools = builder.paths['tools']
+        tool_record = {'signature': copy.deepcopy(builder.context_signature(tools)),
+                       'sources': copy.deepcopy(builder.sources)}
+        builder.llvm_phase = 'base'
+        base = {'signature': copy.deepcopy(builder.context_signature(objects)),
+                'sources': copy.deepcopy(builder.sources)}
+        for role in ('objcopy', 'strip'):
+            builder.signature['compiler']['binaries'][role]['sha256'] = 'a' * 64
+        self.assertFalse(builder.compatible_context(base, objects))
+        builder.llvm_phase = 'headers'
+        self.assertTrue(builder.compatible_context(header, objects))
+        self.assertTrue(builder.compatible_context(tool_record, tools))
+        builder.signature['compiler']['binaries']['objcopy']['path'] = '/changed/objcopy'
+        self.assertFalse(builder.compatible_context(header, objects))
+        self.assertFalse(builder.compatible_context(tool_record, tools))
+
+    def test_expat_selection_changes_headers_but_not_native_tools(self):
+        builder, _ = self.builder()
+        builder.preflight()
+        builder.llvm_phase = 'headers'
+        tools, objects = builder.paths['tools'], builder.paths['objects']
+        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+        builder.paths['expat-source'] = '/prepared/expat'
+        builder.signature['common_sources']['expat'] = {'tree_sha256': 'a' * 64}
+        builder.signature['flags'].append('EMBER_EXPAT_SOURCE=/prepared/expat')
         self.assertTrue(builder.compatible_context(records[tools], tools))
         self.assertFalse(builder.compatible_context(records[objects], objects))
 

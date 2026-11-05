@@ -25,7 +25,7 @@ def main():
                         help='positive build parallelism; default: CPUs available to this process')
     parser.add_argument('--runtime-work', action=UniqueOption,
                         help='required for GCC or to build an LLVM runtime; not needed with a selected LLVM stage')
-    for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'libfido2-source', 'libcbor-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'mdns-source', 'dhcpcd-source', 'heimdal-source', 'openssh-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'zlib-source'):
+    for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'libfido2-source', 'libcbor-source', 'expat-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'mdns-source', 'dhcpcd-source', 'heimdal-source', 'openssh-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'zlib-source'):
         parser.add_argument('--' + name, action=UniqueOption, help='required for the OS base build')
     parser.add_argument('--host-compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
                         help='Clang by default; select GCC explicitly for a platform exception')
@@ -53,6 +53,9 @@ def main():
     for name in ('host-cc', 'host-cxx', 'python'):
         parser.add_argument('--' + name, action=UniqueOption, help='optional checked alias inside --host-prefix')
     parser.add_argument('--c-foundation', action='store_true', help='build an intermediate static C foundation, not a complete SDK')
+    parser.add_argument('--compatible-target-tool', action='append', metavar='ROLE:OLD_SHA256:NEW_SHA256',
+                        help='one-run reviewed ELF object-tool transition; objcopy or strip only')
+    parser.add_argument('--update-stage', action='store_true', help='incrementally update an existing completed matching work stage')
     parser.add_argument('--plan', action='store_true', help='inspect inputs and emit commands without creating outputs')
     arguments = parser.parse_args()
     try:

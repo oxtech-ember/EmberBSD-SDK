@@ -6,12 +6,15 @@ No version solver, source tree, build tools or package execution is used here.
 Authentication is provided by the enclosing signed release, before parsing.
 """
 
+import hashlib
 import re
 
 from .errors import SDKError
 from .jsonio import loads_json
 from .package_selection import _parse_root
 from .ports_plan import lock_graph
+from .release_catalog import local_artifact
+from .release_signing import read_bytes
 
 CATALOG_SCHEMA = 'emberbsd.packages.v1'
 _REPEATED = {'DEPENDS', 'CONFLICTS', 'REQUIRES', 'PROVIDES', 'DESCRIPTION', 'SUPERSEDES'}
@@ -133,6 +136,28 @@ def parse_catalog(data, release, catalog_artifact):
                 len(entries) != len(set(entries)) or not set(entries) <= roots):
             raise SDKError(f'invalid package set: {name}')
     return value
+
+
+def load_release_catalogs(release, directory, repositories=()):
+    """Validate selected local package catalogs against the full release inventory."""
+    catalogs = []
+    requested = set(repositories)
+    for artifact in release['artifacts']:
+        if artifact['kind'] != 'package-index' or not artifact['path'].endswith('/catalog.json'):
+            continue
+        repository = artifact['path'].split('/')[0]
+        if requested and repository not in requested:
+            continue
+        data = read_bytes(local_artifact(directory, artifact['path']))
+        if len(data) != artifact['size'] or hashlib.sha256(data).hexdigest() != artifact['sha256']:
+            raise SDKError('binary catalog size or SHA256 differs from signed release')
+        catalog = parse_catalog(data, release, artifact)
+        if catalog['repository'] != repository:
+            raise SDKError('catalog repository differs from its signed path')
+        catalogs.append(catalog)
+    if requested - {catalog['repository'] for catalog in catalogs}:
+        raise SDKError('requested binary repository is missing')
+    return catalogs
 
 
 def select_packages(release, catalogs, *, sets=(), roots=()):

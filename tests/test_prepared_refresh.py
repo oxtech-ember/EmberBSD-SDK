@@ -475,7 +475,7 @@ class TransitionTests(unittest.TestCase):
         byacc = {'path': '/byacc', 'record': {'tree_sha256': 'old'}}
         selected = {'compiler': 'same', 'native_sources': {'heimdal': 'same'}}
         fake = SimpleNamespace(paths={'os': '/os', 'objects': '/obj', 'tools': '/tools'},
-                               context_signature=lambda p: selected)
+                               compatible_target_tools={}, context_signature=lambda p: selected)
         fake.reuse_signature = MethodType(SysrootBuilder.reuse_signature, fake)
         fake.compatible_context = MethodType(SysrootBuilder.compatible_context, fake)
         record = {'signature': deepcopy(selected)}

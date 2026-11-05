@@ -17,12 +17,19 @@ from test_package_cache import Store
 class Installer:
     def __init__(self):
         self.present, self.actions = set(), []
-    def installed(self, config):
+        self.recover_args = []
+    def installed(self, config, *, recover=True):
+        self.recover_args.append(recover)
         return self.present
     def check(self, path, config):
         self.actions.append(('check', path.name))
-    def install(self, path, config, *, checked=False):
-        self.actions.append(('install', path.name))
+    def install(self, path, config, *, checked=False, configure=True):
+        self.actions.append(('install', path.name, configure))
+        self.present.add(path.stem)
+    def check_updates(self, packages, archives, config):
+        pass
+    def configure(self, config):
+        self.actions.append(('configure',))
 
 
 class ClientTests(unittest.TestCase):
@@ -69,16 +76,46 @@ class ClientTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'platform'):
             self.plan(sets=['task'])
 
-    def test_replacement_requires_the_update_path_before_any_mutation(self):
+    def test_replacement_is_planned_without_mutation(self):
         self.installer.present.add('lib-0')
-        with self.assertRaisesRegex(SDKError, 'update'):
-            self.plan(sets=['task'])
+        plan = self.plan(sets=['task'])
+        self.assertEqual(plan['packages'][0]['replaces'], ['lib-0'])
+        self.assertEqual(plan['packages'][0]['action'], 'download')
         self.assertEqual(self.installer.actions, [])
+
+    def test_selected_batch_is_installed_before_hooks_and_retries_failed_configuration(self):
+        plan = self.plan(sets=['task'])
+        def configure_once(config):
+            self.installer.actions.append(('configure',))
+            if configure.call_count == 1:
+                raise SDKError('hook interrupted')
+        with patch.object(self.installer, 'configure', side_effect=configure_once) as configure:
+            with self.assertRaisesRegex(SDKError, 'hook interrupted'):
+                apply_plan(plan, self.cfg, self.installer, self.cache, self.store)
+            self.assertEqual([action[0] for action in self.installer.actions],
+                             ['check', 'check', 'install', 'install', 'configure'])
+            self.assertEqual([action[2] for action in self.installer.actions if action[0] == 'install'],
+                             [False, False])
+            self.installer.present.update(package['pkgname'] for package in plan['packages'])
+            retry = self.plan(sets=['task'])
+            self.assertTrue(all(package['action'] == 'installed' for package in retry['packages']))
+            apply_plan(retry, self.cfg, self.installer, self.cache, self.store)
+            self.assertEqual(configure.call_count, 2)
+        self.assertTrue(self.installer.recover_args)
+        self.assertFalse(any(self.installer.recover_args))
+
+    def test_incompatible_update_stops_before_any_package_mutation(self):
+        self.installer.present.add('lib-0')
+        with patch.object(self.installer, 'check_updates', side_effect=SDKError('incompatible update')):
+            with self.assertRaisesRegex(SDKError, 'incompatible update'):
+                apply_plan(self.plan(sets=['task']), self.cfg, self.installer, self.cache, self.store)
+        self.assertEqual([a[0] for a in self.installer.actions], ['check', 'check'])
 
     def test_all_archives_checked_before_any_install(self):
         plan = self.plan(sets=['task'])
         apply_plan(plan, self.cfg, self.installer, self.cache, self.store)
-        self.assertEqual([a[0] for a in self.installer.actions], ['check', 'check', 'install', 'install'])
+        self.assertEqual([a[0] for a in self.installer.actions],
+                         ['check', 'check', 'install', 'install', 'configure'])
         self.assertEqual(len(self.store.calls), 1)
 
     def test_download_failure_does_not_install_or_build(self):
@@ -103,7 +140,7 @@ class ClientTests(unittest.TestCase):
             def check(config, roots, binaries):
                 self.assertEqual(roots, ['devel/missing@native'])
                 self.assertEqual(binaries, [('devel/lib@native', 'lib-1'), ('net/app@native', 'app-1')])
-                self.assertEqual(self.installer.actions[-1][0], 'install')
+                self.assertEqual(self.installer.actions[-1][0], 'configure')
                 self.assertFalse((self.root / 'state/build.lock').exists())
                 self.assertFalse((self.cache.root / '.lock').exists())
             build.side_effect = check

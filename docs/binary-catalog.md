@@ -9,6 +9,9 @@ The [release format](signed-releases.md) remains the trust and artifact format.
 One release can include native and target repositories. One native tool archive
 serves all targets on that host. Each repository has exactly one host or target
 identity, including the declared ABI/runtime.
+Sealing, offline verification and sparse publication validate each catalog against
+the complete release inventory, including exact repository platform identities.
+Correcting metadata does not require rebuilding unchanged package payloads.
 
 ## Produce a catalog
 
@@ -95,9 +98,27 @@ the same source again can change the signature container. A rebuilt or changed
 package needs the appropriate version/revision before replacing its predecessor.
 Both unsigned TARs and signed BSD-ar containers undergo the same payload checks.
 
-Missing LICENSE, nonempty NO_BIN_ON_FTP/RESTRICTED and payload size exceeding
-SIZE_PKG are rejected. Declared redistribution checks do not replace license
-review. Target payloads are inspected without extraction: direct little-endian
+For a sparse update, pass `--current /work/current-snapshot`, obtained with
+`s3-release.py fetch`. Composition preserves all current artifacts and merges
+the selected roots and sets. Missing archive-map entries can reuse an exact
+root/version and its runtime dependency IDs from authenticated current metadata;
+other missing runtime packages still fail. Changed roots retain their artifact
+IDs, and retained reverse consumers are checked against replacements. Repository
+platform identity cannot change. Package downgrades are refused.
+The resulting directory contains new packages and all small indexes, without
+copies of the old payloads; publish it with the existing sparse-release options.
+The [optional maintainer command](s3-distribution.md#optional-maintainer-command-publish-built-additions)
+automates this sequence and skips local duplicates of already published versions.
+
+A missing or empty LICENSE is represented in the signed release as SPDX
+[`NOASSERTION`](https://spdx.github.io/spdx-spec/v2.3/package-information/#713-concluded-license-field): no license terms are asserted. This identifier does not grant
+redistribution rights. Declared nonempty LICENSE values are preserved. Duplicate
+or malformed metadata, nonempty NO_BIN_ON_FTP/RESTRICTED and payload size
+exceeding SIZE_PKG are rejected. For target packages, each `/usr/pkg/` REQUIRES path must be present in
+PROVIDES of the package itself or its reachable runtime dependency closure.
+Requirements outside `/usr/pkg/` belong to the target base and are not verified
+by this package-only check. Declared redistribution checks do not replace
+license review. Target payloads are inspected without extraction: direct little-endian
 ELF headers must match the CPU; ordinary Mach-O/PE host files are rejected.
 Native package composition requires exactly one qualified prefix-independent or
 text relocation declaration in the packing list. This declaration does not

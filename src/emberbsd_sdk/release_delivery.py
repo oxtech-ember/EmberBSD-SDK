@@ -11,12 +11,13 @@ import shutil
 import tempfile
 import time
 
+from .binary_catalog import load_release_catalogs
 from .errors import SDKError
 from .jsonio import json_bytes, loads_json
 from .paths import open_regular, verify_stable
 from .publication import publish_directory_noreplace
 from .release_catalog import (MAX_ENVELOPE, _relative, _pattern, _SLUG, commit_channel,
-                              local_artifact, parse_channel, parse_release)
+                              file_reference, local_artifact, parse_channel, parse_release)
 from .release_cli import verify_release
 from .release_signing import read_bytes, write_new
 from .release_s3 import HTTPStatusError
@@ -110,14 +111,19 @@ def _clean_current(store, prefix, keep):
 
 def publish_release(crypto, store, public, envelope_path, identity, trust,
                     *, prefix='', ttl=7 * 86400, refresh=False, previous_channel_time=None,
-                    expected_generation=None):
+                    expected_generation=None, reuse_current=False):
     if type(ttl) is not int or ttl <= 0:
         raise SDKError('channel lifetime must be a positive number of seconds')
     if expected_generation is not None and (type(expected_generation) is not int or expected_generation < 0):
         raise SDKError('expected generation must be a nonnegative integer')
+    if reuse_current and expected_generation is None:
+        raise SDKError('--reuse-current requires --expected-generation')
     envelope_path = Path(envelope_path)
     envelope = read_bytes(envelope_path)
-    release = verify_release(crypto, envelope, envelope_path.parent, trust)
+    release = (parse_release(crypto.verify_cms(envelope, trust)) if reuse_current else
+               verify_release(crypto, envelope, envelope_path.parent, trust))
+    if reuse_current:
+        load_release_catalogs(release, envelope_path.parent)
     base = 'current/metadata/' + hashlib.sha256(envelope).hexdigest()
     keys = [artifact_key(item, base) for item in release['artifacts']]
     if len({key.casefold() for key in keys}) != len(keys):
@@ -135,12 +141,14 @@ def publish_release(crypto, store, public, envelope_path, identity, trust,
     with _publisher_lock(store, prefix):
         return _publish_current(crypto, store, public, envelope_path, envelope, release,
                                 base, identity, trust, prefix, ttl, refresh, previous_channel_time,
-                                expected_generation)
+                                expected_generation, reuse_current)
 
 
 def _publish_current(crypto, store, public, envelope_path, envelope, release, base,
-                     identity, trust, prefix, ttl, refresh, previous_channel_time, expected_generation):
+                     identity, trust, prefix, ttl, refresh, previous_channel_time, expected_generation,
+                     reuse_current):
     release_key = _key(prefix, base + '/release.p7m')
+    reference = dict(id=release['release_id'], path=base + '/release.p7m', **_digest(envelope))
     channel_key = _key(prefix, 'current.p7m')
     old_envelope, old_headers = _optional_read(store, channel_key)
     now, previous = int(time.time()), None
@@ -162,16 +170,42 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
                 previous['release']['sha256'] != hashlib.sha256(envelope).hexdigest()):
             raise SDKError('current release ID already has different metadata; choose a new ID')
     generation = previous['generation'] if previous else 0
-    if expected_generation is not None and generation != expected_generation:
+    stale_generation = expected_generation is not None and generation != expected_generation
+    # The previous attempt may have switched current before losing its response
+    # or failing verification/cleanup. Only the exact authenticated envelope can
+    # reconcile that attempt; a refresh is a new conditional channel write.
+    current_retry = (previous is not None and previous['release'] == reference and
+                     previous['expires_at'] > now and not refresh)
+    if stale_generation and not (expected_generation < generation and current_retry):
         raise SDKError(f'current changed: expected generation {expected_generation}, found {generation}; '
                        'merge the latest current before publishing')
+    if reuse_current:
+        if previous is None:
+            raise SDKError('--reuse-current requires an existing authenticated current release')
+        old = previous['release']
+        previous_release_envelope, _ = public.read(_key(prefix, old['path']), MAX_ENVELOPE)
+        _check(previous_release_envelope, old)
+        previous_release = parse_release(crypto.verify_cms(previous_release_envelope, trust))
+        if previous_release['release_id'] != old['id']:
+            raise SDKError('current channel and authenticated release identities differ')
+        reusable_ids = _verify_sparse_local(crypto, release, previous_release, envelope_path.parent, trust)
+        _require_current_coverage(release, previous_release)
+    else:
+        reusable_ids = set()
     keep = {release_key}
     # Packages precede indexes. The release envelope is always uploaded last.
     for artifact in sorted(release['artifacts'], key=lambda item: item['kind'] == 'package-index'):
-        path = local_artifact(envelope_path.parent, artifact['path'])
-        handle, before = open_regular(path)
         key = _key(prefix, artifact_key(artifact, base))
         keep.add(key)
+        path = _local_if_present(envelope_path.parent, artifact['path'])
+        if path is None:
+            if artifact['id'] not in reusable_ids:
+                raise SDKError(f'local artifact disappeared before upload: {artifact["id"]}')
+            headers = public.head(key)
+            if int(headers['content-length']) != artifact['size']:
+                raise SDKError(f'reused current object size differs: {key}')
+            continue
+        handle, before = open_regular(path)
         with handle:
             content_type = 'application/json' if path.suffix == '.json' else 'application/octet-stream'
             _immutable(store, public, key, handle,
@@ -180,7 +214,6 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
         verify_stable(path, before)
     _immutable(store, public, release_key, io.BytesIO(envelope), **_digest(envelope),
                content_type='application/pkcs7-mime')
-    reference = dict(id=release['release_id'], path=base + '/release.p7m', **_digest(envelope))
     # Upload/verification time must not consume the new channel's validity window.
     now = int(time.time())
     if previous and previous['issued_at'] > now:
@@ -189,6 +222,11 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
         public.verify(channel_key, **_digest(old_envelope))
         _clean_current(store, prefix, keep)
         return previous
+    if stale_generation:
+        # Payload verification can outlive the pointer. A retry with an old
+        # generation must never turn into an unguarded expiry refresh.
+        raise SDKError(f'current changed: expected generation {expected_generation}, found {generation}; '
+                       'current expired during retry; read its generation before refreshing')
     pointer = dict(schema='emberbsd.channel.v1', channel=CHANNEL,
                    generation=previous['generation'] + 1 if previous else 1,
                    issued_at=now, expires_at=now + ttl, release=reference)
@@ -205,6 +243,59 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
     public.verify(channel_key, **_digest(signed))
     _clean_current(store, prefix, keep)
     return pointer
+
+
+def _local_if_present(root, relative):
+    """Return a safely located artifact, or None only when its leaf is absent."""
+    candidate = Path(root)
+    parts = relative.split('/')
+    for part in parts[:-1]:
+        candidate /= part
+        if candidate.is_symlink():
+            return local_artifact(root, relative)
+        if not candidate.exists():
+            return None
+        if not candidate.is_dir():
+            return local_artifact(root, relative)
+    candidate /= parts[-1]
+    if not candidate.exists() and not candidate.is_symlink():
+        return None
+    return local_artifact(root, relative)
+
+
+def _slot(artifact):
+    if artifact['host']:
+        platform = artifact['host']['os'].lower() + '-' + artifact['host']['arch']
+        role = 'host'
+    else:
+        platform, role = artifact['target']['arch'], 'target'
+    return artifact['id'], role, platform.casefold()
+
+
+def _require_current_coverage(candidate, current):
+    slots = {_slot(item) for item in candidate['artifacts']}
+    missing = [_slot(item) for item in current['artifacts'] if _slot(item) not in slots]
+    if missing:
+        raise SDKError('candidate release drops current artifacts; preserve each artifact ID and platform')
+
+
+def _verify_sparse_local(crypto, candidate, current, directory, trust):
+    old_by_slot = {_slot(item): item for item in current['artifacts']}
+    reusable_ids = set()
+    for artifact in candidate['artifacts']:
+        path = _local_if_present(directory, artifact['path'])
+        if path is None:
+            if artifact['kind'] == 'package-index':
+                raise SDKError(f'package indexes must be present locally: {artifact["id"]}')
+            if old_by_slot.get(_slot(artifact)) != artifact:
+                raise SDKError(f'missing artifact is not an exact current match: {artifact["id"]}')
+            reusable_ids.add(artifact['id'])
+            continue
+        if file_reference(path) != {key: artifact[key] for key in ('size', 'sha256')}:
+            raise SDKError(f'artifact size or SHA256 mismatch: {artifact["id"]}')
+        if artifact['kind'] in ('host-package', 'target-package'):
+            crypto.verify_package(path, trust)
+    return reusable_ids
 
 
 def fetch_release(crypto, public, trust, state, output, *, prefix='', repositories=()):
@@ -240,6 +331,7 @@ def _fetch_snapshot(crypto, public, trust, state, output, prefix, repositories, 
     requested, found = set(repositories), set()
     scratch = Path(tempfile.mkdtemp(prefix='.release-metadata-', dir=output.parent))
     try:
+        write_new(scratch / 'current.p7m', channel_bytes)
         write_new(scratch / 'release.p7m', envelope)
         for artifact in release['artifacts']:
             if artifact['kind'] != 'package-index':

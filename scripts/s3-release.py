@@ -37,6 +37,8 @@ def main(argv=None):
             command.add_argument('--refresh', action='store_true', help='refresh expiry even for the same release')
             command.add_argument('--expected-generation', type=int,
                                  help='refuse a changed current before uploading; 0 requires an empty repository')
+            command.add_argument('--reuse-current', action='store_true',
+                                 help='reuse exact missing records from authenticated current (requires generation)')
             command.add_argument('--previous-channel-time', type=int,
                                  help='publisher recovery only: authenticate the old channel at this past Unix time')
         else:
@@ -56,7 +58,8 @@ def main(argv=None):
                 value = publish_release(crypto, store, public, args.release, identity, args.trust_root,
                                         prefix=args.prefix, ttl=args.ttl, refresh=args.refresh,
                                         previous_channel_time=args.previous_channel_time,
-                                        expected_generation=args.expected_generation)
+                                        expected_generation=args.expected_generation,
+                                        reuse_current=args.reuse_current)
             else:
                 value = fetch_release(crypto, public, args.trust_root, args.state, args.output,
                                       prefix=args.prefix, repositories=args.repository)

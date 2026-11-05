@@ -241,6 +241,16 @@ class SysrootBuilder:
 
     def __init__(self, options, *, receipts=None):
         self.options = options.copy()
+        self.compatible_target_tools = {}
+        requested = self.options.get('compatible-target-tool', [])
+        if not isinstance(requested, list):
+            raise SDKError('invalid compatible target tool transition')
+        for value in requested:
+            match = re.fullmatch(r'(objcopy|strip):([0-9a-f]{64}):([0-9a-f]{64})', value) if isinstance(value, str) else None
+            if not match or match[1] in self.compatible_target_tools or match[2] == match[3]:
+                raise SDKError('invalid compatible target tool transition')
+            self.compatible_target_tools[match[1]] = (match[2], match[3])
+        self.applied_target_tools = {}
         # One run shares one set of in-memory verification receipts.
         self.verification = RunReceipts() if receipts is None else receipts
         if 'base-cxx' not in self.options:
@@ -382,7 +392,12 @@ class SysrootBuilder:
         if paths.entry(destination) is not None:
             paths.real_directory(destination)
             if os.listdir(destination):
+                if self.options.get('update-stage'):
+                    paths.regular_file(os.path.join(destination, self.RECEIPT))
+                    return
                 raise SDKError('destination must be new or empty; active sysroot is never overwritten')
+        if self.options.get('update-stage'):
+            raise SDKError('update requires an existing completed sysroot stage')
 
     def compiler(self):
         prefix, triplet = self.paths['compiler'], self.target['triplet']
@@ -874,7 +889,34 @@ class SysrootBuilder:
         # Routing evidence must retain bindings that phase-specific comparison
         # may later remove as irrelevant to header object contents.
         selected_binding_flags = copy.deepcopy(new.get('flags'))
+        transition = {}
+        target_transition = (self.compatible_target_tools and path == self.paths['objects'] and
+                             self.compiler_family() == 'clang' and getattr(self, 'llvm_phase', None) != 'headers')
         if old == new:
+            # A repeated check in this run can see the just-written context.
+            # A later run must omit the one-shot transition assertion.
+            if target_transition:
+                expected = {role: {'old_sha256': before, 'new_sha256': after}
+                            for role, (before, after) in self.compatible_target_tools.items()}
+                try:
+                    return (self.applied_target_tools == expected and
+                            all(new['compiler']['binaries'][role]['sha256'] == after
+                                for role, (_, after) in self.compatible_target_tools.items()))
+                except (KeyError, TypeError):
+                    return False
+            return True
+        if target_transition:
+            try:
+                for role, (before, after) in self.compatible_target_tools.items():
+                    if (old['compiler']['binaries'][role]['sha256'] != before or
+                            new['compiler']['binaries'][role]['sha256'] != after):
+                        return False
+                    old['compiler']['binaries'][role]['sha256'] = after
+                    transition[role] = {'old_sha256': before, 'new_sha256': after}
+            except (KeyError, TypeError):
+                return False
+        if old == new:
+            self.applied_target_tools.update(transition)
             return True
         try:
             # Loaded modules still match selected sources before/during a run.
@@ -883,11 +925,11 @@ class SysrootBuilder:
             new['python'].pop('modules', None)
             if (self.compiler_family() == 'clang' and
                     (path == self.paths['tools'] or getattr(self, 'llvm_phase', None) == 'headers')):
-                # Native tools and target headers never invoke the target linker.
-                # Keep its selected route and all compiler/ABI inputs, but do not
-                # discard these outputs solely because ld.lld bytes changed.
+                # Native tools and target headers do not execute target linker,
+                # objcopy or strip; keep their selected paths and all ABI inputs.
                 for signature in (old, new):
-                    signature['compiler']['binaries']['ld'].pop('sha256', None)
+                    for role in ('ld', 'objcopy', 'strip'):
+                        signature['compiler']['binaries'][role].pop('sha256', None)
             if (self.compiler_family() == 'clang' and
                     getattr(self, 'llvm_phase', None) == 'headers' and
                     path != self.paths['tools']):
@@ -907,6 +949,8 @@ class SysrootBuilder:
                         signature['header_libfido2_source'] = common_sources['libfido2']
                     if 'libcbor' in common_sources:
                         signature['header_libcbor_source'] = common_sources['libcbor']
+                    if 'expat' in common_sources:
+                        signature['header_expat_source'] = common_sources['expat']
                     if 'libfetch' in common_sources:
                         signature['header_libfetch_source'] = common_sources['libfetch']
                     if 'openldap' in common_sources:
@@ -1014,7 +1058,10 @@ class SysrootBuilder:
             new_env['PATH'] = old_env['PATH']
             for role in added:
                 del selected['tools'][role]
-            return old == new
+            compatible = old == new
+            if compatible:
+                self.applied_target_tools.update(transition)
+            return compatible
         except (KeyError, TypeError, AttributeError, ValueError):
             return False
 
@@ -1101,7 +1148,7 @@ class SysrootBuilder:
     # inputs and the digest of the tree it published.
     COMMON_SOURCES = (
         ('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'),
-        ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd'), ('heimdal', 'security/heimdal'), ('openssh', 'security/openssh'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'),
+        ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('expat', 'textproc/expat'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd'), ('heimdal', 'security/heimdal'), ('openssh', 'security/openssh'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'),
         ('diffutils', 'devel/diffutils'), ('grep', 'textproc/grep'), ('ekermit', 'comms/ekermit'),
         ('nvi', 'editors/nvi'), ('top', 'sysutils/top'), ('iscsi', 'devel/netbsd-iscsi-lib'),
         ('ntp', 'net/ntp4'), ('libopts', 'devel/autogen'), ('libpcap', 'net/libpcap'),
@@ -1641,7 +1688,7 @@ class SysrootBuilder:
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
-        input_names += [name for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'libfido2-source', 'libcbor-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'mdns-source', 'dhcpcd-source', 'heimdal-source', 'openssh-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'zlib-source', 'x11-source') if self.options.get(name)]
+        input_names += [name for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'libfido2-source', 'libcbor-source', 'expat-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'mdns-source', 'dhcpcd-source', 'heimdal-source', 'openssh-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'zlib-source', 'x11-source') if self.options.get(name)]
         if clang and self.llvm_phase != 'headers' and self.options.get('llvm-runtime-original-source'):
             input_names.append('llvm-runtime-original-source')
         input_names += (([] if self.llvm_phase == 'headers' else ['llvm-runtime-stage'])
@@ -1670,6 +1717,8 @@ class SysrootBuilder:
         self.paths['destination'] = self.output_path(self.options.get('destination', os.path.join(sdk, 'sysroot')), sdk)
         if paths.inside(self.paths['destination'], os.path.join(sdk, 'sysroot')):
             raise SDKError('destination must not be below the active sysroot; use SDK/stages/NAME')
+        if self.options.get('update-stage') and not paths.inside(self.paths['destination'], os.path.join(sdk, 'stages')):
+            raise SDKError('update requires a work stage inside SDK/stages')
         for name, directory in (('objects', 'os'), ('tools', 'tools')):
             self.paths[name] = self.output_path(self.options.get(name, os.path.join(sdk, 'obj', directory, profile)), os.path.join(sdk, 'obj'))
         self.paths['native-routing'] = os.path.join(
@@ -1772,7 +1821,7 @@ class SysrootBuilder:
         self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}',
                        f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
         self.flags += [f'EMBER_{name.upper().replace("-", "_")}_SOURCE={self.paths[name + "-source"]}'
-                       for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'libfetch', 'openldap', 'unbound', 'wpa', 'mdns', 'dhcpcd', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'zlib') if name + '-source' in self.paths]
+                       for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'expat', 'libfetch', 'openldap', 'unbound', 'wpa', 'mdns', 'dhcpcd', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'zlib') if name + '-source' in self.paths]
         if 'openssl-source' in self.paths or 'openssh-source' in self.paths:
             self.flags.append('HOST_PERL=' + self.native.tool('perl'))
         if 'openssh-source' in self.paths:
@@ -1808,7 +1857,8 @@ class SysrootBuilder:
         # Commit metadata stays out of the signature: the same OS tree at a new
         # commit reuses compatible objects. build.sh derives a missing
         # MKREPRO_TIMESTAMP from VCS tools that the sanitized PATH omits.
-        for flag in self.flags + ['MKREPRO_TIMESTAMP=' + str(self.source_timestamp()),
+        for flag in self.flags + ['EMBER_SOURCE_GIT=' + self.git_command,
+                                  'MKREPRO_TIMESTAMP=' + str(self.source_timestamp()),
                                   'BUILDINFO=EmberBSD:' + self.sources['os']['commit']]:
             self.build_command.extend(('-V', flag))
         self.os_build_operations = (['libs'] if getattr(self, 'coordinator_tools_ready', False)
@@ -1820,7 +1870,61 @@ class SysrootBuilder:
         self.receipt = dict(format='emberbsd-sysroot-build', version=3 if clang else 2, scope='sysroot-build', qualification='not-built', execution_acceptance='not-run', workspace=layout, paths=self.paths, sources=self.sources, previous_contexts=self.contexts, signature=self.signature, commands=self.commands, plan=[self.runtime_command, self.build_command, self.loader_command, self.install_command, self.runtime_command, self.runtime_command], working_directory=self.paths['os'], copy=dict(source=prefix, destination=os.path.join(self.paths['destination'], 'usr/pkg/llvm' if clang else 'usr/pkg/gcc16'), verification='exact pre/copy/post inventory'), not_checked=['target execution', 'ABI compatibility', 'SDK release'])
         if getattr(self, 'refresh_dirs', None):
             self.receipt['prepared_source_refresh'] = list(self.refresh_dirs)
+        if self.applied_target_tools:
+            self.receipt['compatible_target_tools'] = copy.deepcopy(self.applied_target_tools)
+        if self.options.get('update-stage') and self.options.get('plan'):
+            self.validate_update_stage()
         return self.receipt
+
+    @classmethod
+    def validate_update_stage_structure(cls, destination, target):
+        # A claimed update retains its original identity in the marker.  An
+        # interrupted run is never exportable but can be resumed by its owner.
+        from . import sysroot_transfer
+        marker = os.path.join(destination, cls.MARKER)
+        current = None
+        if paths.entry(marker) is not None:
+            record = jsonio.read_json(marker)
+            if record.get('format') != 'emberbsd-sysroot-stage-update' or record.get('version') != 1:
+                raise SDKError('incomplete sysroot is not a resumable stage update')
+            previous = record.get('previous')
+            if not isinstance(previous, dict):
+                raise SDKError('invalid sysroot update identity')
+            current = jsonio.read_json(os.path.join(destination, cls.RECEIPT))
+            if (current.get('qualification') not in ('incomplete', 'built-and-inspected') or
+                    current.get('workspace', {}).get('target') != target):
+                raise SDKError('interrupted sysroot update identity differs')
+        else:
+            previous = jsonio.read_json(os.path.join(destination, cls.RECEIPT))
+        sysroot_transfer._provenance(previous, target)
+        for relative in ('usr/pkg/pkgdb', 'var/db/pkg'):
+            if paths.entry(os.path.join(destination, relative)) is not None:
+                raise SDKError('sysroot stage contains an installed package database')
+        return previous, current
+
+    def validate_update_stage(self):
+        previous, current = self.validate_update_stage_structure(
+            self.paths['destination'], self.options['target'])
+        if current is not None and not self.compatible_context(current, self.paths['objects']):
+            raise SDKError('interrupted sysroot update identity differs')
+        if not self.compatible_context(previous, self.paths['objects']):
+            raise SDKError('sysroot stage build context differs')
+        for name in ('sdk', 'destination', 'objects', 'tools', 'os', 'ports'):
+            if previous.get('paths', {}).get(name) != self.paths.get(name):
+                raise SDKError('sysroot stage path context differs: ' + name)
+        return previous
+
+    def validate_updated_runtime(self, outputs):
+        prefix = 'usr/pkg/llvm' if self.compiler_family() == 'clang' else 'usr/pkg/gcc16'
+        root = outputs.get(prefix)
+        expected_root = dict(kind='directory', mode=self.runtime_record['root_mode'])
+        if root != expected_root:
+            raise SDKError('updated sysroot runtime root differs')
+        prefix += '/'
+        actual = {name[len(prefix):]: row for name, row in outputs.items()
+                  if name.startswith(prefix)}
+        if actual != self.runtime_record['inventory']:
+            raise SDKError('updated sysroot runtime differs from selected runtime')
 
     def source_timestamp(self):
         return int(self.git(self.paths['os'], 'show', '-s', '--format=%ct', self.sources['os']['commit']))
@@ -1840,6 +1944,9 @@ class SysrootBuilder:
         return handle
 
     def save_receipt(self):
+        if self.options.get('update-stage'):
+            jsonio.write_json(os.path.join(self.paths['destination'], self.RECEIPT), self.receipt, exclusive=False)
+            return
         self.receipt_file.seek(0)
         self.receipt_file.write(jsonio.json_bytes(self.receipt))
         self.receipt_file.truncate()
@@ -2129,7 +2236,8 @@ class SysrootBuilder:
         """Run the producer sequence under the shared ownership contract."""
         for command in (self.build_command, self.loader_command, self.install_command):
             self.dispatch(command)
-        self.copy_runtime()
+        if not self.options.get('update-stage'):
+            self.copy_runtime()
 
     def inspect_payload(self):
         self.receipt['libedit_installation'] = libedit.validate_installation(
@@ -2160,15 +2268,31 @@ class SysrootBuilder:
             self.interrupted()
             self.locks = process.ContextLocks([self.paths[name] for name in ('objects', 'tools')], os.path.join(self.paths['sdk'], 'obj')).acquire()
             self.empty_destination()
+            updating = self.options.get('update-stage', False)
+            if updating:
+                previous = self.validate_update_stage()
             self.mkdirs(self.paths['destination'], self.paths['sdk'])
             marker = os.path.join(self.paths['destination'], self.MARKER)
-            handle = self.exclusive_file(marker)
-            handle.write(b'This sysroot build is incomplete. Do not accept this payload.\n')
-            handle.flush()
-            if os.listdir(self.paths['destination']) != [self.MARKER]:
+            if updating and paths.entry(marker) is not None:
+                paths.regular_file(marker)
+            else:
+                handle = self.exclusive_file(marker)
+                if updating:
+                    handle.write(jsonio.json_bytes(dict(format='emberbsd-sysroot-stage-update',
+                        version=1, previous=previous)))
+                else:
+                    handle.write(b'This sysroot build is incomplete. Do not accept this payload.\n')
+                handle.flush()
+                os.fsync(handle.fileno())
+            if not updating and os.listdir(self.paths['destination']) != [self.MARKER]:
                 raise SDKError('destination changed during claim')
-            self.receipt_file = self.exclusive_file(os.path.join(self.paths['destination'], self.RECEIPT))
-            self.log = self.exclusive_file(os.path.join(self.paths['destination'], self.LOG))
+            if updating:
+                self.receipt_file = os.path.join(self.paths['destination'], self.RECEIPT)
+                self.log = open(os.path.join(self.paths['destination'], self.LOG), 'ab')
+                self.handles.append(self.log)
+            else:
+                self.receipt_file = self.exclusive_file(os.path.join(self.paths['destination'], self.RECEIPT))
+                self.log = self.exclusive_file(os.path.join(self.paths['destination'], self.LOG))
             self.receipt['qualification'] = 'incomplete'
             self.save_receipt()
             refresh = bool(getattr(self, 'refresh_dirs', None) or
@@ -2186,6 +2310,8 @@ class SysrootBuilder:
             self.build_payload()
             self.finish_native_refresh()
             self.receipt['outputs'] = self.inspect_payload()
+            if updating:
+                self.validate_updated_runtime(self.receipt['outputs'])
             self.interrupted()
             if hasattr(self, 'runtime_refresh_files'):
                 self.finish_runtime_refresh()

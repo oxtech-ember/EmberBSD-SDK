@@ -57,7 +57,7 @@ def installation_plan(release, catalogs, config, installer, cache, *, sets=(), r
     for catalog in catalogs:
         repository = catalog['repository']
         cfg = config['repositories'][repository]
-        installed[repository] = installer.installed(cfg)
+        installed[repository] = installer.installed(cfg, recover=False)
         for package in catalog['packages']:
             artifact = artifacts[package['artifact']]
             if (artifact['host'] != cfg.get('host') or artifact['target'] != cfg.get('target')):
@@ -84,18 +84,17 @@ def installation_plan(release, catalogs, config, installer, cache, *, sets=(), r
     packages, downloads, unpacked = [], {}, 0
     for identity in ordered:
         item, record = by_id[identity], records[identity]
+        base = record['pkgname'].rsplit('-', 1)[0]
+        replaces = sorted(name for name in installed[record['repository']]
+                          if name.rsplit('-', 1)[0] == base and name != record['pkgname'])
         if record['pkgname'] in installed[record['repository']]:
             action = 'installed'
         else:
-            base = record['pkgname'].rsplit('-', 1)[0]
-            if any(name.rsplit('-', 1)[0] == base for name in installed[record['repository']]):
-                raise SDKError(f"{record['pkgname']}: another version is installed; use a coherent component update "
-                               "before adding this selection (binary updates are not implemented yet)")
             action = 'cache' if cache.path(item).exists() else 'download'
             unpacked += item['unpacked_size']
             if action == 'download':
                 downloads[item['sha256']] = item['size']
-        packages.append(dict(record, artifact=item, action=action))
+        packages.append(dict(record, artifact=item, action=action, replaces=replaces))
     return dict(release_id=release['release_id'], roots=requested, packages=packages,
                 build_roots=missing, download_size=sum(downloads.values()), unpacked_size=unpacked)
 
@@ -226,6 +225,7 @@ def include_source_dependencies(plan, release, catalogs, config, installer, cach
 def apply_plan(plan, config, installer, cache, store):
     _source_config(config, plan['build_roots'])
     pending = [p for p in plan['packages'] if p['action'] != 'installed']
+    selected_repositories = {p['repository'] for p in plan['packages']}
     sysroot = plan.get('sysroot')
     new_sysroot = sysroot and sysroot['action'] != 'installed'
     keep = {p['artifact']['sha256'] for p in pending}
@@ -252,22 +252,33 @@ def apply_plan(plan, config, installer, cache, store):
         sysroot_package.check(sysroot_archive, sysroot)
     with ExitStack() as locks:
         # Same whole-build lock as cross-bulk; release before asking it to build.
-        if config.get('source') and (pending or new_sysroot):
+        if config.get('source') and (new_sysroot or selected_repositories):
             locks.enter_context(directory_lock(Path(config['source']['state']) / 'build.lock'))
         # A target pkgdb lock can create its parent inside the sysroot. Publish
         # the verified base first, then add target packages through pkg_tools.
         if new_sysroot:
             sysroot_package.install(sysroot_archive, sysroot)
-        for repository in sorted({p['repository'] for p in pending}):
+        for repository in sorted(selected_repositories):
             _, database = install_paths(config['repositories'][repository])
             locks.enter_context(directory_lock(database.parent / (database.name + '.sdk-lock')))
+        # Check every replacement before changing any package. pkg_add remains
+        # the dependency and file owner; this path preserves installed consumers.
+        for repository in sorted(selected_repositories):
+            cfg = config['repositories'][repository]
+            selected = [p for p in plan['packages'] if p['repository'] == repository]
+            installer.check_updates(selected, archives, cfg)
         for package in pending:
             cfg = config['repositories'][package['repository']]
             # Recheck paths after earlier packages have populated the prefix.
             from .package_install import inspect_install_paths
             if isinstance(installer, PackageInstaller):
                 inspect_install_paths(archives[package['artifact']['id']], cfg)
-            installer.install(archives[package['artifact']['id']], cfg, checked=True)
+            installer.install(archives[package['artifact']['id']], cfg, checked=True, configure=False)
+        # Configure only after every selected payload has been installed and
+        # relocated. Pending hooks are retried even when this selection reused
+        # every exact installed package.
+        for repository in sorted(selected_repositories):
+            installer.configure(config['repositories'][repository])
     cache.trim(config.get('cache_limit', 512 * 1024 * 1024))
 
 
@@ -378,7 +389,10 @@ def main(argv=None, *, default_config=None):
                     if args.command == 'plan':
                         sys.stdout.buffer.write(json_bytes(plan))
                         return 0
-                    print(f"Install: {sum(p['action'] != 'installed' for p in plan['packages'])} binary packages; "
+                    print(f"Install: reuse {sum(p['action'] == 'installed' for p in plan['packages'])}; "
+                          f"add {sum(p['action'] != 'installed' and not p['replaces'] for p in plan['packages'])}; "
+                          f"replace {sum(bool(p['replaces']) for p in plan['packages'])}; "
+                          f"cached {sum(p['action'] == 'cache' for p in plan['packages'])}; "
                           f"{int(bool(plan.get('sysroot')) and plan['sysroot']['action'] != 'installed')} sysroots; "
                           f"download {plan['download_size']} bytes; unpack {plan['unpacked_size']} bytes; "
                           f"build {len(plan['build_roots'])} roots", file=sys.stderr)
