@@ -38,16 +38,21 @@ def packages_from_state(spec, state, packages):
             fields = line.split()
             if not fields:
                 continue
+            root = fields[0]
+            # Cross-bulk STATE can contain successful results for both roles.
+            # Ignore the other role before interpreting its row payload.
+            if root.endswith('@native') != (role == 'host'):
+                continue
             if len(fields) != width:
                 raise SDKError('invalid Ports state row: ' + name)
             root, pkgname = fields[:2]
             _parse_root(root, 'Ports state')
             if (name == 'packages' and root in result) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+\-]*-[0-9][A-Za-z0-9._+]*', pkgname):
                 raise SDKError('invalid or duplicate package in Ports state: ' + root)
-            if width == 3 and not re.fullmatch('[0-9a-f]{64}', fields[2]):
-                raise SDKError('invalid successful package SHA256: ' + root)
-            # Bulk builds append successful rebuilds to done; the last result
-            # for a root supersedes its earlier version/hash.
+            if name == 'done' and not (role == 'host' and fields[2] == 'native'):
+                if not re.fullmatch('[0-9a-f]{64}', fields[2]):
+                    raise SDKError('invalid successful package SHA256: ' + root)
+            # The latest result can also be an installed-only native tool.
             result[root] = fields[1:]
     excluded = set()
     for name in ('failed', 'blocked', 'skipped'):
@@ -56,10 +61,10 @@ def packages_from_state(spec, state, packages):
             excluded.update(line.split()[0] for line in path.read_text(encoding='utf-8').splitlines() if line.split())
     paths, checksums, roots = {}, {}, []
     for root, (pkgname,) in sorted(planned.items()):
-        if root.endswith('@native') != (role == 'host') or root in excluded:
+        if root in excluded:
             continue
         done = completed.get(root)
-        if not done or done[0] != pkgname:
+        if not done or done[0] != pkgname or done[1] == 'native':
             continue
         nodes = by_root.get(root, [])
         if len(nodes) != 1 or nodes[0]['version'] != pkgname.rsplit('-', 1)[-1]:

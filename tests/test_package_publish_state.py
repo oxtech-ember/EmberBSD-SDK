@@ -62,7 +62,7 @@ class PackagesFromStateTests(unittest.TestCase):
             done=['net/app app-1.2 ' + '1' * 64, 'net/failed failed-2.0 ' + '2' * 64,
                   'net/blocked blocked-3.0 ' + '3' * 64, 'net/skipped skipped-4.0 ' + '4' * 64,
                   'net/wrong-name different-1.0 ' + '5' * 64,
-                  'devel/generator@native generator-5.0 ' + '6' * 64],
+                  'devel/generator@native generator-5.0 native'],
             failed=['net/failed failed-2.0'], blocked=['net/blocked blocked-3.0'],
             skipped=['net/skipped skipped-4.0'])
 
@@ -88,6 +88,18 @@ class PackagesFromStateTests(unittest.TestCase):
         self.assertEqual(result['repositories'][0]['packages'], {'host:devel/generator': path})
         self.assertEqual(result['repositories'][0]['roots'], ['devel/generator@native'])
         self.assertEqual(checksums, {path: 'a' * 64})
+
+    def test_latest_native_install_marker_supersedes_older_host_archive(self):
+        self.graph_path.write_text(json.dumps(graph([('host:devel/generator', '5.0')])), encoding='utf-8')
+        spec = dict(schema='emberbsd.package-build.v1', repositories=[dict(
+            id='native', host={'os': 'Darwin'}, target=None, graph=str(self.graph_path),
+            roots=[], packages={})])
+        self.write_state(packages=['devel/generator@native generator-5.0'],
+                         done=['devel/generator@native generator-5.0 ' + 'a' * 64,
+                               'devel/generator@native generator-5.0 native'])
+
+        with self.assertRaisesRegex(SDKError, 'no successful packages'):
+            packages_from_state(spec, self.state, self.packages)
 
     def test_latest_successful_rebuild_supplies_package_name_and_checksum(self):
         self.graph_path.write_text(json.dumps(graph([('target:net/app', '2.0')])), encoding='utf-8')
@@ -115,9 +127,10 @@ class PackagesFromStateTests(unittest.TestCase):
 
     def test_rejects_invalid_state_and_multiple_repositories(self):
         spec = self.target_spec()
-        self.write_state(packages=['net/app app-1.2'], done=['net/app app-1.2 not-a-sha'])
-        with self.assertRaisesRegex(SDKError, 'SHA256'):
-            packages_from_state(spec, self.state, self.packages)
+        for invalid in ('not-a-sha', 'native'):
+            self.write_state(packages=['net/app app-1.2'], done=['net/app app-1.2 ' + invalid])
+            with self.assertRaisesRegex(SDKError, 'SHA256'):
+                packages_from_state(spec, self.state, self.packages)
 
         spec['repositories'].append(deepcopy(spec['repositories'][0]))
         with self.assertRaisesRegex(SDKError, 'exactly one'):

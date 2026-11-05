@@ -160,6 +160,11 @@ The input can leave `packages` empty in this mode. `STATE/packages` names must
 match successful `STATE/done` entries and graph versions. Failed, blocked and
 skipped entries stay out; native entries stay out of a target repository.
 For native publication, select a host repository and its native archive directory.
+The state can mix target archives and native tools installed by cross-bulk. A
+host `STATE/done` row ending in the exact `native` marker records a local tool
+installation. It supersedes earlier rows for that root. The publisher skips it.
+Only rows with a valid archive SHA256 are publishable, including
+host rows. Other marker values are rejected.
 The command adds successful roots to the explicit selection; selected sets retain
 their normal complete runtime requirements. It verifies the producer's recorded
 SHA256 for each archive it actually uses. State records do not replace the
