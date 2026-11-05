@@ -8,6 +8,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import signal
 import stat
 import struct
 import sys
@@ -263,11 +264,25 @@ def main(argv):
     parser.add_argument('--preserve-target-ownership', action='store_true',
                         help='explicitly trust input UID/GID as target metadata; otherwise use UID/GID 0')
     options = parser.parse_args(argv)
+    previous = {}
+
+    def interrupt(number, frame):
+        # Unwind through run_logged so it stops and waits for owned producers.
+        raise KeyboardInterrupt
+
     try:
+        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            previous[number] = signal.signal(number, interrupt)
         result = personalize(options)
         print(json.dumps(result))
         return 0
+    except KeyboardInterrupt:
+        print('Private root preparation interrupted; inspect the private output.', file=sys.stderr)
+        return 130
     except (SDKError, OSError, ValueError, UnicodeError):
         # Paths, device identity, native output and credentials remain private.
         print('Private root preparation failed; inspect the private output and inputs.', file=sys.stderr)
         return 1
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)

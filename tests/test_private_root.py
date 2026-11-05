@@ -6,10 +6,15 @@ import json
 import os
 from pathlib import Path
 import stat
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+
+sys.dont_write_bytecode = True
+SDK_SOURCE = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SDK_SOURCE / 'src'))
 
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.private_root import copy_layer, personalize

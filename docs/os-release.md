@@ -369,6 +369,11 @@ private output for inspection and does not produce a success metadata file.
 Retry with a new output; remove an unneeded failed output only after inspection.
 No input tree, shared cache or existing output is removed.
 
+SIGINT, SIGTERM and SIGHUP interrupt preparation with exit status 130. The
+command stops and waits for its owned producers before returning. Interrupted
+output remains private for inspection. Interruption during a producer does not
+write success metadata.
+
 Each invocation generates an independent host key, 48-hex nonce and entropy
 seed in the OS `rndsave_t` format (explicit target byte order). The marker is
 `/etc/ember/firstboot-pending`. Private metadata binds the caller's device ID,
