@@ -321,3 +321,73 @@ when the OS producer requires `EMBER_EXPAT_SOURCE`. Prepare it with the Ports
 For a developer-reviewed target ELF object-tool transition, the same scoped
 `--compatible-target-tool ROLE:OLD_SHA256:NEW_SHA256` option documented in
 [sysroot builds](sysroot.md) is available in incremental object mode.
+
+## Private root personalization
+
+`scripts/os-release.py personalize` prepares a separate private root from an
+already assembled EmberBSD base/runtime tree. It does not build or install
+packages, select a board, configure an application, publish, write a device,
+arm a trial or reboot. The output is not a publishable release kit.
+
+Supply a stable source tree with the intended target modes. By default, all
+input files receive target UID/GID 0 through mtree; host unpacker ownership
+is not target identity. Select --preserve-target-ownership only when the
+caller supplies correct target UID/GID metadata, including service users.
+The same explicit policy applies to the overlay. Hardlinks and device nodes
+are retained without host mknod or chown. Do not supply live runtime directories
+or change inputs during preparation. Generated root credentials, the marker
+and entropy always receive target UID/GID 0 and mode 0600. Their parent
+directories must have target UID 0 and no group/other write permissions.
+Unsafe target metadata is refused before writing private identity files.
+
+```sh
+python3 scripts/os-release.py personalize \
+  --root-tree /work/ready-runtime --overlay /private/device-overlay \
+  --authorized-key /private/operator.pub --device-id device-001 \
+  --boot-image /work/selected-boot.bin \
+  --kernel-version-file /work/selected-kernel-version.txt \
+  --host-prefix /work/native-prefix --ssh-keygen /explicit/ssh-keygen \
+  --tools /work/os-tools --makedev /work/dest/dev/MAKEDEV \
+  --os-source /work/EmberBSD --machine evbarm --machine-arch aarch64 \
+  --device std --device dk0 --device dk1 --byte-order little \
+  --size 4294967296 --output /private/device-001
+```
+
+The selected OS tools must contain `bin/nbmakefs`; MAKEDEV and its machine
+selection must match that OS producer. Native shell/awk/sed use the existing
+SDK tool selector. The provisioning `ssh-keygen` executable is an explicit
+input: it may be outside the SDK prefix. There is no fallback or dependency
+build when it is unavailable. Only one Ed25519 authorized public key is
+accepted. Existing SSH host keys in the input tree are removed from the
+private copy and replaced by a newly generated Ed25519 key.
+
+The output directory must not exist and has mode 0700. It contains the
+personalized tree, mode-0600 image, mtree, logs and `private.json`. The image
+must have the exact requested byte size before success metadata is written. All output
+must remain private, including failed attempts. A failure leaves its owned
+private output for inspection and does not produce a success metadata file.
+Retry with a new output; remove an unneeded failed output only after inspection.
+No input tree, shared cache or existing output is removed.
+
+Each invocation generates an independent host key, 48-hex nonce and entropy
+seed in the OS `rndsave_t` format (explicit target byte order). The marker is
+`/etc/ember/firstboot-pending`. Private metadata binds the caller's device ID,
+public host key, nonce, kernel version, boot hash and completed FFS hash.
+Device ID is caller data, not a measured hardware identity. Kernel version
+must come from the producer of the selected boot artifact. Supplying these
+two inputs is a caller binding, not cryptographic runtime attestation.
+
+The root/overlay must already configure SSH, target users, services and any
+first-boot policy. This action does not enable a service or replace
+`sshd_config`. For an A133 trial, explicitly select the OS-owned
+`ember/boot/a133-firstboot-guard.sh` and
+`ember/boot/a133-firstboot-guard.rc`, plus
+`ember/tools/mcu7502-keepalive.rc`, through the caller's overlay. Install the
+guard library with mode 0444 and the rc wrapper as
+`etc/rc.d/ember_firstboot_guard` with mode 0555, as documented by the OS owner.
+The SDK does not supply a hotel-specific hook. The OS cable/trial/native-postboot tools retain all device admission,
+watchdog, one-shot reboot, confirmation and normal-release responsibilities.
+
+The private action does not add any operation to `prepare`, `publish` or
+other existing release commands. Host filesystem contracts and a small FFS
+smoke do not establish device installation or boot acceptance.

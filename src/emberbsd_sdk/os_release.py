@@ -553,7 +553,12 @@ def prepare(build, directory, profile, qualification=None, os_source=None):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == 'personalize':
+        from .private_root import main as personalize_main
+        return personalize_main(arguments[1:])
+    parser = argparse.ArgumentParser(description=__doc__, epilog=(
+        'For private root preparation, run: os-release.py personalize --help'))
     parser.add_argument('--profile', required=True, choices=('amd64', 'aarch64-sysroot'))
     commands = parser.add_subparsers(dest='action', required=True)
     p = commands.add_parser('prepare')
