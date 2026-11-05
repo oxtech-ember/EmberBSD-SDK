@@ -30,6 +30,11 @@ class SysrootCompositionTests(LLVMRuntimeFixture):
             (self.base / 'usr/lib' / name).write_bytes(header(183, 1))
         for name in ('libc.so', 'libm.so', 'libpthread.so'):
             (self.base / 'usr/lib' / name).write_bytes(header(183, 3))
+        markers = self.base / 'usr/share/emberbsd/ports'
+        markers.mkdir(parents=True)
+        (markers / 'editline.distinfo').write_text('SHA512 (libedit.tar.gz) = base\n')
+        (self.base / 'usr/share/misc').mkdir(parents=True)
+        (self.base / 'usr/share/misc/unneeded').write_text('not SDK input')
         (self.base / 'libexec').mkdir()
         (self.base / 'libexec/ld.elf_so').write_bytes(header(183, 3))
         self.record['base']['files'] = {'usr/include/stdio.h': inventory.sha256_file(self.base / 'usr/include/stdio.h')}
@@ -70,6 +75,10 @@ class SysrootCompositionTests(LLVMRuntimeFixture):
                                        manifest_sha256=result['manifest_sha256'])
         self.assertEqual((destination / 'usr/include/c++/vector').read_text(), '// new C++ runtime\n')
         self.assertFalse((destination / 'usr/bin').exists())
+        self.assertFalse((destination / 'usr/share/misc').exists())
+        # Ports builtin checks accept a base library only with its marker.
+        self.assertEqual((destination / 'usr/share/emberbsd/ports/editline.distinfo').read_text(),
+                         'SHA512 (libedit.tar.gz) = base\n')
         self.assertFalse((destination / sysroot_transfer.RECEIPT).exists())
         origin = jsonio.read_json(destination / 'usr/share/emberbsd/sysroot-origin.json')
         self.assertEqual(origin['base']['manifest_sha256'], self.pin)

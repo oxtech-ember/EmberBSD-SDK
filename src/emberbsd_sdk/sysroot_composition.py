@@ -55,7 +55,10 @@ def _copy_base(base, destination, old_runtime):
         (base / name).unlink()
     shutil.rmtree(base / 'usr/include/c++')
     destination.mkdir()
-    for name in ('lib', 'usr/include', 'usr/lib', 'usr/share/legal'):
+    # usr/share/emberbsd/ports names the Ports sources the base was built
+    # from: Ports builtin checks (editline, elftoolchain) accept a base
+    # library only with its marker, and refuse to build a second provider.
+    for name in ('lib', 'usr/include', 'usr/lib', 'usr/share/legal', 'usr/share/emberbsd/ports'):
         source = base / name
         if source.exists():
             shutil.copytree(source, destination / name, symlinks=True)
