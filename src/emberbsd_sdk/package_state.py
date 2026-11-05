@@ -37,8 +37,10 @@ def update_plan(release, catalogs, config, installer, cache, *, roots=()):
         cfg = dict(config, repositories={repository: config['repositories'][repository]})
         available = {p['root']: p for c in catalogs if c['repository'] == repository for p in c['packages']}
         installed_bases = {}
+        installed_roots = {}
         for package in packages:
             installed_bases.setdefault(package['root'], set()).add(package['pkgname'].rsplit('-', 1)[0])
+            installed_roots[package['pkgname']] = package['root']
         selected = set()
         for package in packages:
             root = package['root']
@@ -53,6 +55,10 @@ def update_plan(release, catalogs, config, installer, cache, *, roots=()):
         plan = installation_plan(release, catalogs, cfg, installer, cache, roots=sorted(selected),
             installed={repository: {p['pkgname'] for p in packages}})
         for package in plan['packages']:
+            for old_name in package['replaces']:
+                if installed_roots[old_name] != package['root']:
+                    raise SDKError(f"{old_name}: installed PKGPATH does not identify {package['root']}; "
+                                   'an explicit migration is required')
             bases = installed_bases.get(package['root'], set())
             if bases and bases != {package['pkgname'].rsplit('-', 1)[0]}:
                 raise SDKError(f"{package['root']}: package rename requires an explicit migration")

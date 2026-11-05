@@ -88,8 +88,10 @@ Use `update --package category/package[@native]` to select one installed root.
 The corresponding preview is `plan --installed --package ROOT`.
 An uninstalled root is an error. Use `install` to add packages or a sysroot.
 Installed packages absent from current, or lacking PKGPATH, are retained and
-reported. Update does not compile them. Package renames require explicit
-migration. Older catalog versions are refused before package mutation, using
+reported. Update does not compile them. A dependency cannot replace a retained
+package by base name. Replacing packages with missing or different installed
+PKGPATHs requires explicit migration, as do package renames.
+Older catalog versions are refused before package mutation, using
 pkg_tools version comparison. Compatible updates retain the safeguards below;
 an incompatible ABI transition still stops before the first package changes.
 

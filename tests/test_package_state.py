@@ -118,6 +118,26 @@ class UpdateSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'rename'):
             self.update(roots=['net/app@native'])
 
+    def test_dependency_cannot_replace_retained_package_without_pkgpath(self):
+        self.inventory([dict(pkgname='app-0', root='net/app@native'),
+                        dict(pkgname='lib-0', root=None)])
+        with self.assertRaisesRegex(SDKError, 'PKGPATH.*migration'):
+            self.update()
+
+    def test_dependency_cannot_replace_retained_package_from_another_pkgpath(self):
+        self.inventory([dict(pkgname='app-0', root='net/app@native'),
+                        dict(pkgname='lib-0', root='local/old-lib@native')])
+        with self.assertRaisesRegex(SDKError, 'PKGPATH.*migration'):
+            self.update(roots=['net/app@native'])
+
+    def test_cli_dependency_conflict_stops_before_download_or_package_mutation(self):
+        self.inventory([dict(pkgname='app-0', root='net/app@native'),
+                        dict(pkgname='lib-0', root=None)])
+        status, _ = self.run_client(['update', '--package', 'net/app@native'])
+        self.assertEqual(status, 1)
+        self.assertEqual(self.store.calls, [])
+        self.assertEqual(self.installer.actions, [])
+
     def test_binary_update_needs_no_configured_source_checkout(self):
         self.inventory([dict(pkgname='lib-1', root='devel/lib@native')])
         self.cfg['source'] = {'ports_root': str(self.root / 'unmounted-ports')}
