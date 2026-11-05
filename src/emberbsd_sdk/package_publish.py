@@ -33,7 +33,7 @@ def packages_from_state(spec, state, packages):
             by_root.setdefault(node_root(node['id']), []).append(node)
     state, packages = Path(state), Path(packages).absolute()
     planned, completed = {}, {}
-    for name, result, width in (('packages', planned, 2), ('done', completed, 3)):
+    for name, result in (('packages', planned), ('done', completed)):
         for line in (state / name).read_text(encoding='utf-8').splitlines():
             fields = line.split()
             if not fields:
@@ -43,17 +43,23 @@ def packages_from_state(spec, state, packages):
             # Ignore the other role before interpreting its row payload.
             if root.endswith('@native') != (role == 'host'):
                 continue
-            if len(fields) != width:
+            if ((name == 'packages' and len(fields) != 2) or
+                    (name == 'done' and len(fields) not in (2, 3))):
                 raise SDKError('invalid Ports state row: ' + name)
             root, pkgname = fields[:2]
             _parse_root(root, 'Ports state')
             if (name == 'packages' and root in result) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+\-]*-[0-9][A-Za-z0-9._+]*', pkgname):
                 raise SDKError('invalid or duplicate package in Ports state: ' + root)
-            if name == 'done' and not (role == 'host' and fields[2] == 'native'):
+            if name == 'done' and len(fields) == 3 and not (role == 'host' and fields[2] == 'native'):
                 if not re.fullmatch('[0-9a-f]{64}', fields[2]):
                     raise SDKError('invalid successful package SHA256: ' + root)
-            # The latest result can also be an installed-only native tool.
-            result[root] = fields[1:]
+            if name == 'done' and len(fields) == 2:
+                # A successful install row without an archive checksum is not
+                # publishable and supersedes any older archived result.
+                result[root] = [pkgname, None]
+            else:
+                # The latest result can also be an installed-only native tool.
+                result[root] = fields[1:]
     excluded = set()
     for name in ('failed', 'blocked', 'skipped'):
         path = state / name
@@ -64,7 +70,7 @@ def packages_from_state(spec, state, packages):
         if root in excluded:
             continue
         done = completed.get(root)
-        if not done or done[0] != pkgname or done[1] == 'native':
+        if not done or done[0] != pkgname or done[1] is None or done[1] == 'native':
             continue
         nodes = by_root.get(root, [])
         if len(nodes) != 1 or nodes[0]['version'] != pkgname.rsplit('-', 1)[-1]:

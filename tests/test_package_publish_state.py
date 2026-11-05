@@ -101,6 +101,24 @@ class PackagesFromStateTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'no successful packages'):
             packages_from_state(spec, self.state, self.packages)
 
+    def test_latest_done_without_digest_skips_archive_but_keeps_hashed_packages(self):
+        self.graph_path.write_text(json.dumps(graph([
+            ('target:net/app', '2.0'), ('target:net/other', '1.0')
+        ])), encoding='utf-8')
+        spec = dict(schema='emberbsd.package-build.v1', repositories=[dict(
+            id='target', host=None, target={'arch': 'aarch64'}, graph=str(self.graph_path),
+            roots=[], packages={})])
+        self.write_state(
+            packages=['net/app app-2.0', 'net/other other-1.0'],
+            done=['net/app app-2.0 ' + 'a' * 64, 'net/app app-2.0',
+                  'net/other other-1.0 ' + 'b' * 64])
+
+        result, checksums = packages_from_state(spec, self.state, self.packages)
+
+        other_path = str((self.packages / 'other-1.0.tgz').absolute())
+        self.assertEqual(result['repositories'][0]['packages'], {'target:net/other': other_path})
+        self.assertEqual(checksums, {other_path: 'b' * 64})
+
     def test_latest_successful_rebuild_supplies_package_name_and_checksum(self):
         self.graph_path.write_text(json.dumps(graph([('target:net/app', '2.0')])), encoding='utf-8')
         spec = dict(schema='emberbsd.package-build.v1', repositories=[dict(
@@ -127,6 +145,10 @@ class PackagesFromStateTests(unittest.TestCase):
 
     def test_rejects_invalid_state_and_multiple_repositories(self):
         spec = self.target_spec()
+        self.write_state(packages=['net/app'], done=[])
+        with self.assertRaisesRegex(SDKError, 'invalid Ports state row: packages'):
+            packages_from_state(spec, self.state, self.packages)
+
         for invalid in ('not-a-sha', 'native'):
             self.write_state(packages=['net/app app-1.2'], done=['net/app app-1.2 ' + invalid])
             with self.assertRaisesRegex(SDKError, 'SHA256'):
