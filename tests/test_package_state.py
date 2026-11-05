@@ -13,6 +13,13 @@ from emberbsd_sdk.package_install import PackageInstaller
 import test_sdk_client as fixtures
 
 
+def installer_factory(installer):
+    class Factory:
+        def __new__(cls, *_args):
+            return installer
+    return Factory
+
+
 class InventoryTests(unittest.TestCase):
     def test_inventory_uses_one_pkg_summary_query_without_configuring_packages(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -166,7 +173,7 @@ class UpdateSelectionTests(unittest.TestCase):
         output = io.TextIOWrapper(io.BytesIO(), encoding='utf-8')
         with patch('emberbsd_sdk.sdk_client.load_config', return_value=cfg), \
              patch('emberbsd_sdk.sdk_client.load_host_prefix') as prefix, \
-             patch('emberbsd_sdk.sdk_client.PackageInstaller.__new__', return_value=self.installer), \
+             patch('emberbsd_sdk.sdk_client.PackageInstaller', installer_factory(self.installer)), \
              patch('emberbsd_sdk.sdk_client.HTTPStore') as store, patch('sys.stdout', output):
             self.assertEqual(main(['--config', 'unused', 'installed']), 0)
             store.assert_not_called()
@@ -182,19 +189,28 @@ class UpdateSelectionTests(unittest.TestCase):
         def fetch(_crypto, _store, _trust, _channel, snapshot, **kwargs):
             snapshot.mkdir()
             (snapshot / 'release.p7m').write_bytes(b'authenticated fixture')
+            return self.release
         output = io.TextIOWrapper(io.BytesIO(), encoding='utf-8')
         with patch('emberbsd_sdk.sdk_client.load_config', return_value=cfg), \
              patch('emberbsd_sdk.sdk_client.load_host_prefix'), \
-             patch('emberbsd_sdk.sdk_client.PackageInstaller.__new__', return_value=self.installer), \
+             patch('emberbsd_sdk.sdk_client.PackageInstaller', installer_factory(self.installer)), \
              patch('emberbsd_sdk.sdk_client.HTTPStore') as store, \
              patch('emberbsd_sdk.sdk_client.fetch_release', side_effect=fetch) as fetched, \
-             patch('emberbsd_sdk.sdk_client.load_catalogs', return_value=(self.release, self.catalogs)), \
+             patch('emberbsd_sdk.sdk_client.load_release_catalogs', return_value=self.catalogs), \
              patch('sys.stdout', output):
             store.return_value.__enter__.return_value = self.store
             status = main(['--config', 'unused', *command])
             self.assertEqual(fetched.call_args.args[3], self.root / 'state/channel.json')
         output.seek(0)
         return status, output.read()
+
+    def test_update_reuses_authenticated_release_without_a_second_cms_verification(self):
+        self.inventory([dict(pkgname='lib-1', root='devel/lib@native')])
+        with patch('emberbsd_sdk.release_signing.ReleaseCrypto.verify_cms',
+                   side_effect=SDKError('release was already authenticated by fetch')) as verify:
+            status, output = self.run_client(['update'])
+        self.assertEqual(status, 0, output)
+        verify.assert_not_called()
 
     def test_cli_plan_installed_uses_actual_pkgdb_without_install_or_build(self):
         import json

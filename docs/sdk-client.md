@@ -104,6 +104,11 @@ from this SDK revision to use these commands with an existing configured prefix;
 this does not rebuild installed packages. Source publication does not update
 the client already installed on another host.
 
+Use [`auto-update`](automatic-updates.md) for periodic installed-package updates.
+It delegates each attempt to `update`, with no service installation or settings
+changes. Starting the controller and delivering it to an existing bootstrap are
+separate actions.
+
 ## Application compiler and sysroot
 
 When the selected channel publishes the compiler set and a matching sysroot:

@@ -15,8 +15,8 @@ import tarfile
 import tempfile
 
 from . import sysroot_package
-from .binary_catalog import select_packages
-from .binary_release import _arch, load_catalogs
+from .binary_catalog import load_release_catalogs, select_packages
+from .binary_release import _arch
 from .errors import SDKError
 from .host_prefix import load_host_prefix
 from .jsonio import json_bytes, read_json, write_json
@@ -339,20 +339,32 @@ def validate_config(value):
 def main(argv=None, *, default_config=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=default_config is None)
-    parser.add_argument('command', choices=('list', 'show', 'plan', 'install', 'installed', 'update', 'cache-clean'))
+    parser.add_argument('command', choices=('list', 'show', 'plan', 'install', 'installed', 'update', 'auto-update', 'cache-clean'))
     parser.add_argument('--set', action='append', default=[], dest='sets')
     parser.add_argument('--package', action='append', default=[], dest='roots')
     parser.add_argument('--target', help='also acquire the application sysroot for this target')
     parser.add_argument('--installed', action='store_true', help='plan updates for installed packages')
+    parser.add_argument('--interval', type=float, help='seconds between auto-update attempts (default: 3600)')
     args = parser.parse_args(argv)
     try:
         if args.installed and args.command != 'plan':
             raise SDKError('--installed requires plan')
-        updating = args.command == 'update' or args.installed
+        updating = args.command in ('update', 'auto-update') or args.installed
         if updating and (args.sets or args.target):
             raise SDKError('package updates accept only installed --package roots; use install to add sets or a sysroot')
         if args.command == 'installed' and (args.sets or args.roots or args.target):
             raise SDKError('installed lists all configured package databases without a selection')
+        if args.interval is not None and args.command != 'auto-update':
+            raise SDKError('--interval requires auto-update')
+        if args.command == 'auto-update':
+            from .package_auto_update import watch_updates
+            arguments = ['update']
+            if args.config is not None:
+                arguments = ['--config', str(args.config), *arguments]
+            for root in args.roots:
+                arguments.extend(('--package', root))
+            return watch_updates(lambda: main(arguments, default_config=default_config),
+                                 3600 if args.interval is None else args.interval)
         config = load_config(args.config) if args.config else validate_config(default_config)
         state = Path(config['state_dir'])
         state.mkdir(parents=True, exist_ok=True)
@@ -383,12 +395,12 @@ def main(argv=None, *, default_config=None):
             for attempt in range(2):
                 with tempfile.TemporaryDirectory(prefix='.metadata-', dir=state) as directory:
                     snapshot = Path(directory) / 'snapshot'
-                    fetch_release(crypto, store, trust, state / 'channel.json', snapshot,
-                                  prefix=config.get('url_prefix', ''))
+                    release = fetch_release(crypto, store, trust, state / 'channel.json', snapshot,
+                                            prefix=config.get('url_prefix', ''))
                     identity = hashlib.sha256((snapshot / 'release.p7m').read_bytes()).hexdigest()
                     if previous == identity:
                         raise SDKError('published package is missing from unchanged current; retry after publisher repair')
-                    release, catalogs = load_catalogs(crypto, snapshot / 'release.p7m', snapshot, trust, ())
+                    catalogs = load_release_catalogs(release, snapshot, ())
                     if args.command in ('list', 'show'):
                         sets = available_sets(catalogs, config)
                         if args.command == 'show':
