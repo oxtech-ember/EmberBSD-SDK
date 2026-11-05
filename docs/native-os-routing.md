@@ -64,6 +64,13 @@ hashes the tree. The receipts are read once, at preflight, and become part
 of the build's input key. Prepare a source again with its Ports owner when its
 recipe changes; its new receipt changes the key.
 
+`archive_metadata.ARCHIVE_METADATA_API` is 1. Source owners can call
+`read_recipe(recipe_root, archive_name, archive_root)` with an explicitly
+selected single archive name and extraction-root component. It uses stable
+reads to validate `distinfo` checksums and the complete patch inventory, then
+returns the archive metadata and checked patch paths. It does not resolve
+packages or versions, fetch archives, or extract source.
+
 A source owner may pass `previous_root` to `sourceprep.write_prepared_tree_receipt`
 when `PREPARED_TREE_REUSE_API` is available. The helper validates the previous
 payload for the same package, preserves modification times only for matching regular
