@@ -73,6 +73,7 @@ def copy_layer(source, target, entries, overlay=False, preserve_ownership=False)
                 visit(child, dst / child.name, name)
             # Parent output is private even when target directory modes are open.
             dst.chmod(stat.S_IMODE(mode) | stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+            os.utime(dst, ns=(info.st_atime_ns, info.st_mtime_ns))
             return
         require(not exists or not stat.S_ISDIR(dst.lstat().st_mode), 'overlay file collides with a directory')
         if exists:
@@ -91,6 +92,7 @@ def copy_layer(source, target, entries, overlay=False, preserve_ownership=False)
             else:
                 shutil.copyfile(src, dst, follow_symlinks=False)
                 dst.chmod(stat.S_IMODE(mode))
+                os.utime(dst, ns=(info.st_atime_ns, info.st_mtime_ns))
                 links[identity] = dst
         elif stat.S_ISCHR(mode) or stat.S_ISBLK(mode):
             # makefs creates target nodes from metadata; no host mknod.

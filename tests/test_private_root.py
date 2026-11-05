@@ -77,7 +77,9 @@ class PrivateRootTests(unittest.TestCase):
         log.chmod(0o600)
 
     def test_private_identity_ffs_and_source_unchanged(self):
-        before = (self.options.root_tree / 'bin/tool').stat()
+        old_ns = (946684800123456789, 946684801234567890)
+        for name in ('bin/tool', 'bin'):
+            os.utime(self.options.root_tree / name, ns=old_ns)
         result = personalize(self.options, native=Native())
         out = self.options.output
         self.assertEqual(result, {'status': 'private_root_prepared', 'installation_ready': False})
@@ -90,6 +92,9 @@ class PrivateRootTests(unittest.TestCase):
         self.assertEqual(data['kernel_version'], 'fixture kernel')
         self.assertRegex(data['nonce'], r'^[0-9a-f]{48}$')
         tree = out / 'root'
+        for name in ('bin/tool', 'bin'):
+            self.assertEqual((tree / name).stat().st_mtime_ns, old_ns[1])
+        self.assertEqual((tree / 'bin/tool').stat().st_atime_ns, old_ns[0])
         self.assertEqual((tree / 'etc/ember/firstboot-pending').read_text(), data['nonce'] + '\n')
         entropy = (tree / 'var/db/entropy-file').read_bytes()
         self.assertEqual(len(entropy), 536)
