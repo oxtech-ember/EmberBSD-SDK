@@ -71,6 +71,19 @@ reads to validate `distinfo` checksums and the complete patch inventory, then
 returns the archive metadata and checked patch paths. It does not resolve
 packages or versions, fetch archives, or extract source.
 
+`native_generator_runtime.NATIVE_GENERATOR_RUNTIME_API` is 1. Its
+`runtime_inputs(prefix, executable, host, package_dirs, search_path=...)`
+checks a selected native ELF64 generator and asks the host loader for its
+actual dependencies. Linux glibc and musl use the executable's interpreter;
+NetBSD uses the system `/usr/bin/ldd`, an OS ABI inspector backed by rtld's
+library resolution, not a compiler or a target tool. The controlled trace
+rejects missing or foreign paths and returns selected-prefix package ownership
+metadata and actual runtime paths; only documented native OS library roots
+may supply host ABI files. SDK does not implement library search resolution.
+ELF64 x86_64 and aarch64 are supported. Installed NetBSD Python was traced on
+the host; Linux glibc/musl paths currently have fixture coverage, not real
+host acceptance. Darwin continues to use its separate Mach-O runtime API.
+
 A source owner may pass `previous_root` to `sourceprep.write_prepared_tree_receipt`
 when `PREPARED_TREE_REUSE_API` is available. The helper validates the previous
 payload for the same package, preserves modification times only for matching regular
