@@ -131,7 +131,9 @@ so their exact bytes are bound to this release.
 ```
 
 Generation is positive and increases on every change, including expiry
-refreshes. Validity is `issued_at <= now < expires_at`. The expected channel
+refreshes. It is a replay counter, not an OS or package version. Advancing it
+does not invalidate unchanged package identities or cached archives.
+Validity is `issued_at <= now < expires_at`. The expected channel
 name is a client input to the generic verifier; S3 delivery fixes it to `current`.
 The reference hashes the complete release CMS envelope;
 its ID must match the authenticated release. Envelopes are limited to 16 MiB,

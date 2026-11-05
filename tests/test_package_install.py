@@ -88,6 +88,8 @@ class InstallTests(unittest.TestCase):
         installer.install(package, self.cfg)
         self.assertEqual((self.destination / 'payload').read_text(), 'installed data')
         self.assertIn('fixture-1.0', installer.installed(self.cfg))
+        self.assertEqual(installer.inventory(self.cfg),
+                         [dict(pkgname='fixture-1.0', root='devel/fixture@native')])
 
     def test_signed_pkg_tools_replacement_preserves_installed_consumer(self):
         installer = PackageInstaller(self.crypto, self.ca.certificate)

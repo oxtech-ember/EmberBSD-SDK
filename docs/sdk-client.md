@@ -52,6 +52,9 @@ python3 scripts/packages.py --config /work/client.json show --set host-fetch
 python3 scripts/packages.py --config /work/client.json plan --set host-fetch
 python3 scripts/packages.py --config /work/client.json install --set host-fetch
 python3 scripts/packages.py --config /work/client.json install --package net/fetch@native
+python3 scripts/packages.py --config /work/client.json installed
+python3 scripts/packages.py --config /work/client.json plan --installed
+python3 scripts/packages.py --config /work/client.json update
 python3 scripts/packages.py --config /work/client.json cache-clean
 ```
 
@@ -62,6 +65,38 @@ reuse, additions, replacements, cache hits, download bytes and source roots.
 Successful installs remember the union of
 explicit roots in `selection.json`; pkg_tools remains the version/file owner.
 No packages are removed merely because a later task selects fewer roots.
+
+## Installed versions and updates
+
+`installed` reads each configured pkgdb with one `pkg_info -X -a` query.
+It shows exact package versions, including `nbN`, and their versionless roots.
+It needs no network, OpenSSL, compiler or Ports checkout, and runs no package hooks.
+For an EmberBSD base, `os_release` shows the installed `/etc/release` header.
+An absent header is reported as null. Configured ABI and the native kernel
+release are separate fields; neither declares the EmberBSD product version.
+
+`plan --installed` previews updates. `update` applies that selection through
+the same download, signature, compatibility and pkg_tools installation path.
+Both read the actual installed packages in each repository, including packages
+installed outside this client. They never expand package sets or replay
+`selection.json`. Removed packages stay removed. Adding another program to
+current does not add it to an installation or invalidate an unchanged package.
+Only installed roots and their published runtime dependencies are selected.
+Two configured target roots retain separate package selections and databases.
+
+Use `update --package category/package[@native]` to select one installed root.
+The corresponding preview is `plan --installed --package ROOT`.
+An uninstalled root is an error. Use `install` to add packages or a sysroot.
+Installed packages absent from current, or lacking PKGPATH, are retained and
+reported. Update does not compile them. Package renames require explicit
+migration. Older catalog versions are refused before package mutation, using
+pkg_tools version comparison. Compatible updates retain the safeguards below;
+an incompatible ABI transition still stops before the first package changes.
+
+The OS and packages have their own versions. The channel's `generation` is
+only persistent replay protection and publisher coordination. It is never an
+installed-system version or an input that invalidates every package.
+The signed format and replay-state schema remain compatible with older clients.
 
 ## Application compiler and sysroot
 
@@ -235,3 +270,6 @@ pkg_tools and signed fixture archives. These contracts do not themselves prove
 a complete portable compiler or execution on EmberBSD. The source-free zipapp
 also reads the live public current and reuses installed fetch/OpenSSL on the
 developer host without downloading or rebuilding them.
+`tests/test_package_state.py` covers actual-pkgdb update selection, independent
+repositories, removed packages, catalog additions, offline versions and CLI
+dispatch. These fixture checks do not establish live update acceptance.

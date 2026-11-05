@@ -71,7 +71,7 @@ class PackageUpdateTests(unittest.TestCase):
         self.installed('consumer-1', depends=('lib<2',))
         self.replacement_archive('lib-2')
         with patch('emberbsd_sdk.package_updates._matches', side_effect=lambda _c, pattern, name:
-                   (name == 'lib-1' and pattern == 'lib<2')):
+                   pattern == 'lib>=1' or (name == 'lib-1' and pattern == 'lib<2')):
             with self.assertRaisesRegex(SDKError, 'does not accept lib-2'):
                 self.check([self.package('lib-2')], {'lib-1', 'consumer-1'})
 
@@ -84,13 +84,22 @@ class PackageUpdateTests(unittest.TestCase):
     def test_update_without_dependents_allows_provider_removal(self):
         self.installed('lib-1', providers=('lib/libexample.so.1',))
         self.replacement_archive('lib-2')
-        self.check([self.package('lib-2')], {'lib-1'})
+        with patch('emberbsd_sdk.package_updates._matches', return_value=True):
+            self.check([self.package('lib-2')], {'lib-1'})
 
     def test_repeated_noop_with_current_package(self):
         self.installed('lib-2')
         package = self.package('lib-2', replaces=())
         self.check([package], {'lib-2'})
         self.check([package], {'lib-2'})
+
+    def test_signed_catalog_cannot_downgrade_newer_installed_package(self):
+        self.installed('lib-3')
+        self.replacement_archive('lib-2')
+        with patch('emberbsd_sdk.package_updates._matches', side_effect=lambda _c, pattern, name:
+                   pattern == 'lib>=3' and name == 'lib-3'):
+            with self.assertRaisesRegex(SDKError, 'downgrade'):
+                self.check([self.package('lib-2', replaces=('lib-3',))], {'lib-3'})
 
 
 if __name__ == '__main__':

@@ -125,6 +125,26 @@ class PackageInstaller:
         self.crypto, self.trust = crypto, Path(trust)
         self._checked = {}
 
+    def inventory(self, config):
+        """Read installed identities in one query, without running pending hooks."""
+        from .binary_catalog import parse_summary, scalar
+        from .package_selection import _parse_root
+        _, database = install_paths(config)
+        if not database.exists():
+            return []
+        result = subprocess.run([self.crypto.prefix.tool('pkg_info'), '-K', str(database), '-X', '-a'],
+            env={'PATH': self.crypto.prefix.path, 'LC_ALL': 'C'}, capture_output=True, timeout=60)
+        if result.returncode and not (result.returncode == 1 and not result.stdout and not result.stderr):
+            raise SDKError('cannot read installed package inventory: ' + result.stderr.decode('utf-8', 'replace'))
+        packages = []
+        for record in parse_summary(result.stdout):
+            root = scalar(record, 'PKGPATH') if 'PKGPATH' in record else None
+            if root is not None:
+                root = _parse_root(root + ('@native' if config.get('host') is not None else ''),
+                                   'installed PKGPATH')
+            packages.append(dict(pkgname=scalar(record, 'PKGNAME'), root=root))
+        return sorted(packages, key=lambda package: package['pkgname'])
+
     def installed(self, config, *, recover=True):
         prefix, database = install_paths(config)
         if not database.exists():

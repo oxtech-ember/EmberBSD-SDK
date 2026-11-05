@@ -43,21 +43,23 @@ def available_sets(catalogs, config):
     return {name: list(dict.fromkeys(roots)) for name, roots in sorted(sets.items())}
 
 
-def installation_plan(release, catalogs, config, installer, cache, *, sets=(), roots=()):
+def installation_plan(release, catalogs, config, installer, cache, *, sets=(), roots=(), installed=None):
     catalogs = [c for c in catalogs if c['repository'] in config['repositories']]
-    all_sets = available_sets(catalogs, config)
+    all_sets = available_sets(catalogs, config) if sets else {}
     requested = list(roots)
     for name in sets:
         if name not in all_sets:
             raise SDKError(f'unknown package set: {name}; configure Ports to select an unpublished set')
         requested.extend(all_sets[name])
     requested = list(dict.fromkeys(_parse_root(r, 'selection') for r in requested))
-    records, platforms, installed = {}, {}, {}
+    records, platforms = {}, {}
+    installed = {} if installed is None else dict(installed)
     artifacts = {a['id']: a for a in release['artifacts']}
     for catalog in catalogs:
         repository = catalog['repository']
         cfg = config['repositories'][repository]
-        installed[repository] = installer.installed(cfg, recover=False)
+        if repository not in installed:
+            installed[repository] = installer.installed(cfg, recover=False)
         for package in catalog['packages']:
             artifact = artifacts[package['artifact']]
             if (artifact['host'] != cfg.get('host') or artifact['target'] != cfg.get('target')):
@@ -337,12 +339,20 @@ def validate_config(value):
 def main(argv=None, *, default_config=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=default_config is None)
-    parser.add_argument('command', choices=('list', 'show', 'plan', 'install', 'cache-clean'))
+    parser.add_argument('command', choices=('list', 'show', 'plan', 'install', 'installed', 'update', 'cache-clean'))
     parser.add_argument('--set', action='append', default=[], dest='sets')
     parser.add_argument('--package', action='append', default=[], dest='roots')
     parser.add_argument('--target', help='also acquire the application sysroot for this target')
+    parser.add_argument('--installed', action='store_true', help='plan updates for installed packages')
     args = parser.parse_args(argv)
     try:
+        if args.installed and args.command != 'plan':
+            raise SDKError('--installed requires plan')
+        updating = args.command == 'update' or args.installed
+        if updating and (args.sets or args.target):
+            raise SDKError('package updates accept only installed --package roots; use install to add sets or a sysroot')
+        if args.command == 'installed' and (args.sets or args.roots or args.target):
+            raise SDKError('installed lists all configured package databases without a selection')
         config = load_config(args.config) if args.config else validate_config(default_config)
         state = Path(config['state_dir'])
         state.mkdir(parents=True, exist_ok=True)
@@ -352,12 +362,17 @@ def main(argv=None, *, default_config=None):
                 with directory_lock(cache.root / '.lock'):
                     print(f'Removed {cache.trim(0)} cached bytes; installed packages are unchanged.')
                 return 0
-            if args.command in ('plan', 'install') and not args.sets and not args.roots and not args.target:
+            if args.command in ('plan', 'install') and not updating and not args.sets and not args.roots and not args.target:
                 print('Nothing selected; no download, install or build requested.')
                 return 0
-            roles = ('openssl', 'pkg_info', 'pkg_admin', 'pkg_add')
+            roles = ('pkg_info',) if args.command == 'installed' else ('openssl', 'pkg_info', 'pkg_admin', 'pkg_add')
             crypto = ReleaseCrypto(load_host_prefix(config['host_prefix'], required_roles=roles))
             trust = Path(config.get('trust_root', Path(__file__).resolve().parents[2] / 'trust/emberbsd-release-root.pem'))
+            if args.command == 'installed':
+                from .package_state import installed_state
+                installer = PackageInstaller(crypto, trust)
+                sys.stdout.buffer.write(json_bytes(installed_state(config, installer)))
+                return 0
             if 'trust_root' not in config and not trust.is_file():
                 trust = temporary.enter_context(resources.as_file(
                     resources.files('emberbsd_sdk').joinpath('emberbsd-release-root.pem')))
@@ -382,10 +397,14 @@ def main(argv=None, *, default_config=None):
                             sets = {k: v for k, v in sets.items() if not args.sets or k in args.sets}
                         sys.stdout.buffer.write(json_bytes(sets))
                         return 0
-                    plan = installation_plan(release, catalogs, config, installer, cache,
-                                             sets=args.sets, roots=args.roots)
-                    plan = include_source_dependencies(plan, release, catalogs, config, installer, cache)
-                    plan = include_sysroot(plan, release, config, cache, args.target)
+                    if updating:
+                        from .package_state import update_plan
+                        plan = update_plan(release, catalogs, config, installer, cache, roots=args.roots)
+                    else:
+                        plan = installation_plan(release, catalogs, config, installer, cache,
+                                                 sets=args.sets, roots=args.roots)
+                        plan = include_source_dependencies(plan, release, catalogs, config, installer, cache)
+                        plan = include_sysroot(plan, release, config, cache, args.target)
                     if args.command == 'plan':
                         sys.stdout.buffer.write(json_bytes(plan))
                         return 0
@@ -396,6 +415,8 @@ def main(argv=None, *, default_config=None):
                           f"{int(bool(plan.get('sysroot')) and plan['sysroot']['action'] != 'installed')} sysroots; "
                           f"download {plan['download_size']} bytes; unpack {plan['unpacked_size']} bytes; "
                           f"build {len(plan['build_roots'])} roots", file=sys.stderr)
+                    for package in plan.get('retained', []):
+                        print(f"Retain {package['repository']}/{package['pkgname']}: {package['reason']}", file=sys.stderr)
                     try:
                         install_selection(plan, config, installer, cache, store)
                     except HTTPStatusError as exc:
@@ -403,9 +424,10 @@ def main(argv=None, *, default_config=None):
                             raise
                         previous = identity
                         continue
-                    selected = state / 'selection.json'
-                    old = read_json(selected) if selected.exists() else {'roots': []}
-                    write_json(selected, {'roots': sorted(set(old['roots']) | set(plan['roots']))}, exclusive=False)
+                    if not updating:
+                        selected = state / 'selection.json'
+                        old = read_json(selected) if selected.exists() else {'roots': []}
+                        write_json(selected, {'roots': sorted(set(old['roots']) | set(plan['roots']))}, exclusive=False)
                     print('Selected components installed; package databases own installed versions.')
                     return 0
     except (SDKError, OSError, ValueError, KeyError, tarfile.TarError, subprocess.TimeoutExpired) as exc:

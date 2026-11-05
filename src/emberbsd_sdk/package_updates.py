@@ -80,6 +80,9 @@ def check_updates(crypto, database, packages, archives, installed):
         if len(package['replaces']) != 1:
             raise SDKError(f"{package['pkgname']}: multiple installed versions require package database repair")
         old_name = package['replaces'][0]
+        base, version = old_name.rsplit('-', 1)
+        if not matches(base + '>=' + version, package['pkgname']):
+            raise SDKError(f"{old_name}: refusing package downgrade to {package['pkgname']}")
         new = _archive(archives[package['artifact']['id']])
         if new['name'] != package['pkgname']:
             raise SDKError('package update name differs from the signed catalog')

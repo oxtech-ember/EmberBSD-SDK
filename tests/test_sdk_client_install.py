@@ -10,7 +10,7 @@ import unittest
 
 import test_package_install as install_fixture
 import test_release_s3 as http_fixture
-from emberbsd_sdk.jsonio import json_bytes
+from emberbsd_sdk.jsonio import json_bytes, read_json
 from emberbsd_sdk.release_cli import seal_release
 from emberbsd_sdk.release_delivery import publish_release
 from emberbsd_sdk.sdk_client import main
@@ -35,6 +35,7 @@ class ClientInstallTests(install_fixture.InstallTests):
                         ('catalog', 'catalog.json', 'package-index'), ('summary', 'pkg_summary.gz', 'package-index')]]
         draft = dict(schema='emberbsd.release.v1', release_id='fixture', created_at=int(time.time()),
                      sources={name: 'a' * 40 for name in ('os', 'ports', 'sdk')}, artifacts=artifacts)
+        self.draft = draft
         envelope = self.repository / 'release.p7m'
         seal_release(self.crypto, json_bytes(draft), self.repository, self.signer, self.ca.certificate, envelope)
         publish_release(self.crypto, self.store, self.public, envelope, self.signer, self.ca.certificate)
@@ -48,7 +49,8 @@ class ClientInstallTests(install_fixture.InstallTests):
         output = io.TextIOWrapper(io.BytesIO(), encoding='utf-8')
         errors = io.StringIO()
         with redirect_stdout(output), redirect_stderr(errors):
-            result = main(['--config', str(self.config), command, '--set', 'fixture'])
+            selection = ['--set', 'fixture'] if command == 'install' else []
+            result = main(['--config', str(self.config), command, *selection])
         output.flush()
         return result, output.buffer.getvalue().decode() + errors.getvalue()
 
@@ -70,6 +72,42 @@ class ClientInstallTests(install_fixture.InstallTests):
         status, output = self.run_client()
         self.assertEqual(status, 1, output)
         self.assertFalse(self.destination.exists())
+
+    def test_online_update_uses_pkgdb_and_reuses_updated_package(self):
+        status, output = self.run_client()
+        self.assertEqual(status, 0, output)
+        shutil.rmtree(self.work / 'stage')
+        replacement = self.package(package_name='fixture-2.0', payload='updated data')
+        shutil.copyfile(replacement, self.repository / 'native/fixture-2.0.tgz')
+        catalog_path = self.repository / 'native/catalog.json'
+        catalog = read_json(catalog_path)
+        catalog['packages'][0]['pkgname'] = 'fixture-2.0'
+        catalog_path.write_bytes(json_bytes(catalog))
+        (self.repository / 'native/pkg_summary.gz').write_bytes(gzip.compress(b'PKGNAME=fixture-2.0\n\n'))
+        self.draft['release_id'] = 'fixture-update'
+        self.draft['artifacts'][0]['path'] = 'native/fixture-2.0.tgz'
+        envelope = self.repository / 'update.p7m'
+        seal_release(self.crypto, json_bytes(self.draft), self.repository,
+                     self.signer, self.ca.certificate, envelope)
+        publish_release(self.crypto, self.store, self.public, envelope, self.signer, self.ca.certificate)
+        # Saved selections do not determine which packages are updated.
+        (self.work / 'state/selection.json').unlink()
+        status, output = self.run_client('update')
+        self.assertEqual(status, 0, output)
+        self.assertIn('replace 1', output)
+        self.assertEqual((self.destination / 'payload').read_text(), 'updated data')
+        self.assertTrue((self.destination / 'pkgdb/fixture-2.0').is_dir())
+        self.assertFalse((self.destination / 'pkgdb/fixture-1.0').exists())
+        for key in list(self.server.objects):
+            if key.endswith('.tgz'):
+                del self.server.objects[key]
+        status, output = self.run_client('update')
+        self.assertEqual(status, 0, output)
+        self.assertIn('download 0 bytes', output)
+        self.server.objects.clear()
+        status, output = self.run_client('installed')
+        self.assertEqual(status, 0, output)
+        self.assertIn('fixture-2.0', output)
 
 
 for name in install_fixture.InstallTests.__dict__:
