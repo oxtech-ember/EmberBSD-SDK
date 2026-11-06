@@ -69,6 +69,20 @@ the transition to the selected native prefix. Keep recipes and version pins ther
    from that prefix and configure the normal Ports native profile. Ordinary
    builds then use tools and compiler components from the selected prefix.
 
+The native build runners discard ambient proxy settings. On a host that requires
+a proxy, fetch needed archives through its declared network route before the
+closed build. Keep the recipe's checksum checks and retain the shared distfile cache.
+
+An OS build with `--gettext-source` can need native `sysutils/checkperms` and the
+common Libtool source archive. Build missing native dependencies through common Ports.
+The [cross-libtool producer](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/common-build-tools/cross/prepare-libtool.py)
+accepts `--distdir`. The OS build receipt records its complete command. After
+fetching the archives, add `--distdir /absolute/existing/cache` to that command
+and run it. The OS builder then reuses the completed producer context.
+
+After a failed OS run, select a new empty destination and retain compatible
+object, tool and runtime directories. See [OS release orchestration](os-release.md).
+
 Retain verified source archives, installed packages and compatible build objects.
 Do not delete them and rebuild solely because a binary host repository is absent.
 Do not mark a partially bootstrapped prefix as a verified native toolset.
