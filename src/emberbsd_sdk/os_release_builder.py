@@ -18,7 +18,7 @@ from .sysroot_builder import (SysrootBuilder, native_host_flags,
                               gettext_target_host_flags, gnu_target_host_flags,
                               check_native_command_identity, validate_native_binding)
 from .targets import target_definition
-from .os_release import (check, full_hash, tag, images, product_version, git_source_identity, release_schema, KERNEL, SYSROOT_SETS, BOOT_SETS,
+from .os_release import (check, full_hash, tag, images, product_version, git_source_identity, release_schema, kernel_check, KERNEL, SYSROOT_SETS, BOOT_SETS,
                          GCC_SCHEMAS, CLANG_SCHEMAS, BASE_CXX_SCHEMAS, SOURCE_TREE_SCHEMAS)
 
 # Optional Clang-only aarch64 X11 sets built from the prepared xsrc input.
@@ -623,6 +623,8 @@ class OSReleaseBuilder(SysrootBuilder):
 
     def inspect_payload(self):
         output = Path(self.paths['destination'])
+        if self.options['target'] == 'aarch64':
+            kernel_check(output / KERNEL, self.sources['os']['commit'])
         if llvm_runtime_install.base_cxx_enabled(self.flags):
             llvm_runtime_install.validate_base_aliases(output / 'dest',
                                                        self.runtime_record['manifest'])

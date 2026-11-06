@@ -385,7 +385,7 @@ with (output / 'observed-argv.jsonl').open('a') as handle: handle.write(json.dum
 if control.get('fail') == args[-1]: raise SystemExit(77)
 sets_source = next((a.split('=',1)[1] for a in args if a.startswith('EMBER_SETS_SOURCE=')), None)
 sha = next(a.split('=',1)[1] for a in args if a.startswith('EMBER_BUILD_ID='))
-kernel = ELF + ('EmberBSD:'+sha+'\\n\\0').encode()
+kernel = ELF + ('EmberBSD:'+control.get('kernel_sha', sha)+'\\n\\0').encode()
 if args[-1] == 'kernel=EMBER64':
     path = Path(value('-O'))/'kernels/EMBER64/netbsd'; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(kernel)
 elif args[-1] == 'distribution':
@@ -513,6 +513,17 @@ def retarget_runtime_amd64(runtime):
 
 
 class BuilderReleaseTests(TemporaryCase):
+    def test_release_rejects_a_reused_kernel_with_an_old_build_identity(self):
+        options = release_fixture(self.root, 'aarch64')
+        control = jsonio.read_json(self.root / 'control.json')
+        control['kernel_sha'] = '0' * 40
+        write(self.root / 'control.json', json.dumps(control))
+        with self.assertRaisesRegex(SDKError, 'full source build identity'):
+            OSReleaseBuilder(options).run()
+        receipt = jsonio.read_json(Path(options['destination']) / OSReleaseBuilder.RECEIPT)
+        self.assertEqual(receipt['qualification'], 'incomplete')
+        self.assertFalse((Path(options['destination']) / 'build-profile.json').exists())
+
     def test_producer_commands_reject_invalid_or_non_clang_base_cxx(self):
         with self.assertRaisesRegex(SDKError, 'must be boolean'):
             producer_commands('aarch64', {}, {}, 'a' * 40, 1, '2', '/bin/sh',
