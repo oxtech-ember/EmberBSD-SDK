@@ -102,7 +102,9 @@ For a sparse update, pass `--current /work/current-snapshot`, obtained with
 `s3-release.py fetch`. Composition preserves all current artifacts and merges
 the selected roots and sets. Missing archive-map entries can reuse an exact
 root/version and its runtime dependency IDs from authenticated current metadata;
-other missing runtime packages still fail. Changed roots retain their artifact
+other missing runtime packages still fail. A different source profile does not
+replace an unchanged binary's signed dependency edges. New archives still need
+their resolved runtime providers. Changed roots retain their artifact
 IDs, and retained reverse consumers are checked against replacements. Repository
 platform identity cannot change. Package downgrades are refused.
 The resulting directory contains new packages and all small indexes, without

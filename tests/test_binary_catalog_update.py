@@ -68,6 +68,45 @@ class BinaryCatalogUpdateTests(BinaryReleaseFixture):
                      self.ca.certificate, new_envelope)
         (directory / 'release.p7m').write_bytes(new_envelope.read_bytes())
 
+    def source_graph_changed_addition(self, *, depends=('app>=1',)):
+        repo, release, current = self.baseline()
+        for package in (current / 'arm64').glob('*.tgz'):
+            package.unlink()
+        value = graph()
+        # The current archive is unchanged. A different source profile no
+        # longer records its dependency, which remains in the signed release.
+        next(node for node in value['nodes'] if node['id'] == 'target:net/app')['dependencies'] = []
+        value['nodes'].append(dict(id='target:net/new', version='1.0',
+            input_sha256='c' * 64, dependencies=[dict(id='target:net/app', kind='runtime')]))
+        self.graph_path.write_bytes(json_bytes(value))
+        repo['sets'] = []
+        repo['roots'] = ['net/new']
+        repo['packages'] = {'target:net/new': self.package('net/new', depends=depends)}
+        self.spec['repositories'] = [repo]
+        self.spec.update(release_id='source-graph-changed', created_at=2)
+        return release, current
+
+    def test_reused_archive_retains_signed_edges_when_source_graph_changes(self):
+        previous, current = self.source_graph_changed_addition()
+        output = self.work / 'addition'
+        result = self.compose(current=current, output=output)
+        packages = {item['id']: item for item in result['artifacts']}
+        for item in previous['artifacts']:
+            if item['kind'] == 'target-package':
+                self.assertEqual(packages[item['id']], item)
+        # The authenticated dependency survives even outside the new source
+        # closure; none of the previous package bodies was required.
+        _, catalogs = self.load(output)
+        self.assertIn('devel/lib', {item['root'] for item in catalogs[0]['packages']})
+        self.assertEqual([path.name for path in (output / 'arm64').glob('*.tgz')], ['new-1.0.tgz'])
+
+    def test_new_archive_still_requires_its_own_resolved_dependencies(self):
+        _, current = self.source_graph_changed_addition(depends=('app>=2',))
+        output = self.work / 'incompatible-addition'
+        with self.assertRaisesRegex(SDKError, 'dependency absent or ambiguous'):
+            self.compose(current=current, output=output)
+        self.assertFalse(output.exists())
+
     def test_replacement_keeps_root_artifact_id_and_unrelated_repo_bootstrap(self):
         repo, _, current = self.baseline()
         # The unrelated repository and host bootstrap are deliberately omitted

@@ -277,10 +277,9 @@ def _prepare_repository(crypto, spec, ports_root, sources, trust, previous=None,
                                  license=_package_license(record),
                                  artifact=old['artifact'] if old else
                                  spec['id'] + '-' + hashlib.sha256(identity.encode()).hexdigest()[:24])
-    for item in reused.values():
-        dependencies = sorted(entries[child]['artifact'] for child in item['node']['dependencies'])
-        if dependencies != sorted(item['release_artifact']['depends']):
-            raise SDKError('reused package runtime graph changed: ' + item['name'])
+    # Reused archives keep their authenticated runtime edges. A current source
+    # profile cannot redefine the dependencies of an unchanged binary. compose
+    # checks new archives and affected consumers against the merged inventory.
     return spec, sets, entries
 
 
