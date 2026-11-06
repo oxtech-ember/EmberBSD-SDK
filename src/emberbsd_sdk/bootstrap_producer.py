@@ -260,8 +260,8 @@ def metadata_environment(plan, commands):
                  'GCC comparison needs one selected strip invocation')
         _require(len(commands.get('uname', ())) == 1,
                  'GCC diagnostics need one selected uname invocation')
-        result['GCC_CONFIGURE_SDK'] = 'yes'
-        result['GCC_CONFIGURE_UNAME'] = _safe_path(commands['uname'][0])
+        result['EMBERBSD_CONFIGURE_SDK'] = 'yes'
+        result['EMBERBSD_CONFIGURE_UNAME'] = _safe_path(commands['uname'][0])
         result['GCC_COMPARE_DEBUG_STRIP'] = _safe_path(commands['strip'][0])
         prefix = _safe_path(plan['output_bundle_root'])
         result['GCC_COMPARE_DEBUG_OBJDUMP'] = os.path.join(prefix, 'bin', 'llvm-objdump')
