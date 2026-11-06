@@ -13,6 +13,7 @@ import tempfile
 from . import application_toolchain, jsonio, publication, sysroot_transfer, target_toolchain
 from .errors import SDKError
 from .host_prefix import load_host_prefix
+from .package_install import target_sysroot
 from .targets import target_definition
 
 RECEIPT = '.ember-sdk-artifact.json'
@@ -67,6 +68,8 @@ def selection(release, config, cache, target):
                   a['target']['triplet'] == definition['triplet']]
     configured = [c for c in config['repositories'].values() if c.get('target') and
                   c['target']['triplet'] == definition['triplet']]
+    if any(not target_sysroot(c) for c in configured):
+        raise SDKError('a live target installation cannot receive an SDK sysroot')
     if configured:
         candidates = [a for a in candidates if a['target'] in [c['target'] for c in configured]]
     if len(candidates) != 1:

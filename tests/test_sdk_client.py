@@ -26,7 +26,7 @@ class Installer:
         return self.present
     def check(self, path, config):
         self.actions.append(('check', path.name))
-    def install(self, path, config, *, checked=False, configure=True):
+    def install(self, path, config, *, checked=False, configure=True, automatic=False):
         self.actions.append(('install', path.name, configure))
         self.present.add(path.stem)
     def check_updates(self, packages, archives, config):
@@ -164,14 +164,16 @@ class ClientTests(unittest.TestCase):
                 self.present = {installed_name}
                 self.checked_updates = []
                 self.installed_paths = []
+                self.automatic_values = []
             def installed(self, _config, *, recover=True):
                 return self.present
             def check(self, _path, _config):
                 pass
             def check_updates(self, packages, _archives, _config):
                 self.checked_updates.extend(packages)
-            def install(self, path, _config, *, checked=False, configure=True):
+            def install(self, path, _config, *, checked=False, configure=True, automatic=False):
                 self.installed_paths.append(path.name)
+                self.automatic_values.append(automatic)
             def configure(self, _config):
                 pass
 
@@ -191,12 +193,15 @@ class ClientTests(unittest.TestCase):
         with patch('emberbsd_sdk.sdk_client.check_space'), \
              patch('emberbsd_sdk.package_install.inspect_install_paths'), \
              patch('emberbsd_sdk.package_updates._matches', side_effect=pmatch), \
+             patch('emberbsd_sdk.package_automatic.finish') as finish, \
              patch('emberbsd_sdk.sdk_client.build_missing', side_effect=lambda _cfg, _roots, rows: selected.extend(rows)):
             install_selection(plan, dict(repositories={'native': cfg}), installer, cache, object())
         provider_row = next(item for item in installer.checked_updates if item['root'].startswith('textproc/'))
         self.assertEqual(provider_row['pkgname'], installed_name)
         self.assertIsNone(provider_row['artifact'])
         self.assertEqual(installer.installed_paths, [consumer.name])
+        self.assertEqual(installer.automatic_values, [False])
+        finish.assert_called_once_with(installer.crypto, cfg, 'consumer-1')
         self.assertIn(('textproc/libxml2@native', installed_name), selected)
 
     def test_all_archives_checked_before_any_install(self):

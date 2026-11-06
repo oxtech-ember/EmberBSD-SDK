@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.package_install import PackageInstaller, inspect_install_paths, PORTABLE_PREFIX
 from emberbsd_sdk.package_updates import check_updates
-from emberbsd_sdk.binary_release import _package_payload
+from emberbsd_sdk.binary_release import _arch, _package_payload
 from emberbsd_sdk import bootstrap_bundle, package_relocation
 
 
@@ -42,7 +42,7 @@ class InstallTests(unittest.TestCase):
     def package(self, *, target=False, link=None, commands='', arch='aarch64', requires_self=False, preserve=False,
                 payload='installed data', provides=False, install_script=None, install_script_mode=0o755,
                 package_name='fixture-1.0',
-                payload_path='payload', executable=False, build_version=None):
+                payload_path='payload', executable=False, build_version=None, deinstall_script=None):
         stage = self.work / 'stage'
         stage.mkdir()
         payload_file = stage / payload_path
@@ -60,7 +60,7 @@ class InstallTests(unittest.TestCase):
             (f'REQUIRES={prefix}/payload\n' if requires_self else '') +
             (f'PROVIDES={prefix}/payload\n' if provides else '') +
             (f'OPSYS=NetBSD\nMACHINE_ARCH={arch}\nOS_VERSION=11.0\n' if target else
-             f'OPSYS={platform.system()}\nMACHINE_ARCH={"aarch64" if platform.machine() == "arm64" else platform.machine()}\nOS_VERSION={platform.release()}\n'))
+             f'OPSYS={platform.system()}\nMACHINE_ARCH={_arch(platform.machine())}\nOS_VERSION={platform.release()}\n'))
         unsigned, signed = self.work / 'unsigned.tgz', self.work / (package_name + '.tgz')
         extra = []
         if build_version is not None:
@@ -74,10 +74,103 @@ class InstallTests(unittest.TestCase):
             script = stage / 'INSTALL'
             script.write_text(install_script); script.chmod(install_script_mode)
             extra += ['-i', script]
+        if deinstall_script is not None:
+            script = stage / 'DEINSTALL'
+            script.write_text(deinstall_script)
+            script.chmod(0o755)
+            extra += ['-k', script]
         self.crypto.run_package('pkg_create', [*extra, '-c', '-fixture', '-d', '-fixture',
             '-f', stage / 'PLIST', '-B', stage / 'INFO', '-p', stage, '-I', prefix, unsigned])
         self.crypto.sign_package(unsigned, signed, self.signer, self.ca.certificate)
         return signed
+
+    @unittest.skipUnless(platform.system() == 'NetBSD', 'native NetBSD lifecycle')
+    def test_native_target_signed_package_hooks_and_replacement(self):
+        arch = _arch(platform.machine())
+        major = platform.release().split('.', 1)[0]
+        self.cfg = dict(prefix=str(self.destination), pkgdb=str(self.destination / 'pkgdb'),
+                        target=dict(arch=arch, triplet=arch + '--netbsd',
+                                    abi='netbsd-' + major, runtime='libc++'),
+                        install_mode='native', os_version=platform.release())
+        installed = self.work / 'installed-hook'
+        removed = self.work / 'removed-hook'
+        post = self.work / 'post-install'
+        deinstall = self.work / 'deinstall-hook'
+        commands = '@exec touch ' + str(installed) + '\n@unexec touch ' + str(removed) + '\n'
+        hook = '#!/bin/sh\n[ "$2" != POST-INSTALL ] || touch ' + str(post) + '\n'
+        unhook = '#!/bin/sh\n[ "$2" != DEINSTALL ] || touch ' + str(deinstall) + '\n'
+        first = self.package(package_name='fixture-1.0', commands=commands,
+                             install_script=hook, deinstall_script=unhook)
+        installer = PackageInstaller(self.crypto, self.ca.certificate)
+        installer.install(first, self.cfg)
+        self.assertTrue(installed.exists())
+        self.assertTrue(post.exists())
+        self.assertIn('fixture-1.0', installer.installed(self.cfg))
+        shutil.rmtree(self.work / 'stage')
+        second = self.package(package_name='fixture-2.0', payload='updated')
+        installer.install(second, self.cfg)
+        self.assertTrue(removed.exists())
+        self.assertTrue(deinstall.exists())
+        self.assertEqual((self.destination / 'payload').read_text(), 'updated')
+        self.assertIn('fixture-2.0', installer.installed(self.cfg))
+        self.assertNotIn('fixture-1.0', installer.installed(self.cfg))
+
+    def test_real_pkgtools_preserve_automatic_state_and_recover(self):
+        from emberbsd_sdk import package_automatic as automatic
+        for state in ('yes', 'no', None):
+            with self.subTest(state=state):
+                case = self.work / ('state-' + str(state))
+                case.mkdir()
+                self.work = case
+                self.destination = case / 'prefix'
+                self.cfg = dict(prefix=str(self.destination),
+                                pkgdb=str(self.destination / 'pkgdb'),
+                                host=dict(os=platform.system(), arch=platform.machine(),
+                                          abi='test', runtime='native'))
+                installer = PackageInstaller(self.crypto, self.ca.certificate)
+                first = self.package(package_name='fixture-1.0')
+                installer.install(first, self.cfg, automatic=(state == 'yes'))
+                if state == 'no':
+                    self.crypto.run_package('pkg_admin', ['-K', self.cfg['pkgdb'],
+                                            'set', 'automatic=no', 'fixture-1.0'])
+                shutil.rmtree(case / 'stage')
+                second = self.package(package_name='fixture-2.0')
+                packages = [{'pkgname': 'fixture-2.0', 'root': 'devel/fixture',
+                             'replaces': ['fixture-1.0']}]
+                chosen = automatic.plan(self.cfg, packages, ['devel/fixture'])
+                self.assertEqual(chosen['fixture-2.0'], state)
+                automatic.prepare(self.cfg, 'fixture-2.0', state)
+                installer.install(second, self.cfg, automatic=(state == 'yes'))
+                failed = subprocess.CompletedProcess([], 1, b'', b'interrupted')
+                with patch('emberbsd_sdk.package_automatic.subprocess.run',
+                           return_value=failed):
+                    with self.assertRaises(SDKError):
+                        automatic.finish(self.crypto, self.cfg, 'fixture-2.0')
+                automatic.recover(self.crypto, self.cfg, ['fixture-2.0'])
+                info = Path(self.cfg['pkgdb']) / 'fixture-2.0/+INSTALLED_INFO'
+                contents = info.read_text() if info.exists() else ''
+                values = [line.split('=', 1)[1].lower() for line in contents.splitlines()
+                          if line.lower().startswith('automatic=')]
+                self.assertEqual(values, [] if state is None else [state])
+                self.work = case.parent
+
+        case = self.work / 'new-dependency'
+        case.mkdir()
+        self.work = case
+        self.destination = case / 'prefix'
+        self.cfg = dict(prefix=str(self.destination), pkgdb=str(self.destination / 'pkgdb'),
+                        host=dict(os=platform.system(), arch=platform.machine(),
+                                  abi='test', runtime='native'))
+        package = self.package()
+        self.destination.mkdir()  # pkgdb lock creates its parent before planning.
+        value = automatic.plan(self.cfg, [{'pkgname': 'fixture-1.0',
+                                'root': 'devel/fixture', 'replaces': []}], [])['fixture-1.0']
+        automatic.prepare(self.cfg, 'fixture-1.0', value)
+        PackageInstaller(self.crypto, self.ca.certificate).install(package, self.cfg,
+                                                                  automatic=(value == 'yes'))
+        automatic.finish(self.crypto, self.cfg, 'fixture-1.0')
+        self.assertIn('automatic=yes', (Path(self.cfg['pkgdb']) /
+                      'fixture-1.0/+INSTALLED_INFO').read_text().lower())
 
     def localbase(self, database):
         return self.crypto.run_package('pkg_info', ['-K', str(database), '-Q', 'LOCALBASE', 'fixture-1.0']).decode().strip()

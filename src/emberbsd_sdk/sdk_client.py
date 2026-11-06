@@ -14,14 +14,14 @@ import sys
 import tarfile
 import tempfile
 
-from . import sysroot_package
+from . import sysroot_package, package_automatic
 from .binary_catalog import load_release_catalogs, select_packages
 from .binary_release import _arch
 from .errors import SDKError
 from .host_prefix import load_host_prefix
 from .jsonio import json_bytes, read_json, write_json
 from .package_cache import PackageCache, check_space, directory_lock
-from .package_install import PackageInstaller, install_paths
+from .package_install import PackageInstaller, install_paths, target_sysroot
 from .package_updates import reuse_compatible_dependencies
 from .package_selection import _package_sets, _parse_root, _read_roots
 from .release_delivery import artifact_key, fetch_release, _key
@@ -105,6 +105,8 @@ def installation_plan(release, catalogs, config, installer, cache, *, sets=(), r
 def _source_config(config, roots):
     if not roots:
         return
+    if any(c.get('target') and not target_sysroot(c) for c in config['repositories'].values()):
+        raise SDKError('live target package installation requires published binaries; build with Ports on the developer host')
     source = config.get('source')
     if not source:
         raise SDKError('binary package absent; configure Ports source (ports_root, pkgsrc, makeconf, state) '
@@ -118,6 +120,7 @@ def run_source(config, roots, command, *, binaries=()):
     """Invoke the existing selector; Ports owns dependency solving and reuse."""
     if not roots:
         return
+    _source_config(config, roots)
     from . import package_selection
     source = config['source']
     native = load_host_prefix(config['host_prefix'], required_roles={'make', 'sh'})
@@ -272,24 +275,35 @@ def apply_plan(plan, config, installer, cache, store):
             compatible_reuse = []
             for repository in sorted(selected_repositories):
                 cfg = config['repositories'][repository]
+                package_automatic.recover(installer.crypto, cfg, installer.installed(cfg, recover=False))
                 repository_packages = [p for p in plan['packages'] if p['repository'] == repository]
                 compatible_reuse.extend(reuse_compatible_dependencies(installer.crypto, cfg,
                     repository_packages, archives, installer.installed(cfg, recover=False), plan['roots']))
             plan['compatible_reuse'] = compatible_reuse
             pending = [p for p in plan['packages'] if p['action'] != 'installed']
+        automatic_states = {}
         # Check every replacement before changing any package. pkg_add remains
         # the dependency and file owner; this path preserves installed consumers.
         for repository in sorted(selected_repositories):
             cfg = config['repositories'][repository]
             selected = [p for p in plan['packages'] if p['repository'] == repository]
             installer.check_updates(selected, archives, cfg)
+            if isinstance(installer, PackageInstaller):
+                automatic_states[repository] = package_automatic.plan(cfg,
+                    [p for p in selected if p['action'] != 'installed'], plan['roots'])
         for package in pending:
             cfg = config['repositories'][package['repository']]
             # Recheck paths after earlier packages have populated the prefix.
             from .package_install import inspect_install_paths
             if isinstance(installer, PackageInstaller):
                 inspect_install_paths(archives[package['artifact']['id']], cfg)
-            installer.install(archives[package['artifact']['id']], cfg, checked=True, configure=False)
+                automatic = automatic_states[package['repository']][package['pkgname']]
+                package_automatic.prepare(cfg, package['pkgname'], automatic)
+                installer.install(archives[package['artifact']['id']], cfg, checked=True,
+                                  configure=False, automatic=automatic == 'yes')
+                package_automatic.finish(installer.crypto, cfg, package['pkgname'])
+            else:
+                installer.install(archives[package['artifact']['id']], cfg, checked=True, configure=False)
         # Configure only after every selected payload has been installed and
         # relocated. Pending hooks are retried even when this selection reused
         # every exact installed package.

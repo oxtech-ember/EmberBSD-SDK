@@ -7,18 +7,19 @@ import platform
 
 from .errors import SDKError
 from .package_selection import _parse_root
+from .package_install import target_sysroot
 from .release_signing import read_bytes
 
 
 def installed_state(config, installer):
     repositories = {}
     for name, cfg in config['repositories'].items():
-        release_file = Path(cfg['sysroot'] if cfg.get('target') else '/') / 'etc/release'
+        release_file = Path(cfg['sysroot'] if target_sysroot(cfg) else '/') / 'etc/release'
         header = read_bytes(release_file, 64 * 1024).decode('utf-8').splitlines() if release_file.exists() else []
         product = header[0] if header and header[0].startswith('EmberBSD ') else None
         repositories[name] = dict(platform=cfg.get('host') or cfg['target'], os_release=product,
             packages=installer.inventory(cfg))
-        if cfg.get('host'):
+        if not target_sysroot(cfg):
             repositories[name]['host_kernel'] = platform.release()
     return dict(repositories=repositories)
 

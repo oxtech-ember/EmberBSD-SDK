@@ -5,11 +5,11 @@ Ports package selector. It prefers a compatible installed package, then a
 published binary, and builds missing roots with Ports. Network, integrity and
 signature failures are errors, not reasons to compile another package.
 
-One configuration describes the native prefix and optional target sysroots.
+One configuration describes the native prefix, optional target sysroots, or a live target installation.
 All tasks share these prefixes, package databases and a bounded SHA256 archive
 cache. Selection remains versionless; host/target ABI comes from configuration.
 The client downloads and verifies the entire binary selection before installing.
-Target installation uses pkg_add's alternate root and no-script mode.
+Target sysroots use pkg_add's alternate root and no-script mode; an explicit live target uses native package hooks.
 There is no separate dependency resolver, toolchain or build tree per task.
 
 ## Use the client
@@ -204,6 +204,37 @@ are ordinary package files, never mutable hardlinks into the archive cache.
 This installs package payloads into an existing target environment; base headers,
 CRT/libc and producer sysroot bundles retain their existing SDK/OS ownership.
 
+### Packages on a running EmberBSD device
+
+The same signed target repository can install into a live matching system with
+`"install_mode": "native"`, no `sysroot`, and the actual native `prefix`/`pkgdb`.
+For example, a NetBSD 11.0 amd64 device using the published libc++ package graph:
+
+```json
+"netbsd-amd64": {
+  "target": {"arch": "x86_64", "triplet": "x86_64--netbsd", "abi": "netbsd-11", "runtime": "libc++"},
+  "install_mode": "native",
+  "prefix": "/usr/pkg",
+  "pkgdb": "/usr/pkg/pkgdb",
+  "os_version": "11.0"
+}
+```
+
+The target identity still must match the signed catalog exactly. Before accessing
+its database, native mode checks the running NetBSD OS version, CPU, triplet and
+major ABI. It does not change the package graph into host `@native` roots: use
+`install --package www/blanc`, for example. Normal `pkg_add` executes installation
+and deinstallation hooks; it receives no alternate root, foreign platform, or
+no-script flag. Hooks can use the device's base OS utilities. Crypto and pkg_tools
+remain explicitly selected executable paths from `host_prefix`; binary operation
+needs no compiler. On devices with base pkg_tools under `/usr/sbin`, `/usr` can be
+selected after the normal tool containment/architecture checks.
+
+Live mode refuses an SDK sysroot and source-build fallback. Build missing packages
+on the developer host through Ports and publish them before device installation.
+The default target mode remains `sysroot`, with its non-root destination and
+non-executing behavior; `install_mode` is not a platform or runtime override.
+
 ## Cache and interruption
 
 Archives are stored once as `SHA256.tgz`, with partial downloads as `SHA256.part`.
@@ -229,7 +260,12 @@ multi-package rollback, and the client does not claim one.
 Re-running `install` selects the current versions of the requested components
 and their dependencies. Exact installed versions are reused. Compatible
 replacements use `pkg_add -U`, preserving the package database and reverse
-dependencies. Before the first package changes, the client checks the installed
+dependencies. New transitive dependencies are marked automatic; new requested
+roots are manual. Replacements preserve `automatic=yes`, `automatic=no`, or the
+absence of that field, even for explicitly requested updates. The client records
+an intent beside the package database before `pkg_add` and removes it only after
+`pkg_admin` restores the field. A retry completes pending intents for installed
+packages under the same database lock before further replacements. Before the first package changes, the client checks the installed
 state under its database lock and checks every replacement against installed
 consumers using pkg_tools dependency patterns. A library replacement must retain
 its old providers while installed consumers exist; `REQUIRES` alone does not

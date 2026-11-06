@@ -3,6 +3,7 @@
 """pkg_tools installation into native prefixes or non-executing target roots."""
 
 import os
+import platform
 from pathlib import Path, PurePosixPath
 import subprocess
 import tarfile
@@ -18,15 +19,38 @@ from .release_signing import read_bytes
 PORTABLE_PREFIX = package_relocation.INDEPENDENT
 
 
+def target_sysroot(config):
+    """Separate the package's catalog identity from where it executes."""
+    mode = config.get('install_mode', 'sysroot' if config.get('target') else 'native')
+    if mode not in ('native', 'sysroot') or (mode == 'sysroot' and not config.get('target')):
+        raise SDKError('invalid package install_mode')
+    return mode == 'sysroot'
+
+
+def _native_target(config):
+    from .targets import TARGETS
+    target = config['target']
+    definitions = [value for value in TARGETS.values() if _arch(value['arch']) == _arch(target['arch'])]
+    release = platform.release()
+    if (platform.system() != 'NetBSD' or _arch(platform.machine()) != _arch(target['arch']) or
+            len(definitions) != 1 or target['triplet'] != definitions[0]['triplet'] or
+            config.get('os_version') != release or target['abi'] != 'netbsd-' + release.split('.')[0]):
+        raise SDKError('native target repository differs from this running OS/CPU/ABI')
+    if 'sysroot' in config:
+        raise SDKError('native target installation must not configure a sysroot')
+
+
 def install_paths(config):
     prefix, database = Path(config['prefix']), Path(config['pkgdb'])
     if not prefix.is_absolute() or not database.is_absolute():
         raise SDKError('package prefix and database must be absolute')
-    if config.get('target'):
+    if target_sysroot(config):
         root = Path(config['sysroot'])
         if not root.is_absolute() or root == Path('/'):
             raise SDKError('target sysroot must be an explicit non-root absolute directory')
         return root / str(prefix).lstrip('/'), root / str(database).lstrip('/')
+    if config.get('target'):
+        _native_target(config)
     if prefix == Path('/'):
         raise SDKError('native SDK prefix must not be /')
     return prefix, database
@@ -166,7 +190,7 @@ class PackageInstaller:
 
         The caller holds the selected repository's SDK pkgdb lock.
         """
-        if config.get('target'):
+        if target_sysroot(config):
             return
         prefix, database = install_paths(config)
         for name in package_relocation.pending(prefix, database):
@@ -182,7 +206,7 @@ class PackageInstaller:
         from .package_updates import check_updates
         check_updates(self.crypto, config, packages, archives, self.installed(config, recover=False))
 
-    def install(self, package, config, *, checked=False, configure=True):
+    def install(self, package, config, *, checked=False, configure=True, automatic=False):
         if not checked:
             self.check(package, config)
         key = str(Path(package).absolute())
@@ -197,13 +221,20 @@ class PackageInstaller:
                             f'GPG_KEYRING_VERIFY={os.devnull}\nPKG_PATH=\n')
             args = [self.crypto.prefix.tool('pkg_add'), '-C', str(conf), '-U',
                     '-K', config['pkgdb'], '-p', config['prefix']]
-            if config.get('target'):
+            if target_sysroot(config):
                 args += ['-P', config['sysroot'], '-I', '-m',
                          'NetBSD/' + _arch(config['target']['arch']) + ' ' + config['os_version']]
             elif selected is not None and selected[2]:
                 args.append('-I')
+            if automatic:
+                args.append('-A')
             args.append(str(Path(package).absolute()))
-            result = subprocess.run(args, env={'PATH': self.crypto.prefix.path, 'LC_ALL': 'C',
+            # Native package hooks use the running OS's base utilities. This
+            # does not change explicitly selected crypto or pkg_tools paths.
+            hook_path = self.crypto.prefix.path
+            if config.get('target') and not target_sysroot(config):
+                hook_path += os.pathsep + os.defpath + os.pathsep + '/sbin:/usr/sbin'
+            result = subprocess.run(args, env={'PATH': hook_path, 'LC_ALL': 'C',
                                               'PKG_PATH': ''}, capture_output=True)
             if result.returncode:
                 raise SDKError('pkg_add failed: ' + result.stderr[-4096:].decode('utf-8', 'replace'))
