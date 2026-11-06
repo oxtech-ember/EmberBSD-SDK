@@ -154,9 +154,9 @@ class MetadataTests(unittest.TestCase):
         plan = copy.deepcopy(self.plan)
         plan.update(format='emberbsd-native-gcc16-bootstrap-plan', output_bundle_root=str(self.work / 'prefix'))
         env = producer.metadata_environment(plan, self.commands)
-        self.assertEqual(env['GCC_CONFIGURE_SDK'], 'yes')
-        self.assertEqual(env['GCC_CONFIGURE_UNAME'], self.commands['uname'][0])
-        self.assertNotIn('GCC_CONFIGURE_SDK', producer.metadata_environment(self.plan, self.commands))
+        self.assertEqual(env['EMBERBSD_CONFIGURE_SDK'], 'yes')
+        self.assertEqual(env['EMBERBSD_CONFIGURE_UNAME'], self.commands['uname'][0])
+        self.assertNotIn('EMBERBSD_CONFIGURE_SDK', producer.metadata_environment(self.plan, self.commands))
 
     def test_outside_uname_still_refuses_after_recomputed_makeconf(self):
         self.commands['uname'] = ('/usr/bin/uname',)
