@@ -16,7 +16,7 @@ from .errors import SDKError
 from .jsonio import json_bytes, loads_json
 from .paths import open_regular, verify_stable
 from .publication import publish_directory_noreplace
-from .release_catalog import (MAX_ENVELOPE, _relative, _pattern, _SLUG, commit_channel,
+from .release_catalog import (MAX_ENVELOPE, _relative, _pattern, _SLUG, _SHA256, CHANNEL_SCHEMA,
                               file_reference, local_artifact, parse_channel, parse_release)
 from .release_cli import verify_release
 from .release_signing import read_bytes, write_new
@@ -111,13 +111,13 @@ def _clean_current(store, prefix, keep):
 
 def publish_release(crypto, store, public, envelope_path, identity, trust,
                     *, prefix='', ttl=7 * 86400, refresh=False, previous_channel_time=None,
-                    expected_generation=None, reuse_current=False):
+                    expected_current=None, reuse_current=False):
     if type(ttl) is not int or ttl <= 0:
         raise SDKError('channel lifetime must be a positive number of seconds')
-    if expected_generation is not None and (type(expected_generation) is not int or expected_generation < 0):
-        raise SDKError('expected generation must be a nonnegative integer')
-    if reuse_current and expected_generation is None:
-        raise SDKError('--reuse-current requires --expected-generation')
+    if expected_current is not None and expected_current != 'absent':
+        _pattern(expected_current, _SHA256, 'expected current SHA256')
+    if reuse_current and expected_current is None:
+        raise SDKError('--reuse-current requires --expected-current')
     envelope_path = Path(envelope_path)
     envelope = read_bytes(envelope_path)
     release = (parse_release(crypto.verify_cms(envelope, trust)) if reuse_current else
@@ -141,11 +141,11 @@ def publish_release(crypto, store, public, envelope_path, identity, trust,
     with _publisher_lock(store, prefix):
         return _publish_current(crypto, store, public, envelope_path, envelope, release,
                                 base, identity, trust, prefix, ttl, refresh, previous_channel_time,
-                                expected_generation, reuse_current)
+                                expected_current, reuse_current)
 
 
 def _publish_current(crypto, store, public, envelope_path, envelope, release, base,
-                     identity, trust, prefix, ttl, refresh, previous_channel_time, expected_generation,
+                     identity, trust, prefix, ttl, refresh, previous_channel_time, expected_current,
                      reuse_current):
     release_key = _key(prefix, base + '/release.p7m')
     reference = dict(id=release['release_id'], path=base + '/release.p7m', **_digest(envelope))
@@ -169,15 +169,15 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
         if (previous['release']['id'] == release['release_id'] and
                 previous['release']['sha256'] != hashlib.sha256(envelope).hexdigest()):
             raise SDKError('current release ID already has different metadata; choose a new ID')
-    generation = previous['generation'] if previous else 0
-    stale_generation = expected_generation is not None and generation != expected_generation
+    current_digest = hashlib.sha256(old_envelope).hexdigest() if old_envelope is not None else 'absent'
+    stale_current = expected_current is not None and current_digest != expected_current
     # The previous attempt may have switched current before losing its response
     # or failing verification/cleanup. Only the exact authenticated envelope can
     # reconcile that attempt; a refresh is a new conditional channel write.
     current_retry = (previous is not None and previous['release'] == reference and
                      previous['expires_at'] > now and not refresh)
-    if stale_generation and not (expected_generation < generation and current_retry):
-        raise SDKError(f'current changed: expected generation {expected_generation}, found {generation}; '
+    if stale_current and not current_retry:
+        raise SDKError(f'current changed: expected {expected_current}, found {current_digest}; '
                        'merge the latest current before publishing')
     if reuse_current:
         if previous is None:
@@ -222,13 +222,12 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
         public.verify(channel_key, **_digest(old_envelope))
         _clean_current(store, prefix, keep)
         return previous
-    if stale_generation:
+    if stale_current:
         # Payload verification can outlive the pointer. A retry with an old
-        # generation must never turn into an unguarded expiry refresh.
-        raise SDKError(f'current changed: expected generation {expected_generation}, found {generation}; '
-                       'current expired during retry; read its generation before refreshing')
-    pointer = dict(schema='emberbsd.channel.v1', channel=CHANNEL,
-                   generation=previous['generation'] + 1 if previous else 1,
+        # snapshot must never turn into an unguarded expiry refresh.
+        raise SDKError(f'current changed: expected {expected_current}, found {current_digest}; '
+                       'current expired during retry; read current before refreshing')
+    pointer = dict(schema=CHANNEL_SCHEMA, channel=CHANNEL,
                    issued_at=now, expires_at=now + ttl, release=reference)
     data = json_bytes(pointer)
     parse_channel(data, CHANNEL)
@@ -298,7 +297,7 @@ def _verify_sparse_local(crypto, candidate, current, directory, trust):
     return reusable_ids
 
 
-def fetch_release(crypto, public, trust, state, output, *, prefix='', repositories=()):
+def fetch_release(crypto, public, trust, output, *, prefix='', repositories=()):
     """Pin one authenticated release and its selected indexes, without payloads."""
     output = Path(output).absolute()
     if output.exists() or output.is_symlink():
@@ -307,7 +306,7 @@ def fetch_release(crypto, public, trust, state, output, *, prefix='', repositori
                                    headers={'cache-control': 'no-cache'})
     for attempt in range(2):
         try:
-            return _fetch_snapshot(crypto, public, trust, state, output, prefix, repositories, channel_bytes)
+            return _fetch_snapshot(crypto, public, trust, output, prefix, repositories, channel_bytes)
         except HTTPStatusError as exc:
             if exc.status != 404 or attempt:
                 raise
@@ -318,7 +317,7 @@ def fetch_release(crypto, public, trust, state, output, *, prefix='', repositori
             channel_bytes = newer
 
 
-def _fetch_snapshot(crypto, public, trust, state, output, prefix, repositories, channel_bytes):
+def _fetch_snapshot(crypto, public, trust, output, prefix, repositories, channel_bytes):
     content = crypto.verify_cms(channel_bytes, trust)
     pointer = parse_channel(content, CHANNEL)
     reference = pointer['release']
@@ -347,7 +346,6 @@ def _fetch_snapshot(crypto, public, trust, state, output, prefix, repositories, 
                               artifact['size'], artifact['sha256'], sink=stream)
         if requested - found:
             raise SDKError('requested repository is not present in this release')
-        commit_channel(content, state, CHANNEL)
         publish_directory_noreplace(scratch, output)
         return release
     finally:

@@ -40,7 +40,7 @@ class CurrentRepositoryTests(fixture.DeliveryTests):
         self.assertIn('/bucket/' + second['release']['path'], keys)
         self.assertFalse(any('/releases/' in key or '/channels/' in key for key in keys))
         fetch_release(self.crypto, self.public, self.ca.certificate,
-                      self.work / 'state.json', self.work / 'snapshot')
+                      self.work / 'snapshot')
 
     def test_failed_upload_preserves_current_then_retry_removes_abandoned_files(self):
         first = self.publish(self.version('first', 'bootstrap-1.tgz', b'one'))
@@ -93,7 +93,7 @@ class CurrentRepositoryTests(fixture.DeliveryTests):
             return read(key, *args, **kwargs)
         with patch.object(self.public, 'read', side_effect=switch):
             release = fetch_release(self.crypto, self.public, self.ca.certificate,
-                                    self.work / 'state.json', self.work / 'snapshot')
+                                    self.work / 'snapshot')
         self.assertEqual(release['release_id'], 'second')
 
     def test_retry_finishes_cleanup_after_current_was_switched(self):
@@ -108,7 +108,7 @@ class CurrentRepositoryTests(fixture.DeliveryTests):
             self.publish(second)
         self.assertNotIn('/bucket/.publisher-lock', self.server.objects)
         pointer = self.publish(second)
-        self.assertEqual(pointer['generation'], 2)
+        self.assertEqual(pointer['release']['id'], 'second')
         self.assertNotIn('/bucket/current/host/darwin-arm64/bootstrap-1.tgz', self.server.objects)
 
 

@@ -11,7 +11,7 @@ from .binary_catalog import load_release_catalogs
 from .errors import SDKError
 from .jsonio import json_bytes, loads_json
 from .paths import regular_file, verify_stable
-from .release_catalog import (commit_channel, file_reference, local_artifact,
+from .release_catalog import (file_reference, local_artifact,
                               parse_channel, parse_release, verify_payloads)
 from .release_signing import ReleaseCrypto, SigningIdentity, read_bytes, write_new
 
@@ -117,13 +117,12 @@ def seal_channel(crypto, draft, directory, identity, trust, output):
     return channel
 
 
-def verify_channel(crypto, envelope, directory, trust, name, state):
+def verify_channel(crypto, envelope, directory, trust, name):
     content = crypto.verify_cms(envelope, trust)
     channel = parse_channel(content, expected_name=name)
     release = _referenced_release(crypto, channel, directory, trust)
     # Accept catalog metadata without requiring every release payload locally.
     # Installation must verify the selected payloads before changing a prefix.
-    commit_channel(content, state, expected_name=name)
     return release
 
 
@@ -153,8 +152,6 @@ def parser():
                              help='signed release snapshot whose exact records may fill missing payloads')
         if command == 'verify-channel':
             sub.add_argument('--channel', required=True)
-            sub.add_argument('--state', type=Path, required=True,
-                             help='persistent local state file in an existing private directory')
         sub.add_argument('input', type=Path)
     return result
 
@@ -191,7 +188,7 @@ def main(argv=None):
                 value = verify_release(crypto, content, args.directory, args.trust_root)
             else:
                 value = verify_channel(crypto, content, args.directory, args.trust_root,
-                                       args.channel, args.state)
+                                       args.channel)
             sys.stdout.buffer.write(json_bytes(value))
         return 0
     except (SDKError, OSError) as exc:

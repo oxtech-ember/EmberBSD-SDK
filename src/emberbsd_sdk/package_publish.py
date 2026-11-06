@@ -3,6 +3,7 @@
 """Explicit maintainer publication using existing Ports and release mechanisms."""
 
 from copy import deepcopy
+import hashlib
 from pathlib import Path
 import re
 import shutil
@@ -131,9 +132,8 @@ def update_packages(crypto, store, public, spec, ports_root, workdir, identity, 
             if snapshot.exists():
                 real_directory(snapshot)
                 shutil.rmtree(snapshot)
-            previous = fetch_release(crypto, public, trust, workdir / 'channel.json', snapshot, prefix=prefix)
+            previous = fetch_release(crypto, public, trust, snapshot, prefix=prefix)
             channel = parse_channel(crypto.verify_cms(read_bytes(snapshot / 'current.p7m'), trust), 'current')
-            write_json(workdir / 'base.json', channel, exclusive=False)
             statistics = {}
             release = compose(crypto, spec, ports_root, output, identity, trust, current=snapshot,
                               additions=True, statistics=statistics, checksums=checksums)
@@ -145,9 +145,9 @@ def update_packages(crypto, store, public, spec, ports_root, workdir, identity, 
             previous = parse_release(crypto.verify_cms(read_bytes(snapshot / 'release.p7m'), trust))
             release = parse_release(crypto.verify_cms(read_bytes(output / 'release.p7m'), trust))
             statistics = _statistics(previous, release)
-        base = read_json(workdir / 'base.json')
+        expected_current = hashlib.sha256(read_bytes(snapshot / 'current.p7m')).hexdigest()
         channel = publish_release(crypto, store, public, output / 'release.p7m', identity, trust,
-                                  prefix=prefix, ttl=ttl, expected_generation=base['generation'],
+                                  prefix=prefix, ttl=ttl, expected_current=expected_current,
                                   reuse_current=True)
         result = dict(channel=channel, statistics=statistics)
         write_json(result_path, result, exclusive=False)

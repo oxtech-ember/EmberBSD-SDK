@@ -35,14 +35,13 @@ def main(argv=None):
             command.add_argument('--bucket', help='defaults to EMBERBSD_S3_BUCKET')
             command.add_argument('--ttl', type=int, default=7 * 86400, help='channel lifetime in seconds')
             command.add_argument('--refresh', action='store_true', help='refresh expiry even for the same release')
-            command.add_argument('--expected-generation', type=int,
-                                 help='refuse a changed current before uploading; 0 requires an empty repository')
+            command.add_argument('--expected-current',
+                                 help='refuse a changed current before uploading; SHA256 of current.p7m, or absent for an empty repository')
             command.add_argument('--reuse-current', action='store_true',
-                                 help='reuse exact missing records from authenticated current (requires generation)')
+                                 help='reuse exact missing records from authenticated current (requires --expected-current)')
             command.add_argument('--previous-channel-time', type=int,
                                  help='publisher recovery only: authenticate the old channel at this past Unix time')
         else:
-            command.add_argument('--state', required=True, type=Path)
             command.add_argument('--output', required=True, type=Path, help='new local metadata snapshot directory')
             command.add_argument('--repository', action='append', default=[])
     args = parser.parse_args(argv)
@@ -58,10 +57,10 @@ def main(argv=None):
                 value = publish_release(crypto, store, public, args.release, identity, args.trust_root,
                                         prefix=args.prefix, ttl=args.ttl, refresh=args.refresh,
                                         previous_channel_time=args.previous_channel_time,
-                                        expected_generation=args.expected_generation,
+                                        expected_current=args.expected_current,
                                         reuse_current=args.reuse_current)
             else:
-                value = fetch_release(crypto, public, args.trust_root, args.state, args.output,
+                value = fetch_release(crypto, public, args.trust_root, args.output,
                                       prefix=args.prefix, repositories=args.repository)
         sys.stdout.buffer.write(json_bytes(value))
         return 0

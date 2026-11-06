@@ -1,11 +1,9 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-"""Release catalog boundaries and durable, serialized channel state."""
+"""Release catalog boundaries and stateless channel validity."""
 
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
-import threading
 import unittest
 from unittest.mock import patch
 
@@ -36,9 +34,9 @@ def release():
                           artifact('bootstrap', kind='bootstrap')]}
 
 
-def channel(generation=1):
+def channel():
     return {'schema': catalog.CHANNEL_SCHEMA, 'channel': 'stable',
-            'generation': generation, 'issued_at': 100, 'expires_at': 300,
+            'issued_at': 100, 'expires_at': 300,
             'release': {'id': '2026.11-test', 'path': 'releases/2026.11-test/release.p7m',
                         'size': 123, 'sha256': 'a' * 64}}
 
@@ -223,8 +221,8 @@ class ChannelFormatTests(unittest.TestCase):
                 catalog.parse_channel(encoded(channel()), expected, 200)
 
     def test_channel_types_timestamps_and_reference_limits(self):
-        for key, invalid in [('schema', 'emberbsd.channel.v2'), ('channel', []),
-                             *[(name, v) for name in ('generation', 'issued_at', 'expires_at')
+        for key, invalid in [('schema', 'emberbsd.channel.v1'), ('channel', []),
+                             *[(name, v) for name in ('issued_at', 'expires_at')
                                for v in (True, 0, -1, 1.5, None, '100')]]:
             value = channel()
             value[key] = invalid
@@ -291,127 +289,15 @@ class PayloadTests(TemporaryCase):
             catalog.file_reference(self.root / 'packages/runtime.tgz')
 
 
-class ChannelStateTests(TemporaryCase):
-    def setUp(self):
-        super().setUp()
-        self.state = self.root / 'channel-state.json'
+class CurrentChannelTests(unittest.TestCase):
+    def test_retired_schema_and_counter_are_rejected(self):
+        for changed in (dict(channel(), schema='emberbsd.channel.v1'), dict(channel(), generation=1)):
+            with self.subTest(changed=changed), self.assertRaises(SDKError):
+                catalog.parse_channel(encoded(changed), 'stable', 200)
 
-    def commit(self, generation=1, **changes):
-        value = channel(generation)
-        value.update(changes)
-        return catalog.commit_channel(encoded(value), self.state, 'stable', 200)
-
-    def test_first_use_and_advancing_generation(self):
-        self.assertEqual(self.commit(), channel())
-        state = jsonio.read_json(self.state)
-        self.assertEqual(state, {'schema': catalog.STATE_SCHEMA, 'channel': 'stable', 'generation': 1,
-                                 'channel_sha256': hashlib.sha256(encoded(channel())).hexdigest()})
-        self.assertEqual(self.state.stat().st_mode & 0o777, 0o600)
-        self.commit(2)
-        self.assertEqual(jsonio.read_json(self.state)['generation'], 2)
-
-    def test_identical_generation_and_bytes_do_not_rewrite(self):
-        self.commit()
-        before = self.state.stat()
-        with patch.object(catalog, 'write_json', side_effect=AssertionError('unexpected rewrite')):
-            self.assertEqual(self.commit(), channel())
-        self.assertEqual(self.state.stat().st_ino, before.st_ino)
-        self.assertEqual(self.state.stat().st_mtime_ns, before.st_mtime_ns)
-
-    def test_rollback_equivocation_and_reencoding_preserve_state(self):
-        self.commit(2)
-        before = self.state.read_bytes()
-        attempts = [(encoded(channel(1)), 'rollback'),
-                    (encoded(dict(channel(2), expires_at=301)), 'equivocation'),
-                    (json.dumps(channel(2), indent=2).encode(), 'equivocation')]
-        for data, diagnostic in attempts:
-            with self.subTest(diagnostic=diagnostic), self.assertRaisesRegex(SDKError, diagnostic):
-                catalog.commit_channel(data, self.state, 'stable', 200)
-            self.assertEqual(self.state.read_bytes(), before)
-
-    def test_name_switch_cannot_reuse_existing_state(self):
-        self.commit()
-        before = self.state.read_bytes()
-        value = dict(channel(2), channel='testing')
-        with self.assertRaisesRegex(SDKError, 'different channel'):
-            catalog.commit_channel(encoded(value), self.state, 'testing', 200)
-        self.assertEqual(self.state.read_bytes(), before)
-
-    def test_invalid_existing_state_is_never_reset(self):
-        good = {'schema': catalog.STATE_SCHEMA, 'channel': 'stable', 'generation': 1,
-                'channel_sha256': 'a' * 64}
-        bad = [b'not JSON', b'{}', encoded(dict(good, schema='old')), encoded(dict(good, extra=1)),
-               encoded(dict(good, generation=True)), encoded(dict(good, generation=0)),
-               encoded(dict(good, channel_sha256='A' * 64)), encoded(dict(good, channel=None))]
-        for data in bad:
-            self.state.write_bytes(data)
-            with self.subTest(data=data), self.assertRaises(SDKError):
-                self.commit(2)
-            self.assertEqual(self.state.read_bytes(), data)
-
-    def test_unreadable_state_fails_closed(self):
-        self.commit()
-        before = self.state.read_bytes()
-        with patch.object(catalog, 'read_json', side_effect=PermissionError('unreadable')):
-            with self.assertRaisesRegex(SDKError, 'cannot commit'):
-                self.commit(2)
-        self.assertEqual(self.state.read_bytes(), before)
-
-    def test_symlink_state_rejected_without_following_or_replacing(self):
-        target = self.write('other-state', b'unchanged')
-        self.state.symlink_to(target)
-        with self.assertRaises(SDKError):
-            self.commit()
-        self.assertTrue(self.state.is_symlink())
-        self.assertEqual(target.read_bytes(), b'unchanged')
-
-    def test_clock_failure_does_not_advance_state_even_for_identical_bytes(self):
-        self.commit()
-        before = self.state.read_bytes()
-        for now in (99, 300):
-            with self.subTest(now=now), self.assertRaisesRegex(SDKError, 'clock'):
-                catalog.commit_channel(encoded(channel()), self.state, 'stable', now)
-        self.assertEqual(self.state.read_bytes(), before)
-
-    def test_atomic_replace_failure_preserves_floor_and_removes_staging_file(self):
-        self.commit()
-        before = self.state.read_bytes()
-        names = set(self.root.iterdir())
-        with patch.object(jsonio.os, 'replace', side_effect=OSError('simulated replacement failure')):
-            with self.assertRaisesRegex(SDKError, 'cannot commit'):
-                self.commit(2)
-        self.assertEqual(self.state.read_bytes(), before)
-        self.assertEqual(set(self.root.iterdir()), names)
-
-    def test_waiting_writer_rechecks_floor_after_lock_acquisition(self):
-        self.commit()
-        writer_entered, release_writer, second_started, second_finished = (threading.Event() for _ in range(4))
-        original = catalog.write_json
-        def delayed_write(path, value, **kwargs):
-            if value['generation'] == 3:
-                writer_entered.set()
-                if not release_writer.wait(5):
-                    raise AssertionError('test did not release the first writer')
-            return original(path, value, **kwargs)
-        def second():
-            second_started.set()
-            try:
-                return self.commit(2)
-            finally:
-                second_finished.set()
-        with patch.object(catalog, 'write_json', delayed_write), ThreadPoolExecutor(max_workers=2) as pool:
-            first = pool.submit(self.commit, 3)
-            try:
-                self.assertTrue(writer_entered.wait(5))
-                lower = pool.submit(second)
-                self.assertTrue(second_started.wait(5))
-                self.assertFalse(second_finished.wait(0.1))
-            finally:
-                release_writer.set()
-            self.assertEqual(first.result(timeout=5)['generation'], 3)
-            with self.assertRaisesRegex(SDKError, 'rollback'):
-                lower.result(timeout=5)
-        self.assertEqual(jsonio.read_json(self.state)['generation'], 3)
+    def test_valid_metadata_does_not_require_a_local_freshness_floor(self):
+        self.assertEqual(catalog.parse_channel(encoded(channel()), 'stable', 200), channel())
+        self.assertFalse(hasattr(catalog, 'commit_channel'))
 
 
 if __name__ == '__main__':

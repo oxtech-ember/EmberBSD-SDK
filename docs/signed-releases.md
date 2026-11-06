@@ -112,13 +112,12 @@ not another dependency solver. `licenses` is a nonempty list of identifiers.
 Generate package indexes after signing packages; include them as artifacts
 so their exact bytes are bound to this release.
 
-## Channel: `emberbsd.channel.v1`
+## Channel: `emberbsd.channel.v2`
 
 ```json
 {
-  "schema": "emberbsd.channel.v1",
+  "schema": "emberbsd.channel.v2",
   "channel": "current",
-  "generation": 1,
   "issued_at": 1793664000,
   "expires_at": 1794268800,
   "release": {
@@ -130,33 +129,45 @@ so their exact bytes are bound to this release.
 }
 ```
 
-Generation is positive and increases on every change, including expiry
-refreshes. It is a replay counter, not an OS or package version. Advancing it
-does not invalidate unchanged package identities or cached archives.
-Validity is `issued_at <= now < expires_at`. The expected channel
-name is a client input to the generic verifier; S3 delivery fixes it to `current`.
-The reference hashes the complete release CMS envelope;
-its ID must match the authenticated release. Envelopes are limited to 16 MiB,
-embedded content to 15 MiB. Payloads are streamed for hashing.
+The channel has no version counter. `issued_at` and `expires_at` are Unix
+seconds, with validity `issued_at <= now < expires_at`; they bound validity,
+not package identity. The expected channel name is a client input to the
+generic verifier; S3 delivery fixes it to `current`. The reference hashes the
+complete release CMS envelope, whose ID must match the authenticated release.
+Envelopes are limited to 16 MiB, embedded content to 15 MiB. Payloads are
+streamed for hashing.
 
-After verifying channel and release metadata signatures, `verify-channel` durably stores
-the channel name, generation and SHA256 of the authenticated **content bytes**.
-A smaller generation or different bytes at the same generation are refused.
-Identical content is a no-op, even if re-signed. A process lock serializes checks
-and atomic replacement. Invalid release metadata never advances the accepted floor.
-This operation reads only the two metadata objects: clients need not download
-the whole release to inspect its catalog. Installers verify hashes and package
-signatures for their selected components before changing installed state.
-Keep the state directory private and persistent, including the lock file.
-Invalid existing state fails closed. Missing state is first use: it cannot
-detect replay within the validity window before a newer generation is accepted.
-Deleting state deliberately removes the local rollback floor.
+`verify-channel` verifies channel and release signatures and their exact binding.
+It does not keep a local channel history or replay floor. Installers verify
+hashes and signatures for selected components and refuse downgrades relative
+to their installed package database. Package and OS versions are independent;
+a catalog change does not require reinstalling unchanged components.
 
-`verify-release` is the explicit offline/local recovery path. It verifies a
-locally supplied signed release and all payloads without consulting or changing
-channel state. It still checks certificate validity at the current time.
-No CLI option disables signatures or time checks. Fix the clock or obtain fresh
-metadata when time checks fail. Offline verification is not installation.
+Signatures prove authenticity, not that a catalog is the newest one. An attacker
+holding an older, still-valid signed catalog and archives can hide a newer
+publication until expiry. Deleting old files on the origin does not erase such
+copies. The client does not claim remembered catalog freshness; it still rejects
+expired metadata, corrupted content and unsigned packages. No CLI option disables
+signatures or time checks. Fix the clock or obtain fresh metadata when those
+checks fail.
+
+`verify-release` verifies a locally supplied signed release and all payloads,
+including current certificate validity. Offline verification is not installation.
+
+### Cutover to the single channel contract
+
+Update publisher and client tooling together before switching the public channel
+to v2. Repackage and deliver the client zipapp/bootstrap as part of that separate
+release operation; publishing source code does not update installed clients.
+Old v1 channels are rejected, not translated. Old `--expected-generation` and
+channel `--state` options have no aliases. Existing installed package databases
+and valid package caches are retained: they are not channel state.
+
+The new client does not read or create former channel-state files. Those files
+are obsolete, not a migration input. Do not add fallback readers or dual
+publication paths. The cutover must establish the v2 current with the intended
+complete inventory and the existing publication lock/conditional-write rules;
+do not reset installed packages or bypass signature checks to make it work.
 
 ## Keys and commands
 
@@ -177,7 +188,7 @@ release seal-channel --trust-root /private/signing/root/certificate.pem \
   --signer-directory /private/signing/release-2026 --directory /repository \
   --output /staging/current.p7m channel.json
 release verify-channel --trust-root /installed/trust/root.pem --directory /repository \
-  --channel current --state /private/client/current.json /staging/current.p7m
+  --channel current /staging/current.p7m
 release verify-release --trust-root /installed/trust/root.pem \
   --directory /repository/releases/example /repository/releases/example/release.p7m
 ```
@@ -202,8 +213,8 @@ The installer must account for cache misses, new expanded components and peak
 staging/rollback space before writing. Reflinks or hardlinks are optional local
 optimizations only where mutation semantics allow them. Never share a writable
 sysroot file with the immutable cache through a hardlink. Cleanup must preserve
-components referenced by other projects, active tools and the selected rollback
-generation. Cache limits and explicit garbage collection belong to the binary
+components referenced by other projects, active tools and any explicitly retained
+recovery artifacts. Cache limits and explicit garbage collection belong to the binary
 client stage, not this signing command.
 
 Key directories must be new (0700); private keys use 0600. Generated keys are

@@ -107,19 +107,17 @@ class ReleaseSigningTests(unittest.TestCase):
         release_cli.seal_release(self.crypto, json_bytes(draft), payloads, self.leaf,
                                  self.ca.certificate, release_path)
         now = int(time.time())
-        channel = {'schema': 'emberbsd.channel.v1', 'channel': 'development', 'generation': 2,
+        channel = {'schema': 'emberbsd.channel.v2', 'channel': 'development',
             'issued_at': now, 'expires_at': now + 3600,
             'release': {'id': 'fixture-1', 'path': 'fixture-1/release.p7m'}}
         pointer = repo / 'development.p7m'
         release_cli.seal_channel(self.crypto, json_bytes(channel), repo, self.leaf,
                                  self.ca.certificate, pointer)
-        state = repo / 'accepted.json'
         verified = release_cli.verify_channel(self.crypto, pointer.read_bytes(), repo,
-                                              self.ca.certificate, 'development', state)
+                                              self.ca.certificate, 'development')
         self.assertEqual(verified['release_id'], 'fixture-1')
-        before = state.read_bytes()
-        # A newer signed pointer with a bad release envelope must not advance the floor.
-        channel['generation'] = 3
+        # A signed pointer never permits a corrupted referenced release.
+        channel['expires_at'] += 60
         newer = repo / 'development-new.p7m'
         release_cli.seal_channel(self.crypto, json_bytes(channel), repo, self.leaf,
                                  self.ca.certificate, newer)
@@ -127,23 +125,20 @@ class ReleaseSigningTests(unittest.TestCase):
         release_path.write_bytes(original_envelope + b'corruption')
         with self.assertRaises(SDKError):
             release_cli.verify_channel(self.crypto, newer.read_bytes(), repo,
-                                       self.ca.certificate, 'development', state)
-        self.assertEqual(state.read_bytes(), before)
+                                       self.ca.certificate, 'development')
         release_path.write_bytes(original_envelope)
         # Catalog verification needs only metadata, so clients can fetch a subset.
         (payloads / 'bootstrap.tar').unlink()
         release_cli.verify_channel(self.crypto, pointer.read_bytes(), repo,
-                                   self.ca.certificate, 'development', state)
+                                   self.ca.certificate, 'development')
         (payloads / 'bootstrap.tar').write_bytes(b'corrupted bootstrap fixture')
         with self.assertRaises(SDKError):
             release_cli.verify_release(self.crypto, original_envelope, payloads, self.ca.certificate)
-        self.assertEqual(state.read_bytes(), before)
         (payloads / 'bootstrap.tar').write_bytes(b'release bootstrap fixture')
-        # Offline restore validates the signed release directly and cannot reset channel state.
+        # Offline restore validates the signed release directly.
         restored = release_cli.verify_release(self.crypto, release_path.read_bytes(), payloads,
                                              self.ca.certificate)
         self.assertEqual(restored, verified)
-        self.assertEqual(state.read_bytes(), before)
 
     def test_private_material_permissions_and_no_overwrite(self):
         for identity in (self.ca, self.leaf):

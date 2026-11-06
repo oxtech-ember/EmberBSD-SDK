@@ -411,7 +411,7 @@ def main(argv=None, *, default_config=None):
             for attempt in range(2):
                 with tempfile.TemporaryDirectory(prefix='.metadata-', dir=state) as directory:
                     snapshot = Path(directory) / 'snapshot'
-                    release = fetch_release(crypto, store, trust, state / 'channel.json', snapshot,
+                    release = fetch_release(crypto, store, trust, snapshot,
                                             prefix=config.get('url_prefix', ''))
                     identity = hashlib.sha256((snapshot / 'release.p7m').read_bytes()).hexdigest()
                     if previous == identity:

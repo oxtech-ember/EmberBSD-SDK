@@ -95,10 +95,12 @@ Older catalog versions are refused before package mutation, using
 pkg_tools version comparison. Compatible updates retain the safeguards below;
 an incompatible ABI transition still stops before the first package changes.
 
-The OS and packages have their own versions. The channel's `generation` is
-only persistent replay protection and publisher coordination. It is never an
-installed-system version or an input that invalidates every package.
-The signed format and replay-state schema remain compatible with older clients.
+The OS and each package have their own versions. The catalog is an authenticated
+list, not a version of the installed system. There is no global generation or
+persistent catalog replay state. Changing the catalog does not invalidate
+unchanged installed packages. The current channel uses the single v2 contract;
+old channel formats and command options are not supported. See the
+[coordinated cutover](signed-releases.md#cutover-to-the-single-channel-contract).
 Existing bootstrap archives retain their embedded client. Repackage the zipapp
 from this SDK revision to use these commands with an existing configured prefix;
 this does not rebuild installed packages. Source publication does not update

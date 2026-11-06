@@ -72,7 +72,7 @@ class CatalogReleaseGuard(unittest.TestCase):
         store.put.side_effect = AssertionError("store mutated before catalog validation")
         with self.assertRaises(SDKError):
             publish_release(self.crypto, store, public, bad_path, self.leaf, self.ca.certificate,
-                            expected_generation=1, reuse_current=True)
+                            expected_current='a' * 64, reuse_current=True)
         store.put.assert_not_called()
         store.delete.assert_not_called()
 

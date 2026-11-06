@@ -94,7 +94,7 @@ class ClientInstallTests(install_fixture.InstallTests):
         (self.work / 'state/selection.json').unlink()
         status, output = self.run_client('update')
         self.assertEqual(status, 0, output)
-        self.assertIn('replace 1', output)
+        self.assertIn('replace candidates 1', output)
         self.assertEqual((self.destination / 'payload').read_text(), 'updated data')
         self.assertTrue((self.destination / 'pkgdb/fixture-2.0').is_dir())
         self.assertFalse((self.destination / 'pkgdb/fixture-1.0').exists())

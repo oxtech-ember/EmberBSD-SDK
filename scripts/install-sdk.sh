@@ -60,7 +60,7 @@ fingerprint=$(/usr/bin/openssl x509 -in "$temporary/root.pem" -noout -fingerprin
 /bin/mkdir "$temporary/empty-ca"
 get "$base/current.p7m" "$temporary/current.p7m"
 verify "$temporary/current.p7m" "$temporary/current.json"
-[ "$(field "$temporary/current.json" schema)" = emberbsd.channel.v1 ] || fail "unsupported current format"
+[ "$(field "$temporary/current.json" schema)" = emberbsd.channel.v2 ] || fail "unsupported current format"
 [ "$(field "$temporary/current.json" channel)" = current ] || fail "unexpected channel"
 now=$(/bin/date +%s)
 [ "$(field "$temporary/current.json" issued_at)" -le "$now" ] && \
@@ -94,11 +94,5 @@ check_file "$temporary/sdk.tar.gz" "$(field "$temporary/release.json" "artifacts
 [ -x "$temporary/unpack/ember-sdk/bin/ember-sdk" ] || fail "bootstrap has no SDK launcher"
 /bin/mv "$temporary/unpack/ember-sdk" "$destination"
 "$destination/bin/ember-sdk" --help >/dev/null
-"$destination/bin/python3.15" -I -B -c '
-import pathlib, sys
-sys.path.insert(0, sys.argv[1])
-from emberbsd_sdk.release_catalog import commit_channel
-commit_channel(pathlib.Path(sys.argv[2]).read_bytes(), sys.argv[3], "current")
-' "$destination/share/emberbsd/ember-sdk.pyz" "$temporary/current.json" "$destination/var/sdk/channel.json"
 echo "SDK installed: $destination/bin/ember-sdk"
 echo "List components: $destination/bin/ember-sdk list"
