@@ -18,6 +18,13 @@ PAYLOAD = b'EmberBSD bootstrap retry\x00payload\n'
 
 
 class BootstrapDownloadTest(unittest.TestCase):
+    def test_installer_uses_only_current_channel_contract(self):
+        source = INSTALLER.read_text()
+        self.assertIn('emberbsd.channel.v2', source)
+        for retired in ('emberbsd.channel.v1', 'commit_channel', 'channel.json'):
+            self.assertNotIn(retired, source)
+        subprocess.run(['/bin/sh', '-n', str(INSTALLER)], check=True)
+
     def test_handshake_timeout_retries_and_downloads_exact_bytes(self):
         source = INSTALLER.read_text()
         match = re.search(r'(?ms)^get\(\) \{.*?(?=^field\(\))', source)

@@ -82,15 +82,18 @@ class DeliveryTests(unittest.TestCase):
                      output, reuse_current=snapshot)
         return output
 
+    def current_digest(self):
+        return hashlib.sha256(self.server.objects['/bucket/current.p7m']).hexdigest()
+
     def fetch(self, directory='snapshot'):
         return fetch_release(self.crypto, self.public, self.ca.certificate,
-                             self.work / 'state.json', self.work / directory)
+                             self.work / directory)
 
     def test_publish_fetch_and_same_release_retry(self):
         release = self.release()
         def publish():
             return publish_release(self.crypto, self.store, self.public, release, self.signer,
-                                   self.ca.certificate, expected_generation=0)
+                                   self.ca.certificate, expected_current='absent')
         first = publish()
         pointer = self.server.objects['/bucket/current.p7m']
         self.assertEqual(publish(), first)
@@ -99,7 +102,7 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(fetched['release_id'], 'one')
         self.assertTrue((self.work / 'snapshot/host/pkg_summary.gz').is_file())
         self.assertFalse((self.work / 'snapshot/payload').exists())
-        self.assertTrue((self.work / 'state.json').is_file())
+        self.assertFalse((self.work / 'state.json').exists())
         self.assertIn('immutable', self.server.headers['/bucket/current/host/darwin-arm64/payload']['cache-control'])
         self.assertIn('no-cache', self.server.headers['/bucket/current.p7m']['cache-control'])
 
@@ -116,22 +119,22 @@ class DeliveryTests(unittest.TestCase):
             self.publish(new)
         self.assertEqual(self.server.objects['/bucket/current.p7m'], pointer)
         self.assertEqual(self.server.objects['/bucket/current.p7m'], pointer)
-        self.assertEqual(self.publish(new)['generation'], 2)
+        self.assertNotIn('generation', self.publish(new))
 
     def test_stale_candidate_does_not_replace_a_newer_current(self):
         first = self.release()
         publish_release(self.crypto, self.store, self.public, first, self.signer,
-                        self.ca.certificate, expected_generation=0)
+                        self.ca.certificate, expected_current='absent')
         # Reuse the immutable payload key with identical bytes; this test covers
-        # generation rejection rather than a changed package version.
+        # snapshot rejection rather than a changed package version.
         new = self.release('two', b'payload' * 1000)
         before = dict(self.server.objects)
-        with self.assertRaisesRegex(SDKError, 'expected generation 0, found 1'):
+        with self.assertRaisesRegex(SDKError, 'current changed'):
             publish_release(self.crypto, self.store, self.public, new, self.signer,
-                            self.ca.certificate, expected_generation=0)
+                            self.ca.certificate, expected_current='absent')
         self.assertEqual(self.server.objects, before)
-        self.assertEqual(publish_release(self.crypto, self.store, self.public, new, self.signer,
-                                       self.ca.certificate, expected_generation=1)['generation'], 2)
+        self.assertNotIn('generation', publish_release(self.crypto, self.store, self.public, new, self.signer,
+                                       self.ca.certificate, expected_current=self.current_digest()))
 
     def test_sparse_publish_reuses_exact_current_without_reading_payloads(self):
         first = self.release()
@@ -144,11 +147,11 @@ class DeliveryTests(unittest.TestCase):
             return original_verify(key, *args, **kwargs)
         with patch.object(self.public, 'verify', side_effect=track):
             result = publish_release(self.crypto, self.store, self.public, sparse, self.signer,
-                                     self.ca.certificate, expected_generation=1, reuse_current=True)
-        self.assertEqual(result['generation'], 2)
+                                     self.ca.certificate, expected_current=self.current_digest(), reuse_current=True)
+        self.assertNotIn('generation', result)
         self.assertNotIn('current/host/darwin-arm64/payload', verified)
         self.assertEqual(publish_release(self.crypto, self.store, self.public, sparse, self.signer,
-                                         self.ca.certificate, expected_generation=2,
+                                         self.ca.certificate, expected_current=self.current_digest(),
                                          reuse_current=True), result)
         self.assertEqual(self.public.head('current/host/darwin-arm64/payload')['content-length'],
                          str(len(b'payload' * 1000)))
@@ -161,8 +164,9 @@ class DeliveryTests(unittest.TestCase):
                                          extra=('newpkg-1.0.tgz', b'signed package fixture'))
         return sparse
 
-    def test_sparse_retry_same_generation_after_current_verify_failure(self):
+    def test_sparse_retry_same_snapshot_after_current_verify_failure(self):
         sparse = self._sparse_addition('current-verify-retry')
+        expected = self.current_digest()
         self.server.objects['/bucket/current/obsolete.bin'] = b'obsolete'
         original_verify = self.public.verify
         failed = False
@@ -178,50 +182,51 @@ class DeliveryTests(unittest.TestCase):
                 patch.object(self.public, 'verify', side_effect=fail_once):
             with self.assertRaisesRegex(SDKError, 'injected current verification failure'):
                 publish_release(self.crypto, self.store, self.public, sparse, self.signer,
-                                self.ca.certificate, expected_generation=1, reuse_current=True)
+                                self.ca.certificate, expected_current=expected, reuse_current=True)
         committed = self.server.objects['/bucket/current.p7m']
         with patch.object(self.crypto, 'verify_package'):
             retried = publish_release(self.crypto, self.store, self.public, sparse, self.signer,
-                                      self.ca.certificate, expected_generation=1, reuse_current=True)
-        self.assertEqual(retried['generation'], 2)
+                                      self.ca.certificate, expected_current=expected, reuse_current=True)
+        self.assertNotIn('generation', retried)
         self.assertEqual(self.server.objects['/bucket/current.p7m'], committed)
         self.assertNotIn('/bucket/current/obsolete.bin', self.server.objects)
 
-    def test_sparse_retry_same_generation_after_cleanup_failure(self):
+    def test_sparse_retry_same_snapshot_after_cleanup_failure(self):
         sparse = self._sparse_addition('current-cleanup-retry')
+        expected = self.current_digest()
         self.server.objects['/bucket/current/obsolete.bin'] = b'obsolete'
         with patch.object(release_delivery, '_clean_current',
                           side_effect=SDKError('injected cleanup failure')), \
                 patch.object(self.crypto, 'verify_package'):
             with self.assertRaisesRegex(SDKError, 'injected cleanup failure'):
                 publish_release(self.crypto, self.store, self.public, sparse, self.signer,
-                                self.ca.certificate, expected_generation=1, reuse_current=True)
+                                self.ca.certificate, expected_current=expected, reuse_current=True)
         committed = self.server.objects['/bucket/current.p7m']
         with patch.object(self.crypto, 'verify_package'):
             retried = publish_release(self.crypto, self.store, self.public, sparse, self.signer,
-                                      self.ca.certificate, expected_generation=1, reuse_current=True)
-        self.assertEqual(retried['generation'], 2)
+                                      self.ca.certificate, expected_current=expected, reuse_current=True)
+        self.assertNotIn('generation', retried)
         self.assertEqual(self.server.objects['/bucket/current.p7m'], committed)
         self.assertNotIn('/bucket/current/obsolete.bin', self.server.objects)
 
-    def test_identical_release_refresh_does_not_bypass_generation_check(self):
+    def test_identical_release_refresh_does_not_bypass_snapshot_check(self):
         release = self.release()
         self.publish(release)
         before = dict(self.server.objects)
-        with self.assertRaisesRegex(SDKError, 'expected generation 0, found 1'):
+        with self.assertRaisesRegex(SDKError, 'current changed'):
             publish_release(self.crypto, self.store, self.public, release, self.signer,
-                            self.ca.certificate, expected_generation=0, refresh=True)
+                            self.ca.certificate, expected_current='absent', refresh=True)
         self.assertEqual(self.server.objects, before)
 
-    def test_identical_expired_release_does_not_bypass_generation_check(self):
+    def test_identical_expired_release_does_not_bypass_snapshot_check(self):
         release = self.release()
         with patch.object(release_delivery.time, 'time', return_value=100000):
             publish_release(self.crypto, self.store, self.public, release, self.signer,
-                            self.ca.certificate, ttl=1, expected_generation=0)
+                            self.ca.certificate, ttl=1, expected_current='absent')
         before = dict(self.server.objects)
-        with self.assertRaisesRegex(SDKError, 'expected generation 0, found 1'):
+        with self.assertRaisesRegex(SDKError, 'current changed'):
             publish_release(self.crypto, self.store, self.public, release, self.signer,
-                            self.ca.certificate, expected_generation=0)
+                            self.ca.certificate, expected_current='absent')
         self.assertEqual(self.server.objects, before)
 
     def test_identical_retry_expiring_during_publish_does_not_advance_pointer(self):
@@ -231,7 +236,7 @@ class DeliveryTests(unittest.TestCase):
             first = publish_release(self.crypto, self.store, self.public, release, self.signer,
                                     self.ca.certificate, ttl=60)
         pointer = self.server.objects['/bucket/current.p7m']
-        self.assertEqual(first['generation'], 1)
+        self.assertNotIn('generation', first)
 
         reads = 0
         def advancing_clock():
@@ -248,9 +253,9 @@ class DeliveryTests(unittest.TestCase):
 
         with patch.object(release_delivery, 'time', SimpleNamespace(time=advancing_clock)), \
                 patch.object(self.store, 'put', side_effect=count_current_put):
-            with self.assertRaisesRegex(SDKError, 'expected generation 0, found 1'):
+            with self.assertRaisesRegex(SDKError, 'current changed'):
                 publish_release(self.crypto, self.store, self.public, release, self.signer,
-                                self.ca.certificate, expected_generation=0)
+                                self.ca.certificate, expected_current='absent')
 
         self.assertGreaterEqual(reads, 3)
         self.assertEqual(current_puts, [])
@@ -267,31 +272,32 @@ class DeliveryTests(unittest.TestCase):
                                                 self.ca.certificate))
         with self.assertRaisesRegex(SDKError, 'not an exact current match'):
             publish_release(self.crypto, self.store, self.public, sparse, self.signer,
-                            self.ca.certificate, expected_generation=1, reuse_current=True)
+                            self.ca.certificate, expected_current=self.current_digest(), reuse_current=True)
 
-    def test_sparse_publish_requires_generation_and_existing_object(self):
+    def test_sparse_publish_requires_snapshot_and_existing_object(self):
         first = self.release()
         self.publish(first)
         sparse = self.sparse_release('sparse', first)
-        with self.assertRaisesRegex(SDKError, 'requires --expected-generation'):
+        with self.assertRaisesRegex(SDKError, 'requires --expected-current'):
             publish_release(self.crypto, self.store, self.public, sparse, self.signer,
                             self.ca.certificate, reuse_current=True)
         self.server.objects.pop('/bucket/current/host/darwin-arm64/payload')
         with self.assertRaisesRegex(SDKError, 'HTTP 404'):
             publish_release(self.crypto, self.store, self.public, sparse, self.signer,
-                            self.ca.certificate, expected_generation=1, reuse_current=True)
+                            self.ca.certificate, expected_current=self.current_digest(), reuse_current=True)
 
-    def test_sparse_publish_refuses_stale_generation_before_reuse(self):
+    def test_sparse_publish_refuses_stale_snapshot_before_reuse(self):
         first = self.release()
         publish_release(self.crypto, self.store, self.public, first, self.signer,
-                        self.ca.certificate, expected_generation=0)
+                        self.ca.certificate, expected_current='absent')
         sparse = self.sparse_release('sparse-stale', first)
+        expected = self.current_digest()
         publish_release(self.crypto, self.store, self.public, self.release('intervening'),
-                        self.signer, self.ca.certificate, expected_generation=1)
+                        self.signer, self.ca.certificate, expected_current=self.current_digest())
         before = dict(self.server.objects)
-        with self.assertRaisesRegex(SDKError, 'expected generation 1, found 2'):
+        with self.assertRaisesRegex(SDKError, 'current changed'):
             publish_release(self.crypto, self.store, self.public, sparse, self.signer,
-                            self.ca.certificate, expected_generation=1, reuse_current=True)
+                            self.ca.certificate, expected_current=expected, reuse_current=True)
         self.assertEqual(self.server.objects, before)
 
     def test_sparse_publish_verifies_new_local_package(self):
@@ -301,7 +307,7 @@ class DeliveryTests(unittest.TestCase):
             sparse = self.sparse_release('sparse-package', first,
                                          extra=('newpkg-1.0.tgz', b'signed package fixture'))
             publish_release(self.crypto, self.store, self.public, sparse, self.signer,
-                            self.ca.certificate, expected_generation=1, reuse_current=True)
+                            self.ca.certificate, expected_current=self.current_digest(), reuse_current=True)
         verifier.assert_called()
 
     def test_sparse_publish_refuses_new_payload_disappearing_after_preflight(self):
@@ -323,7 +329,7 @@ class DeliveryTests(unittest.TestCase):
                 patch.object(self.crypto, 'verify_package'):
             with self.assertRaisesRegex(SDKError, 'disappeared before upload: new-package'):
                 publish_release(self.crypto, self.store, self.public, sparse, self.signer,
-                                self.ca.certificate, expected_generation=1, reuse_current=True)
+                                self.ca.certificate, expected_current=self.current_digest(), reuse_current=True)
         self.assertEqual(self.server.objects['/bucket/current.p7m'], pointer)
 
     def test_release_identity_cannot_change(self):
@@ -361,22 +367,23 @@ class DeliveryTests(unittest.TestCase):
         self.assertFalse((self.work / 'state.json').exists())
         self.assertFalse((self.work / 'snapshot').exists())
 
-    def test_corrupt_manifest_and_old_generation_rejected(self):
+    def test_fetch_has_no_persistent_floor_but_rejects_corrupt_manifest(self):
         pointer = self.publish(self.release())
-        old = self.server.objects['/bucket/current.p7m']
+        original = dict(self.server.objects)
         self.fetch()
-        self.publish(self.release('two'))
+        publish_release(self.crypto, self.store, self.public, self.release('two'),
+                        self.signer, self.ca.certificate, expected_current=self.current_digest())
         self.fetch('second-snapshot')
-        state = (self.work / 'state.json').read_bytes()
-        self.server.objects['/bucket/current.p7m'] = old
-        with self.assertRaises(SDKError):
-            self.fetch('replayed')
-        self.assertEqual((self.work / 'state.json').read_bytes(), state)
-
+        # Authentic, unexpired old data is allowed; freshness comes from the
+        # selected HTTPS repository, not a local global sequence counter.
+        self.server.objects.clear()
+        self.server.objects.update(original)
+        self.fetch('older-snapshot')
+        self.assertFalse((self.work / 'state.json').exists())
         self.server.objects['/bucket/' + pointer['release']['path']] = b'invalid envelope'
         with self.assertRaises(SDKError):
             self.fetch('corrupted')
-        self.assertEqual((self.work / 'state.json').read_bytes(), state)
+        self.assertFalse((self.work / 'corrupted').exists())
 
     def test_indexes_are_streamed_without_cms_envelope_size_limit(self):
         size = 17 * 1024 * 1024
@@ -396,7 +403,7 @@ class DeliveryTests(unittest.TestCase):
         with patch('emberbsd_sdk.release_delivery.time.time', side_effect=lambda: clock[0]), \
                 patch.object(self.public, 'verify', side_effect=advance):
             second = self.publish(release)
-        self.assertEqual(second['generation'], 2)
+        self.assertNotIn('generation', second)
         self.assertEqual(second['issued_at'], clock[0])
 
     def test_expired_previous_signer_has_explicit_publisher_recovery(self):
@@ -414,7 +421,7 @@ class DeliveryTests(unittest.TestCase):
                 self.publish(release)
             second = publish_release(self.crypto, self.store, self.public, release, self.signer,
                 self.ca.certificate, previous_channel_time=first['issued_at'])
-        self.assertEqual(second['generation'], 2)
+        self.assertNotIn('generation', second)
 
 
 class PublicationRetryTests(unittest.TestCase):
@@ -444,9 +451,36 @@ class PublicationRetryTests(unittest.TestCase):
         self.signer = object()
         self.ca = SimpleNamespace(certificate=object())
 
-    def publish(self, release, generation=0, **kwargs):
+    current_digest = DeliveryTests.current_digest
+
+    def publish(self, release, expected_current='absent', **kwargs):
         return publish_release(self.crypto, self.store, self.public, release, self.signer,
-                               self.ca.certificate, expected_generation=generation, **kwargs)
+                               self.ca.certificate, expected_current=expected_current, **kwargs)
+
+    fetch = DeliveryTests.fetch
+    test_fetch_has_no_persistent_floor_but_rejects_corrupt_manifest = (
+        DeliveryTests.test_fetch_has_no_persistent_floor_but_rejects_corrupt_manifest)
+
+    def test_stale_digest_rejects_a_different_candidate_before_upload(self):
+        first = self.release()
+        self.publish(first)
+        expected = self.current_digest()
+        self.publish(self.release('intervening'), expected)
+        candidate = self.release('stale-candidate')
+        before = dict(self.server.objects)
+        with patch.object(release_delivery, '_immutable') as upload:
+            with self.assertRaisesRegex(SDKError, 'current changed'):
+                self.publish(candidate, expected)
+        upload.assert_not_called()
+        self.assertEqual(self.server.objects, before)
+
+    def test_invalid_expected_current_rejected_before_io(self):
+        release = self.release()
+        for invalid in (0, True, '', 'A' * 64, 'a' * 63, 'unknown'):
+            with self.subTest(expected=invalid), patch.object(self.store, 'put') as put:
+                with self.assertRaisesRegex(SDKError, 'expected current SHA256'):
+                    self.publish(release, invalid)
+                put.assert_not_called()
 
     def test_exact_retry_keeps_pointer_and_does_not_sign(self):
         release = self.release()
@@ -468,10 +502,10 @@ class PublicationRetryTests(unittest.TestCase):
             with self.assertRaisesRegex(SDKError, 'lost switch acknowledgement'):
                 self.publish(release)
         before = dict(self.server.objects)
-        self.assertEqual(self.publish(release)['generation'], 1)
+        self.assertNotIn('generation', self.publish(release))
         self.assertEqual(self.server.objects, before)
 
-    def test_retry_after_upload_failure_keeps_original_generation_expectation(self):
+    def test_retry_after_upload_failure_keeps_original_snapshot_expectation(self):
         release = self.release()
         put = self.store.put
         def fail_index(key, *args, **kwargs):
@@ -482,7 +516,7 @@ class PublicationRetryTests(unittest.TestCase):
             with self.assertRaisesRegex(SDKError, 'index upload interrupted'):
                 self.publish(release)
         self.assertNotIn('/bucket/current.p7m', self.server.objects)
-        self.assertEqual(self.publish(release)['generation'], 1)
+        self.assertNotIn('generation', self.publish(release))
 
     def test_retry_after_public_channel_verification_failure(self):
         release = self.release()
@@ -495,13 +529,14 @@ class PublicationRetryTests(unittest.TestCase):
             with self.assertRaisesRegex(SDKError, 'verification interrupted'):
                 self.publish(release)
         pointer = self.server.objects['/bucket/current.p7m']
-        self.assertEqual(self.publish(release)['generation'], 1)
+        self.assertNotIn('generation', self.publish(release))
         self.assertEqual(self.server.objects['/bucket/current.p7m'], pointer)
 
     def test_sparse_retry_finishes_interrupted_cleanup(self):
         first = self.release()
         self.publish(first)
         sparse = self.sparse_release('addition', first)
+        expected = self.current_digest()
         obsolete = ('/bucket/current/abandoned-a', '/bucket/current/abandoned-b')
         for key in obsolete:
             self.server.objects[key] = b'abandoned upload'
@@ -512,12 +547,12 @@ class PublicationRetryTests(unittest.TestCase):
             return delete(key)
         with patch.object(self.store, 'delete', side_effect=interrupt_cleanup):
             with self.assertRaisesRegex(SDKError, 'cleanup interrupted'):
-                self.publish(sparse, 1, reuse_current=True)
+                self.publish(sparse, expected, reuse_current=True)
         self.assertNotIn(obsolete[0], self.server.objects)
         self.assertIn(obsolete[1], self.server.objects)
         pointer = self.server.objects['/bucket/current.p7m']
         self.crypto.sign_cms.reset_mock()
-        self.assertEqual(self.publish(sparse, 1, reuse_current=True)['generation'], 2)
+        self.assertNotIn('generation', self.publish(sparse, expected, reuse_current=True))
         self.assertEqual(self.server.objects['/bucket/current.p7m'], pointer)
         for key in obsolete:
             self.assertNotIn(key, self.server.objects)
@@ -527,7 +562,7 @@ class PublicationRetryTests(unittest.TestCase):
         self.publish(self.release())
         other = self.release('other')
         before = dict(self.server.objects)
-        with self.assertRaisesRegex(SDKError, 'expected generation 0, found 1'):
+        with self.assertRaisesRegex(SDKError, 'current changed'):
             self.publish(other)
         self.assertEqual(self.server.objects, before)
 
@@ -560,26 +595,27 @@ class PublicationRetryTests(unittest.TestCase):
                 upload.assert_not_called()
                 self.assertEqual(self.server.objects, before)
 
-    def test_future_generation_and_refresh_still_require_current_generation(self):
+    def test_refresh_requires_current_hash(self):
         release = self.release()
         self.publish(release)
         before = dict(self.server.objects)
-        for generation, refresh in ((2, False), (0, True)):
-            with self.subTest(generation=generation, refresh=refresh):
+        expected = self.current_digest()
+        for wrong in ('f' * 64, 'absent'):
+            with self.subTest(expected=wrong):
                 with self.assertRaisesRegex(SDKError, 'current changed'):
-                    self.publish(release, generation, refresh=refresh)
+                    self.publish(release, wrong, refresh=True)
                 self.assertEqual(self.server.objects, before)
-        self.assertEqual(self.publish(release, 1, refresh=True)['generation'], 2)
+        self.assertNotIn('generation', self.publish(release, expected, refresh=True))
 
-    def test_expired_pointer_requires_a_new_generation_check(self):
+    def test_expired_pointer_requires_a_new_snapshot_check(self):
         release = self.release()
         first = self.publish(release, ttl=10)
         with patch.object(release_delivery.time, 'time', return_value=first['expires_at']):
             with self.assertRaisesRegex(SDKError, 'current changed'):
                 self.publish(release)
-            self.assertEqual(self.publish(release, 1)['generation'], 2)
+            self.assertNotIn('generation', self.publish(release, self.current_digest()))
 
-    def test_pointer_expiring_during_retry_does_not_advance_generation(self):
+    def test_pointer_expiring_during_retry_does_not_advance_snapshot(self):
         release = self.release()
         first = self.publish(release, ttl=10)
         now = [first['issued_at']]
@@ -590,7 +626,7 @@ class PublicationRetryTests(unittest.TestCase):
         before = dict(self.server.objects)
         with patch.object(release_delivery.time, 'time', side_effect=lambda: now[0]), \
                 patch.object(self.public, 'verify', side_effect=expire):
-            with self.assertRaisesRegex(SDKError, 'expected generation 0, found 1; current expired during retry'):
+            with self.assertRaisesRegex(SDKError, 'current changed: .*current expired during retry'):
                 self.publish(release)
         self.assertEqual(self.server.objects, before)
 

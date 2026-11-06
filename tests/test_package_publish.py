@@ -34,7 +34,7 @@ class PackagePublishTests(BinaryReleaseFixture):
         self.compose(output=release_dir)
         pointer = publish_release(self.crypto, self.store, self.public,
             release_dir / 'release.p7m', self.leaf, self.ca.certificate)
-        self.assertEqual(pointer['generation'], 1)
+        self.assertNotIn('generation', pointer)
         return repo
 
     def prepare_addition(self, *, root='net/new', release_id='package-update', created_at=2):
@@ -67,7 +67,7 @@ class PackagePublishTests(BinaryReleaseFixture):
         with patch.object(self.public, 'read', side_effect=track_read):
             result = self.update(workdir)
 
-        self.assertEqual(result['channel']['generation'], 2)
+        self.assertNotIn('generation', result['channel'])
         self.assertEqual(result['statistics']['added'], 1)
         self.assertEqual(result['statistics']['replaced'], 0)
         self.assertEqual(result['statistics']['uploaded_packages'], 1)
@@ -109,7 +109,7 @@ class PackagePublishTests(BinaryReleaseFixture):
         self.compose(output=baseline)
         initial = publish_release(self.crypto, self.store, self.public, baseline / 'release.p7m',
                                   self.leaf, self.ca.certificate)
-        self.assertEqual(initial['generation'], 1)
+        self.assertNotIn('generation', initial)
         pointer = self.server.objects['/bucket/current.p7m']
 
         value = graph()
@@ -157,13 +157,13 @@ class PackagePublishTests(BinaryReleaseFixture):
                     self.update(workdir)
             calls = (package_sign.call_count, cms_sign.call_count)
             prepared = (workdir / 'release/release.p7m').read_bytes()
-            self.assertEqual(json.loads((workdir / 'base.json').read_text())['generation'], 1)
+            self.assertTrue((workdir / 'snapshot/current.p7m').is_file())
 
             result = self.update(workdir)
 
             self.assertEqual((package_sign.call_count, cms_sign.call_count), calls)
             self.assertEqual((workdir / 'release/release.p7m').read_bytes(), prepared)
-        self.assertEqual(result['channel']['generation'], 2)
+        self.assertNotIn('generation', result['channel'])
 
     def test_partial_current_verify_failure_retries_prepared_signature(self):
         self._run_partial_retry('verify')
@@ -175,7 +175,7 @@ class PackagePublishTests(BinaryReleaseFixture):
         repo, first_archive, workdir = self.prepare_addition(release_id='first-update')
         first_archive_bytes = first_archive.read_bytes()
         first = self.update(workdir)
-        self.assertEqual(first['channel']['generation'], 2)
+        self.assertNotIn('generation', first['channel'])
         old_snapshot_marker = workdir / 'snapshot/obsolete-marker'
         old_release_marker = workdir / 'release/obsolete-marker'
         old_snapshot_marker.write_bytes(b'owned snapshot output')
@@ -194,7 +194,7 @@ class PackagePublishTests(BinaryReleaseFixture):
 
         second = self.update(workdir)
 
-        self.assertEqual(second['channel']['generation'], 3)
+        self.assertNotIn('generation', second['channel'])
         self.assertFalse(old_snapshot_marker.exists())
         self.assertFalse(old_release_marker.exists())
         self.assertEqual(first_archive.read_bytes(), first_archive_bytes)
@@ -216,7 +216,7 @@ class PackagePublishTests(BinaryReleaseFixture):
         self.spec.update(release_id='renamed-package', created_at=2)
         result = self.update(self.work / 'rename-work')
 
-        self.assertEqual(result['channel']['generation'], 2)
+        self.assertNotIn('generation', result['channel'])
         self.assertEqual(result['statistics']['added'], 0)
         self.assertEqual(result['statistics']['replaced'], 1)
         self.assertEqual(result['statistics']['uploaded_packages'], 1)
@@ -234,7 +234,7 @@ class PackagePublishTests(BinaryReleaseFixture):
     def test_already_current_packages_are_noop_without_signing_or_pointer_put(self):
         _, _, workdir = self.prepare_addition(release_id='already-current')
         first = self.update(workdir)
-        self.assertEqual(first['channel']['generation'], 2)
+        self.assertNotIn('generation', first['channel'])
         pointer = self.server.objects['/bucket/current.p7m']
         signed_input = workdir / 'release/arm64/new-1.0.tgz'
 
@@ -254,7 +254,7 @@ class PackagePublishTests(BinaryReleaseFixture):
                 patch.object(self.store, 'put', side_effect=count_current_put):
             result = self.update(noop_workdir)
 
-        self.assertEqual(result['channel']['generation'], 2)
+        self.assertNotIn('generation', result['channel'])
         current = parse_channel(self.crypto.verify_cms(pointer, self.ca.certificate), 'current')
         self.assertEqual(result['channel'], current)
         self.assertEqual(result['statistics']['added'], 0)

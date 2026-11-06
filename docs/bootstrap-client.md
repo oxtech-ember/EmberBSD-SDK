@@ -25,7 +25,7 @@ failed transfer leaves no installed prefix. The first RSA-3072/SHA256 certificat
 profile is explicit; changing that profile requires updating this installer. No Python,
 Homebrew, compiler or SDK is required beforehand. Further operations use the
 installed Python/OpenSSL and the [normal client](sdk-client.md), including its
-bounded shared cache and persistent channel generation.
+bounded shared cache and authenticated current metadata.
 
 `sdk-source-tools` adds digest, awk, sed, patch and the Ports mktools/cwrappers
 helpers, reusing fetch and OpenSSL when present. Its roots live in Ports, without

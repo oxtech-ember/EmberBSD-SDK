@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-"""Strict release metadata and persistent channel rollback protection.
+"""Strict release metadata and channel validity checks.
 
 Parsing checks structure and consistency, not authenticity. Callers must verify
 the CMS signature of the exact input bytes before trusting these records or
-calling commit_channel. Artifact roots and state directories are owner-controlled.
+using these records. Artifact roots are owner-controlled.
 """
 
 import hashlib
@@ -14,15 +14,13 @@ import re
 import time
 
 from .errors import SDKError
-from .jsonio import MAX_JSON, loads_json, read_json, write_json
-from .paths import (canonical_existing, entry, open_regular, path_string,
+from .jsonio import MAX_JSON, loads_json
+from .paths import (canonical_existing, open_regular,
                     real_directory, regular_file, verify_stable)
-from .process import ContextLocks
 
 
 RELEASE_SCHEMA = 'emberbsd.release.v1'
-CHANNEL_SCHEMA = 'emberbsd.channel.v1'
-STATE_SCHEMA = 'emberbsd.channel-state.v1'
+CHANNEL_SCHEMA = 'emberbsd.channel.v2'
 MAX_ENVELOPE = 16 * 1024 * 1024
 _SLUG = re.compile(r'[a-z0-9][a-z0-9._-]*\Z')
 _SEGMENT = re.compile(r'[A-Za-z0-9._+-]+\Z')
@@ -163,14 +161,14 @@ def parse_release(data: bytes) -> dict:
 def parse_channel(data: bytes, expected_name: str, now: int | None = None) -> dict:
     """Validate a channel against the caller-selected name and local UTC clock."""
     value = _input(data)
-    _object(value, ('schema', 'channel', 'generation', 'issued_at', 'expires_at', 'release'), 'channel')
+    _object(value, ('schema', 'channel', 'issued_at', 'expires_at', 'release'), 'channel')
     if value['schema'] != CHANNEL_SCHEMA:
         raise SDKError('unsupported channel schema')
     _pattern(expected_name, _SLUG, 'expected channel name')
     _pattern(value['channel'], _SLUG, 'channel name')
     if value['channel'] != expected_name:
         raise SDKError('channel name differs from the selected channel')
-    for name in ('generation', 'issued_at', 'expires_at'):
+    for name in ('issued_at', 'expires_at'):
         _integer(value[name], 'channel ' + name)
     _reference(value['release'], ('id', 'path', 'size', 'sha256'), 'channel release', envelope=True)
     if not value['release']['path'].endswith('/release.p7m'):
@@ -233,45 +231,3 @@ def verify_payloads(release: dict, root) -> None:
         local_artifact(root, artifact['path'])
         if actual != {key: artifact[key] for key in ('size', 'sha256')}:
             raise SDKError(f'artifact size or SHA256 mismatch: {artifact["id"]}')
-
-
-def commit_channel(data: bytes, state_path, expected_name: str, now: int | None = None) -> dict:
-    """Atomically accept a channel after its release metadata is authenticated.
-
-    The caller MUST authenticate these exact bytes and the referenced release
-    metadata before calling. Installers verify their selected payloads separately.
-    This function does not perform cryptography. The
-    existing state directory must be owner-controlled; never remove its lock
-    files. Missing state is first use, while invalid existing state fails closed.
-    """
-    try:
-        logical = path_string(state_path)
-        parent = canonical_existing(os.path.dirname(logical))
-        real_directory(parent)
-        path = os.path.join(parent, os.path.basename(logical))
-        # A directory-wide key also serializes case aliases on insensitive FSs.
-        with ContextLocks(['release-channel-state'], parent, wait=True):
-            channel = parse_channel(data, expected_name, now)
-            digest = hashlib.sha256(data).hexdigest()
-            if entry(path) is not None:
-                previous = read_json(path)
-                _object(previous, ('schema', 'channel', 'generation', 'channel_sha256'), 'channel state')
-                if previous['schema'] != STATE_SCHEMA:
-                    raise SDKError('unsupported channel state schema')
-                _pattern(previous['channel'], _SLUG, 'state channel')
-                _integer(previous['generation'], 'state generation')
-                _pattern(previous['channel_sha256'], _SHA256, 'state channel_sha256')
-                if previous['channel'] != expected_name:
-                    raise SDKError('channel state belongs to a different channel')
-                if channel['generation'] < previous['generation']:
-                    raise SDKError('channel rollback: generation is below the accepted floor')
-                if channel['generation'] == previous['generation']:
-                    if digest != previous['channel_sha256']:
-                        raise SDKError('channel equivocation: same generation has different bytes')
-                    return channel
-            write_json(path, {'schema': STATE_SCHEMA, 'channel': expected_name,
-                              'generation': channel['generation'], 'channel_sha256': digest},
-                       exclusive=False, mode=0o600)
-            return channel
-    except OSError as exc:
-        raise SDKError(f'cannot commit channel state: {exc}') from exc

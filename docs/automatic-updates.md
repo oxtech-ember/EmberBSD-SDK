@@ -34,15 +34,16 @@ Coordinated ABI transitions and sysroot replacement retain their existing refusa
 
 ## Metadata and component identity
 
-Every attempt uses the existing signed channel and persistent replay floor.
-An unchanged generation does not suppress a check: the local installed set can
-change while the repository stays unchanged. A changed generation does not
-invalidate installed packages or their SHA256 archive cache.
+Every attempt reads the signed current catalog and the local installed set.
+An unchanged catalog does not suppress a check: the local installed set can
+change independently. Adding another published package does not invalidate
+installed packages or their SHA256 archive cache.
 
-Generation remains only the metadata rollback/equivocation floor and publisher
-coordination token. A hash proves byte identity, not ordering or freshness.
-Expiry bounds replay in time; it does not replace the accepted monotonic floor.
-The strict v1 channel/state format and existing clients remain compatible.
+There is no catalog generation or persistent replay floor. The client verifies
+metadata signatures and validity, then compares individual package versions.
+It refuses package downgrades. Metadata expiry bounds freshness; it does not
+prove that an unexpired catalog is the newest publication. See the
+[signed channel contract](signed-releases.md#channel-emberbsdchannelv2).
 
 Within one operation the client reuses the authenticated release returned by
 `fetch_release`. It keeps catalog hash checks before parsing and package checks

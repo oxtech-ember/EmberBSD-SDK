@@ -179,7 +179,7 @@ class AutomaticClientTests(unittest.TestCase):
         self.inventory([dict(pkgname='lib-1', root='devel/lib@native')])
         def watch(update, interval):
             self.assertEqual(update(), 0)
-            self.release['release_id'] = 'new-catalog-generation'
+            self.release['release_id'] = 'new-catalog-content'
             self.catalogs[0]['sets']['task'].append('devel/lib@native')
             self.assertEqual(update(), 0)
             return 0

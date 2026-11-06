@@ -40,9 +40,9 @@ There are no dated release directories or separate S3 content-addressed package
 pool. Local client caches can use SHA256 to avoid repeated downloads across
 projects; that does not require keeping historical server versions.
 
-The CMS pointer retains the shared channel schema with the fixed name `current`,
-a generation, expiry and exact manifest reference. The manifest keeps producer
-paths for local files; `artifact_key()` maps payloads to the platform directories
+The CMS pointer uses channel schema v2 with the fixed name `current`,
+issuance/expiry times and an exact manifest reference, without a generation.
+The manifest keeps producer paths for local files; `artifact_key()` maps payloads to the platform directories
 above. Repository IDs in metadata remain those selected by the producer.
 
 ## Publish
@@ -61,13 +61,16 @@ EMBERBSD_S3_SECRET_KEY
 python3 scripts/s3-release.py --host-prefix /work/host-pkg-llvm publish \
   /work/prepared-release/release.p7m --url https://emberbsd-pkg.oxteam.me \
   --trust-root trust/emberbsd-release-root.pem \
-  --signer-directory /private/release-signer
+  --signer-directory /private/release-signer --expected-current absent
 ```
+
+The example creates an initially empty repository. For an existing current,
+use the verified snapshot hash as described below.
 
 The publisher verifies local signatures and hashes, uploads missing packages
 and new metadata, verifies new objects through public HTTPS, conditionally
 switches `current.p7m`, then removes superseded files. Repeating the same
-publication retains the generation and finishes any interrupted cleanup.
+publication retains the current pointer and finishes any interrupted cleanup.
 Keep the exact signed release envelope and archives after a failed attempt;
 resealing equivalent metadata creates different bytes and is not recovery of
 that publication. A transport, verification or cleanup failure alone requires
@@ -80,14 +83,15 @@ merged inventory; every new or changed artifact must be local, and package
 archives are verified with pkg_tools before signing. Indexes remain local so
 the publisher can prepare the new catalog beside the release.
 
-Publish that sparse release with both `--reuse-current` and the generation from
-the snapshot:
+Publish that sparse release with both `--reuse-current` and the SHA256 of the
+verified snapshot's `current.p7m` bytes:
 
 ```sh
+CURRENT_SHA256=$(python3 -c 'import hashlib, pathlib; print(hashlib.sha256(pathlib.Path("/work/catalog/current.p7m").read_bytes()).hexdigest())')
 python3 scripts/s3-release.py --host-prefix /work/host-pkg-llvm publish \
   /work/prepared-release/release.p7m --url https://emberbsd-pkg.oxteam.me \
   --trust-root trust/emberbsd-release-root.pem --signer-directory /private/release-signer \
-  --expected-generation 12 --reuse-current
+  --expected-current "$CURRENT_SHA256" --reuse-current
 ```
 
 Under the publisher lock, the tool authenticates current and its release
@@ -100,21 +104,23 @@ size. Its body is not downloaded or rehashed: the authenticated current record
 is the reuse evidence, keeping large unchanged archives off the publisher's
 disk and avoiding their transfer. Consumers verify downloaded bytes against the
 signed SHA before installation. A missing reused object stops publication;
-merge the latest snapshot and retry with its generation.
+merge the latest snapshot and retry with its current-envelope SHA256.
 
 When extending an existing catalog, preserve its current packages and sets in
-the candidate and pass `--expected-generation N` from the verified snapshot.
-Under the publisher lock, a changed generation stops a different candidate
-before any artifact upload or cleanup; merge the newer catalog and retry.
-There is one recovery exception: an older expected generation may finish the
-exact authenticated release already selected by an unexpired current pointer.
-Its release ID, path, size and envelope SHA256 must all match. It verifies the
-objects and finishes cleanup without signing or advancing the pointer. This
-covers a lost switch acknowledgement or a failure after switching. A future
-expected generation, `--refresh`, or an expired pointer still requires the
-actual current generation; expiry during verification also stops a stale retry.
-Use `0` for an initially empty repository and retain it for recovery of that
-same publication. The option does not merge catalogs.
+the candidate and pass `--expected-current SHA256` from the verified snapshot.
+This is a compare-and-swap precondition for that publication, not a package or
+catalog version. Under the publisher lock, a changed current envelope stops a
+different candidate before any upload or cleanup; merge the new catalog and retry.
+
+An interrupted publication may finish the exact authenticated release already
+selected by an unexpired current pointer. Its release ID, path, size and envelope
+SHA256 must all match. Recovery verifies objects and finishes cleanup without
+signing or switching the pointer again. A refresh or an expired pointer requires
+the actual current hash; expiry during verification also stops a stale retry.
+Use `--expected-current absent` for an initially empty repository and retain that
+precondition when recovering the same publication. The option does not merge
+catalogs. `publish-additions.py` obtains the hash from its authenticated snapshot
+automatically; users never maintain a counter.
 
 A create-only `.publisher-lock` serializes publication **and cleanup** across
 publishers. Normal exit removes it. After a process crash, inspect the publisher
@@ -187,9 +193,9 @@ selection returns current without signing, switching its pointer or cleanup.
 
 Keep the private workdir outside source packages and graphs. After an interrupted
 operation, rerun the same command: a prepared signed batch is frozen and resumes
-with its original expected generation. Do not edit that batch to add more packages;
+with its original expected-current hash. Do not edit that batch to add more packages;
 finish it, then use a new `release_id`. If another publisher changed current,
-the generation guard refuses to overwrite it; coordinate the writer before
+the current-hash precondition refuses to overwrite it; coordinate the writer before
 starting. This tool does not bypass the existing publication lock.
 
 The next invocation after success removes only the previous operation's snapshot
@@ -212,17 +218,16 @@ multipart remains unsupported. The public endpoint must permit object GET;
 ## Read
 
 ```sh
-mkdir -m 700 /work/repository-state
 python3 scripts/s3-release.py --host-prefix /work/host-pkg-llvm fetch \
   --url https://emberbsd-pkg.oxteam.me \
   --trust-root trust/emberbsd-release-root.pem \
-  --state /work/repository-state/current.json --output /work/catalog \
+  --output /work/catalog \
   --repository darwin-arm64
 ```
 
 The output parent must exist and the output directory must be new. The reader
 verifies current, its exact manifest and selected index sizes/hashes, then
-advances persistent replay state and publishes the local snapshot. Indexes
+publishes the local snapshot without persistent channel replay state. Indexes
 stream to disk; package archives are not downloaded. If superseded metadata
 disappears during reading, it retries once only when current has changed.
 An ordinary missing file, invalid signature or corrupt bytes is an error.
@@ -241,14 +246,14 @@ remains a separate integration. This tool does not claim a working pkgin install
 
 The default current lifetime is seven days. `--ttl SECONDS` chooses another
 positive lifetime; it starts after upload and read-back complete. `--refresh`
-renews it and advances the generation without changing package bytes. Expiry
+renews its validity without changing package bytes. Expiry
 blocks accepting stale online metadata; it does not delete packages or stop
 installed programs. Renewal is not automatic.
 
 Rotate the working certificate under the same root before expiry. If the
 previous pointer's signer has expired, explicit publisher-only
 `--previous-channel-time UNIX_SECONDS` authenticates that pointer at a known
-valid historical time, retaining its generation and ETag. New packages,
+valid historical time, retaining its exact envelope and ETag. New packages,
 metadata and signer still require current validity. Readers have no such flag.
 
 HTTPS CA trust is separate from the release root. `--tls-ca-file FILE` selects
@@ -278,7 +283,7 @@ selects this one release; displaced packages and previous metadata are removed.
 
 Tests cover conditional publication, interrupted upload and cleanup, version
 replacement, unchanged archive reuse, competing writers, current changing
-during a read, bad signatures/hashes, replay and streamed large indexes. Timeweb
+during a read, bad signatures/hashes, validity and streamed large indexes. Timeweb
 S3 listing may omit Content-Length; listing responses are bounded independently
 of it, while signed artifact downloads still require the exact size.
 

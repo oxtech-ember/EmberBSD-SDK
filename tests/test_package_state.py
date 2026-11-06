@@ -66,7 +66,7 @@ class UpdateSelectionTests(unittest.TestCase):
         self.inventory([dict(pkgname='lib-1', root='devel/lib@native')])
         first = self.update()
         self.catalogs[0]['sets']['task'].append('devel/lib@native')
-        self.release['release_id'] = 'later-generation-with-new-app'
+        self.release['release_id'] = 'catalog-with-new-app'
         second = self.update()
         self.assertEqual(second['packages'], first['packages'])
         self.assertEqual(second['download_size'], 0)
@@ -186,7 +186,7 @@ class UpdateSelectionTests(unittest.TestCase):
         import io
         cfg = dict(self.cfg, state_dir=str(self.root / 'state'), cache_dir=str(self.cache.root),
                    host_prefix=str(self.root / 'tools'))
-        def fetch(_crypto, _store, _trust, _channel, snapshot, **kwargs):
+        def fetch(_crypto, _store, _trust, snapshot, **kwargs):
             snapshot.mkdir()
             (snapshot / 'release.p7m').write_bytes(b'authenticated fixture')
             return self.release
@@ -200,7 +200,8 @@ class UpdateSelectionTests(unittest.TestCase):
              patch('sys.stdout', output):
             store.return_value.__enter__.return_value = self.store
             status = main(['--config', 'unused', *command])
-            self.assertEqual(fetched.call_args.args[3], self.root / 'state/channel.json')
+            self.assertEqual(fetched.call_args.args[3].name, 'snapshot')
+            self.assertFalse((self.root / 'state/channel.json').exists())
         output.seek(0)
         return status, output.read()
 

@@ -189,7 +189,7 @@ Tests requiring native OpenSSL/pkg_tools are gated by
 `EMBERBSD_TEST_HOST_PREFIX`; the ordinary CI job reports this missing
 prerequisite. Its green result covers the tests actually executed, not native
 signing, package lifecycle or a complete SDK build. Publication recovery and
-generation-conflict tests also run autonomously with an authentication double
+current-conflict tests also run autonomously with an authentication double
 and the real local conditional object server.
 
 The tests use temporary filesystem trees and build-command fixtures. Their
