@@ -2,11 +2,12 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Own the Ports build lock for a whole source schedule.
 
-The client computes waves. This process is the lock PID and the parent of
-the controller. A killed client closes the death pipe; the controller tree
-is stopped before the lock is removed. Receipts are copied back from a
-private schedule only after that tree is gone, so a second controller cannot
-observe a narrowed order or write the same state at the same time.
+The client computes waves. On Linux the lock PID is the init process of a
+private PID namespace, so stopping that PID stops every process in the build,
+including a stage session. A killed client closes the death pipe; the init
+process stops the controller, copies new receipts back, and drops the lock.
+Receipts come from a private schedule, so a second controller cannot observe
+a narrowed order or write the same state at the same time.
 """
 
 import ctypes
@@ -21,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 from .errors import SDKError
 
@@ -166,6 +168,13 @@ def _parents():
 
 
 def _descendants(pid):
+    if pid <= 1:
+        try:
+            private_init = os.getpid() == 1 and os.readlink('/proc/self') == '1'
+        except OSError:
+            private_init = False
+        if not private_init:
+            raise SDKError('refusing to walk host init')
     parents = _parents()
     children = {}
     for child, parent in parents.items():
@@ -280,12 +289,145 @@ def _run_build(message, real_state):
     return receipts
 
 
+def _global_pid():
+    """PID as seen outside a private PID namespace. The lock file must use this."""
+    if sys.platform == 'linux':
+        try:
+            return int(os.readlink('/proc/self'))
+        except OSError:
+            pass
+    value = os.getpid()
+    if value <= 1:
+        raise OSError('cannot identify this process outside its PID namespace')
+    return value
+
+
+def _mount_proc():
+    library = ctypes.CDLL(None, use_errno=True)
+    library.mount.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p,
+                              ctypes.c_ulong, ctypes.c_char_p)
+    library.mount.restype = ctypes.c_int
+    if library.mount(b'proc', b'/proc', b'proc', 0, None) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
+def _unshare(flags):
+    library = ctypes.CDLL(None, use_errno=True)
+    library.unshare.argtypes = (ctypes.c_int,)
+    library.unshare.restype = ctypes.c_int
+    if library.unshare(flags) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
+def _pid_namespace_available():
+    """True when this process can put a child in a new user and PID namespace."""
+    if sys.platform != 'linux':
+        return False
+    probe = os.fork()
+    if probe == 0:
+        try:
+            _unshare(0x10000000)  # CLONE_NEWUSER
+            _unshare(0x20000000)  # CLONE_NEWPID
+            _unshare(0x20000)  # CLONE_NEWNS
+        except OSError:
+            os._exit(1)
+        os._exit(0)
+    _pid, status = os.waitpid(probe, 0)
+    return os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+
+
+def _namespace_busy(inode):
+    for entry in os.listdir('/proc'):
+        if not entry.isdigit():
+            continue
+        try:
+            if os.stat(f'/proc/{entry}/ns/pid').st_ino == inode:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _release_lock(lock):
+    try:
+        (lock / 'pid').unlink(missing_ok=True)
+        lock.rmdir()
+    except OSError:
+        pass
+
+
+def _reap_namespace(helper, state):
+    """Wait until the namespace init is gone, then drop a lock it could not drop.
+
+    Killing that init makes the kernel stop every process in its PID namespace.
+    The lock is removed only after none of those processes remain.
+    """
+    lock = state / 'build.lock'
+    inode = None
+    while inode is None:
+        ended, _status = os.waitpid(helper, os.WNOHANG)
+        if ended:
+            if lock.exists():
+                _release_lock(lock)
+            return
+        try:
+            text = (lock / 'pid').read_text().strip()
+            inode = os.stat(f'/proc/{int(text)}/ns/pid').st_ino
+        except (OSError, ValueError):
+            time.sleep(0.05)
+    os.waitpid(helper, 0)
+    deadline = time.monotonic() + 5
+    while _namespace_busy(inode):
+        if time.monotonic() > deadline:
+            os._exit(3)
+        time.sleep(0.05)
+    _release_lock(lock)
+
+
 def _supervise(sock, death_read, state):
     signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+    if _pid_namespace_available():
+        helper = os.fork()
+        if helper == 0:
+            try:
+                _unshare(0x10000000)  # CLONE_NEWUSER
+                _unshare(0x20000000)  # CLONE_NEWPID
+                init = os.fork()
+                if init == 0:
+                    try:
+                        outside = int(os.readlink('/proc/self'))
+                        if outside <= 1:
+                            raise OSError('pid namespace did not provide an outside pid')
+                        os.setsid()
+                        _unshare(0x20000)  # CLONE_NEWNS
+                        _mount_proc()
+                        _supervise_owner(sock, state, death_read, outside)
+                    except BaseException:
+                        os._exit(1)
+                    os._exit(0)
+                os.close(death_read)
+                sock.close()
+                os.waitpid(init, 0)
+            except BaseException:
+                os._exit(1)
+            os._exit(0)
+        sock.close()
+        os.close(death_read)
+        _reap_namespace(helper, state)
+        return
+    _supervise_owner(sock, state, death_read, _global_pid())
+
+
+def _supervise_owner(sock, state, death_read, outside_pid):
     _become_subreaper()
     lock = state / 'build.lock'
     owned = False
     dead = threading.Event()
+    # outside_pid is the signalable PID. Inside a private proc it differs from getpid().
+    me = outside_pid
+    kill_root = os.getpid() if os.getpid() == 1 and outside_pid != 1 else outside_pid
 
     def watch():
         try:
@@ -294,7 +436,7 @@ def _supervise(sock, death_read, state):
         except OSError:
             pass
         dead.set()
-        _kill_descendants(os.getpid())
+        _kill_descendants(kill_root)
 
     threading.Thread(target=watch, daemon=True).start()
     try:
@@ -305,8 +447,8 @@ def _supervise(sock, death_read, state):
             _send(sock, {'op': 'error', 'error': f'writer is busy: {lock}; remove only after confirming its owner and every build it started have stopped'})
             return
         owned = True
-        (lock / 'pid').write_text(str(os.getpid()) + '\n')
-        _send(sock, {'op': 'ready', 'pid': os.getpid()})
+        (lock / 'pid').write_text(str(me) + '\n')
+        _send(sock, {'op': 'ready', 'pid': me})
         buffer = b''
         while not dead.is_set():
             readable, _, _ = select.select([sock], [], [], 0.2)
@@ -317,7 +459,7 @@ def _supervise(sock, death_read, state):
             chunk = sock.recv(65536)
             if not chunk:
                 dead.set()
-                _kill_descendants(os.getpid())
+                _kill_descendants(kill_root)
                 break
             buffer += chunk
             while b'\n' in buffer and not dead.is_set():
@@ -341,7 +483,7 @@ def _supervise(sock, death_read, state):
                     _send(sock, {'op': 'error', 'error': 'unknown source wave command'})
     finally:
         os.close(death_read)
-        drained = _kill_descendants(os.getpid())
+        drained = _kill_descendants(kill_root)
         if owned and drained:
             try:
                 (lock / 'pid').unlink(missing_ok=True)

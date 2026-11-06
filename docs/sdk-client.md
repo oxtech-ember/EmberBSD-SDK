@@ -212,10 +212,11 @@ tree has stopped. A killed client closes the supervisor's death pipe; the
 supervisor stops the controller, including a stage session it started, and
 only then removes the lock. `STATE/order` cannot be left narrowed. Do not
 remove `build.lock` while its PID is alive or while a build it started is
-still running. Killing the supervisor itself does not drain the
-controller: the lock remains and the build it started can still be running.
-A controller session whose parent has already exited is also outside this
-drain on a system that has no child subreaper. The private copy keeps the full edges, so a native tool that
+still running. On Linux that PID is the init process of a private PID
+namespace, so stopping it stops every process in the build. Where that
+namespace cannot be created, stopping the supervisor directly can leave the
+controller running, and the lock stays until that tree has been drained.
+The private copy keeps the full edges, so a native tool that
 a later target package feeds still receives that target's settings.
 The client does not order a native-only subset with `selected-build`.
 `lang/llvm` with `lang/llvm-devel`, and the Qt and ICU pairs, stay in one wave

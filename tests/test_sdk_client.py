@@ -370,7 +370,12 @@ class ClientTests(unittest.TestCase):
         def source(config, roots, command, binaries=(), controller_mode=None):
             private = Path(config['source']['state'])
             self.assertTrue((state / 'build.lock').is_dir())
-            self.assertEqual((state / 'build.lock' / 'pid').read_text().strip(), str(os.getpid()))
+            lock_pid = (state / 'build.lock' / 'pid').read_text().strip()
+            # A private PID namespace stores the outside PID in the lock.
+            if os.getpid() == 1:
+                self.assertGreater(int(lock_pid), 1)
+            else:
+                self.assertEqual(lock_pid, str(os.getpid()))
             self.assertEqual((state / 'order').stat().st_ino, order_inode)
             self.assertEqual((state / 'order').read_bytes(), original_order)
             self.assertNotEqual(private.resolve(), state.resolve())

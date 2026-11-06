@@ -63,7 +63,7 @@ for arg in "$@"; do
         package-install|package|replace)
             echo "$arg" >> "$FIXTURE/targets"
             if [ -n "$BMAKE_SLEEP_ON_BUILD" ]; then
-                echo $$ > "$FIXTURE/bmake.pid"
+                echo ready > "$FIXTURE/bmake.ready"
                 while :; do
                     if [ -f "$FIXTURE/overlap-check" ]; then
                         echo overlap > "$FIXTURE/overlap"
@@ -176,7 +176,7 @@ exit 0
     def test_killed_client_stops_the_controller_before_the_lock_can_be_taken(self):
         self._bmake(sleep=True)
         state = self.fix / 'state'
-        pid_file = self.fix / 'bmake.pid'
+        ready = self.fix / 'bmake.ready'
 
         def client():
             session = SourceWaveLock(state)
@@ -195,23 +195,20 @@ exit 0
                 os._exit(0)
         try:
             deadline = time.monotonic() + 20
-            while not pid_file.exists():
+            while not ready.exists():
                 ended, _status = os.waitpid(client_pid, os.WNOHANG)
                 if ended:
                     self.fail('client exited before the controller reached bmake')
                 if time.monotonic() > deadline:
                     self.fail('real controller did not reach bmake')
                 time.sleep(0.05)
-            bmake_pid = int(pid_file.read_text().strip())
+            self.assertTrue(self._fixture_pids())
             lock_pid = int((state / 'build.lock' / 'pid').read_text().strip())
+            self.assertGreater(lock_pid, 1)
             self.assertNotEqual(lock_pid, client_pid)
             os.kill(lock_pid, 0)
             os.kill(client_pid, 9)
-            while True:
-                try:
-                    os.kill(bmake_pid, 0)
-                except ProcessLookupError:
-                    break
+            while self._fixture_pids():
                 if time.monotonic() > deadline:
                     self.fail('controller kept running after the client was killed')
                 time.sleep(0.05)
@@ -230,15 +227,11 @@ exit 0
         finally:
             self._reap(client_pid)
 
-    def test_killed_supervisor_leaves_the_lock_and_the_controller(self):
-        """SIGKILL of the lock owner is not recovered from this process.
-
-        The real controller keeps running and the lock stays. Removing that
-        lock while it runs would let a second build share the work directory.
-        """
+    def test_killed_lock_owner_stops_the_real_controller(self):
+        """SIGKILL of the lock PID stops the real controller before the lock is reusable."""
         self._bmake(sleep=True)
         state = self.fix / 'state'
-        pid_file = self.fix / 'bmake.pid'
+        ready = self.fix / 'bmake.ready'
         private_before = set(Path('/tmp').glob('ember-wave-*'))
 
         def client():
@@ -258,39 +251,55 @@ exit 0
                 os._exit(0)
         try:
             deadline = time.monotonic() + 20
-            while not pid_file.exists():
+            while not ready.exists():
                 ended, _status = os.waitpid(client_pid, os.WNOHANG)
                 if ended:
                     self.fail('client exited before the controller reached bmake')
                 if time.monotonic() > deadline:
                     self.fail('real controller did not reach bmake')
                 time.sleep(0.05)
-            bmake_pid = int(pid_file.read_text().strip())
             lock_pid = int((state / 'build.lock' / 'pid').read_text().strip())
+            self.assertGreater(lock_pid, 1)
+            self.assertEqual(Path(f'/proc/{lock_pid}/comm').read_text().strip(), 'python3')
+            isolated = os.stat(f'/proc/{lock_pid}/ns/pid').st_ino != os.stat('/proc/self/ns/pid').st_ino
+            self.assertTrue(isolated)
+            self.assertTrue(self._fixture_pids())
             os.kill(lock_pid, 9)
-            while True:
-                try:
-                    os.kill(lock_pid, 0)
-                except ProcessLookupError:
-                    break
+            while self._fixture_pids():
                 if time.monotonic() > deadline:
-                    self.fail('supervisor did not die')
+                    self.fail('controller kept running after the lock owner was killed')
                 time.sleep(0.05)
-            time.sleep(0.4)
-            self.assertTrue((state / 'build.lock').is_dir())
-            os.kill(bmake_pid, 0)
+            while (state / 'build.lock').exists():
+                if time.monotonic() > deadline:
+                    self.fail('build lock remained after the controller stopped')
+                time.sleep(0.05)
+            (self.fix / 'overlap-check').write_text('x')
+            self.assertFalse((self.fix / 'overlap').exists())
+            self.sleep = False
+            result = self._run(state)
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            self.assertNotIn('Another build', result.stderr)
         finally:
             self._reap(client_pid)
-            if pid_file.exists():
-                try:
-                    os.kill(int(pid_file.read_text().strip()), 9)
-                except (ProcessLookupError, ValueError):
-                    pass
             for path in set(Path('/tmp').glob('ember-wave-*')) - private_before:
                 shutil.rmtree(path, ignore_errors=True)
-            lock = state / 'build.lock'
-            if lock.is_dir():
-                shutil.rmtree(lock, ignore_errors=True)
+
+    def _fixture_pids(self):
+        needle = str(self.fix).encode()
+        found = []
+        for entry in os.listdir('/proc'):
+            if not entry.isdigit():
+                continue
+            pid = int(entry)
+            if pid == os.getpid():
+                continue
+            try:
+                command = Path('/proc', entry, 'cmdline').read_bytes()
+            except OSError:
+                continue
+            if needle in command:
+                found.append(pid)
+        return found
 
     def _reap(self, pid):
         try:
