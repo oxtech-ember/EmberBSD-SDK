@@ -234,6 +234,15 @@ its old providers while installed consumers exist; `REQUIRES` alone does not
 describe all dynamically loaded libraries. Native provider paths are compared
 relative to their package prefixes.
 
+The signed catalog pins exact package artifacts, while installed package
+dependencies may allow a newer revision than the artifact selected by that
+catalog. For a transitive dependency, the client reuses the newer installed
+package when every selected direct consumer's authenticated `@pkgdep` pattern
+accepts it and its installed `PROVIDES` still contains every provider declared
+by the selected artifact. Explicitly requested roots are not elided. If metadata
+is missing, ambiguous, or incompatible, the normal replacement checks still
+apply; the client does not infer ABI compatibility from version numbers alone.
+
 This supports in-place component and package revision updates. It deliberately
 refuses transitions which require removing library providers or replacing an
 installed consumer before its dependency can change. Such coordinated ABI

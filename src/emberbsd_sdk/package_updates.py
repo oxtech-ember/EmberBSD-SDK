@@ -50,6 +50,79 @@ def _archive(path):
     return _metadata(fields['+CONTENTS'], fields['+BUILD_INFO'])
 
 
+def reuse_compatible_dependencies(crypto, database, packages, archives, installed, roots=()):
+    """Reuse a newer installed package when every selected direct consumer accepts it.
+
+    Catalog edges identify exact artifacts, not pkg_tools version constraints. Use
+    authenticated package metadata and pkg_admin's matcher to avoid replacing a
+    compatible installed dependency with an older catalog artifact. Explicit roots
+    are never elided; ambiguous or undeclared edges remain selected for the normal
+    update checks to handle.
+    """
+    by_id = {package['artifact']['id']: package for package in packages}
+    incoming = {identity: [] for identity in by_id}
+    for consumer in packages:
+        for dependency in consumer['artifact']['depends']:
+            if dependency in incoming:
+                incoming[dependency].append(consumer)
+
+    installed_by_base = {}
+    for name in installed:
+        installed_by_base.setdefault(name.rsplit('-', 1)[0], []).append(name)
+
+    @cache
+    def metadata(name):
+        return _installed(database, name)
+
+    @cache
+    def matches(pattern, name):
+        return _matches(crypto, pattern, name)
+
+    @cache
+    def archive_metadata(identity):
+        return _archive(archives[identity])
+
+    roots = set(roots)
+    reused = []
+    for identity, package in by_id.items():
+        name = package['pkgname']
+        if package['action'] == 'installed' or package.get('root') in roots:
+            continue
+        base, version = name.rsplit('-', 1)
+        candidates = installed_by_base.get(base, [])
+        if len(candidates) != 1:
+            continue
+        installed_name = candidates[0]
+        if not matches(base + '>=' + version, installed_name):
+            continue
+        candidate_metadata = archive_metadata(identity)
+        if not candidate_metadata['providers'] <= metadata(installed_name)['providers']:
+            continue
+        consumers = incoming[identity]
+        if not consumers:
+            continue
+        compatible = True
+        for consumer in consumers:
+            if consumer['action'] == 'installed':
+                requirements = metadata(consumer['pkgname'])['depends']
+            else:
+                requirements = archive_metadata(consumer['artifact']['id'])['depends']
+            accepted = [pattern for pattern in requirements if matches(pattern, name)]
+            if not accepted or not all(matches(pattern, installed_name) for pattern in accepted):
+                compatible = False
+                break
+        if compatible:
+            reused.append(dict(root=package.get('root'), pkgname=installed_name,
+                               catalog_candidate=name))
+            package['pkgname'] = installed_name
+            package['action'] = 'installed'
+            package['replaces'] = []
+            # This catalog artifact was authenticated but was not installed. Do
+            # not retain it in the resulting package ledger as an installed row.
+            package['artifact'] = None
+    return reused
+
+
 def check_updates(crypto, database, packages, archives, installed):
     """Run under the pkgdb lock after archive authentication, before mutation.
 
