@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from test_core import TemporaryCase
 from emberbsd_sdk import jsonio, release_catalog as catalog
-from emberbsd_sdk.errors import SDKError
+from emberbsd_sdk.errors import ChannelExpired, SDKError
 
 
 HOST = {'os': 'darwin', 'arch': 'aarch64', 'abi': 'macos-15.0', 'runtime': 'libSystem-libcxx'}
@@ -200,8 +200,9 @@ class ChannelFormatTests(unittest.TestCase):
         for now in (100, 200, 299):
             self.assertEqual(catalog.parse_channel(encoded(value), 'stable', now), value)
         for now in (99, 300):
-            with self.subTest(now=now), self.assertRaisesRegex(SDKError, 'clock'):
+            with self.subTest(now=now), self.assertRaisesRegex(SDKError, 'clock') as caught:
                 catalog.parse_channel(encoded(value), 'stable', now)
+            self.assertEqual(isinstance(caught.exception, ChannelExpired), now == 300)
         with patch.object(catalog.time, 'time', return_value=200):
             self.assertEqual(catalog.parse_channel(encoded(value), 'stable'), value)
 

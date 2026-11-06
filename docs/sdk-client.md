@@ -194,22 +194,31 @@ The running install is not restarted because the pointer changed. `plan`
 remains the snapshot from when it ran.
 
 An unchanged pointer does not download again and does not rebuild a package
-the current install already finished. An expired pointer, or a reread that
-cannot reach the publisher, is not adopted; the source build continues with
-the last verified catalog. A signature or trust failure stops the install
-and does not install those bytes.
+the current install already finished. An expired pointer, an HTTP error, or a
+transport failure is not adopted; the source build continues with the last
+verified catalog. That reread does not restart the install. A certificate,
+signature, schema, hash or not-yet-valid failure stops the install and does
+not install those bytes. A broken authenticated catalog is the same kind of
+failure, not a reason to compile the package.
 
-Each wave builds through cross-bulk `build` with the ready packages written
-to `STATE/order`. The full `STATE/edges` graph stays in place, so a native
-tool that a later target package feeds still receives that target's settings.
-The client does not order a native-only subset with `selected-build`. After
-the wave, the saved order is restored. A newer installed native package is
-Ports' successful result (`BASE>=version`); the client does not replace it
-with an older exact catalog package and does not treat that reuse as a missing
-install. A target package still has to be the graph PKGNAME. A package whose
-catalog PKGNAME would replace a different installed version stays on the
-source wave. A transitive dependency of a newly published package can keep a
-newer installed package when the existing compatible-reuse check accepts it.
+Each wave holds the Ports `build.lock` and runs cross-bulk `build` against a
+private schedule. `STATE/order` is not rewritten, so another client or
+`packages.py` cannot observe a narrowed order. A killed client can leave the
+lock and the private directory; it cannot leave a narrowed order. The private
+directory links the real `STATE/edges`, so a native tool that a later
+target package feeds still receives that target's settings.
+The client does not order a native-only subset with `selected-build`.
+`lang/llvm` with `lang/llvm-devel`, and the Qt and ICU pairs, stay in one wave
+when the second package is waiting only on the first, so the same-run shared
+stage still applies. A package recorded skipped or failed is not treated as
+built, even when Ports exits 0 for a skip; its dependents do not start. A
+native package that Ports reused because the host database already has
+`BASE>=version` has no `done` row and is accepted from that host database. A
+target package is accepted from its own database or a `done` row. The same
+PKGNAME in the other database does not count. An older installed package is
+replaced by the exact catalog package. A newer installed package is not. A
+transitive dependency of a newly published package can keep a newer installed
+package when the existing compatible-reuse check accepts it.
 If `STATE/order` or `STATE/edges` is
 missing, or does not contain every source root, the client keeps one
 `selected-build` of the remaining roots and does not split that build.

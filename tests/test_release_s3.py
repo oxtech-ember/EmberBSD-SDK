@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from emberbsd_sdk.errors import SDKError
+from emberbsd_sdk.errors import SDKError, TransportError
 from emberbsd_sdk.release_s3 import HTTPStore, S3Store, HTTPStatusError, sign_request
 
 
@@ -230,7 +230,7 @@ class HTTPSRetryTests(unittest.TestCase):
             connection.getresponse.side_effect = TimeoutError()
         with patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection',
                    side_effect=connections) as factory:
-            with self.assertRaises(SDKError):
+            with self.assertRaises(TransportError):
                 with self.store.request('GET', 'object'):
                     self.fail('no response expected')
         self.assertEqual(factory.call_count, 3)
@@ -264,11 +264,16 @@ class HTTPSRetryTests(unittest.TestCase):
                     response.read.return_value = b'wrong'
                 with patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection',
                            return_value=connection) as factory:
-                    with self.assertRaises(SDKError):
+                    with self.assertRaises(SDKError) as caught:
                         if failure == 'integrity':
                             self.store.verify('object', 7, hashlib.sha256(b'payload').hexdigest())
                         else:
                             self.store.read('object', 100)
+                if failure == 'certificate':
+                    self.assertNotIsInstance(caught.exception, TransportError)
+                    self.assertIn('certificate verification failed', str(caught.exception))
+                elif failure in ('body',):
+                    self.assertIsInstance(caught.exception, TransportError)
                 self.assertEqual(factory.call_count, 1)
                 connection.close.assert_called_once_with()
 

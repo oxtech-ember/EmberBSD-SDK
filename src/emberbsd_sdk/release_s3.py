@@ -19,12 +19,19 @@ import ssl
 from urllib.parse import quote, urlsplit
 import xml.etree.ElementTree as ET
 
-from .errors import SDKError
+from .errors import SDKError, TransportError
 from .release_catalog import _relative
 
 EMPTY_SHA256 = hashlib.sha256(b'').hexdigest()
 BLOCK_SIZE = 1024 * 1024
 MAX_PUT_SIZE = 5 * 1024 ** 3
+
+
+def _failed_transport(method, path, exc):
+    """Separate a failed certificate check from a response that never arrived."""
+    if isinstance(exc, ssl.SSLError):
+        raise SDKError(f'{method} {path}: HTTPS certificate verification failed ({type(exc).__name__})') from exc
+    raise TransportError(f'{method} {path}: HTTPS transport failed ({type(exc).__name__})') from exc
 
 
 class HTTPStatusError(SDKError):
@@ -129,10 +136,10 @@ class HTTPStore:
             except (TimeoutError, ConnectionError, http.client.RemoteDisconnected) as exc:
                 connection.close()
                 if attempt + 1 == attempts:
-                    raise SDKError(f'{method} {path}: HTTPS transport failed ({type(exc).__name__})') from exc
+                    _failed_transport(method, path, exc)
             except (OSError, http.client.HTTPException) as exc:
                 connection.close()
-                raise SDKError(f'{method} {path}: HTTPS transport failed ({type(exc).__name__})') from exc
+                _failed_transport(method, path, exc)
             else:
                 break
         complete = False
@@ -144,7 +151,7 @@ class HTTPStore:
             yield response
             complete = True
         except (OSError, http.client.HTTPException) as exc:
-            raise SDKError(f'{method} {path}: HTTPS transport failed ({type(exc).__name__})') from exc
+            _failed_transport(method, path, exc)
         finally:
             # A partial body or failed validation must never contaminate the
             # next response. isclosed() alone also accepts a manually closed

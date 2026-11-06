@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 import time
 
-from .errors import SDKError
+from .errors import ChannelExpired, SDKError
 from .jsonio import MAX_JSON, loads_json
 from .paths import (canonical_existing, open_regular,
                     real_directory, regular_file, verify_stable)
@@ -180,7 +180,7 @@ def parse_channel(data: bytes, expected_name: str, now: int | None = None) -> di
     if now < value['issued_at']:
         raise SDKError('channel is not yet valid; check the local clock')
     if now >= value['expires_at']:
-        raise SDKError('channel has expired; check the local clock or obtain a fresh channel')
+        raise ChannelExpired('channel has expired; check the local clock or obtain a fresh channel')
     return value
 
 

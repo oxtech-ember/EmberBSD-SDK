@@ -9,6 +9,7 @@ from importlib import resources
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -16,8 +17,8 @@ import tempfile
 
 from . import sysroot_package, package_automatic
 from .binary_catalog import load_release_catalogs, select_packages
-from .binary_release import _arch
-from .errors import SDKError
+from .binary_release import _arch, _matches
+from .errors import ChannelExpired, SDKError, TransportError
 from .host_prefix import load_host_prefix
 from .jsonio import json_bytes, read_json, write_json
 from .package_cache import PackageCache, check_space, directory_lock
@@ -347,60 +348,135 @@ def _catalog_closure_matches(root, names, release, catalogs, config):
         return False
     try:
         closure = select_packages(release, selected, roots=[root])['packages']
-        return all(names.get(records[item['id']]['root']) == records[item['id']]['pkgname']
-                   for item in closure)
-    except (SDKError, KeyError):
-        return False
+    except KeyError as exc:
+        raise SDKError('authenticated catalog closure is incomplete') from exc
+    for item in closure:
+        closed = records.get(item['id'])
+        if closed is None:
+            raise SDKError(f"authenticated catalog omits closure package {item['id']}")
+        if names.get(closed['root']) != closed['pkgname']:
+            return False
+    return True
 
 
 def _refresh_channel(refresh_current):
-    """Reread authenticated current. Expired or unreachable data is not a new catalog."""
+    """Reread authenticated current.
+
+    An expired pointer, an HTTP status, or a transport failure keeps the last
+    verified catalog. Certificate, signature, schema, hash and not-yet-valid
+    failures are not transport errors and stop the install.
+    """
     try:
         return refresh_current()
-    except SDKError as exc:
-        if str(exc).startswith('channel has expired'):
-            print('Current channel has expired; continuing the source build with the last verified catalog.',
-                  file=sys.stderr)
-            return None
-        raise
-    except (HTTPStatusError, OSError) as exc:
+    except (HTTPStatusError, TransportError, ChannelExpired) as exc:
         print(f'Current channel could not be reread ({exc}); continuing with the last verified catalog.',
               file=sys.stderr)
         return None
 
 
+# Producer/consumer packages that cross-bulk compiles from one staged work
+# directory when both are in the same build. Keeping only one of the pair in
+# the schedule disables that handoff and builds each package alone.
+_SHARED_STAGE_PAIRS = (
+    ('lang/llvm', 'lang/llvm-devel'),
+    ('x11/qt6-qtbase', 'x11/qt6-qtbase-devel'),
+    ('textproc/icu', 'textproc/icu-devel'),
+)
+_RECEIPTS = ('done', 'failed', 'blocked', 'skipped')
+
+
+def _package_path(root):
+    return root[:-len('@native')] if root.endswith('@native') else root
+
+
 def _ready_wave(order, deps, pending):
-    return [root for root in order if root in pending and
-            not any(dep in pending for dep in deps.get(root, ()))]
+    ready = [root for root in order if root in pending and
+             not any(dep in pending for dep in deps.get(root, ()))]
+    selected = set(ready)
+    by_path = {}
+    for root in pending:
+        by_path.setdefault(_package_path(root), root)
+    changed = True
+    while changed:
+        changed = False
+        for producer, consumer in _SHARED_STAGE_PAIRS:
+            producer_root = by_path.get(producer)
+            consumer_root = by_path.get(consumer)
+            if (producer_root not in selected or consumer_root is None or consumer_root in selected):
+                continue
+            if all(dep in selected or dep not in pending for dep in deps.get(consumer_root, ())):
+                selected.add(consumer_root)
+                changed = True
+    return [root for root in order if root in selected]
 
 
-def _installed_names(config, installer):
+def _installed_names(config, installer, role):
     names = set()
     for cfg in config['repositories'].values():
+        cfg_role = 'host' if cfg.get('host') else 'target'
+        if cfg_role != role:
+            continue
         names.update(installer.installed(cfg, recover=False))
     return names
 
 
+def _version_pattern(graph_name):
+    base, version = graph_name.rsplit('-', 1)
+    return base, base + '>=' + version
+
+
+def _installed_is_current(installer, graph_name, installed):
+    """True when this role's database already has the graph package or a newer one."""
+    if graph_name in installed:
+        return True
+    crypto = getattr(installer, 'crypto', None)
+    if crypto is None or '-' not in graph_name:
+        return False
+    base, pattern = _version_pattern(graph_name)
+    return any(name.rsplit('-', 1)[0] == base and _matches(crypto, pattern, name) for name in installed)
+
+
+def _replacement_is_upgrade(installer, graph_name, installed):
+    """True only when pkg_tools shows every installed sibling is older than the catalog package."""
+    crypto = getattr(installer, 'crypto', None)
+    if crypto is None or '-' not in graph_name:
+        return False
+    base, pattern = _version_pattern(graph_name)
+    siblings = [name for name in installed if name.rsplit('-', 1)[0] == base and name != graph_name]
+    return bool(siblings) and all(not _matches(crypto, pattern, name) for name in siblings)
+
+
 def _adopt_published(config, installer, cache, store, release, catalogs, names, order, pending, binaries):
-    """Download exact not-yet-started packages. Do not replace an installed version."""
+    """Download exact not-yet-started packages, including an older installed package.
+
+    A newer installed package stays on the source wave. An installer that cannot
+    ask pkg_tools whether the installed package is older does not download a
+    replacement.
+    """
     candidates = []
     for root in order:
         if root not in pending or not _catalog_closure_matches(root, names, release, catalogs, config):
             continue
         one = installation_plan(release, catalogs, config, installer, cache, roots=[root])
         own = [package for package in one['packages'] if package['root'] == root]
-        # The catalog package itself must be the graph PKGNAME and must not
-        # replace a different installed version. A newer native package stays
-        # with Ports. Dependencies may still be reused by apply_plan.
-        if one['build_roots'] or len(own) != 1 or own[0]['replaces'] or own[0]['pkgname'] != names[root]:
+        # A newer installed package stays with Ports. An older installed package
+        # is an exact catalog upgrade and is downloaded. Dependencies may still
+        # be reused by apply_plan when the installer can prove that.
+        if one['build_roots'] or len(own) != 1 or own[0]['pkgname'] != names[root]:
             continue
+        if own[0]['replaces']:
+            role = 'host' if root.endswith('@native') else 'target'
+            if not _replacement_is_upgrade(installer, names[root], _installed_names(config, installer, role)):
+                continue
         candidates.append(root)
     if not candidates:
         return binaries, []
     merged = installation_plan(release, catalogs, config, installer, cache, roots=candidates)
     if merged['build_roots']:
         return binaries, []
-    if any(package['replaces'] for package in merged['packages']) and not isinstance(installer, PackageInstaller):
+    dependency_replacements = [package for package in merged['packages']
+                               if package['replaces'] and package['root'] not in candidates]
+    if dependency_replacements and not isinstance(installer, PackageInstaller):
         return binaries, []
     fresh = [package for package in merged['packages'] if package['action'] != 'installed']
     reused = []
@@ -423,36 +499,101 @@ def _adopt_published(config, installer, cache, store, release, catalogs, names, 
     return binaries, reused
 
 
+def _receipt_text(path):
+    if not path.exists() or path.is_dir():
+        return ''
+    return path.read_text()
+
+
+def _link_receipt(real_state, private, name):
+    source = real_state / name
+    if name == 'logs':
+        source.mkdir(exist_ok=True)
+    elif not source.exists():
+        source.write_text('')
+    (private / name).symlink_to(source)
+
+
+def _new_receipt_roots(before, current):
+    previous = set(before.splitlines())
+    return [line.split()[0] for line in current.splitlines() if line.strip() and line not in previous]
+
+
+def _persist_detached_receipts(real_state, private):
+    """Ports renames a symlink when it rotates failed/blocked; keep those new lines."""
+    for name in ('failed', 'blocked', 'skipped', 'done'):
+        path = private / name
+        if path.is_symlink() or not path.is_file():
+            continue
+        text = path.read_text()
+        if not text:
+            continue
+        with (real_state / name).open('a') as stream:
+            if text and not text.endswith('\n'):
+                text += '\n'
+            stream.write(text)
+
+
 def _build_saved_wave(config, ready, binaries):
-    """Build one ready wave without recomputing the saved dependency edges."""
-    order_path = Path(config['source']['state']) / 'order'
-    original = order_path.read_bytes()
-    try:
-        order_path.write_text(''.join(root + '\n' for root in ready))
-        run_source(config, ready, 'build', binaries=binaries, controller_mode='build')
-    finally:
-        order_path.write_bytes(original)
+    """Build one ready wave without rewriting the shared Ports order.
 
-
-def _accept_built_wave(config, installer, names, ready, pending):
-    """Trust a successful native wave, including a newer installed package.
-
-    Ports returns success when `pkg_info -e BASE>=version` already matches a
-    native package, and that result is not recorded as a built PKGNAME. An
-    exact catalog name remains the binary adoption rule. A target package
-    still has to be the graph PKGNAME.
+    cross-bulk `build` schedules `$state/order` and reads target-fed tools from
+    `$state/edges`. The shared order stays in place. This wave's schedule is a
+    private file, and the real edges and receipt files are linked into that
+    directory. The real `build.lock` is held so another client or `packages.py`
+    cannot build the same state; the controller locks only the private directory,
+    because the Ports lock is not reentrant.
     """
-    installed = _installed_names(config, installer)
+    real_state = Path(config['source']['state'])
+    with directory_lock(real_state / 'build.lock'):
+        private = Path(tempfile.mkdtemp(prefix='ember-wave-'))
+        try:
+            before = {name: _receipt_text(real_state / name) for name in _RECEIPTS}
+            for name in ('edges', 'packages', 'progress', 'logs', *_RECEIPTS):
+                _link_receipt(real_state, private, name)
+            (private / 'order').write_text(''.join(root + '\n' for root in ready))
+            wave = dict(config, source=dict(config['source'], state=str(private)))
+            try:
+                run_source(wave, ready, 'build', binaries=binaries, controller_mode='build')
+            finally:
+                _persist_detached_receipts(real_state, private)
+            receipts = {name: _new_receipt_roots(before[name], _receipt_text(private / name))
+                        for name in _RECEIPTS}
+        finally:
+            shutil.rmtree(private)
+    return receipts
+
+
+def _accept_built_wave(config, installer, names, ready, pending, receipts):
+    """Honor this wave's done, skipped and failed receipts.
+
+    A native package Ports reused through `pkg_info -e BASE>=version` is not
+    written to `state/done`. That reuse is accepted only from the host package
+    database. A skipped package still makes `build` exit 0; its dependents must
+    not run in a later wave. A target package is accepted from the target
+    database or a done receipt, never because the native database has the same name.
+    """
+    skipped = set(receipts['skipped'])
+    failed = set(receipts['failed']) | set(receipts['blocked'])
+    done = set(receipts['done'])
+    blocked = [root for root in ready if root in skipped or root in failed]
+    if blocked:
+        raise SDKError('Ports did not build ' + ', '.join(blocked))
     missing = []
     for root in ready:
-        if root.endswith('@native'):
+        if root in done:
             pending.discard(root)
             continue
+        role = 'host' if root.endswith('@native') else 'target'
+        installed = _installed_names(config, installer, role)
         name = names.get(root)
-        if name and name in installed:
+        if role == 'host' and name and _installed_is_current(installer, name, installed):
             pending.discard(root)
-        else:
-            missing.append(f'{root} ({name or "unknown"})')
+            continue
+        if role == 'target' and name and name in installed:
+            pending.discard(root)
+            continue
+        missing.append(f'{root} ({name or "unknown"})')
     if missing:
         raise SDKError('Ports build finished without installing ' + ', '.join(missing))
 
@@ -488,8 +629,8 @@ def _install_source_waves(plan, config, installer, cache, store, refresh_current
         ready = _ready_wave(order, deps, pending)
         if not ready:
             raise SDKError('source graph has no ready package')
-        _build_saved_wave(config, ready, binaries)
-        _accept_built_wave(config, installer, names, ready, pending)
+        receipts = _build_saved_wave(config, ready, binaries)
+        _accept_built_wave(config, installer, names, ready, pending, receipts)
     return reused
 
 

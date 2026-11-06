@@ -7,6 +7,14 @@ class SDKError(Exception):
     """An input, producer, or inspection failed its explicit contract."""
 
 
+class TransportError(SDKError):
+    """An HTTPS read produced no response that can be authenticated."""
+
+
+class ChannelExpired(SDKError):
+    """The signed channel is authentic and outside its validity window."""
+
+
 class CommandError(SDKError):
     """A completed producer failed. Keep its exact status and captured bytes."""
 
