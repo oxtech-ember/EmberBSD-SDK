@@ -1153,7 +1153,7 @@ class SysrootBuilder:
         ('nvi', 'editors/nvi'), ('top', 'sysutils/top'), ('iscsi', 'devel/netbsd-iscsi-lib'),
         ('ntp', 'net/ntp4'), ('libopts', 'devel/autogen'), ('libpcap', 'net/libpcap'),
         ('tcpdump', 'net/tcpdump'), ('tcp-wrappers', 'security/tcp_wrappers'),
-        ('gettext', 'devel/gettext'), ('libxml2', 'textproc/libxml2'), ('zlib', 'devel/zlib'), ('ppp', 'net/pppd'),
+        ('gettext', 'devel/gettext'), ('libxml2', 'textproc/libxml2'), ('tree-sitter', 'textproc/tree-sitter'), ('zlib', 'devel/zlib'), ('ppp', 'net/pppd'),
         ('tdb', 'databases/tdb'), ('x11', 'netbsd/xsrc'))
 
     def verify_common_sources(self):
@@ -1404,6 +1404,7 @@ class SysrootBuilder:
                   'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
                   'EMBER_GETTEXT_SOURCE=' + self.paths['gettext-source'],
                   'EMBER_LIBXML2_SOURCE=' + self.paths['libxml2-source'],
+                  'EMBER_TREE_SITTER_SOURCE=' + self.paths['tree-sitter-source'],
                   'HOST_GMAKE=' + self.native.tool('gmake'), 'HOST_SH=' + self.native.tool('sh'),
                   'HOST_OD=' + self.native.tool('od'),
                   'HOST_PKG_CONFIG=' + self.native.tool('pkg-config'),
@@ -1411,16 +1412,23 @@ class SysrootBuilder:
         try:
             xml = process.capture([*common, '-C', os.path.join(root, 'external/bsd/libxml2/gnu'),
                                    '-V', '${GNU_SOURCE}'], env=env).stdout.decode('utf-8').strip()
+            tree_sitter = process.capture([*common, '-C', os.path.join(root, 'external/mit/tree-sitter/lib'),
+                                          '-V', '${EMBER_TREE_SITTER_SOURCE}'], env=env).stdout.decode('utf-8').strip()
             output = process.capture([*common, '-C', os.path.join(root, 'external/gpl2/gettext/gnu'),
                                       '-V', '${GNU_SOURCE}', '-V', '${GNU_CONFIGURE_ENV}',
                                       '-V', '${GNU_CONFIGURE_DEPENDENCY}'], env=env).stdout.decode('utf-8').splitlines()
         except (SDKError, UnicodeError) as exc:
-            raise SDKError('selected OS cannot resolve the common gettext and libxml2 producers') from exc
-        if (xml != self.paths['libxml2-source'] or len(output) != 3 or
+            raise SDKError('selected OS cannot resolve the common gettext, libxml2, and tree-sitter producers') from exc
+        dependencies = output[2].split() if len(output) == 3 else []
+        if (xml != self.paths['libxml2-source'] or
+                tree_sitter != self.paths['tree-sitter-source'] or len(output) != 3 or
                 output[0] != self.paths['gettext-source'] or
                 'EMBER_GETTEXT_PLAIN_STYLE=yes' not in output[1] or
-                not output[2].endswith('/gnu-build/.libs/libxml2.a')):
-            raise SDKError('selected OS does not support the common gettext and libxml2 producers')
+                not dependencies or not dependencies[0].endswith('/gnu-build/.libs/libxml2.a') or
+                not any(item.endswith('/libtree-sitter.a') for item in dependencies) or
+                not any(item.endswith('/tree-sitter-uninstalled.pc') for item in dependencies) or
+                'PKG_CONFIG=' + self.native.tool('pkg-config') not in output[1]):
+            raise SDKError('selected OS does not support the common gettext, libxml2, and tree-sitter producers')
 
     def require_ekermit_source_support(self):
         if 'ekermit-source' not in self.paths:
@@ -1658,8 +1666,9 @@ class SysrootBuilder:
         self.llvm_phase = getattr(self, 'llvm_phase', 'final')
         if not self.options.get('llvm-source'):
             raise SDKError('--llvm-source is required: prepare the common Ports LLVM source')
-        if bool(self.options.get('gettext-source')) != bool(self.options.get('libxml2-source')):
-            raise SDKError('gettext and libxml2 sources must be selected together')
+        if len({bool(self.options.get(name + '-source'))
+                for name in ('gettext', 'libxml2', 'tree-sitter')}) != 1:
+            raise SDKError('gettext, libxml2, and tree-sitter sources must be selected together')
         for name in ('libarchive-source', 'libevent-source'):
             if self.llvm_phase != 'headers' and not self.options.get('c-foundation') and not self.options.get(name):
                 raise SDKError(f'--{name} is required: prepare the common Ports source')
@@ -1688,7 +1697,7 @@ class SysrootBuilder:
         self.logical_sdk = layout['logical_root']
         self.paths = dict(sdk=paths.build_path(layout['canonical_root']))
         input_names = ['os', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'llvm-source', 'host-binutils']
-        input_names += [name for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'libfido2-source', 'libcbor-source', 'expat-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'mdns-source', 'dhcpcd-source', 'heimdal-source', 'openssh-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'zlib-source', 'x11-source') if self.options.get(name)]
+        input_names += [name for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'libfido2-source', 'libcbor-source', 'expat-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'mdns-source', 'dhcpcd-source', 'heimdal-source', 'openssh-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'tree-sitter-source', 'zlib-source', 'x11-source') if self.options.get(name)]
         if self.options.get('distdir'):
             input_names.append('distdir')
         if clang and self.llvm_phase != 'headers' and self.options.get('llvm-runtime-original-source'):
@@ -1823,7 +1832,7 @@ class SysrootBuilder:
         self.flags += [f'EMBER_LIBEDIT_SOURCE={self.paths["libedit-source"]}',
                        f'EMBER_HOST_BFD_CONFIG={self.paths["host-binutils"]}/host-bfd.mk'] + native_host_flags(self.native_selection)
         self.flags += [f'EMBER_{name.upper().replace("-", "_")}_SOURCE={self.paths[name + "-source"]}'
-                       for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'expat', 'libfetch', 'openldap', 'unbound', 'wpa', 'mdns', 'dhcpcd', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'zlib') if name + '-source' in self.paths]
+                       for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'expat', 'libfetch', 'openldap', 'unbound', 'wpa', 'mdns', 'dhcpcd', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'tree-sitter', 'zlib') if name + '-source' in self.paths]
         if 'openssl-source' in self.paths or 'openssh-source' in self.paths:
             self.flags.append('HOST_PERL=' + self.native.tool('perl'))
         if 'openssh-source' in self.paths:

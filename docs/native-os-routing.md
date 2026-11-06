@@ -214,13 +214,17 @@ producer. The former is prepared by the common Ports NTP owner and the latter
 by the common AutoGen owner. The AutoGen host package need not remain installed after the
 tearoff has been prepared.
 
-Select `--gettext-source` and `--libxml2-source` together for the native
-gettext tools. Their Ports owners prepare them. The release builds the ordinary target
-foundation first, then prepares the shared Ports cross-libtool in its OS
-TOOLDIR before building the gettext and static libxml2 consumers. This path
-uses the selected native tools and target runtime; it does not add GNU libintl
-to the native Citrus ABI. The OS base selects plain output without the newer
-color and CSS features.
+Select `--gettext-source`, `--libxml2-source`, and `--tree-sitter-source`
+together for the native gettext tools. Their Ports owners prepare them; the
+[Tree-sitter owner](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/scripts/source-inputs/tree-sitter/source.py)
+prepares the third input. The release builds the ordinary target foundation first, then prepares the shared Ports
+cross-libtool in its OS TOOLDIR before building the gettext and static libxml2
+consumers. Pass all three prepared paths through `EMBER_GETTEXT_SOURCE`,
+`EMBER_LIBXML2_SOURCE`, and `EMBER_TREE_SITTER_SOURCE`. Tree-sitter is built as
+a private target runtime for the libxml2 consumer; gettext continues using its
+pinned grammar inputs. This path uses the selected native tools and target
+runtime; it does not add GNU libintl to the native Citrus ABI. The OS base
+selects plain output without the newer color and CSS features.
 
 A successfully inspected release whose profile publication was interrupted can
 be finalized without rebuilding: run `scripts/build-os-release.py finalize

@@ -74,6 +74,7 @@ def main():
     parser.add_argument('--libopts-source', action=UniqueOption, help='prepared common AutoGen libopts source')
     parser.add_argument('--gettext-source', action=UniqueOption, help='prepared common Ports gettext source')
     parser.add_argument('--libxml2-source', action=UniqueOption, help='prepared common Ports libxml2 source')
+    parser.add_argument('--tree-sitter-source', action=UniqueOption, help='prepared common Ports tree-sitter source')
     parser.add_argument('--zlib-source', action=UniqueOption, help='prepared common Ports zlib source')
     parser.add_argument('--ppp-source', action=UniqueOption, help='prepared common Ports PPP source')
     parser.add_argument('--tdb-source', action=UniqueOption, help='prepared common Ports TDB source')

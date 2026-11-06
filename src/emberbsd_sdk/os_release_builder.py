@@ -125,7 +125,7 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
         f'EMBER_LIBEDIT_SOURCE={paths["libedit-source"]}',
         f'MKREPRO_TIMESTAMP={timestamp}', f'EMBER_BUILD_ID={sha}', f'BUILDINFO=EmberBSD:{sha}',
         f'KERNOBJDIR={paths["objects"]}/kernels'] + (native_host_flags(native_selection) if native_selection is not None else [])
-    for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'expat', 'libfetch', 'openldap', 'unbound', 'wpa', 'mdns', 'dhcpcd', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'zlib'):
+    for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'expat', 'libfetch', 'openldap', 'unbound', 'wpa', 'mdns', 'dhcpcd', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'tree-sitter', 'zlib'):
         if name + '-source' in paths:
             flags.append(f'EMBER_{name.upper().replace("-", "_")}_SOURCE={paths[name + "-source"]}')
     if ('openssl-source' in paths or 'openssh-source' in paths) and native_selection is not None:
@@ -202,7 +202,7 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
                                           native_selection['compiler']['family'])
         commands.insert(2, provider)
     source_flags = [f'EMBER_{name.upper().replace("-", "_")}_SOURCE={paths[name + "-source"]}'
-                    for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'expat', 'libfetch', 'openldap', 'unbound', 'wpa', 'mdns', 'dhcpcd', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'zlib') if name + '-source' in paths]
+                    for name in ('libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'expat', 'libfetch', 'openldap', 'unbound', 'wpa', 'mdns', 'dhcpcd', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'tree-sitter', 'zlib') if name + '-source' in paths]
     if ('openssl-source' in paths or 'openssh-source' in paths) and native_selection is not None:
         source_flags.append('HOST_PERL=' + native_selection['tools']['perl'])
     if 'openssh-source' in paths and native_selection is not None:
@@ -288,7 +288,7 @@ def validate_profile(profile, sha, target):
     if 'common_sources' in signature:
         common_sources = signature['common_sources']
         check(isinstance(common_sources, dict) and {'libarchive', 'libevent'} <= set(common_sources) <=
-              {'libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'expat', 'libfetch', 'openldap', 'unbound', 'wpa', 'mdns', 'dhcpcd', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'zlib', 'x11'}, 'Invalid common source selection')
+              {'libarchive', 'libevent', 'openssl', 'libfido2', 'libcbor', 'expat', 'libfetch', 'openldap', 'unbound', 'wpa', 'mdns', 'dhcpcd', 'heimdal', 'openssh', 'byacc', 'texinfo', 'rcs', 'diffutils', 'grep', 'ekermit', 'nvi', 'tdb', 'ppp', 'top', 'iscsi', 'libpcap', 'tcpdump', 'tcp-wrappers', 'ntp', 'libopts', 'gettext', 'libxml2', 'tree-sitter', 'zlib', 'x11'}, 'Invalid common source selection')
         check(('x11' in common_sources) == ('x11-source' in paths), 'Mixed X11 source selection')
         check(('zlib' in common_sources) == ('zlib-source' in paths), 'Mixed zlib source selection')
         check(('openssl' in common_sources) == ('openssl-source' in paths), 'Mixed OpenSSL source selection')
@@ -306,10 +306,14 @@ def validate_profile(profile, sha, target):
         check(('ntp' in common_sources) == ('libopts' in common_sources) ==
               ('ntp-source' in paths) == ('libopts-source' in paths),
               'Mixed NTP and libopts source selection')
+        check(('tree-sitter' in common_sources) == ('tree-sitter-source' in paths),
+              'Mixed tree-sitter source selection')
+        check('tree-sitter' not in common_sources or 'gettext' in common_sources,
+              'Tree-sitter requires the gettext consumer')
         check(('gettext' in common_sources) == ('libxml2' in common_sources) ==
               ('gettext-source' in paths) == ('libxml2-source' in paths),
               'Mixed gettext and libxml2 source selection')
-        for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'), ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('expat', 'textproc/expat'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd'), ('heimdal', 'security/heimdal'), ('openssh', 'security/openssh'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'), ('diffutils', 'devel/diffutils'), ('grep', 'textproc/grep'), ('ekermit', 'comms/ekermit'), ('nvi', 'editors/nvi'), ('tdb', 'databases/tdb'), ('ppp', 'net/pppd'), ('top', 'sysutils/top'), ('iscsi', 'devel/netbsd-iscsi-lib'), ('libpcap', 'net/libpcap'), ('tcpdump', 'net/tcpdump'), ('tcp-wrappers', 'security/tcp_wrappers'), ('ntp', 'net/ntp4'), ('libopts', 'devel/autogen'), ('gettext', 'devel/gettext'), ('libxml2', 'textproc/libxml2'), ('zlib', 'devel/zlib'),
+        for name, package in (('libarchive', 'archivers/libarchive'), ('libevent', 'devel/libevent'), ('openssl', 'security/openssl'), ('libfido2', 'security/libfido2'), ('libcbor', 'devel/libcbor'), ('expat', 'textproc/expat'), ('libfetch', 'net/libfetch'), ('openldap', 'databases/openldap'), ('unbound', 'net/unbound'), ('wpa', 'net/wpa_supplicant'), ('mdns', 'net/mDNSResponder'), ('dhcpcd', 'net/dhcpcd'), ('heimdal', 'security/heimdal'), ('openssh', 'security/openssh'), ('byacc', 'devel/byacc'), ('texinfo', 'devel/gtexinfo'), ('rcs', 'devel/rcs'), ('diffutils', 'devel/diffutils'), ('grep', 'textproc/grep'), ('ekermit', 'comms/ekermit'), ('nvi', 'editors/nvi'), ('tdb', 'databases/tdb'), ('ppp', 'net/pppd'), ('top', 'sysutils/top'), ('iscsi', 'devel/netbsd-iscsi-lib'), ('libpcap', 'net/libpcap'), ('tcpdump', 'net/tcpdump'), ('tcp-wrappers', 'security/tcp_wrappers'), ('ntp', 'net/ntp4'), ('libopts', 'devel/autogen'), ('gettext', 'devel/gettext'), ('libxml2', 'textproc/libxml2'), ('tree-sitter', 'textproc/tree-sitter'), ('zlib', 'devel/zlib'),
                               ('x11', X11_PACKAGE)):
             if name not in common_sources:
                 continue

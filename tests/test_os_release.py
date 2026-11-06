@@ -529,9 +529,10 @@ class BuilderReleaseTests(TemporaryCase):
         saved = profile['sdk_receipt']
         signature, paths = saved['signature'], saved['paths']
         paths.update({'gettext-source': '/prepared/gettext', 'libxml2-source': '/prepared/xml',
+                      'tree-sitter-source': '/prepared/tree-sitter',
                       'zlib-source': '/prepared/zlib', 'git': '/usr/bin/git'})
         for name, package in (('gettext', 'devel/gettext'), ('libxml2', 'textproc/libxml2'),
-                              ('zlib', 'devel/zlib')):
+                              ('tree-sitter', 'textproc/tree-sitter'), ('zlib', 'devel/zlib')):
             signature['common_sources'][name] = {'format': 'emberbsd-prepared-source', 'version': 1,
                 'package': package, 'tree_sha256': 'a' * 64, 'identity': {'fixture': True}}
         native = signature['native_toolset']
@@ -543,7 +544,8 @@ class BuilderReleaseTests(TemporaryCase):
             native, signature['compiler_family'])
         saved['commands'] = [dict(argv=argv, status='passed', exit_status=0) for argv in profile['commands']]
         self.assertGreater(len(profile['commands']), 2)
-        self.assertTrue(all('EMBER_ZLIB_SOURCE=/prepared/zlib' in command
+        self.assertTrue(all('EMBER_ZLIB_SOURCE=/prepared/zlib' in command and
+                            'EMBER_TREE_SITTER_SOURCE=/prepared/tree-sitter' in command
                             for command in profile['commands']
                             if command[0].endswith('/build.sh') or
                             command[0].startswith(paths['tools'] + '/bin/nbmake-')))
@@ -567,6 +569,31 @@ class BuilderReleaseTests(TemporaryCase):
                     validate_profile(profile, receipt['sources']['os']['commit'], 'aarch64')
                 del saved['signature']['common_sources'][name]
                 del saved['paths'][name + '-source']
+
+    def test_historical_gettext_pair_receipt_without_tree_sitter_remains_readable(self):
+        options = release_fixture(self.root, 'aarch64')
+        receipt = OSReleaseBuilder(options).run()
+        profile = jsonio.read_json(Path(options['destination']) / 'build-profile.json')
+        saved = profile['sdk_receipt']
+        signature, paths = saved['signature'], saved['paths']
+        paths.update({'gettext-source': '/prepared/gettext', 'libxml2-source': '/prepared/xml',
+                      'git': '/usr/bin/git'})
+        for name, package in (('gettext', 'devel/gettext'), ('libxml2', 'textproc/libxml2')):
+            signature['common_sources'][name] = {'format': 'emberbsd-prepared-source', 'version': 1,
+                'package': package, 'tree_sha256': 'a' * 64, 'identity': {'fixture': True}}
+        native = signature['native_toolset']
+        for role in ('gmake', 'pkg-config', 'od', 'msgfmt', 'msgmerge', 'xgettext', 'msginit', 'msgconv', 'msgfilter', 'sed'):
+            native['tools'][role] = native['bundle_root'] + '/bin/' + role
+        from emberbsd_sdk.native_os_routing import native_path
+        signature['environment']['PATH'] = native_path(native)
+        signature['flags'], profile['commands'] = producer_commands('aarch64', paths,
+            signature['host_tools'], receipt['sources']['os']['commit'], profile['source_timestamp'],
+            profile['jobs'], profile['shell'], native, signature['compiler_family'])
+        saved['commands'] = [dict(argv=argv, status='passed', exit_status=0)
+                             for argv in profile['commands']]
+        self.assertNotIn('tree-sitter-source', paths)
+        self.assertNotIn('tree-sitter', signature['common_sources'])
+        kit.profile_check(profile, receipt['sources']['os']['commit'], profile['product_version'])
 
     def test_profile_rejects_gettext_path_without_source_record(self):
         options = release_fixture(self.root, 'aarch64')

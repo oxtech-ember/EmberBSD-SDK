@@ -253,10 +253,18 @@ print(json.dumps({{'current': names}}))
 
 
 class BuilderTests(TemporaryCase):
-    def test_gcc_requires_gettext_and_libxml2_as_a_pair(self):
-        for name in ('gettext-source', 'libxml2-source'):
-            with self.subTest(name=name), self.assertRaisesRegex(SDKError, 'selected together'):
-                B(self.options | {name: '/prepared/source'}).preflight()
+    def test_gcc_requires_gettext_libxml2_and_tree_sitter_as_a_triple(self):
+        incomplete = [
+            {'gettext-source': '/prepared/gettext'},
+            {'libxml2-source': '/prepared/xml'},
+            {'tree-sitter-source': '/prepared/tree'},
+            {'gettext-source': '/prepared/gettext', 'libxml2-source': '/prepared/xml'},
+            {'gettext-source': '/prepared/gettext', 'tree-sitter-source': '/prepared/tree'},
+            {'libxml2-source': '/prepared/xml', 'tree-sitter-source': '/prepared/tree'},
+        ]
+        for sources in incomplete:
+            with self.subTest(sources=sources), self.assertRaisesRegex(SDKError, 'selected together'):
+                B(self.options | sources).preflight()
 
     def test_stale_prepared_source_for_the_selected_ports_fails_preflight(self):
         # Without the Ports check a receipt is read by form only, so a source
