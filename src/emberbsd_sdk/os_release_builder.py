@@ -89,6 +89,8 @@ def gettext_libtool_command(paths, git, target, jobs, compiler_family, host_fami
                '--host-compiler-family', host_family]
     if 'pkgsrc-export' in paths:
         command += ['--pkgsrc-export', paths['pkgsrc-export']]
+    if 'distdir' in paths:
+        command += ['--distdir', paths['distdir']]
     if compiler_family == 'clang' and 'llvm-runtime-stage' in paths:
         command += ['--runtime-stage', paths['llvm-runtime-stage']]
         if 'llvm-runtime-base' in paths:

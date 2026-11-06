@@ -154,6 +154,12 @@ command, so it never runs alongside the compile;
 later builds with the same pkgsrc inputs reuse it, and the receipt records the
 fingerprint and whether the stage was reused as `pkgsrc_export`. The libtool
 producer only reads the stage. Older Ports checkouts keep the per-run export.
+Pass `--distdir /absolute/existing/cache` to reuse downloaded source archives
+in every cross-libtool context. Recipes still check their source checksums.
+The cache path is recorded with the build inputs; it does not change compiler
+flags or force compatible object files to be rebuilt. Build runners do not
+inherit ambient proxy settings, so fetch missing archives through the declared
+network route before starting a build that needs the cache.
 No compilation or output writes occur in plan mode.
 The three optional driver/interpreter path options are checked aliases for the selected
 native prefix roles. The context binds the complete normalized native selection.

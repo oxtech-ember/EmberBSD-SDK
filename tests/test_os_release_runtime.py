@@ -217,6 +217,10 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
         paths['pkgsrc-export'] = '/sdk/stages/pkgsrc-export/' + 'f' * 64
         command = gettext_libtool_command(paths, '/usr/bin/git', 'aarch64', '2', 'clang', 'clang')
         self.assertEqual(command[command.index('--pkgsrc-export') + 1], paths['pkgsrc-export'])
+        self.assertNotIn('--distdir', command)
+        paths['distdir'] = '/shared/distfiles'
+        command = gettext_libtool_command(paths, '/usr/bin/git', 'aarch64', '2', 'clang', 'clang')
+        self.assertEqual(command[command.index('--distdir') + 1], paths['distdir'])
 
     def test_pkgsrc_export_stage_is_selected_and_prepared_before_the_os_build(self):
         import json, os, tempfile
@@ -286,13 +290,20 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
                      'tools': {role: '/host/' + role for role in roles},
                      'compiler': {'family': 'clang', 'triplet': 'host-triplet'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
-        _, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
+        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
                             '/host/sh', compiler_family='clang', base_cxx=True,
                             install_base_cxx=True, native_selection=selection)
         self.assertEqual(commands[0][-2:], ['tools', 'kernel=EMBER64'])
         self.assertEqual(commands[1][-1], 'libs')
         self.assertIn('profiles/common-build-tools/cross/prepare-libtool.py', commands[2][2])
         self.assertEqual(commands[3][-1], 'distribution')
+        paths['distdir'] = '/shared/distfiles'
+        cached_flags, cached = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
+                            '/host/sh', compiler_family='clang', base_cxx=True,
+                            install_base_cxx=True, native_selection=selection)
+        self.assertEqual(cached_flags, flags)
+        self.assertEqual(cached[:2] + cached[3:], commands[:2] + commands[3:])
+        self.assertEqual(cached[2][cached[2].index('--distdir') + 1], paths['distdir'])
 
     def test_gettext_and_xml_reach_release_and_set_checks(self):
         paths = {name: '/sdk/' + name for name in (

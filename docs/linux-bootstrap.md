@@ -79,6 +79,8 @@ The [cross-libtool producer](https://github.com/oxtech-ember/EmberBSD-Ports/blob
 accepts `--distdir`. The OS build receipt records its complete command. After
 fetching the archives, add `--distdir /absolute/existing/cache` to that command
 and run it. The OS builder then reuses the completed producer context.
+The OS release CLI also accepts `--distdir /absolute/existing/cache` and forwards
+it to each cross-libtool invocation, including later context refreshes.
 
 After a failed OS run, select a new empty destination and retain compatible
 object, tool and runtime directories. See [OS release orchestration](os-release.md).
