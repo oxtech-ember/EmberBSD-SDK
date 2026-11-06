@@ -1398,6 +1398,8 @@ class SysrootBuilder:
         root = self.paths['os']
         env = dict(self.environment)
         env.pop('EMBER_NATIVE_TOOLS', None)
+        # Recursive producer queries must use the same selected OS make rules.
+        env['MAKESYSPATH'] = os.path.join(root, 'share/mk')
         common = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
                   'MAKECONF=/dev/null', '_SRC_TOP_=', 'NETBSDSRCDIR=' + root,
                   'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
