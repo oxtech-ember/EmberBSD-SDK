@@ -3,8 +3,13 @@
 import tempfile
 import unittest
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 from unittest.mock import patch
+
+sys.dont_write_bytecode = True
+SDK_SOURCE = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SDK_SOURCE / 'src'))
 
 from emberbsd_sdk import package_automatic as automatic
 from emberbsd_sdk.errors import SDKError
