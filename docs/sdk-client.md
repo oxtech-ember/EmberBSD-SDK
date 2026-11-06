@@ -201,22 +201,39 @@ signature, schema, hash or not-yet-valid failure stops the install and does
 not install those bytes. A broken authenticated catalog is the same kind of
 failure, not a reason to compile the package.
 
-Each wave holds the Ports `build.lock` and runs cross-bulk `build` against a
-private schedule. `STATE/order` is not rewritten, so another client or
-`packages.py` cannot observe a narrowed order. A killed client can leave the
-lock and the private directory; it cannot leave a narrowed order. The private
-directory links the real `STATE/edges`, so a native tool that a later
-target package feeds still receives that target's settings.
+The source schedule holds the Ports `build.lock` for the whole interval:
+the saved graph is read under that lock, current is reread under that lock,
+and every wave's controller runs under that lock. The lock PID is a
+supervisor that starts the controller, not the client. `STATE/order` is not
+rewritten. The controller receives a private copy of the edges and receipts,
+and its own `build.lock` is on that copy because the Ports lock is not
+reentrant. Finished receipt lines are copied back only after that controller
+tree has stopped. A killed client closes the supervisor's death pipe; the
+supervisor stops the controller, including a stage session it started, and
+only then removes the lock. `STATE/order` cannot be left narrowed. Do not
+remove `build.lock` while its PID is alive or while a build it started is
+still running. Killing the supervisor itself does not drain the
+controller: the lock remains and the build it started can still be running.
+A controller session whose parent has already exited is also outside this
+drain on a system that has no child subreaper. The private copy keeps the full edges, so a native tool that
+a later target package feeds still receives that target's settings.
 The client does not order a native-only subset with `selected-build`.
 `lang/llvm` with `lang/llvm-devel`, and the Qt and ICU pairs, stay in one wave
 when the second package is waiting only on the first, so the same-run shared
 stage still applies. A package recorded skipped or failed is not treated as
 built, even when Ports exits 0 for a skip; its dependents do not start. A
-native package that Ports reused because the host database already has
-`BASE>=version` has no `done` row and is accepted from that host database. A
-target package is accepted from its own database or a `done` row. The same
-PKGNAME in the other database does not count. An older installed package is
-replaced by the exact catalog package. A newer installed package is not. A
+done row names the PKGPATH and the PKGNAME that was built. That PKGNAME has
+to be the graph package. A native package that Ports reused because the host
+database already has `BASE>=version` has no done row and is accepted from
+that host database; it is not scheduled again. A newer target package is the
+same `BASE>=version` result and is not scheduled, because Ports would
+otherwise `package` and `replace` it with the older graph package. An
+installed target of the same package base is not scheduled when pkg_tools
+cannot show that it is older. A target
+package is accepted from an exact name in its own database or from a matching
+done row. The same PKGNAME in the other database does not count. An older
+installed package is replaced by the exact catalog package. A newer installed
+package is not. A
 transitive dependency of a newly published package can keep a newer installed
 package when the existing compatible-reuse check accepts it.
 If `STATE/order` or `STATE/edges` is

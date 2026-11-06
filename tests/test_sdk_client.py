@@ -6,6 +6,7 @@ import json
 import platform
 from contextlib import redirect_stderr
 from pathlib import Path
+import os
 import ssl
 import subprocess
 import sys
@@ -20,7 +21,8 @@ from emberbsd_sdk.package_cache import directory_lock
 from emberbsd_sdk.release_catalog import parse_channel
 from emberbsd_sdk.release_s3 import HTTPStatusError, HTTPStore
 from emberbsd_sdk.sdk_client import (
-    _build_saved_wave, installation_plan, apply_plan, include_source_dependencies, install_selection)
+    _ready_wave, installation_plan, apply_plan, include_source_dependencies, install_selection)
+from emberbsd_sdk.source_wave import SourceWaveLock
 from emberbsd_sdk.package_cache import PackageCache
 from emberbsd_sdk.package_install import PackageInstaller
 from test_package_cache import Store
@@ -362,32 +364,38 @@ class ClientTests(unittest.TestCase):
         self.installer.present.update(installed)
         plan = dict(roots=list(order), build_roots=list(order), packages=[], source_packages=dict(names),
                     download_size=0, unpacked_size=0)
-        calls = []
+        call_log = self.root / 'wave-calls.jsonl'
+        call_log.unlink(missing_ok=True)
 
         def source(config, roots, command, binaries=(), controller_mode=None):
             private = Path(config['source']['state'])
             self.assertTrue((state / 'build.lock').is_dir())
+            self.assertEqual((state / 'build.lock' / 'pid').read_text().strip(), str(os.getpid()))
             self.assertEqual((state / 'order').stat().st_ino, order_inode)
             self.assertEqual((state / 'order').read_bytes(), original_order)
             self.assertNotEqual(private.resolve(), state.resolve())
-            self.assertTrue((private / 'edges').is_symlink())
+            for name in ('edges', 'done', 'failed', 'blocked', 'skipped', 'packages', 'progress', 'order'):
+                self.assertFalse((private / name).is_symlink(), name)
             self.assertEqual((private / 'edges').read_bytes(), original_edges)
             with self.assertRaisesRegex(SDKError, 'writer is busy'):
                 with directory_lock(state / 'build.lock'):
                     pass
-            calls.append((list(roots), command, controller_mode,
-                          (private / 'order').read_text(), (private / 'edges').read_text()))
+            record = [list(roots), command, controller_mode,
+                      (private / 'order').read_text(), (private / 'edges').read_text()]
+            with call_log.open('a') as stream:
+                stream.write(json.dumps(record) + '\n')
             if build is not None:
                 build(roots, private)
             else:
                 with (private / 'done').open('a') as stream:
                     for root in roots:
-                        stream.write(root + ' done\n')
+                        stream.write(root + ' ' + names[root] + ' built\n')
 
         errors = io.StringIO()
         with patch('emberbsd_sdk.sdk_client.run_source', side_effect=source), redirect_stderr(errors):
             install_selection(plan, self.cfg, self.installer, self.cache, self.store,
                               refresh_current=refresh, accepted_channel=accepted)
+        calls = [json.loads(line) for line in call_log.read_text().splitlines()] if call_log.exists() else []
         self.assertEqual((state / 'order').read_bytes(), original_order)
         self.assertEqual((state / 'order').stat().st_ino, order_inode)
         self.assertEqual((state / 'edges').read_bytes(), original_edges)
@@ -457,7 +465,7 @@ class ClientTests(unittest.TestCase):
 
         with self.assertRaisesRegex(SDKError, 'CMS signature'):
             self._waves([lib, app], [(lib, lib), (lib, app), (app, app)], {lib: 'lib-1', app: 'app-1'}, refresh,
-                        build=lambda roots, _private: self.installer.present.add('lib-1'))
+                        build=lambda roots, private: (private / 'done').open('a').write(roots[0] + ' lib-1 built\n'))
         self.assertEqual(self.store.calls, [])
         self.assertNotIn('app-1', self.installer.present)
 
@@ -482,11 +490,31 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(self.store.calls, [])
         self.assertIn('could not be reread', errors)
 
+    def test_tls_eof_during_channel_reread_continues_the_build(self):
+        lib, app = 'devel/lib@native', 'net/app@native'
+        seen = {'n': 0}
+
+        def refresh():
+            seen['n'] += 1
+            if seen['n'] > 1:
+                store = HTTPStore('https://packages.example')
+                connection = unittest.mock.Mock()
+                connection.getresponse.side_effect = ssl.SSLEOFError('unexpected eof')
+                with patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection', return_value=connection):
+                    store.read('current.p7m', 1024)
+            return (*self._channel([]), 'same')
+
+        calls, errors = self._waves(
+            [lib, app], [(lib, lib), (lib, app), (app, app)], {lib: 'lib-1', app: 'app-1'}, refresh)
+        self.assertEqual([call[0] for call in calls], [[lib], [app]])
+        self.assertIn('could not be reread', errors)
+        self.assertNotIn('certificate', errors)
+
     def test_pkgname_mismatch_stays_on_the_source_wave(self):
         app = 'net/app@native'
         published = (*self._channel([('app', app, 'app-2', [])]), 'newer')
         calls, _errors = self._waves([app], [(app, app)], {app: 'app-1'}, lambda: published,
-                                     build=lambda roots, _private: self.installer.present.add('app-1'))
+                                     build=lambda roots, private: (private / 'done').open('a').write(roots[0] + ' app-1 built\n'))
         self.assertEqual([call[0] for call in calls], [[app]])
         self.assertEqual(self.store.calls, [])
 
@@ -502,7 +530,7 @@ class ClientTests(unittest.TestCase):
         with patch('emberbsd_sdk.sdk_client._matches', side_effect=matches):
             calls, errors = self._waves([lib], [(lib, lib)], {lib: 'lib-1'}, lambda: published,
                                         installed={'lib-2'}, build=lambda _roots, _private: None)
-        self.assertEqual([call[0] for call in calls], [[lib]])
+        self.assertEqual(calls, [])
         self.assertEqual(self.store.calls, [])
         self.assertNotIn('lib-1', self.installer.present)
         self.assertNotIn('without installing', errors)
@@ -614,19 +642,18 @@ class ClientTests(unittest.TestCase):
             return pattern == 'libtool-base>=1' and name == 'libtool-base-2'
 
         def build(roots, private):
-            if roots == [app]:
-                with (private / 'done').open('a') as stream:
-                    stream.write(app + ' done\n')
+            with (private / 'done').open('a') as stream:
+                for root in roots:
+                    stream.write(root + ' ' + {tool: 'libtool-base-1', app: 'app-1'}[root] + ' built\n')
 
         with patch('emberbsd_sdk.sdk_client._matches', side_effect=matches):
             calls, _errors = self._waves(
                 [tool, app], edges, {tool: 'libtool-base-1', app: 'app-1'},
                 lambda: (*self._channel([]), 'same'), installed={'libtool-base-2'}, build=build)
-        self.assertEqual([call[0] for call in calls], [[tool], [app]])
+        self.assertEqual([call[0] for call in calls], [[app]])
         self.assertTrue(all(call[1] == 'build' and call[2] == 'build' for call in calls))
         self.assertIn(f'{tool} {app}', calls[0][4])
-        self.assertEqual(calls[0][3].split(), [tool])
-        self.assertIn(f'{tool} {app}', calls[1][4])
+        self.assertEqual(calls[0][3].split(), [app])
         self.assertEqual(self.store.calls, [])
         self.assertNotIn('libtool-base-1', self.installer.present)
 
@@ -770,17 +797,15 @@ class ClientTests(unittest.TestCase):
 
     def test_skipped_native_blocks_the_dependent(self):
         lib, app = 'devel/lib@native', 'net/app@native'
-        seen = []
-
         def build(roots, private):
-            seen.append(list(roots))
             with (private / 'skipped').open('a') as stream:
                 stream.write(lib + ' skipped PKG_SKIP_REASON\n')
 
         with self.assertRaisesRegex(SDKError, 'did not build'):
             self._waves([lib, app], [(lib, lib), (lib, app), (app, app)], {lib: 'lib-1', app: 'app-1'},
                         lambda: (*self._channel([]), 'same'), build=build)
-        self.assertEqual(seen, [[lib]])
+        calls = [json.loads(line) for line in (self.root / 'wave-calls.jsonl').read_text().splitlines()]
+        self.assertEqual([call[0] for call in calls], [[lib]])
 
     def test_target_acceptance_ignores_the_native_package_database(self):
         app = 'x11/app'
@@ -811,11 +836,116 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(calls[0][0], [llvm, gate])
         self.assertNotIn(devel, calls[0][0])
 
+    def test_newer_target_is_not_scheduled_for_replacement(self):
+        app = 'x11/app'
+        self.cfg['repositories']['target'] = dict(
+            target=dict(arch='aarch64', triplet='aarch64--netbsd', abi='emberbsd-11', runtime='llvm'),
+            prefix=str(self.root / 'target'), pkgdb=str(self.root / 'target-pkgdb'))
+        self.installer.target_present.add('app-9')
+        self.installer.crypto = object()
+
+        def matches(_crypto, pattern, name):
+            self.assertEqual((pattern, name), ('app>=1', 'app-9'))
+            return True
+
+        with patch('emberbsd_sdk.sdk_client._matches', side_effect=matches):
+            calls, _errors = self._waves([app], [(app, app)], {app: 'app-1'},
+                                         lambda: (*self._channel([]), 'same'))
+        self.assertEqual(calls, [])
+        self.assertIn('app-9', self.installer.target_present)
+
+    def test_older_target_is_still_scheduled(self):
+        app = 'x11/app'
+        self.cfg['repositories']['target'] = dict(
+            target=dict(arch='aarch64', triplet='aarch64--netbsd', abi='emberbsd-11', runtime='llvm'),
+            prefix=str(self.root / 'target'), pkgdb=str(self.root / 'target-pkgdb'))
+        self.installer.target_present.add('app-0')
+        self.installer.crypto = object()
+
+        def matches(_crypto, pattern, name):
+            self.assertEqual((pattern, name), ('app>=1', 'app-0'))
+            return False
+
+        with patch('emberbsd_sdk.sdk_client._matches', side_effect=matches):
+            calls, _errors = self._waves([app], [(app, app)], {app: 'app-1'},
+                                         lambda: (*self._channel([]), 'same'))
+        self.assertEqual([call[0] for call in calls], [[app]])
+
+    def test_uncompared_target_is_not_replaced(self):
+        app = 'x11/app'
+        self.cfg['repositories']['target'] = dict(
+            target=dict(arch='aarch64', triplet='aarch64--netbsd', abi='emberbsd-11', runtime='llvm'),
+            prefix=str(self.root / 'target'), pkgdb=str(self.root / 'target-pkgdb'))
+        self.installer.target_present.add('app-9')
+        with self.assertRaisesRegex(SDKError, 'without proof it is older'):
+            self._waves([app], [(app, app)], {app: 'app-1'}, lambda: (*self._channel([]), 'same'))
+
+    def test_done_receipt_must_name_the_graph_package(self):
+        app = 'x11/app'
+
+        def build(_roots, private):
+            with (private / 'done').open('a') as stream:
+                stream.write('x11/app app-9 other\n')
+
+        with self.assertRaisesRegex(SDKError, 'does not match the graph'):
+            self._waves([app], [(app, app)], {app: 'app-1'}, lambda: (*self._channel([]), 'same'), build=build)
+
+    def test_channel_reread_keeps_the_source_lock(self):
+        lib, app = 'devel/lib@native', 'net/app@native'
+        seen = {'n': 0}
+
+        def refresh():
+            seen['n'] += 1
+            if seen['n'] > 1:
+                state = self.root / 'state'
+                self.assertTrue((state / 'build.lock').is_dir())
+                self.assertNotEqual((state / 'build.lock' / 'pid').read_text().strip(), str(os.getpid()))
+                with self.assertRaisesRegex(SDKError, 'writer is busy'):
+                    with directory_lock(state / 'build.lock'):
+                        pass
+            return (*self._channel([]), 'same')
+
+        calls, _errors = self._waves(
+            [lib, app], [(lib, lib), (lib, app), (app, app)], {lib: 'lib-1', app: 'app-1'}, refresh)
+        self.assertEqual([call[0] for call in calls], [[lib], [app]])
+        self.assertFalse((self.root / 'state' / 'build.lock').exists())
+
+    def test_shared_stage_grouping_follows_each_role(self):
+        llvm, native, devel, native_devel = (
+            'lang/llvm', 'lang/llvm@native', 'lang/llvm-devel', 'lang/llvm-devel@native')
+        blocker, later = 'devel/blocker', 'devel/later'
+        order = [llvm, native, devel, native_devel, blocker, later]
+        deps = {
+            llvm: [],
+            native: [blocker],
+            devel: [llvm],
+            native_devel: [native],
+            blocker: [later],
+            later: [blocker],
+        }
+        code = (
+            'import json\n'
+            'from emberbsd_sdk.sdk_client import _ready_wave\n'
+            f'order = {order!r}\n'
+            f'deps = {deps!r}\n'
+            'print(json.dumps(_ready_wave(order, deps, set(order))))\n'
+        )
+        results = []
+        for seed in range(8):
+            env = os.environ.copy()
+            env['PYTHONHASHSEED'] = str(seed)
+            env['PYTHONPATH'] = 'src'
+            out = subprocess.check_output([sys.executable, '-c', code], env=env, cwd='/workspace')
+            results.append(out)
+        self.assertEqual(len(set(results)), 1)
+        self.assertEqual(json.loads(results[0]), [llvm, devel])
+
     def test_ports_receipt_rotation_does_not_change_the_shared_order(self):
         self._source()
         lib, app = 'devel/lib@native', 'net/app@native'
         state = self._graph([lib, app], [(lib, lib), (lib, app), (app, app)], {lib: 'lib-1', app: 'app-1'})
         (state / 'failed').write_text('old/failed failed\n')
+        (state / 'progress').write_text('start old/pkg\n')
         inode = (state / 'order').stat().st_ino
         marker = self.root / 'private-state'
         script = self.root / 'rotate-receipts.sh'
@@ -828,26 +958,34 @@ grep -qx 'devel/lib@native' "$state/order"
 test "$(stat -c %i "$3/order")" = "$4"
 mv "$state/failed" "$state/failed.rotated"
 printf '%s\\n' 'devel/lib@native failed' > "$state/failed"
-printf '%s\\n' 'net/app@native done' >> "$state/done"
+printf '%s\\n' 'net/app@native app-1 built' >> "$state/done"
+printf '%s\\n' 'start devel/lib@native' >> "$state/progress"
 """)
         script.chmod(0o755)
 
         def source(config, roots, command, binaries=(), controller_mode=None):
+            private = Path(config['source']['state'])
             self.assertEqual((roots, command, controller_mode), ([lib], 'build', 'build'))
+            self.assertFalse((private / 'failed').is_symlink())
             self.assertTrue((state / 'build.lock').is_dir())
             subprocess.run([str(script), config['source']['state'], str(marker), str(state), str(inode)], check=True)
 
         with patch('emberbsd_sdk.sdk_client.run_source', side_effect=source):
-            receipts = _build_saved_wave(self.cfg, [lib], [])
+            session = SourceWaveLock(state)
+            try:
+                receipts = session.build(self.cfg, [lib], [])
+            finally:
+                session.close()
         private = Path(marker.read_text())
         self.assertFalse(private.exists())
         self.assertEqual((state / 'order').stat().st_ino, inode)
         self.assertEqual((state / 'order').read_text().splitlines(), [lib, app])
         self.assertTrue((state / 'edges').is_file())
-        self.assertTrue((state / 'logs').is_dir())
-        self.assertEqual(receipts['failed'], [lib])
-        self.assertEqual(receipts['done'], [app])
+        self.assertFalse((state / 'edges').is_symlink())
+        self.assertEqual(receipts['failed'], [[lib, 'failed']])
+        self.assertEqual(receipts['done'], [[app, 'app-1', 'built']])
         self.assertEqual((state / 'failed').read_text().splitlines(), ['old/failed failed', lib + ' failed'])
+        self.assertEqual((state / 'progress').read_text().splitlines(), ['start old/pkg', 'start devel/lib@native'])
         self.assertFalse((state / 'build.lock').exists())
         self.assertFalse((state / 'failed.rotated').exists())
 

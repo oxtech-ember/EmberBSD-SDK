@@ -9,7 +9,6 @@ from importlib import resources
 import os
 from pathlib import Path
 import platform
-import shutil
 import subprocess
 import sys
 import tarfile
@@ -230,7 +229,7 @@ def include_source_dependencies(plan, release, catalogs, config, installer, cach
     return result
 
 
-def apply_plan(plan, config, installer, cache, store):
+def apply_plan(plan, config, installer, cache, store, *, source_locked=False):
     _source_config(config, plan['build_roots'])
     pending = [p for p in plan['packages'] if p['action'] != 'installed']
     selected_repositories = {p['repository'] for p in plan['packages']}
@@ -259,8 +258,9 @@ def apply_plan(plan, config, installer, cache, store):
         sysroot_archive = cache.fetch(store, _key(config.get('url_prefix', ''), artifact_key(item, '')), item)
         sysroot_package.check(sysroot_archive, sysroot)
     with ExitStack() as locks:
-        # Same whole-build lock as cross-bulk; release before asking it to build.
-        if config.get('source') and (new_sysroot or selected_repositories):
+        # Same whole-build lock as cross-bulk. A source-wave supervisor already
+        # holds it across adoption, so this install must not take it again.
+        if config.get('source') and (new_sysroot or selected_repositories) and not source_locked:
             locks.enter_context(directory_lock(Path(config['source']['state']) / 'build.lock'))
         # A target pkgdb lock can create its parent inside the sysroot. Publish
         # the verified base first, then add target packages through pkg_tools.
@@ -382,31 +382,26 @@ _SHARED_STAGE_PAIRS = (
     ('x11/qt6-qtbase', 'x11/qt6-qtbase-devel'),
     ('textproc/icu', 'textproc/icu-devel'),
 )
-_RECEIPTS = ('done', 'failed', 'blocked', 'skipped')
-
-
-def _package_path(root):
-    return root[:-len('@native')] if root.endswith('@native') else root
 
 
 def _ready_wave(order, deps, pending):
     ready = [root for root in order if root in pending and
              not any(dep in pending for dep in deps.get(root, ()))]
     selected = set(ready)
-    by_path = {}
-    for root in pending:
-        by_path.setdefault(_package_path(root), root)
+    # Target and native copies of one PKGPATH are different packages. Walk
+    # both roles explicitly so set iteration order cannot pick one of them.
     changed = True
     while changed:
         changed = False
         for producer, consumer in _SHARED_STAGE_PAIRS:
-            producer_root = by_path.get(producer)
-            consumer_root = by_path.get(consumer)
-            if (producer_root not in selected or consumer_root is None or consumer_root in selected):
-                continue
-            if all(dep in selected or dep not in pending for dep in deps.get(consumer_root, ())):
-                selected.add(consumer_root)
-                changed = True
+            for suffix in ('', '@native'):
+                producer_root = producer + suffix
+                consumer_root = consumer + suffix
+                if producer_root not in selected or consumer_root not in pending or consumer_root in selected:
+                    continue
+                if all(dep in selected or dep not in pending for dep in deps.get(consumer_root, ())):
+                    selected.add(consumer_root)
+                    changed = True
     return [root for root in order if root in selected]
 
 
@@ -434,6 +429,15 @@ def _installed_is_current(installer, graph_name, installed):
         return False
     base, pattern = _version_pattern(graph_name)
     return any(name.rsplit('-', 1)[0] == base and _matches(crypto, pattern, name) for name in installed)
+
+
+def _unproven_target_replacement(installer, graph_name, installed):
+    """True when a different installed target of this PKGBASE might not be older."""
+    if '-' not in graph_name or graph_name in installed:
+        return False
+    base = graph_name.rsplit('-', 1)[0]
+    siblings = [name for name in installed if name != graph_name and '-' in name and name.rsplit('-', 1)[0] == base]
+    return bool(siblings) and not _replacement_is_upgrade(installer, graph_name, installed)
 
 
 def _replacement_is_upgrade(installer, graph_name, installed):
@@ -482,7 +486,7 @@ def _adopt_published(config, installer, cache, store, release, catalogs, names, 
     reused = []
     if fresh:
         with directory_lock(cache.root / '.lock'):
-            apply_plan(merged, config, installer, cache, store)
+            apply_plan(merged, config, installer, cache, store, source_locked=True)
         reused = list(merged.get('compatible_reuse') or [])
         binaries = list(binaries) + [(package['root'], package['pkgname'])
                                      for package in merged['packages'] if package.get('pkgname')]
@@ -499,86 +503,65 @@ def _adopt_published(config, installer, cache, store, release, catalogs, names, 
     return binaries, reused
 
 
-def _receipt_text(path):
-    if not path.exists() or path.is_dir():
-        return ''
-    return path.read_text()
+def _receipt_roots(rows):
+    return [row[0] for row in rows if row]
 
 
-def _link_receipt(real_state, private, name):
-    source = real_state / name
-    if name == 'logs':
-        source.mkdir(exist_ok=True)
-    elif not source.exists():
-        source.write_text('')
-    (private / name).symlink_to(source)
+def _retain_current(config, installer, names, pending):
+    """Drop a package the role's database already accepts at the graph version or newer.
 
-
-def _new_receipt_roots(before, current):
-    previous = set(before.splitlines())
-    return [line.split()[0] for line in current.splitlines() if line.strip() and line not in previous]
-
-
-def _persist_detached_receipts(real_state, private):
-    """Ports renames a symlink when it rotates failed/blocked; keep those new lines."""
-    for name in ('failed', 'blocked', 'skipped', 'done'):
-        path = private / name
-        if path.is_symlink() or not path.is_file():
-            continue
-        text = path.read_text()
-        if not text:
-            continue
-        with (real_state / name).open('a') as stream:
-            if text and not text.endswith('\n'):
-                text += '\n'
-            stream.write(text)
-
-
-def _build_saved_wave(config, ready, binaries):
-    """Build one ready wave without rewriting the shared Ports order.
-
-    cross-bulk `build` schedules `$state/order` and reads target-fed tools from
-    `$state/edges`. The shared order stays in place. This wave's schedule is a
-    private file, and the real edges and receipt files are linked into that
-    directory. The real `build.lock` is held so another client or `packages.py`
-    cannot build the same state; the controller locks only the private directory,
-    because the Ports lock is not reentrant.
+    Ports replaces any installed target of the same PKGBASE, including a newer
+    one. That replacement is a downgrade, so a current target never enters the
+    schedule. A current native package is the same ``BASE>=version`` result
+    Ports already treats as done.
     """
-    real_state = Path(config['source']['state'])
-    with directory_lock(real_state / 'build.lock'):
-        private = Path(tempfile.mkdtemp(prefix='ember-wave-'))
-        try:
-            before = {name: _receipt_text(real_state / name) for name in _RECEIPTS}
-            for name in ('edges', 'packages', 'progress', 'logs', *_RECEIPTS):
-                _link_receipt(real_state, private, name)
-            (private / 'order').write_text(''.join(root + '\n' for root in ready))
-            wave = dict(config, source=dict(config['source'], state=str(private)))
-            try:
-                run_source(wave, ready, 'build', binaries=binaries, controller_mode='build')
-            finally:
-                _persist_detached_receipts(real_state, private)
-            receipts = {name: _new_receipt_roots(before[name], _receipt_text(private / name))
-                        for name in _RECEIPTS}
-        finally:
-            shutil.rmtree(private)
-    return receipts
+    for root in list(pending):
+        name = names.get(root)
+        if not name:
+            continue
+        role = 'host' if root.endswith('@native') else 'target'
+        installed = _installed_names(config, installer, role)
+        if _installed_is_current(installer, name, installed):
+            pending.discard(root)
+            continue
+        # Ports replaces any target of the same PKGBASE. Scheduling that is a
+        # downgrade unless pkg_tools has shown the installed package is older.
+        if role == 'target' and _unproven_target_replacement(installer, name, installed):
+            installed_names = ', '.join(sorted(
+                sibling for sibling in installed if sibling.rsplit('-', 1)[0] == name.rsplit('-', 1)[0]))
+            raise SDKError(
+                f'{root} is installed as {installed_names}; refusing to replace it with {name} '
+                'without proof it is older')
 
 
 def _accept_built_wave(config, installer, names, ready, pending, receipts):
     """Honor this wave's done, skipped and failed receipts.
 
-    A native package Ports reused through `pkg_info -e BASE>=version` is not
-    written to `state/done`. That reuse is accepted only from the host package
-    database. A skipped package still makes `build` exit 0; its dependents must
-    not run in a later wave. A target package is accepted from the target
-    database or a done receipt, never because the native database has the same name.
+    A done row is ``PKGPATH PKGNAME ...``. The PKGNAME has to be the graph
+    package; a newer or older name in that row is not success. A native
+    package Ports reused through ``pkg_info -e BASE>=version`` has no done
+    row and is accepted from the host database. A target package is accepted
+    from an exact target-database name or a matching done row, never from
+    the host database and never from a newer target that Ports would replace.
     """
-    skipped = set(receipts['skipped'])
-    failed = set(receipts['failed']) | set(receipts['blocked'])
-    done = set(receipts['done'])
+    skipped = set(_receipt_roots(receipts['skipped']))
+    failed = set(_receipt_roots(receipts['failed'])) | set(_receipt_roots(receipts['blocked']))
     blocked = [root for root in ready if root in skipped or root in failed]
     if blocked:
         raise SDKError('Ports did not build ' + ', '.join(blocked))
+    done = {}
+    mismatched = []
+    for row in receipts['done']:
+        if not row or row[0] not in ready:
+            continue
+        pkgname = row[1] if len(row) > 1 else None
+        expected = names.get(row[0])
+        if pkgname != expected:
+            mismatched.append(f'{row[0]} receipt {pkgname or "without a PKGNAME"} is not {expected or "the graph package"}')
+        else:
+            done[row[0]] = pkgname
+    if mismatched:
+        raise SDKError('Ports receipt does not match the graph: ' + '; '.join(mismatched))
     missing = []
     for root in ready:
         if root in done:
@@ -604,34 +587,43 @@ def _install_source_waves(plan, config, installer, cache, store, refresh_current
     names = plan.get('source_packages')
     if refresh_current is None or not names or not source:
         return None
-    graph = _read_source_graph(Path(source['state']))
-    if graph is None:
-        return None
-    order, deps = graph
-    if any(root not in order for root in plan['build_roots']):
-        return None
-    handled = {package['root'] for package in plan['packages']}
-    pending = {root for root in order if root not in handled}
-    reused, seen = [], accepted_channel
-    while pending:
-        snapshot = _refresh_channel(refresh_current)
-        if snapshot is not None:
-            release, catalogs, identity = snapshot
-            if seen != identity:
-                if seen is not None:
-                    print('Current changed; checking for published packages.', file=sys.stderr)
-                seen = identity
-            binaries, extra = _adopt_published(config, installer, cache, store, release, catalogs,
-                                               names, order, pending, binaries)
-            reused.extend(extra)
-        if not pending:
-            break
-        ready = _ready_wave(order, deps, pending)
-        if not ready:
-            raise SDKError('source graph has no ready package')
-        receipts = _build_saved_wave(config, ready, binaries)
-        _accept_built_wave(config, installer, names, ready, pending, receipts)
-    return reused
+    state = Path(source['state'])
+    from .source_wave import SourceWaveLock
+    # The lock covers the graph read, every channel reread and every controller.
+    # The controller writes a private copy and locks only that copy.
+    session = SourceWaveLock(state)
+    try:
+        graph = _read_source_graph(state)
+        if graph is None:
+            return None
+        order, deps = graph
+        if any(root not in order for root in plan['build_roots']):
+            return None
+        handled = {package['root'] for package in plan['packages']}
+        pending = {root for root in order if root not in handled}
+        reused, seen = [], accepted_channel
+        while pending:
+            snapshot = _refresh_channel(refresh_current)
+            if snapshot is not None:
+                release, catalogs, identity = snapshot
+                if seen != identity:
+                    if seen is not None:
+                        print('Current changed; checking for published packages.', file=sys.stderr)
+                    seen = identity
+                binaries, extra = _adopt_published(config, installer, cache, store, release, catalogs,
+                                                   names, order, pending, binaries)
+                reused.extend(extra)
+            _retain_current(config, installer, names, pending)
+            if not pending:
+                break
+            ready = _ready_wave(order, deps, pending)
+            if not ready:
+                raise SDKError('source graph has no ready package')
+            receipts = session.build(config, ready, binaries)
+            _accept_built_wave(config, installer, names, ready, pending, receipts)
+        return reused
+    finally:
+        session.close()
 
 
 def _read_channel(crypto, store, trust, state, prefix):

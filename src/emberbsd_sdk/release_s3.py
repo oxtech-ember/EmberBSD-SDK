@@ -28,8 +28,12 @@ MAX_PUT_SIZE = 5 * 1024 ** 3
 
 
 def _failed_transport(method, path, exc):
-    """Separate a failed certificate check from a response that never arrived."""
-    if isinstance(exc, ssl.SSLError):
+    """Separate a rejected certificate from a TLS session that did not finish.
+
+    EOF, syscall and renegotiation errors are transport failures. Only an
+    actual certificate verification error is a trust failure.
+    """
+    if isinstance(exc, ssl.SSLCertVerificationError):
         raise SDKError(f'{method} {path}: HTTPS certificate verification failed ({type(exc).__name__})') from exc
     raise TransportError(f'{method} {path}: HTTPS transport failed ({type(exc).__name__})') from exc
 
@@ -133,9 +137,10 @@ class HTTPStore:
             try:
                 connection.request(method, path, body=body, headers=self._headers(method, path, dict(headers)))
                 response = connection.getresponse()
-            except (TimeoutError, ConnectionError, http.client.RemoteDisconnected) as exc:
+            except (TimeoutError, ConnectionError, http.client.RemoteDisconnected, ssl.SSLError) as exc:
                 connection.close()
-                if attempt + 1 == attempts:
+                # A rejected certificate is not a dropped session and is not retried.
+                if isinstance(exc, ssl.SSLCertVerificationError) or attempt + 1 == attempts:
                     _failed_transport(method, path, exc)
             except (OSError, http.client.HTTPException) as exc:
                 connection.close()

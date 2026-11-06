@@ -277,6 +277,28 @@ class HTTPSRetryTests(unittest.TestCase):
                 self.assertEqual(factory.call_count, 1)
                 connection.close.assert_called_once_with()
 
+    def test_tls_eof_is_a_transport_failure(self):
+        for failure in (ssl.SSLEOFError('unexpected eof'), ssl.SSLSyscallError('syscall')):
+            with self.subTest(failure=type(failure).__name__):
+                connection = Mock()
+                connection.getresponse.side_effect = failure
+                with patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection',
+                           return_value=connection) as factory:
+                    with self.assertRaises(TransportError) as caught:
+                        self.store.read('object', 100)
+                self.assertNotIn('certificate', str(caught.exception))
+                self.assertEqual(factory.call_count, 3)
+                self.assertEqual(connection.close.call_count, 3)
+        connection = Mock()
+        response = self.response()
+        connection.getresponse.return_value = response
+        response.read.side_effect = ssl.SSLEOFError('eof during body')
+        with patch('emberbsd_sdk.release_s3.http.client.HTTPSConnection', return_value=connection) as factory:
+            with self.assertRaises(TransportError) as caught:
+                self.store.read('object', 100)
+        self.assertNotIn('certificate', str(caught.exception))
+        self.assertEqual(factory.call_count, 1)
+
 
 class KeepAliveHandler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'

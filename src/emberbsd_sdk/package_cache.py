@@ -20,7 +20,7 @@ def directory_lock(path):
     try:
         path.mkdir()
     except FileExistsError as exc:
-        raise SDKError(f'writer is busy: {path}; remove only after confirming its owner stopped') from exc
+        raise SDKError(f'writer is busy: {path}; remove only after confirming its owner and every build it started have stopped') from exc
     try:
         (path / 'pid').write_text(str(os.getpid()) + '\n')
         yield
