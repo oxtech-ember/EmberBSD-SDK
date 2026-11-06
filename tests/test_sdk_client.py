@@ -370,12 +370,7 @@ class ClientTests(unittest.TestCase):
         def source(config, roots, command, binaries=(), controller_mode=None):
             private = Path(config['source']['state'])
             self.assertTrue((state / 'build.lock').is_dir())
-            lock_pid = (state / 'build.lock' / 'pid').read_text().strip()
-            # A private PID namespace stores the outside PID in the lock.
-            if os.getpid() == 1:
-                self.assertGreater(int(lock_pid), 1)
-            else:
-                self.assertEqual(lock_pid, str(os.getpid()))
+            self.assertEqual((state / 'build.lock' / 'pid').read_text().strip(), str(os.getpid()))
             self.assertEqual((state / 'order').stat().st_ino, order_inode)
             self.assertEqual((state / 'order').read_bytes(), original_order)
             self.assertNotEqual(private.resolve(), state.resolve())
@@ -935,12 +930,13 @@ class ClientTests(unittest.TestCase):
             f'deps = {deps!r}\n'
             'print(json.dumps(_ready_wave(order, deps, set(order))))\n'
         )
+        checkout = Path(__file__).resolve().parents[1]
         results = []
         for seed in range(8):
             env = os.environ.copy()
             env['PYTHONHASHSEED'] = str(seed)
-            env['PYTHONPATH'] = 'src'
-            out = subprocess.check_output([sys.executable, '-c', code], env=env, cwd='/workspace')
+            env['PYTHONPATH'] = str(checkout / 'src')
+            out = subprocess.check_output([sys.executable, '-c', code], env=env, cwd=checkout)
             results.append(out)
         self.assertEqual(len(set(results)), 1)
         self.assertEqual(json.loads(results[0]), [llvm, devel])

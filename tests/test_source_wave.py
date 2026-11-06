@@ -19,7 +19,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.package_cache import directory_lock
-from emberbsd_sdk.source_wave import SourceWaveLock
+from emberbsd_sdk.source_wave import SourceWaveLock, _descendants
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -202,13 +202,13 @@ exit 0
                 if time.monotonic() > deadline:
                     self.fail('real controller did not reach bmake')
                 time.sleep(0.05)
-            self.assertTrue(self._fixture_pids())
+            self.assertTrue(self._fixture_commands())
             lock_pid = int((state / 'build.lock' / 'pid').read_text().strip())
-            self.assertGreater(lock_pid, 1)
+            self._assert_recorded_controller(state, lock_pid)
             self.assertNotEqual(lock_pid, client_pid)
             os.kill(lock_pid, 0)
             os.kill(client_pid, 9)
-            while self._fixture_pids():
+            while self._fixture_commands():
                 if time.monotonic() > deadline:
                     self.fail('controller kept running after the client was killed')
                 time.sleep(0.05)
@@ -227,8 +227,8 @@ exit 0
         finally:
             self._reap(client_pid)
 
-    def test_killed_lock_owner_stops_the_real_controller(self):
-        """SIGKILL of the lock PID stops the real controller before the lock is reusable."""
+    def test_killed_lock_owner_stops_the_real_controller_without_a_namespace(self):
+        """SIGKILL of the published lock PID stops the setsid controller before the lock is reusable."""
         self._bmake(sleep=True)
         state = self.fix / 'state'
         ready = self.fix / 'bmake.ready'
@@ -259,15 +259,13 @@ exit 0
                     self.fail('real controller did not reach bmake')
                 time.sleep(0.05)
             lock_pid = int((state / 'build.lock' / 'pid').read_text().strip())
-            self.assertGreater(lock_pid, 1)
-            self.assertEqual(Path(f'/proc/{lock_pid}/comm').read_text().strip(), 'python3')
-            isolated = os.stat(f'/proc/{lock_pid}/ns/pid').st_ino != os.stat('/proc/self/ns/pid').st_ino
-            self.assertTrue(isolated)
-            self.assertTrue(self._fixture_pids())
+            controller = self._assert_recorded_controller(state, lock_pid)
+            self._assert_same_pid_namespace(lock_pid)
+            self._assert_same_pid_namespace(controller)
             os.kill(lock_pid, 9)
-            while self._fixture_pids():
+            while self._fixture_commands() or self._alive(controller):
                 if time.monotonic() > deadline:
-                    self.fail('controller kept running after the lock owner was killed')
+                    self.fail('controller kept running after the published lock owner was killed')
                 time.sleep(0.05)
             while (state / 'build.lock').exists():
                 if time.monotonic() > deadline:
@@ -275,6 +273,7 @@ exit 0
                 time.sleep(0.05)
             (self.fix / 'overlap-check').write_text('x')
             self.assertFalse((self.fix / 'overlap').exists())
+            self.assertIn('start x11/app', (state / 'progress').read_text())
             self.sleep = False
             result = self._run(state)
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -284,22 +283,120 @@ exit 0
             for path in set(Path('/tmp').glob('ember-wave-*')) - private_before:
                 shutil.rmtree(path, ignore_errors=True)
 
-    def _fixture_pids(self):
-        needle = str(self.fix).encode()
-        found = []
-        for entry in os.listdir('/proc'):
-            if not entry.isdigit():
-                continue
-            pid = int(entry)
-            if pid == os.getpid():
-                continue
+    def test_one_interrupt_stops_the_controller(self):
+        self._bmake(sleep=True)
+        state = self.fix / 'state'
+        ready = self.fix / 'bmake.ready'
+
+        def client():
+            session = SourceWaveLock(state)
             try:
-                command = Path('/proc', entry, 'cmdline').read_bytes()
-            except OSError:
-                continue
-            if needle in command:
-                found.append(pid)
-        return found
+                session.exec_controller(
+                    ['/bin/sh', str(SCRIPT), 'build', str(self.fix / 'roots'), '{state}'],
+                    self._env(), ['x11/app'])
+            finally:
+                session.close()
+
+        client_pid = os.fork()
+        if client_pid == 0:
+            try:
+                client()
+            finally:
+                os._exit(0)
+        try:
+            deadline = time.monotonic() + 20
+            while not ready.exists():
+                ended, _status = os.waitpid(client_pid, os.WNOHANG)
+                if ended:
+                    self.fail('client exited before the controller reached bmake')
+                if time.monotonic() > deadline:
+                    self.fail('real controller did not reach bmake')
+                time.sleep(0.05)
+            os.kill(client_pid, signal.SIGINT)
+            while self._fixture_commands():
+                if time.monotonic() > deadline:
+                    self.fail('one interrupt left the controller running')
+                time.sleep(0.05)
+            while (state / 'build.lock').exists():
+                if time.monotonic() > deadline:
+                    self.fail('one interrupt left the build lock')
+                time.sleep(0.05)
+            _pid, status = os.waitpid(client_pid, 0)
+            self.assertTrue(os.WIFEXITED(status))
+            self.assertIn('start x11/app', (state / 'progress').read_text())
+            (self.fix / 'overlap-check').write_text('x')
+            self.assertFalse((self.fix / 'overlap').exists())
+        finally:
+            self._reap(client_pid)
+
+    def test_ps_parent_walk_sees_a_setsid_child(self):
+        pid = os.fork()
+        if pid == 0:
+            try:
+                os.setsid()
+                while True:
+                    time.sleep(30)
+            finally:
+                os._exit(0)
+        try:
+            deadline = time.monotonic() + 5
+            while pid not in _descendants(os.getpid()):
+                if time.monotonic() > deadline:
+                    self.fail('ps parent walk missed a setsid child')
+                time.sleep(0.05)
+            self.assertEqual(os.getsid(pid), pid)
+        finally:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            os.waitpid(pid, 0)
+
+    def _command_map(self):
+        result = subprocess.run(
+            ['ps', '-ax', '-o', 'pid=,command='], capture_output=True, text=True, check=False)
+        mapping = {}
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            pid, separator, command = line.partition(' ')
+            if separator and pid.isdigit():
+                mapping[int(pid)] = command
+        return mapping
+
+    def _fixture_commands(self):
+        needle = str(self.fix)
+        return {pid: command for pid, command in self._command_map().items() if needle in command}
+
+    def _alive(self, pid):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    def _assert_same_pid_namespace(self, pid):
+        own = Path('/proc/self/ns/pid')
+        if not own.exists():
+            return
+        self.assertEqual(os.stat(f'/proc/{pid}/ns/pid').st_ino, own.stat().st_ino)
+
+    def _assert_recorded_controller(self, state, lock_pid):
+        self.assertGreater(lock_pid, 1)
+        self._assert_same_pid_namespace(lock_pid)
+        record = (state / 'build.lock' / 'controller').read_text().splitlines()
+        controller = int(record[0])
+        self.assertGreater(controller, 1)
+        self.assertNotEqual(controller, lock_pid)
+        self.assertEqual(os.getsid(controller), controller)
+        self.assertTrue(record[1].startswith('/'))
+        self.assertIn('ember-wave-', record[1])
+        commands = self._command_map()
+        descendants = _descendants(controller)
+        self.assertIn(controller, commands)
+        self.assertIn('cross-bulk.sh', commands[controller])
+        self.assertTrue(any('stage-context-supervisor.py' in commands.get(pid, '') for pid in descendants))
+        self.assertTrue(any('bmake' in commands.get(pid, '') for pid in descendants))
+        return controller
 
     def _reap(self, pid):
         try:

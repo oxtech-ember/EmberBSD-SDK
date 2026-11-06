@@ -2,15 +2,13 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Own the Ports build lock for a whole source schedule.
 
-The client computes waves. On Linux the lock PID is the init process of a
-private PID namespace, so stopping that PID stops every process in the build,
-including a stage session. A killed client closes the death pipe; the init
-process stops the controller, copies new receipts back, and drops the lock.
-Receipts come from a private schedule, so a second controller cannot observe
-a narrowed order or write the same state at the same time.
+The client computes waves. The published lock PID starts the controller and
+records that controller's PID. An outer drainer survives the published PID:
+if that PID is killed, the drainer stops the recorded controller, including a
+session it opened, copies any receipts the controller had already written, and
+only then removes the lock. The same parent walk is used on Darwin and Linux.
 """
 
-import ctypes
 import json
 import os
 from pathlib import Path
@@ -32,7 +30,7 @@ _COPIED = ('edges', 'packages', 'progress', *_RECEIPTS)
 
 
 class SourceWaveLock:
-    """Hold ``STATE/build.lock`` in a child that outlives this process."""
+    """Hold ``STATE/build.lock`` until this process ends or asks to stop."""
 
     def __init__(self, state):
         self.state = Path(state)
@@ -43,10 +41,6 @@ class SourceWaveLock:
             try:
                 os.close(self._death[1])
                 self._parent.close()
-                try:
-                    os.setsid()
-                except OSError:
-                    pass
                 _supervise(child, self._death[0], self.state)
             except BaseException as exc:
                 try:
@@ -86,18 +80,33 @@ class SourceWaveLock:
         return reply['receipts']
 
     def close(self):
+        """Stop the controller, if one is running, and wait until the lock is released.
+
+        Closing the death pipe is the stop request. The published owner drains
+        the controller it started; this wait does not depend on that controller
+        noticing a terminal signal.
+        """
         if self._parent is None:
             return
+        death = self._death[1]
+        self._death = (None, None)
         try:
-            self._send({'op': 'close'})
-            self._read()
-        except (OSError, SDKError):
+            os.close(death)
+        except OSError:
             pass
-        finally:
+        try:
             self._parent.close()
-            self._parent = None
-            os.close(self._death[1])
-            os.waitpid(self._pid, 0)
+        except OSError:
+            pass
+        self._parent = None
+        while True:
+            try:
+                os.waitpid(self._pid, 0)
+                break
+            except InterruptedError:
+                continue
+            except ChildProcessError:
+                break
 
     def _send(self, message):
         data = json.dumps(message).encode('utf-8') + b'\n'
@@ -130,35 +139,20 @@ def _send(sock, message):
         view = view[sent:]
 
 
-def _become_subreaper():
-    if sys.platform != 'linux':
-        return
-    try:
-        library = ctypes.CDLL(None, use_errno=True)
-        library.prctl.argtypes = (ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
-                                  ctypes.c_ulong, ctypes.c_ulong)
-        library.prctl.restype = ctypes.c_int
-        library.prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER
-    except (OSError, AttributeError):
-        pass
+def _ignore_terminal_signals():
+    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGPIPE):
+        try:
+            signal.signal(number, signal.SIG_IGN)
+        except OSError:
+            pass
 
 
 def _parents():
-    if sys.platform == 'linux' and Path('/proc').is_dir():
-        parents = {}
-        for entry in os.listdir('/proc'):
-            if not entry.isdigit():
-                continue
-            try:
-                text = Path('/proc', entry, 'status').read_text()
-            except OSError:
-                continue
-            for line in text.splitlines():
-                if line.startswith('PPid:'):
-                    parents[int(entry)] = int(line.split()[1])
-                    break
-        return parents
-    result = subprocess.run(['ps', '-ax', '-o', 'pid=,ppid='], capture_output=True, text=True, check=False)
+    """Parent of every process, from ``ps``. Darwin and Linux both provide this."""
+    result = subprocess.run(
+        ['ps', '-ax', '-o', 'pid=,ppid='], capture_output=True, text=True, check=False)
+    if result.returncode != 0 and not result.stdout.strip():
+        raise SDKError('ps parent walk failed')
     parents = {}
     for line in result.stdout.splitlines():
         parts = line.split()
@@ -169,12 +163,7 @@ def _parents():
 
 def _descendants(pid):
     if pid <= 1:
-        try:
-            private_init = os.getpid() == 1 and os.readlink('/proc/self') == '1'
-        except OSError:
-            private_init = False
-        if not private_init:
-            raise SDKError('refusing to walk host init')
+        raise SDKError('refusing to walk host init')
     parents = _parents()
     children = {}
     for child, parent in parents.items():
@@ -190,23 +179,43 @@ def _descendants(pid):
     return found
 
 
-def _kill_descendants(pid):
-    """Stop every child, including a session the controller opened. Return false if any remain."""
+def _alive(pid):
+    if pid <= 1:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _kill_tree(roots):
+    """Stop roots and every process still parented under them. Return false if any remain."""
+    roots = {pid for pid in roots if pid > 1}
     for _ in range(50):
-        descendants = _descendants(pid)
-        if not descendants:
+        victims = []
+        for root in list(roots):
+            if not _alive(root):
+                roots.discard(root)
+                continue
+            victims.extend(_descendants(root))
+        if not roots and not victims:
             return True
-        for child in reversed(descendants):
+        for pid in reversed(victims):
+            if pid > 1:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        for pid in list(roots):
             try:
-                os.kill(child, signal.SIGKILL)
+                os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-        try:
-            while True:
-                os.waitpid(-1, os.WNOHANG)
-        except ChildProcessError:
-            pass
-    return not _descendants(pid)
+        time.sleep(0.05)
+    return not any(_alive(pid) or _descendants(pid) for pid in roots)
 
 
 def _read_text(path):
@@ -249,12 +258,82 @@ def _merge_receipts(real_state, private, before):
     return receipts
 
 
+def _safe_private(text):
+    if not text or text != text.strip() or '\x00' in text:
+        return None
+    path = Path(text)
+    if not path.is_absolute() or not path.name.startswith('ember-wave-'):
+        return None
+    return path
+
+
+def _write_controller(lock, pid, private):
+    blob = f'{int(pid)}\n{private}\n'.encode()
+    temporary = lock / 'controller.tmp'
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        os.write(fd, blob)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(temporary, lock / 'controller')
+
+
+def _clear_controller(lock):
+    try:
+        (lock / 'controller').unlink()
+    except OSError:
+        pass
+    try:
+        (lock / 'controller.tmp').unlink()
+    except OSError:
+        pass
+
+
+def _read_record(lock):
+    try:
+        lines = (lock / 'controller').read_text().splitlines()
+    except OSError:
+        return None
+    if len(lines) < 2:
+        return None
+    try:
+        pid = int(lines[0])
+    except ValueError:
+        return None
+    private = _safe_private(lines[1])
+    if private is None or pid < 0:
+        return None
+    return pid, private
+
+
+def _recover_receipts(state, private):
+    if private is None or not private.is_dir():
+        return
+    before = {name: _read_text(state / name) for name in (*_RECEIPTS, 'progress')}
+    _merge_receipts(state, private, before)
+    shutil.rmtree(private, ignore_errors=True)
+
+
+def _release_lock(lock):
+    _clear_controller(lock)
+    try:
+        (lock / 'pid').unlink(missing_ok=True)
+        lock.rmdir()
+    except OSError:
+        pass
+
+
 def _run_build(message, real_state):
     ready = message.get('ready')
     if not isinstance(ready, list) or any(not isinstance(root, str) for root in ready):
         raise SDKError('source wave has no schedule')
     before = {name: _read_text(real_state / name) for name in (*_RECEIPTS, 'progress')}
     private = _private_schedule(real_state, ready)
+    lock = real_state / 'build.lock'
+    # The private directory is recorded before the controller exists so a killed
+    # owner can still copy the receipts that controller manages to write.
+    _write_controller(lock, 0, private)
     run_error = None
     receipts = {name: [] for name in _RECEIPTS}
     try:
@@ -272,7 +351,11 @@ def _run_build(message, real_state):
                 env = os.environ.copy()
                 env.update(message.get('env') or {})
                 command = [str(private) if part == '{state}' else part for part in argv]
-                status = subprocess.call(command, env=env)
+                # A new session matches package selection and the Ports stage supervisor.
+                # The recorded PID remains the parent of that session for the ps walk.
+                process = subprocess.Popen(command, env=env, start_new_session=True)
+                _write_controller(lock, process.pid, private)
+                status = process.wait()
                 if status:
                     raise SDKError(f'Ports build failed ({status}); compatible objects and logs were retained')
         except Exception as exc:
@@ -283,151 +366,61 @@ def _run_build(message, real_state):
             if run_error is None:
                 run_error = exc
     finally:
+        _clear_controller(lock)
         shutil.rmtree(private, ignore_errors=True)
     if run_error is not None:
         raise run_error
     return receipts
 
 
-def _global_pid():
-    """PID as seen outside a private PID namespace. The lock file must use this."""
-    if sys.platform == 'linux':
-        try:
-            return int(os.readlink('/proc/self'))
-        except OSError:
-            pass
-    value = os.getpid()
-    if value <= 1:
-        raise OSError('cannot identify this process outside its PID namespace')
-    return value
-
-
-def _mount_proc():
-    library = ctypes.CDLL(None, use_errno=True)
-    library.mount.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p,
-                              ctypes.c_ulong, ctypes.c_char_p)
-    library.mount.restype = ctypes.c_int
-    if library.mount(b'proc', b'/proc', b'proc', 0, None) != 0:
-        error = ctypes.get_errno()
-        raise OSError(error, os.strerror(error))
-
-
-def _unshare(flags):
-    library = ctypes.CDLL(None, use_errno=True)
-    library.unshare.argtypes = (ctypes.c_int,)
-    library.unshare.restype = ctypes.c_int
-    if library.unshare(flags) != 0:
-        error = ctypes.get_errno()
-        raise OSError(error, os.strerror(error))
-
-
-def _pid_namespace_available():
-    """True when this process can put a child in a new user and PID namespace."""
-    if sys.platform != 'linux':
-        return False
-    probe = os.fork()
-    if probe == 0:
-        try:
-            _unshare(0x10000000)  # CLONE_NEWUSER
-            _unshare(0x20000000)  # CLONE_NEWPID
-            _unshare(0x20000)  # CLONE_NEWNS
-        except OSError:
-            os._exit(1)
-        os._exit(0)
-    _pid, status = os.waitpid(probe, 0)
-    return os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
-
-
-def _namespace_busy(inode):
-    for entry in os.listdir('/proc'):
-        if not entry.isdigit():
+def _stop_orphans(owner_pid, record, snapshot):
+    roots = set()
+    if record and record[0] > 1:
+        roots.add(record[0])
+    parents = _parents()
+    for pid in snapshot:
+        if pid <= 1 or pid == owner_pid:
             continue
-        try:
-            if os.stat(f'/proc/{entry}/ns/pid').st_ino == inode:
-                return True
-        except OSError:
-            continue
-    return False
+        parent = parents.get(pid)
+        if parent in (1, owner_pid) or (record and parent == record[0]):
+            roots.add(pid)
+    return _kill_tree(roots)
 
 
-def _release_lock(lock):
-    try:
-        (lock / 'pid').unlink(missing_ok=True)
-        lock.rmdir()
-    except OSError:
-        pass
-
-
-def _reap_namespace(helper, state):
-    """Wait until the namespace init is gone, then drop a lock it could not drop.
-
-    Killing that init makes the kernel stop every process in its PID namespace.
-    The lock is removed only after none of those processes remain.
-    """
+def _reap_owner(owner, state):
+    """After the published owner dies, stop the controller it recorded."""
     lock = state / 'build.lock'
-    inode = None
-    while inode is None:
-        ended, _status = os.waitpid(helper, os.WNOHANG)
-        if ended:
-            if lock.exists():
-                _release_lock(lock)
-            return
+    record = None
+    snapshot = set()
+    while True:
+        current = _read_record(lock)
+        if current is not None:
+            record = current
+            if current[0] > 1:
+                snapshot.update(_descendants(current[0]))
+                snapshot.add(current[0])
         try:
-            text = (lock / 'pid').read_text().strip()
-            inode = os.stat(f'/proc/{int(text)}/ns/pid').st_ino
-        except (OSError, ValueError):
-            time.sleep(0.05)
-    os.waitpid(helper, 0)
-    deadline = time.monotonic() + 5
-    while _namespace_busy(inode):
-        if time.monotonic() > deadline:
-            os._exit(3)
-        time.sleep(0.05)
+            snapshot.update(_descendants(owner))
+        except SDKError:
+            pass
+        ended, status = os.waitpid(owner, os.WNOHANG)
+        if ended:
+            break
+        time.sleep(0.02)
+    if not lock.exists():
+        return
+    # A clean owner removes the lock itself. This path is the killed owner.
+    if not _stop_orphans(owner, record, snapshot):
+        os._exit(3)
+    if record is not None:
+        _recover_receipts(state, record[1])
     _release_lock(lock)
 
 
-def _supervise(sock, death_read, state):
-    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
-    if _pid_namespace_available():
-        helper = os.fork()
-        if helper == 0:
-            try:
-                _unshare(0x10000000)  # CLONE_NEWUSER
-                _unshare(0x20000000)  # CLONE_NEWPID
-                init = os.fork()
-                if init == 0:
-                    try:
-                        outside = int(os.readlink('/proc/self'))
-                        if outside <= 1:
-                            raise OSError('pid namespace did not provide an outside pid')
-                        os.setsid()
-                        _unshare(0x20000)  # CLONE_NEWNS
-                        _mount_proc()
-                        _supervise_owner(sock, state, death_read, outside)
-                    except BaseException:
-                        os._exit(1)
-                    os._exit(0)
-                os.close(death_read)
-                sock.close()
-                os.waitpid(init, 0)
-            except BaseException:
-                os._exit(1)
-            os._exit(0)
-        sock.close()
-        os.close(death_read)
-        _reap_namespace(helper, state)
-        return
-    _supervise_owner(sock, state, death_read, _global_pid())
-
-
-def _supervise_owner(sock, state, death_read, outside_pid):
-    _become_subreaper()
+def _owner(sock, death_read, state):
     lock = state / 'build.lock'
     owned = False
     dead = threading.Event()
-    # outside_pid is the signalable PID. Inside a private proc it differs from getpid().
-    me = outside_pid
-    kill_root = os.getpid() if os.getpid() == 1 and outside_pid != 1 else outside_pid
 
     def watch():
         try:
@@ -436,19 +429,22 @@ def _supervise_owner(sock, state, death_read, outside_pid):
         except OSError:
             pass
         dead.set()
-        _kill_descendants(kill_root)
+        try:
+            _kill_tree(_descendants(os.getpid()))
+        except SDKError:
+            pass
 
     threading.Thread(target=watch, daemon=True).start()
     try:
         lock.parent.mkdir(parents=True, exist_ok=True)
         try:
             lock.mkdir()
-        except FileExistsError as exc:
-            _send(sock, {'op': 'error', 'error': f'writer is busy: {lock}; remove only after confirming its owner and every build it started have stopped'})
+        except FileExistsError:
+            _send(sock, {'op': 'error', 'error': f'writer is busy: {lock}; a build owns this lock and its controller is recorded there'})
             return
         owned = True
-        (lock / 'pid').write_text(str(me) + '\n')
-        _send(sock, {'op': 'ready', 'pid': me})
+        (lock / 'pid').write_text(str(os.getpid()) + '\n')
+        _send(sock, {'op': 'ready', 'pid': os.getpid()})
         buffer = b''
         while not dead.is_set():
             readable, _, _ = select.select([sock], [], [], 0.2)
@@ -456,10 +452,17 @@ def _supervise_owner(sock, state, death_read, outside_pid):
                 break
             if not readable:
                 continue
-            chunk = sock.recv(65536)
+            try:
+                chunk = sock.recv(65536)
+            except OSError:
+                dead.set()
+                break
             if not chunk:
                 dead.set()
-                _kill_descendants(kill_root)
+                try:
+                    _kill_tree(_descendants(os.getpid()))
+                except SDKError:
+                    pass
                 break
             buffer += chunk
             while b'\n' in buffer and not dead.is_set():
@@ -474,25 +477,57 @@ def _supervise_owner(sock, state, death_read, outside_pid):
                         receipts = _run_build(message, state)
                     except Exception as exc:
                         if not dead.is_set():
-                            _send(sock, {'op': 'error', 'error': str(exc)})
+                            try:
+                                _send(sock, {'op': 'error', 'error': str(exc)})
+                            except OSError:
+                                dead.set()
                         continue
                     if dead.is_set():
                         break
-                    _send(sock, {'op': 'built', 'receipts': receipts})
+                    try:
+                        _send(sock, {'op': 'built', 'receipts': receipts})
+                    except OSError:
+                        dead.set()
+                        break
                 else:
                     _send(sock, {'op': 'error', 'error': 'unknown source wave command'})
     finally:
-        os.close(death_read)
-        drained = _kill_descendants(kill_root)
+        try:
+            os.close(death_read)
+        except OSError:
+            pass
+        try:
+            drained = _kill_tree(_descendants(os.getpid()))
+        except SDKError:
+            drained = False
         if owned and drained:
-            try:
-                (lock / 'pid').unlink(missing_ok=True)
-                lock.rmdir()
-            except OSError:
-                pass
+            _release_lock(lock)
         elif owned:
             os._exit(3)
         try:
             sock.close()
         except OSError:
             pass
+
+
+def _supervise(sock, death_read, state):
+    """Drainer. The child is the published lock PID and can be killed alone."""
+    _ignore_terminal_signals()
+    try:
+        os.setsid()
+    except OSError:
+        pass
+    owner = os.fork()
+    if owner == 0:
+        try:
+            os.setsid()
+        except OSError:
+            pass
+        try:
+            _owner(sock, death_read, state)
+        except BaseException:
+            os._exit(1)
+        os._exit(0)
+    os.close(death_read)
+    sock.close()
+    _reap_owner(owner, state)

@@ -203,19 +203,19 @@ failure, not a reason to compile the package.
 
 The source schedule holds the Ports `build.lock` for the whole interval:
 the saved graph is read under that lock, current is reread under that lock,
-and every wave's controller runs under that lock. The lock PID is a
-supervisor that starts the controller, not the client. `STATE/order` is not
-rewritten. The controller receives a private copy of the edges and receipts,
-and its own `build.lock` is on that copy because the Ports lock is not
-reentrant. Finished receipt lines are copied back only after that controller
-tree has stopped. A killed client closes the supervisor's death pipe; the
-supervisor stops the controller, including a stage session it started, and
-only then removes the lock. `STATE/order` cannot be left narrowed. Do not
-remove `build.lock` while its PID is alive or while a build it started is
-still running. On Linux that PID is the init process of a private PID
-namespace, so stopping it stops every process in the build. Where that
-namespace cannot be created, stopping the supervisor directly can leave the
-controller running, and the lock stays until that tree has been drained.
+and every wave's controller runs under that lock. The lock PID is the process
+that starts the controller, not the client. That PID records the controller
+PID and the private schedule directory in the lock. An outer drainer survives
+the lock PID. Killing the lock PID does not leave the controller writing: the
+drainer stops the recorded controller and every process still parented under
+it, copies receipts the controller had already written, and only then removes
+the lock. The parent walk is `ps`, on Darwin and on Linux. A killed client
+closes the death pipe; one interrupt does the same, and the wait ends when
+the drainer finishes rather than when the controller notices a terminal
+signal. `STATE/order` is not rewritten. The controller receives a private
+copy of the edges and receipts, and its own `build.lock` is on that copy
+because the Ports lock is not reentrant. Do not remove `build.lock` while
+its PID is alive or while the recorded controller is running.
 The private copy keeps the full edges, so a native tool that
 a later target package feeds still receives that target's settings.
 The client does not order a native-only subset with `selected-build`.
