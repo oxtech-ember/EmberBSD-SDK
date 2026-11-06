@@ -540,14 +540,15 @@ class OSReleaseBuilder(SysrootBuilder):
     def pkgsrc_export_command(self, action, *args):
         patch = native_toolset.load_host_prefix(self.native.bundle_root, required_roles={'gpatch'}).tool('gpatch')
         return [self.paths['python'], '-B', os.path.join(self.paths['ports'], self.PKGSRC_EXPORT_STAGE),
-                action, *args, '--git', self.paths['git'], '--patch', patch]
+                action, *args, '--sdk-source', self.paths['sdk-source'],
+                '--git', self.paths['git'], '--patch', patch]
 
     def select_pkgsrc_export(self):
-        # Only the gettext cross-libtool reads a pkgsrc export. Ports pins
-        # without the stage script keep the per-run export.
-        if ('gettext-source' not in self.paths or
-                not os.path.isfile(os.path.join(self.paths['ports'], self.PKGSRC_EXPORT_STAGE))):
+        # Only the gettext cross-libtool reads a pkgsrc export.
+        if 'gettext-source' not in self.paths:
             return
+        check(os.path.isfile(os.path.join(self.paths['ports'], self.PKGSRC_EXPORT_STAGE)),
+              'Ports source lacks the current pkgsrc export producer')
         record = jsonio.loads_json(self.capture(*self.pkgsrc_export_command('fingerprint'))[0])
         fingerprint = record.get('fingerprint') if isinstance(record, dict) else None
         check(full_hash(fingerprint), 'invalid pkgsrc export fingerprint')

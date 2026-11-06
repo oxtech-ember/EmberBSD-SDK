@@ -231,7 +231,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             (root / 'destination').mkdir()
             builder = OSReleaseBuilder.__new__(OSReleaseBuilder)
             builder.paths = {'ports': str(root / 'ports'), 'sdk': str(root / 'sdk'), 'python': '/host/python',
-                             'git': '/host/git', 'gettext-source': '/sdk/gettext',
+                             'git': '/host/git', 'sdk-source': '/source/sdk', 'gettext-source': '/sdk/gettext',
                              'destination': str(root / 'destination'), 'os': '/os'}
             builder.native = mock.Mock(bundle_root='/host')
             builder.receipt = {}
@@ -242,15 +242,17 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             builder.capture = lambda *argv: (calls.append(argv) or json.dumps(replies[argv[3]]), '')
             selector = mock.Mock(**{'tool.return_value': '/host/bin/gpatch'})
             with mock.patch('emberbsd_sdk.native_toolset.load_host_prefix', return_value=selector):
-                # Ports pins without the stage script keep the per-run export.
-                builder.select_pkgsrc_export()
+                # An older Ports pin cannot silently select another producer.
+                with self.assertRaisesRegex(SDKError, 'Ports source lacks the current pkgsrc export producer'):
+                    builder.select_pkgsrc_export()
                 self.assertNotIn('pkgsrc-export', builder.paths)
                 self.assertEqual(calls, [])
                 (root / 'ports/scripts/pkgsrc-export-stage.py').write_text('')
                 builder.select_pkgsrc_export()
                 self.assertEqual(builder.paths['pkgsrc-export'], stage)
                 self.assertEqual(calls[-1], ('/host/python', '-B', str(root / 'ports/scripts/pkgsrc-export-stage.py'),
-                                             'fingerprint', '--git', '/host/git', '--patch', '/host/bin/gpatch'))
+                                             'fingerprint', '--sdk-source', '/source/sdk',
+                                             '--git', '/host/git', '--patch', '/host/bin/gpatch'))
                 # The stage is prepared as its own step before the first OS command.
                 events = []
                 builder.flags, builder.release_commands = [], [['/tools/bin/nbmake-evbarm', 'tools']]
