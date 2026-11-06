@@ -116,7 +116,7 @@ def _source_config(config, roots):
             raise SDKError(f'Ports source requires an absolute {key}')
 
 
-def run_source(config, roots, command, *, binaries=()):
+def run_source(config, roots, command, *, binaries=(), controller_mode=None):
     """Invoke the existing selector; Ports owns dependency solving and reuse."""
     if not roots:
         return
@@ -163,7 +163,8 @@ def run_source(config, roots, command, *, binaries=()):
             os.environ[binary_variable] = str(selected)
             try:
                 with redirect_stdout(sys.stderr):
-                    status = package_selection.main(arguments, controller_stdout=sys.stderr)
+                    status = package_selection.main(arguments, controller_stdout=sys.stderr,
+                                                    controller_mode=controller_mode)
             finally:
                 if old_binary is None:
                     os.environ.pop(binary_variable, None)
@@ -312,14 +313,209 @@ def apply_plan(plan, config, installer, cache, store):
     cache.trim(config.get('cache_limit', 512 * 1024 * 1024))
 
 
-def install_selection(plan, config, installer, cache, store):
+def _read_source_graph(state):
+    """Return the saved build order and dependency edges, or None when either is absent.
+
+    Edges are `dependency dependent`, including a self-edge for every node.
+    The order file is the producer's schedule. Both must stay the full graph:
+    a later wave may build only the ready nodes, but target-fed native tools
+    are identified from edges to target packages that are not in that wave.
+    """
+    order_path, edges_path = state / 'order', state / 'edges'
+    if not order_path.is_file() or not edges_path.is_file():
+        return None
+    order = [line.strip() for line in order_path.read_text().splitlines() if line.strip()]
+    deps = {root: [] for root in order}
+    for line in edges_path.read_text().splitlines():
+        parts = line.split()
+        if len(parts) < 2 or parts[0] == parts[1]:
+            continue
+        deps.setdefault(parts[1], []).append(parts[0])
+    return order, deps
+
+
+def _catalog_closure_matches(root, names, release, catalogs, config):
+    """True when the signed catalog names this graph node and its runtime closure exactly."""
+    selected = [catalog for catalog in catalogs if catalog['repository'] in config['repositories']]
+    records, by_root = {}, {}
+    for catalog in selected:
+        for package in catalog['packages']:
+            records[package['artifact']] = package
+            by_root.setdefault(package['root'], package)
+    record = by_root.get(root)
+    if record is None or record['pkgname'] != names.get(root):
+        return False
+    try:
+        closure = select_packages(release, selected, roots=[root])['packages']
+        return all(names.get(records[item['id']]['root']) == records[item['id']]['pkgname']
+                   for item in closure)
+    except (SDKError, KeyError):
+        return False
+
+
+def _refresh_channel(refresh_current):
+    """Reread authenticated current. Expired or unreachable data is not a new catalog."""
+    try:
+        return refresh_current()
+    except SDKError as exc:
+        if str(exc).startswith('channel has expired'):
+            print('Current channel has expired; continuing the source build with the last verified catalog.',
+                  file=sys.stderr)
+            return None
+        raise
+    except (HTTPStatusError, OSError) as exc:
+        print(f'Current channel could not be reread ({exc}); continuing with the last verified catalog.',
+              file=sys.stderr)
+        return None
+
+
+def _ready_wave(order, deps, pending):
+    return [root for root in order if root in pending and
+            not any(dep in pending for dep in deps.get(root, ()))]
+
+
+def _installed_names(config, installer):
+    names = set()
+    for cfg in config['repositories'].values():
+        names.update(installer.installed(cfg, recover=False))
+    return names
+
+
+def _adopt_published(config, installer, cache, store, release, catalogs, names, order, pending, binaries):
+    """Download exact not-yet-started packages. Do not replace an installed version."""
+    candidates = []
+    for root in order:
+        if root not in pending or not _catalog_closure_matches(root, names, release, catalogs, config):
+            continue
+        one = installation_plan(release, catalogs, config, installer, cache, roots=[root])
+        own = [package for package in one['packages'] if package['root'] == root]
+        # The catalog package itself must be the graph PKGNAME and must not
+        # replace a different installed version. A newer native package stays
+        # with Ports. Dependencies may still be reused by apply_plan.
+        if one['build_roots'] or len(own) != 1 or own[0]['replaces'] or own[0]['pkgname'] != names[root]:
+            continue
+        candidates.append(root)
+    if not candidates:
+        return binaries, []
+    merged = installation_plan(release, catalogs, config, installer, cache, roots=candidates)
+    if merged['build_roots']:
+        return binaries, []
+    if any(package['replaces'] for package in merged['packages']) and not isinstance(installer, PackageInstaller):
+        return binaries, []
+    fresh = [package for package in merged['packages'] if package['action'] != 'installed']
+    reused = []
+    if fresh:
+        with directory_lock(cache.root / '.lock'):
+            apply_plan(merged, config, installer, cache, store)
+        reused = list(merged.get('compatible_reuse') or [])
+        binaries = list(binaries) + [(package['root'], package['pkgname'])
+                                     for package in merged['packages'] if package.get('pkgname')]
+        # Reuse can keep a newer installed dependency, so count only packages
+        # that were actually added from this pointer.
+        added = [package for package in merged['packages'] if package['action'] != 'installed' and package.get('artifact')]
+        if added:
+            size = sum(package['artifact']['size'] for package in added)
+            label = 'package' if len(added) == 1 else 'packages'
+            print(f"Current supplies {len(added)} {label} ({size} bytes); "
+                  f"installing them instead of building.", file=sys.stderr)
+    for package in merged['packages']:
+        pending.discard(package['root'])
+    return binaries, reused
+
+
+def _build_saved_wave(config, ready, binaries):
+    """Build one ready wave without recomputing the saved dependency edges."""
+    order_path = Path(config['source']['state']) / 'order'
+    original = order_path.read_bytes()
+    try:
+        order_path.write_text(''.join(root + '\n' for root in ready))
+        run_source(config, ready, 'build', binaries=binaries, controller_mode='build')
+    finally:
+        order_path.write_bytes(original)
+
+
+def _accept_built_wave(config, installer, names, ready, pending):
+    """Trust a successful native wave, including a newer installed package.
+
+    Ports returns success when `pkg_info -e BASE>=version` already matches a
+    native package, and that result is not recorded as a built PKGNAME. An
+    exact catalog name remains the binary adoption rule. A target package
+    still has to be the graph PKGNAME.
+    """
+    installed = _installed_names(config, installer)
+    missing = []
+    for root in ready:
+        if root.endswith('@native'):
+            pending.discard(root)
+            continue
+        name = names.get(root)
+        if name and name in installed:
+            pending.discard(root)
+        else:
+            missing.append(f'{root} ({name or "unknown"})')
+    if missing:
+        raise SDKError('Ports build finished without installing ' + ', '.join(missing))
+
+
+def _install_source_waves(plan, config, installer, cache, store, refresh_current, accepted_channel, binaries):
+    """Re-read current between waves. Return reuse rows, or None to keep one selected build."""
+    source = config.get('source')
+    names = plan.get('source_packages')
+    if refresh_current is None or not names or not source:
+        return None
+    graph = _read_source_graph(Path(source['state']))
+    if graph is None:
+        return None
+    order, deps = graph
+    if any(root not in order for root in plan['build_roots']):
+        return None
+    handled = {package['root'] for package in plan['packages']}
+    pending = {root for root in order if root not in handled}
+    reused, seen = [], accepted_channel
+    while pending:
+        snapshot = _refresh_channel(refresh_current)
+        if snapshot is not None:
+            release, catalogs, identity = snapshot
+            if seen != identity:
+                if seen is not None:
+                    print('Current changed; checking for published packages.', file=sys.stderr)
+                seen = identity
+            binaries, extra = _adopt_published(config, installer, cache, store, release, catalogs,
+                                               names, order, pending, binaries)
+            reused.extend(extra)
+        if not pending:
+            break
+        ready = _ready_wave(order, deps, pending)
+        if not ready:
+            raise SDKError('source graph has no ready package')
+        _build_saved_wave(config, ready, binaries)
+        _accept_built_wave(config, installer, names, ready, pending)
+    return reused
+
+
+def _read_channel(crypto, store, trust, state, prefix):
+    """Load one authenticated current into memory. The snapshot directory does not outlive this call."""
+    with release_snapshot(crypto, store, trust, state, prefix=prefix) as (release, snapshot):
+        catalogs = load_release_catalogs(release, snapshot, ())
+        identity = hashlib.sha256((snapshot / 'current.p7m').read_bytes()).hexdigest()
+        return release, catalogs, identity
+
+
+def install_selection(plan, config, installer, cache, store, *, refresh_current=None, accepted_channel=None):
     with directory_lock(cache.root / '.lock'):
         apply_plan(plan, config, installer, cache, store)
     # Compilation may be long; it must not monopolize another target's downloads.
-    build_missing(config, plan['build_roots'], [(p['root'], p['pkgname']) for p in plan['packages']])
+    binaries = [(package['root'], package['pkgname']) for package in plan['packages'] if package.get('pkgname')]
+    reused = list(plan.get('compatible_reuse') or [])
+    extra = _install_source_waves(plan, config, installer, cache, store, refresh_current,
+                                  accepted_channel, binaries) if plan['build_roots'] else None
+    if extra is None:
+        build_missing(config, plan['build_roots'], binaries)
+    else:
+        reused.extend(extra)
     if plan.get('sysroot'):
         sysroot_package.bind_compiler(config, plan['sysroot'])
-    return plan.get('compatible_reuse', [])
+    return reused
 
 
 def include_sysroot(plan, release, config, cache, target):
@@ -425,6 +621,7 @@ def main(argv=None, *, default_config=None):
                 with release_snapshot(crypto, store, trust, state,
                                       prefix=config.get('url_prefix', '')) as (release, snapshot):
                     identity = hashlib.sha256((snapshot / 'release.p7m').read_bytes()).hexdigest()
+                    channel = hashlib.sha256((snapshot / 'current.p7m').read_bytes()).hexdigest()
                     if previous == identity:
                         raise SDKError('published package is missing from unchanged current; retry after publisher repair')
                     catalogs = load_release_catalogs(release, snapshot, ())
@@ -457,7 +654,11 @@ def main(argv=None, *, default_config=None):
                     for package in plan.get('retained', []):
                         print(f"Retain {package['repository']}/{package['pkgname']}: {package['reason']}", file=sys.stderr)
                     try:
-                        compatible_reuse = install_selection(plan, config, installer, cache, store)
+                        compatible_reuse = install_selection(
+                            plan, config, installer, cache, store,
+                            refresh_current=lambda: _read_channel(
+                                crypto, store, trust, state, config.get('url_prefix', '')),
+                            accepted_channel=channel)
                     except HTTPStatusError as exc:
                         if exc.status != 404 or attempt:
                             raise

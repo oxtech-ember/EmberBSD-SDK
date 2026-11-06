@@ -317,6 +317,312 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result['packages'], [])
         self.assertEqual(set(result['build_roots']), {'net/app@native', 'devel/missing@native'})
 
+    def _source(self):
+        self.cfg['source'] = {name: str(self.root / name) for name in ('ports_root', 'pkgsrc', 'makeconf', 'state')}
+        (self.root / 'ports_root/profiles/package-sets').mkdir(parents=True, exist_ok=True)
+
+    def _graph(self, order, edges, names):
+        state = self.root / 'state'
+        state.mkdir(parents=True, exist_ok=True)
+        (state / 'order').write_text(''.join(root + '\n' for root in order))
+        (state / 'edges').write_text(''.join(dep + ' ' + node + '\n' for dep, node in edges))
+        (state / 'packages').write_text(''.join(root + ' ' + name + '\n' for root, name in names.items()))
+        return state
+
+    def _channel(self, packages):
+        artifacts, entries = [], []
+        for identity, root, pkgname, depends in packages:
+            artifacts.append(dict(id=identity, path=f'native/{pkgname}.tgz', kind='host-package', host=self.host,
+                                  target=None, size=13, sha256=hashlib.sha256(self.store.payload).hexdigest(),
+                                  unpacked_size=20, depends=list(depends)))
+            entries.append(dict(root=root, pkgname=pkgname, artifact=identity))
+        release = dict(release_id='current', artifacts=artifacts)
+        catalogs = [dict(repository='native', sets={}, packages=entries)]
+        return release, catalogs
+
+    def _waves(self, order, edges, names, refresh, *, installed=(), accepted='same', build=None):
+        self._source()
+        state = self._graph(order, edges, names)
+        original_order = (state / 'order').read_bytes()
+        original_edges = (state / 'edges').read_bytes()
+        self.installer.present.update(installed)
+        plan = dict(roots=list(order), build_roots=list(order), packages=[], source_packages=dict(names),
+                    download_size=0, unpacked_size=0)
+        calls = []
+
+        def source(config, roots, command, binaries=(), controller_mode=None):
+            calls.append((list(roots), command, controller_mode,
+                          (state / 'order').read_text(), (state / 'edges').read_text()))
+            if build is not None:
+                build(roots)
+
+        errors = io.StringIO()
+        with patch('emberbsd_sdk.sdk_client.run_source', side_effect=source), redirect_stderr(errors):
+            install_selection(plan, self.cfg, self.installer, self.cache, self.store,
+                              refresh_current=refresh, accepted_channel=accepted)
+        self.assertEqual((state / 'order').read_bytes(), original_order)
+        self.assertEqual((state / 'edges').read_bytes(), original_edges)
+        return calls, errors.getvalue()
+
+    def test_running_install_adopts_new_current_between_source_waves(self):
+        lib, app = 'devel/lib@native', 'net/app@native'
+        published = self._channel([('app', app, 'app-1', [])])
+        snapshots = iter(((*self._channel([]), 'same'), (*published, 'newer')))
+
+        def refresh():
+            return next(snapshots)
+
+        calls, errors = self._waves(
+            [lib, app], [(lib, lib), (lib, app), (app, app)], {lib: 'lib-1', app: 'app-1'}, refresh)
+        self.assertEqual([call[0] for call in calls], [[lib]])
+        self.assertEqual({call[2] for call in calls}, {'build'})
+        self.assertEqual([call[1] for call in self.store.calls],
+                         ['current/host/darwin-arm64/app-1.tgz'])
+        self.assertIn('Current changed', errors)
+        self.assertIn('installing them instead of building', errors)
+        self.assertNotIn('generation', errors)
+
+    def test_unchanged_current_does_not_rebuild_or_download(self):
+        lib, app = 'devel/lib@native', 'net/app@native'
+        empty = (*self._channel([]), 'same')
+
+        def refresh():
+            return empty
+
+        calls, errors = self._waves(
+            [lib, app], [(lib, lib), (lib, app), (app, app)], {lib: 'lib-1', app: 'app-1'}, refresh)
+        self.assertEqual([call[0] for call in calls], [[lib], [app]])
+        self.assertEqual(self.store.calls, [])
+        self.assertNotIn('Current changed', errors)
+        self.assertNotIn('installing them instead of building', errors)
+
+    def test_expired_current_is_not_adopted_and_the_build_continues(self):
+        lib, app = 'devel/lib@native', 'net/app@native'
+        seen = {'n': 0}
+
+        def refresh():
+            seen['n'] += 1
+            if seen['n'] > 1:
+                raise SDKError('channel has expired; check the local clock or obtain a fresh channel')
+            return (*self._channel([]), 'same')
+
+        calls, errors = self._waves(
+            [lib, app], [(lib, lib), (lib, app), (app, app)], {lib: 'lib-1', app: 'app-1'}, refresh)
+        self.assertEqual([call[0] for call in calls], [[lib], [app]])
+        self.assertEqual(self.store.calls, [])
+        self.assertIn('expired', errors)
+        self.assertNotIn('generation', errors)
+
+    def test_untrusted_current_stops_without_adoption(self):
+        lib, app = 'devel/lib@native', 'net/app@native'
+        seen = {'n': 0}
+
+        def refresh():
+            seen['n'] += 1
+            if seen['n'] > 1:
+                raise SDKError('CMS signature/certificate verification failed; check trust')
+            return (*self._channel([]), 'same')
+
+        with self.assertRaisesRegex(SDKError, 'CMS signature'):
+            self._waves([lib, app], [(lib, lib), (lib, app), (app, app)], {lib: 'lib-1', app: 'app-1'}, refresh,
+                        build=lambda roots: self.installer.present.add('lib-1'))
+        self.assertEqual(self.store.calls, [])
+        self.assertNotIn('app-1', self.installer.present)
+
+    def test_unreachable_current_continues_without_a_new_download(self):
+        lib, app = 'devel/lib@native', 'net/app@native'
+        seen = {'n': 0}
+
+        def refresh():
+            seen['n'] += 1
+            if seen['n'] > 1:
+                raise OSError('timed out')
+            return (*self._channel([]), 'same')
+
+        calls, errors = self._waves(
+            [lib, app], [(lib, lib), (lib, app), (app, app)], {lib: 'lib-1', app: 'app-1'}, refresh)
+        self.assertEqual([call[0] for call in calls], [[lib], [app]])
+        self.assertEqual(self.store.calls, [])
+        self.assertIn('could not be reread', errors)
+
+    def test_pkgname_mismatch_stays_on_the_source_wave(self):
+        app = 'net/app@native'
+        published = (*self._channel([('app', app, 'app-2', [])]), 'newer')
+        calls, _errors = self._waves([app], [(app, app)], {app: 'app-1'}, lambda: published,
+                                     build=lambda roots: self.installer.present.add('app-1'))
+        self.assertEqual([call[0] for call in calls], [[app]])
+        self.assertEqual(self.store.calls, [])
+
+    def test_newer_installed_native_is_not_replaced_or_rebuilt(self):
+        lib = 'devel/lib@native'
+        published = (*self._channel([('lib', lib, 'lib-1', [])]), 'newer')
+        calls, errors = self._waves([lib], [(lib, lib)], {lib: 'lib-1'}, lambda: published, installed={'lib-2'})
+        self.assertEqual([call[0] for call in calls], [[lib]])
+        self.assertEqual(self.store.calls, [])
+        self.assertNotIn('lib-1', self.installer.present)
+        self.assertNotIn('without installing', errors)
+        self.assertNotIn('generation', errors)
+
+    def test_published_consumer_keeps_a_newer_installed_dependency(self):
+        provider_root, consumer_root = 'textproc/libxml2@native', 'cad/consumer@native'
+        installed_name = 'libxml2-2.15.4nb5'
+        prefix, database = self.root / 'prefix', self.root / 'pkgdb'
+        prefix.mkdir()
+        installed_dir = database / installed_name
+        installed_dir.mkdir(parents=True)
+        (installed_dir / '+CONTENTS').write_text('@cwd /prefix\n@name ' + installed_name + '\n')
+        (installed_dir / '+BUILD_INFO').write_text('PROVIDES=/prefix/lib/libxml2.so.2\n')
+
+        def package_archive(path, name, *, depends=(), providers=()):
+            contents = '@cwd /producer/prefix\n@name ' + name + '\n' + ''.join(
+                '@pkgdep ' + value + '\n' for value in depends)
+            info = ''.join('PROVIDES=/producer/prefix/' + value + '\n' for value in providers)
+            with tarfile.open(path, 'w:gz') as archive:
+                for filename, data in (('+CONTENTS', contents), ('+BUILD_INFO', info)):
+                    content = data.encode()
+                    member = tarfile.TarInfo(filename)
+                    member.size = len(content)
+                    archive.addfile(member, io.BytesIO(content))
+            return path
+
+        provider = package_archive(self.root / 'provider.tgz', 'libxml2-2.15.4nb4',
+                                   providers=('lib/libxml2.so.2',))
+        consumer = package_archive(self.root / 'consumer.tgz', 'consumer-1',
+                                   depends=('libxml2>=2.14.6nb2',))
+        payloads = {'libxml2-2.15.4nb4': provider.read_bytes(), 'consumer-1': consumer.read_bytes()}
+
+        class CatalogStore(Store):
+            def verify(self, key, size, sha256, *, sink):
+                self.calls.append(('get', key))
+                payload = payloads['libxml2-2.15.4nb4' if key.endswith('libxml2-2.15.4nb4.tgz') else 'consumer-1']
+                if len(payload) != size or hashlib.sha256(payload).hexdigest() != sha256:
+                    raise SDKError('invalid downloaded bytes')
+                sink.write(payload)
+
+        class ReuseInstaller(PackageInstaller):
+            def __init__(self):
+                self.crypto = object()
+                self.present = {installed_name}
+                self.checked_updates = []
+                self.installed_paths = []
+            def installed(self, _config, *, recover=True):
+                return self.present
+            def check(self, _path, _config):
+                pass
+            def check_updates(self, packages, _archives, _config):
+                self.checked_updates.extend(packages)
+            def install(self, path, _config, *, checked=False, configure=True, automatic=False):
+                self.installed_paths.append(path.name)
+            def configure(self, _config):
+                pass
+
+        artifacts = []
+        for identity, filename, deps in (('provider', 'libxml2-2.15.4nb4.tgz', []),
+                                        ('consumer', 'consumer-1.tgz', ['provider'])):
+            payload = payloads['libxml2-2.15.4nb4' if identity == 'provider' else 'consumer-1']
+            artifacts.append(dict(id=identity, path='native/' + filename, kind='host-package', host=self.host,
+                                  target=None, size=len(payload), sha256=hashlib.sha256(payload).hexdigest(),
+                                  unpacked_size=1, depends=deps))
+        release = dict(release_id='current', artifacts=artifacts)
+        catalogs = [dict(repository='native', sets={}, packages=[
+            dict(root=provider_root, pkgname='libxml2-2.15.4nb4', artifact='provider'),
+            dict(root=consumer_root, pkgname='consumer-1', artifact='consumer')])]
+        self._source()
+        cfg = dict(host=self.host, prefix=str(prefix), pkgdb=str(database))
+        self.cfg = dict(repositories={'native': cfg}, source=self.cfg['source'])
+        self._graph([provider_root, consumer_root],
+                    [(provider_root, provider_root), (provider_root, consumer_root), (consumer_root, consumer_root)],
+                    {provider_root: 'libxml2-2.15.4nb4', consumer_root: 'consumer-1'})
+        plan = dict(roots=[provider_root, consumer_root], build_roots=[provider_root, consumer_root], packages=[],
+                    source_packages={provider_root: 'libxml2-2.15.4nb4', consumer_root: 'consumer-1'},
+                    download_size=0, unpacked_size=0)
+        installer, store = ReuseInstaller(), CatalogStore(b'')
+        built = []
+
+        def pmatch(_crypto, pattern, name):
+            if pattern.startswith('libxml2>='):
+                return name in ('libxml2-2.15.4nb4', installed_name)
+            return False
+
+        with patch('emberbsd_sdk.sdk_client.check_space'), \
+                patch('emberbsd_sdk.package_install.inspect_install_paths'), \
+                patch('emberbsd_sdk.package_updates._matches', side_effect=pmatch), \
+                patch('emberbsd_sdk.package_automatic.finish'), \
+                patch('emberbsd_sdk.sdk_client.run_source', side_effect=lambda *_args, **_kwargs: built.append(_args)):
+            install_selection(plan, self.cfg, installer, self.cache, store,
+                              refresh_current=lambda: (release, catalogs, 'newer'), accepted_channel='same')
+        self.assertEqual(built, [])
+        self.assertEqual(len(installer.installed_paths), 1)
+        provider_row = next(item for item in installer.checked_updates if item['root'] == provider_root)
+        self.assertEqual(provider_row['pkgname'], installed_name)
+        self.assertIsNone(provider_row['artifact'])
+        self.assertNotIn('libxml2-2.15.4nb4', installer.present)
+
+    def test_saved_edges_keep_target_fed_native_context(self):
+        tool, app = 'cross/cross-libtool-base@native', 'x11/app'
+        edges = [(tool, tool), (tool, app), (app, app)]
+
+        def build(roots):
+            if roots == [app]:
+                self.installer.present.add('app-1')
+
+        calls, _errors = self._waves(
+            [tool, app], edges, {tool: 'libtool-base-1', app: 'app-1'},
+            lambda: (*self._channel([]), 'same'), installed={'libtool-base-2'}, build=build)
+        self.assertEqual([call[0] for call in calls], [[tool], [app]])
+        self.assertTrue(all(call[1] == 'build' and call[2] == 'build' for call in calls))
+        self.assertIn(f'{tool} {app}', calls[0][4])
+        self.assertEqual(calls[0][3].split(), [tool])
+        self.assertIn(f'{tool} {app}', calls[1][4])
+        self.assertEqual(self.store.calls, [])
+        self.assertNotIn('libtool-base-1', self.installer.present)
+
+    def test_target_wave_requires_the_exact_pkgname(self):
+        app = 'x11/app'
+        with self.assertRaisesRegex(SDKError, 'without installing'):
+            self._waves([app], [(app, app)], {app: 'app-1'}, lambda: (*self._channel([]), 'same'))
+
+    def test_independent_source_packages_share_one_build_wave(self):
+        lib, tool = 'devel/lib@native', 'devel/tool@native'
+        calls, _errors = self._waves(
+            [lib, tool], [(lib, lib), (tool, tool)], {lib: 'lib-1', tool: 'tool-1'},
+            lambda: (*self._channel([]), 'same'))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(set(calls[0][0]), {lib, tool})
+        self.assertEqual(calls[0][2], 'build')
+
+    def test_missing_saved_graph_keeps_one_selected_build(self):
+        self._source()
+        plan = dict(roots=['devel/missing@native'], build_roots=['devel/missing@native'], packages=[],
+                    source_packages={'devel/missing@native': 'missing-1'}, download_size=0, unpacked_size=0)
+        with patch('emberbsd_sdk.sdk_client.build_missing') as build, \
+                patch('emberbsd_sdk.sdk_client.run_source') as source:
+            install_selection(plan, self.cfg, self.installer, self.cache, self.store,
+                              refresh_current=lambda: (self.release, self.catalogs, 'same'),
+                              accepted_channel='same')
+        build.assert_called_once()
+        self.assertEqual(build.call_args.args[1], ['devel/missing@native'])
+        source.assert_not_called()
+
+    def test_narrowed_order_is_restored_when_the_wave_fails(self):
+        app = 'devel/app@native'
+        self._source()
+        state = self._graph([app], [(app, app)], {app: 'app-1'})
+        original = (state / 'order').read_bytes()
+        plan = dict(roots=[app], build_roots=[app], packages=[], source_packages={app: 'app-1'},
+                    download_size=0, unpacked_size=0)
+
+        def source(config, roots, command, binaries=(), controller_mode=None):
+            self.assertEqual((state / 'order').read_text().split(), [app])
+            raise SDKError('Ports build failed (1); compatible objects and logs were retained')
+
+        with patch('emberbsd_sdk.sdk_client.run_source', side_effect=source):
+            with self.assertRaisesRegex(SDKError, 'Ports build failed'):
+                install_selection(plan, self.cfg, self.installer, self.cache, self.store,
+                                  refresh_current=lambda: (*self._channel([]), 'same'),
+                                  accepted_channel='same')
+        self.assertEqual((state / 'order').read_bytes(), original)
+
 
 if __name__ == '__main__':
     unittest.main()

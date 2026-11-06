@@ -178,11 +178,41 @@ stops before changing packages and names the roots that require Ports.
 Ports package sets supplement the published sets when `source` is configured.
 For missing roots, the existing `selected-order` controller supplies the closure
 and exact names in `STATE/packages`. The client downloads matching binaries
-within that closure, then invokes the existing selected build. Ports rechecks
+within that closure, then builds what is still missing. Ports rechecks
 exact installed target names before accepting this authenticated binary
 selection; ordinary explicit source builds keep their existing behavior.
 Version mismatches remain source work. Runtime dependency selection in the
 binary catalog and build dependency resolution in Ports remain separate.
+
+`install` keeps that order. Before each ready source wave it rereads the
+authenticated [`current.p7m`](signed-releases.md) pointer: issuance, expiry,
+and the release size and SHA256. There is no generation counter and no saved
+channel state. A changed authenticated pointer is adopted in the same process.
+Packages that have not started, whose PKGNAME and runtime closure match the
+Ports graph exactly, are installed from that pointer instead of compiled.
+The running install is not restarted because the pointer changed. `plan`
+remains the snapshot from when it ran.
+
+An unchanged pointer does not download again and does not rebuild a package
+the current install already finished. An expired pointer, or a reread that
+cannot reach the publisher, is not adopted; the source build continues with
+the last verified catalog. A signature or trust failure stops the install
+and does not install those bytes.
+
+Each wave builds through cross-bulk `build` with the ready packages written
+to `STATE/order`. The full `STATE/edges` graph stays in place, so a native
+tool that a later target package feeds still receives that target's settings.
+The client does not order a native-only subset with `selected-build`. After
+the wave, the saved order is restored. A newer installed native package is
+Ports' successful result (`BASE>=version`); the client does not replace it
+with an older exact catalog package and does not treat that reuse as a missing
+install. A target package still has to be the graph PKGNAME. A package whose
+catalog PKGNAME would replace a different installed version stays on the
+source wave. A transitive dependency of a newly published package can keep a
+newer installed package when the existing compatible-reuse check accepts it.
+If `STATE/order` or `STATE/edges` is
+missing, or does not contain every source root, the client keeps one
+`selected-build` of the remaining roots and does not split that build.
 
 Compilation requires its usual prepared compiler/sysroot inputs. It may download
 upstream sources, but it does not upload locally built packages or need a release
@@ -252,7 +282,9 @@ The complete selection is downloaded and verified before the first pkg_add.
 Sizes and SHA256 come from the signed release; pkg_admin also authenticates each
 package. A displaced current archive causes one metadata reread/replan, only
 when the current release changed. Corruption and an unchanged missing archive
-are errors, never source fallbacks.
+are errors, never source fallbacks. Separately, a source install rereads the
+authenticated current pointer between build waves and installs a newly
+published exact package without starting the client again.
 
 The default cache budget is 512 MiB. The active selection may temporarily exceed
 it; older archives are removed first and the budget is restored after success.

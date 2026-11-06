@@ -83,6 +83,9 @@ case "$mode" in
             printf '%s\\n' build-started >> "$CONTROLLER_OUTPUT"
         fi
         ;;
+    build)
+        printf '%s\\n' build-saved >> "$CONTROLLER_OUTPUT"
+        ;;
     *) exit 2 ;;
 esac
 ''', encoding='utf-8')
@@ -220,6 +223,20 @@ exit 2
             self.assertFalse(roots_path.exists())
         self.assertEqual((self.root / 'paths').read_text().splitlines(),
                          [os.fspath(self.prefix / 'bin')] * 2)
+
+    def test_saved_graph_build_does_not_reorder(self):
+        output = StringIO()
+        native = SelectedHostPrefix(self.bmake, self.shell)
+        arguments = ['--ports-root', os.fspath(self.ports), 'build',
+                     '--state', os.fspath(self.state), '--host-prefix', os.fspath(self.prefix),
+                     '--package', 'lang/tool@native']
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(package_selection, 'load_host_prefix', return_value=native), \
+                redirect_stdout(output), redirect_stderr(output):
+            status = package_selection.main(arguments, controller_mode='build')
+        self.assertEqual(status, 0, output.getvalue())
+        self.assertEqual([line.split()[0] for line in self.calls.read_text().splitlines()], ['build'])
+        self.assertIn('build-saved', self.controller_output.read_text())
 
     def test_bmake_must_match_selected_native_prefix(self):
         other = self.root / 'other-bmake'

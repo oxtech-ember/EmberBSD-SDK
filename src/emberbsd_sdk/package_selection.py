@@ -163,7 +163,7 @@ def _run_controller(ports_root, state, native, roots, command, build_environment
         roots_path.unlink(missing_ok=True)
 
 
-def main(argv=None, *, controller_stdout=None):
+def main(argv=None, *, controller_stdout=None, controller_mode=None):
     args = _parser().parse_args(argv)
     try:
         ports_root = args.ports_root.resolve(strict=True)
@@ -194,7 +194,15 @@ def main(argv=None, *, controller_stdout=None):
         )
         print("Sets: " + (", ".join(args.sets) if args.sets else "none"))
         print("Roots: " + (", ".join(roots) if roots else "none"), flush=True)
-        mode = "selected-order" if args.command == "plan" else "selected-build"
+        # `build` reads the saved order and edges. `selected-build` orders the
+        # roots it is given, which drops target-fed settings when those roots
+        # are only the ready native wave.
+        if controller_mode is None:
+            mode = "selected-order" if args.command == "plan" else "selected-build"
+        elif controller_mode == "build" and args.command == "build":
+            mode = "build"
+        else:
+            raise ValueError("unsupported controller mode")
         status = _run_controller(ports_root, state, native, roots, mode, build_environment,
                                  stdout=controller_stdout)
         if status:
