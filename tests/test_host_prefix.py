@@ -134,6 +134,16 @@ class HostPrefixTests(TemporaryCase):
         self.assertEqual(self.fixture.queries, [])
         validate_selection(selected.as_dict(), required_roles=('git', 'patch'))
 
+    def test_ports_versioned_ruby_uses_native_prefix_checks(self):
+        ruby = self.fixture.write('ruby40', header(62, 2))
+        legacy = self.fixture.write('ruby', header(62, 2))
+        self.assertEqual(self.fixture.load(roles=('ruby',)).tool('ruby'), str(ruby))
+        self.fixture.write('ruby40', header(183, 2))
+        with self.assertRaises(SDKError):
+            self.fixture.load(roles=('ruby',))
+        ruby.unlink()
+        self.assertEqual(self.fixture.load(roles=('ruby',)).tool('ruby'), str(legacy))
+
     def test_compiler_wrapper_uses_a_prefix_interpreter(self):
         self.fixture.write('gcc', ('#!' + str(self.fixture.root / 'bin/sh') + '\n').encode())
         self.fixture.load()

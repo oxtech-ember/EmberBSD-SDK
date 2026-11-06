@@ -2,7 +2,10 @@
 
 Use `scripts/run-native-check.py` for owner checks that compile host fixtures.
 The selected native prefix supplies compilers, interpreters and other build
-tools. The check script remains in its owning repository.
+tools. Ruby selects the common Ports `bin/ruby40`, or an installed `bin/ruby`
+when the versioned command is absent; no manual alias is needed. Both commands
+must pass the same native-prefix checks. The check script remains in its
+owning repository.
 
 ```sh
 "$HOST_PREFIX/bin/python3.15" "$SDK_SOURCE/scripts/run-native-check.py" \
