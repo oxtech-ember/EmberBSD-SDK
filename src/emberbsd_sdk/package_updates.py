@@ -8,6 +8,8 @@ import tarfile
 
 from .binary_release import _matches, _package_payload
 from .errors import SDKError
+from .package_install import install_paths
+from .package_abi import providers_preserved
 from .release_signing import read_bytes
 
 
@@ -50,7 +52,7 @@ def _archive(path):
     return _metadata(fields['+CONTENTS'], fields['+BUILD_INFO'])
 
 
-def reuse_compatible_dependencies(crypto, database, packages, archives, installed, roots=()):
+def reuse_compatible_dependencies(crypto, config, packages, archives, installed, roots=()):
     """Reuse a newer installed package when every selected direct consumer accepts it.
 
     Catalog edges identify exact artifacts, not pkg_tools version constraints. Use
@@ -59,6 +61,7 @@ def reuse_compatible_dependencies(crypto, database, packages, archives, installe
     are never elided; ambiguous or undeclared edges remain selected for the normal
     update checks to handle.
     """
+    _, database = install_paths(config)
     by_id = {package['artifact']['id']: package for package in packages}
     incoming = {identity: [] for identity in by_id}
     for consumer in packages:
@@ -96,7 +99,8 @@ def reuse_compatible_dependencies(crypto, database, packages, archives, installe
         if not matches(base + '>=' + version, installed_name):
             continue
         candidate_metadata = archive_metadata(identity)
-        if not candidate_metadata['providers'] <= metadata(installed_name)['providers']:
+        if not providers_preserved(config, archives[identity], candidate_metadata['providers'],
+                                   metadata(installed_name)['providers'], installed_is_old=False):
             continue
         consumers = incoming[identity]
         if not consumers:
@@ -123,13 +127,14 @@ def reuse_compatible_dependencies(crypto, database, packages, archives, installe
     return reused
 
 
-def check_updates(crypto, database, packages, archives, installed):
+def check_updates(crypto, config, packages, archives, installed):
     """Run under the pkgdb lock after archive authentication, before mutation.
 
     Do not replace the resolver in pkg_tools. This bounded update path requires
     existing consumers to remain usable while dependencies change in place.
     ABI transitions which remove providers need a separate coordinated update.
     """
+    _, database = install_paths(config)
     by_base = {}
     for name in installed:
         by_base.setdefault(name.rsplit('-', 1)[0], set()).add(name)
@@ -162,9 +167,10 @@ def check_updates(crypto, database, packages, archives, installed):
         old = metadata(old_name)
         required_by = database / old_name / '+REQUIRED_BY'
         dependents = set(read_bytes(required_by, 8 * 1024 * 1024).decode('utf-8').splitlines()) if required_by.exists() else set()
-        if dependents and not old['providers'] <= new['providers']:
-            # REQUIRES does not list every dlopen/Python extension consumer.
-            # Retain providers rather than assuming those unlisted uses are safe.
+        if dependents and not providers_preserved(config, archives[package['artifact']['id']],
+                                                 old['providers'], new['providers']):
+            # REQUIRES omits dlopen users. Preserve exact providers unless the
+            # payloads prove a versioned implementation of the retained SONAME.
             raise SDKError(f'{old_name}: replacement removes library providers used by installed consumers; '
                            'a coordinated ABI update is required')
         for dependent in sorted(dependents):

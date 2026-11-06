@@ -111,7 +111,7 @@ class InstallTests(unittest.TestCase):
                                    payload='replacement data')
         packages = [dict(pkgname='fixture-2.0', replaces=['fixture-1.0'],
                          artifact={'id': 'replacement'}, action='download')]
-        check_updates(self.crypto, self.destination / 'pkgdb', packages,
+        check_updates(self.crypto, self.cfg, packages,
                       {'replacement': replacement}, installer.installed(self.cfg))
         installer.install(replacement, self.cfg)
 

@@ -234,14 +234,21 @@ state under its database lock and checks every replacement against installed
 consumers using pkg_tools dependency patterns. A library replacement must retain
 its old providers while installed consumers exist; `REQUIRES` alone does not
 describe all dynamically loaded libraries. Native provider paths are compared
-relative to their package prefixes.
+relative to their package prefixes. A versioned regular ELF64 little-endian
+implementation may replace a physical versioned filename when the actual old
+and new payload bindings retain the same SONAME and ELF class, byte order,
+machine, type, OS ABI, ABI version and flags. The retained SONAME must resolve
+to the corresponding implementation. This proves neither complete C ABI nor
+symbol or behavioral compatibility. Objects without SONAME, plugins and opaque,
+unsafe or malformed entries retain the strict provider-path requirement.
 
 The signed catalog pins exact package artifacts, while installed package
 dependencies may allow a newer revision than the artifact selected by that
 catalog. For a transitive dependency, the client reuses the newer installed
 package when every selected direct consumer's authenticated `@pkgdep` pattern
-accepts it and its installed `PROVIDES` still contains every provider declared
-by the selected artifact. Explicitly requested roots are not elided. If metadata
+accepts it and its installed providers satisfy the same provider retention or
+proven ELF implementation substitution rule against the selected artifact.
+Explicitly requested roots are not elided. If metadata
 is missing, ambiguous, or incompatible, the normal replacement checks still
 apply; the client does not infer ABI compatibility from version numbers alone.
 

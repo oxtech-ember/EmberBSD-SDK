@@ -272,9 +272,8 @@ def apply_plan(plan, config, installer, cache, store):
             compatible_reuse = []
             for repository in sorted(selected_repositories):
                 cfg = config['repositories'][repository]
-                _, database = install_paths(cfg)
                 repository_packages = [p for p in plan['packages'] if p['repository'] == repository]
-                compatible_reuse.extend(reuse_compatible_dependencies(installer.crypto, database,
+                compatible_reuse.extend(reuse_compatible_dependencies(installer.crypto, cfg,
                     repository_packages, archives, installer.installed(cfg, recover=False), plan['roots']))
             plan['compatible_reuse'] = compatible_reuse
             pending = [p for p in plan['packages'] if p['action'] != 'installed']

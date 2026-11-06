@@ -39,7 +39,7 @@ def _relative(name):
     return path
 
 
-def inspect_install_paths(package, config):
+def inspect_install_paths(package, config, *, visit=None):
     """Inspect signed archives before pkg_add; never unpack target files ourselves."""
     prefix, _ = install_paths(config)
     root = prefix.resolve()
@@ -112,6 +112,8 @@ def inspect_install_paths(package, config):
                 links.add(path)
             elif not (member.isfile() or member.isdir()):
                 raise SDKError(f'unsupported special file in SDK package: {name}')
+            if visit is not None:
+                visit(member, path, archive)
         if portable and hooks and not deferred_hooks:
             raise SDKError('prefix-independent package contains installation scripts')
         if relocation is not None and original_prefix is None:
@@ -178,8 +180,7 @@ class PackageInstaller:
 
     def check_updates(self, packages, archives, config):
         from .package_updates import check_updates
-        _, database = install_paths(config)
-        check_updates(self.crypto, database, packages, archives, self.installed(config, recover=False))
+        check_updates(self.crypto, config, packages, archives, self.installed(config, recover=False))
 
     def install(self, package, config, *, checked=False, configure=True):
         if not checked:
