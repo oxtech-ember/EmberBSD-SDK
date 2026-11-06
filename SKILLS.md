@@ -53,7 +53,9 @@ unsatisfied version patterns together through the owning Ports checks.
 For changes to resumable operations, test first use, unchanged repeat,
 compatible changed inputs, interruption before and after commit, recovery with
 the same arguments, and a competing incompatible operation. Use representative
-metadata, including read-only hooks, prior schemas and exact dependencies when
-relevant. Keep state-machine regressions runnable without a production SDK;
+metadata, including read-only hooks, supported schemas and exact dependencies when
+relevant. Test explicit rejection of retired schemas in normal operations; do not retain a legacy reader
+only to keep an old test passing. Update affected consumers and tests with the
+current contract. Keep state-machine regressions runnable without a production SDK;
 native signing, package lifecycle and target tests remain separate evidence.
 Report executed and skipped checks, including missing integration prerequisites.
