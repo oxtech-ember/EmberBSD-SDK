@@ -61,7 +61,7 @@ class InstallTests(unittest.TestCase):
             (f'PROVIDES={prefix}/payload\n' if provides else '') +
             (f'OPSYS=NetBSD\nMACHINE_ARCH={arch}\nOS_VERSION=11.0\n' if target else
              f'OPSYS={platform.system()}\nMACHINE_ARCH={"aarch64" if platform.machine() == "arm64" else platform.machine()}\nOS_VERSION={platform.release()}\n'))
-        unsigned, signed = self.work / 'unsigned.tgz', self.work / 'fixture-1.0.tgz'
+        unsigned, signed = self.work / 'unsigned.tgz', self.work / (package_name + '.tgz')
         extra = []
         if build_version is not None:
             (stage / 'BUILD_VERSION').write_text(build_version)
@@ -102,7 +102,7 @@ class InstallTests(unittest.TestCase):
                                 commands='@pkgdep fixture>=1\n')
         installer.install(consumer, self.cfg)
         consumer = consumer.with_name('consumer.tgz')
-        (self.work / 'fixture-1.0.tgz').replace(consumer)
+        (self.work / 'consumer-1.0.tgz').replace(consumer)
         shutil.rmtree(self.work / 'stage')
 
         old_required_by = self.destination / 'pkgdb/fixture-1.0/+REQUIRED_BY'
