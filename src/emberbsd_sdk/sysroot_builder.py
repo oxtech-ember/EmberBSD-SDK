@@ -801,6 +801,15 @@ class SysrootBuilder:
                     if len(bindings) == 1 and os.path.isabs(bindings[0]):
                         source_roots.add(bindings[0])
             self.refresh_file_outputs = []
+            native_tool_aliases = {}
+            if 'gettext' in record['signature'].get('common_sources', {}) and 'gettext' in after:
+                previous_od = old.get('native_toolset', {}).get('tools', {}).get('od')
+                selected_od = new.get('native_toolset', {}).get('tools', {}).get('od')
+                if previous_od is not None and previous_od == selected_od:
+                    # The GNU consumer creates this local alias for its selected od.
+                    native_tool_aliases['external/gpl2/gettext/gnu/host-tools/od'] = selected_od
+            if native_tool_aliases:
+                extra['native_tool_aliases'] = native_tool_aliases
             self.refresh_dirs = prepared_refresh.plan(self.paths['os'], path, changed, members,
                                                       self.refresh_nested_outputs,
                                                       allowed_source_roots=sorted(source_roots),

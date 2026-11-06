@@ -271,6 +271,29 @@ class PreparedRefreshTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'binary alias outside object tree'):
             prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [])
 
+    def test_native_tool_alias_requires_exact_path_and_selected_binary(self):
+        selected = Path(self.temp.name) / 'selected-od'
+        selected.write_bytes(b'\x7fELFnative tool')
+        alias = self.obj / 'external/cbor/od'
+        alias.symlink_to(selected)
+        bindings = {'external/cbor/od': str(selected)}
+        with self.assertRaisesRegex(SDKError, 'unverified file alias'):
+            prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [])
+        self.assertEqual(prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [],
+                         native_tool_aliases=bindings), ['external/cbor', 'external/fido'])
+        other = Path(self.temp.name) / 'other-od'
+        other.write_bytes(b'\x7fELFother native tool')
+        alias.unlink()
+        alias.symlink_to(other)
+        with self.assertRaisesRegex(SDKError, 'native tool alias differs'):
+            prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [],
+                                  native_tool_aliases=bindings)
+        alias.unlink()
+        (self.obj / 'external/cbor/other-alias').symlink_to(selected)
+        with self.assertRaisesRegex(SDKError, 'unverified file alias'):
+            prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [],
+                                  native_tool_aliases=bindings)
+
     def test_external_directory_alias_is_refused(self):
         (self.obj / 'escape').symlink_to(Path(self.temp.name))
         with self.assertRaises(SDKError):

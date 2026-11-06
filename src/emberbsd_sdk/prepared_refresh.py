@@ -70,7 +70,7 @@ def plan_native(os_root, objects, names):
 
 def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
          extra_headers=(), extra_linked=(), allowed_source_roots=(), scan_consumers=True,
-         file_outputs=None):
+         file_outputs=None, native_tool_aliases=None):
     root, obj = Path(os_root), Path(objects)
     try:
         root_resolved, obj_resolved = root.resolve(), obj.resolve()
@@ -81,6 +81,12 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
                 raise ValueError('nonabsolute prepared source root')
             source_roots.append(source.resolve())
         source_roots = tuple(dict.fromkeys(source_roots))
+        tool_aliases = {}
+        for alias, selected in (native_tool_aliases or {}).items():
+            selected = Path(selected)
+            if not selected.is_absolute() or not selected.is_file():
+                raise ValueError('invalid selected native tool')
+            tool_aliases[relative(alias)] = selected.resolve(strict=True)
         contract = json.loads((root / CONTRACT).read_text())
         required = {'version', 'sources', 'header_independent_object_patterns', 'header_independent_archive_patterns'}
         if set(contract) not in (required, required | {'nested_object_owners'}) or contract['version'] != 1:
@@ -155,6 +161,10 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
                 rel = path.relative_to(obj).as_posix()
                 if path.is_symlink():
                     resolved = path.resolve()
+                    if rel in tool_aliases:
+                        if resolved != tool_aliases[rel] or not resolved.is_file():
+                            raise ValueError('native tool alias differs from selected tool: ' + str(path))
+                        continue
                     in_object = resolved.is_relative_to(obj_resolved)
                     in_os_source = resolved.is_relative_to(root_resolved)
                     in_prepared_source = any(resolved.is_relative_to(source) for source in source_roots)
