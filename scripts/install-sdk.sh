@@ -10,7 +10,7 @@ fail() { echo "install-sdk: $*" >&2; exit 1; }
 case "$1" in /*) destination=$1 ;; *) fail "select an absolute SDK directory" ;; esac
 case "$destination" in *[!A-Za-z0-9_./-]*) fail "Ports requires a path without spaces or shell metacharacters" ;; esac
 [ ! -e "$destination" ] && [ ! -L "$destination" ] || fail "destination already exists; use its ember-sdk client"
-[ "$(/usr/bin/uname -s)/$(/usr/bin/uname -m)" = Darwin/arm64 ] || fail "this bootstrap currently supports macOS arm64"
+[ "$(/usr/bin/uname -s)/$(/usr/bin/uname -m)" = Darwin/arm64 ] || fail "this binary bootstrap supports macOS arm64; for Linux use https://github.com/oxtech-ember/EmberBSD-SDK/blob/main/docs/linux-bootstrap.md"
 major=$(/usr/bin/sw_vers -productVersion); major=${major%%.*}
 [ "$major" -ge 27 ] || fail "this published bootstrap requires macOS 27 or newer"
 parent=${destination%/*}; [ -n "$parent" ] || parent=/

@@ -1,5 +1,9 @@
 # First SDK installation
 
+For Linux, use the [initial native bootstrap](linux-bootstrap.md) when no
+compatible host bootstrap is published. This shell installer selects Darwin arm64;
+target NetBSD packages cannot supply native Linux tools.
+
 The Darwin arm64 bootstrap runs on macOS 27 or newer. It contains the client,
 Python 3.15 without test modules, OpenSSL, pkg_tools, public Mozilla CA data and
 their runtime packages. It has no compiler, application sysroot, GUI or source

@@ -66,12 +66,12 @@
           "posix": "The selected host's native development tools and POSIX process interfaces."
         },
         "producer_specific_module_support": {
-          "zlib": "Required for libedit source preparation and when Ports runtime relink recovery reads its gzip-compressed backup through Python tarfile."
+          "zlib": "Required for libedit source preparation and when Ports runtime relink recovery reads its gzip-compressed backup through Python tarfile.",
+          "lzma": "Required when Python prepares xz-compressed sources, including the common LLVM source archive; provide liblzma development files before building the control interpreter.",
+          "bz2": "Required when Python prepares bzip2-compressed source inputs; provide bzip2 development files before building the control interpreter."
         },
         "optional_module_libraries": [
-          "bzip2",
           "SQLite",
-          "liblzma",
           "readline",
           "ncurses",
           "gdbm"

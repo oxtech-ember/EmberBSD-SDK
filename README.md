@@ -5,6 +5,8 @@ Developer tools and build contracts for [EmberBSD](https://github.com/oxtech-emb
 Start on macOS arm64 with the [minimal binary SDK](docs/bootstrap-client.md):
 one download supplies Python, package management and the `ember-sdk` client.
 Install components by task; compilers and target sysroots are separate additions.
+On Linux, follow the [initial native bootstrap](docs/linux-bootstrap.md) when
+the catalog has no compatible host bootstrap or components.
 
 ## Prebuild SDK
 
