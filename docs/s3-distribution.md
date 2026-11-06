@@ -234,7 +234,9 @@ verifies current, its exact manifest and selected index sizes/hashes, then
 publishes the local snapshot without persistent channel replay state. Indexes
 stream to disk; package archives are not downloaded. If superseded metadata
 disappears during reading, it retries once only when current has changed.
-An ordinary missing file, invalid signature or corrupt bytes is an error.
+An ordinary missing file, invalid signature or corrupt bytes is an error. Public
+snapshot export uses atomic no-replace directory publication; client reads and
+artifact downloads use private temporary metadata cleaned up after the operation.
 
 Download one artifact selected by its exact ID from authenticated current:
 

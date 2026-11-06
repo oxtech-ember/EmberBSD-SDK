@@ -24,7 +24,7 @@ from .package_cache import PackageCache, check_space, directory_lock
 from .package_install import PackageInstaller, install_paths, target_sysroot
 from .package_updates import reuse_compatible_dependencies
 from .package_selection import _package_sets, _parse_root, _read_roots
-from .release_delivery import artifact_key, fetch_release, _key
+from .release_delivery import artifact_key, release_snapshot, _key
 from .release_signing import ReleaseCrypto
 from .release_s3 import HTTPStore, HTTPStatusError
 
@@ -422,10 +422,8 @@ def main(argv=None, *, default_config=None):
             installer = PackageInstaller(crypto, trust)
             previous = None
             for attempt in range(2):
-                with tempfile.TemporaryDirectory(prefix='.metadata-', dir=state) as directory:
-                    snapshot = Path(directory) / 'snapshot'
-                    release = fetch_release(crypto, store, trust, snapshot,
-                                            prefix=config.get('url_prefix', ''))
+                with release_snapshot(crypto, store, trust, state,
+                                      prefix=config.get('url_prefix', '')) as (release, snapshot):
                     identity = hashlib.sha256((snapshot / 'release.p7m').read_bytes()).hexdigest()
                     if previous == identity:
                         raise SDKError('published package is missing from unchanged current; retry after publisher repair')

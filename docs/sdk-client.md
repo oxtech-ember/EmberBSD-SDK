@@ -8,7 +8,9 @@ signature failures are errors, not reasons to compile another package.
 One configuration describes the native prefix, optional target sysroots, or a live target installation.
 All tasks share these prefixes, package databases and a bounded SHA256 archive
 cache. Selection remains versionless; host/target ABI comes from configuration.
-The client downloads and verifies the entire binary selection before installing.
+The client reads authenticated metadata in a private temporary directory and
+cleans it up after use. It downloads and verifies the entire binary selection
+before installing.
 Target sysroots use pkg_add's alternate root and no-script mode; an explicit live target uses native package hooks.
 There is no separate dependency resolver, toolchain or build tree per task.
 

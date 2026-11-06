@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import time
 import unittest
+from unittest.mock import patch
 
 import test_package_install as install_fixture
 import test_release_s3 as http_fixture
@@ -53,6 +54,15 @@ class ClientInstallTests(install_fixture.InstallTests):
             result = main(['--config', str(self.config), command, *selection])
         output.flush()
         return result, output.buffer.getvalue().decode() + errors.getvalue()
+
+    def test_list_reads_signed_private_snapshot_without_publication(self):
+        with patch('emberbsd_sdk.release_delivery.publish_directory_noreplace',
+                   side_effect=RuntimeError('public publication unavailable')) as publish:
+            status, output = self.run_client('list')
+        self.assertEqual(status, 0, output)
+        self.assertIn('fixture', output)
+        publish.assert_not_called()
+        self.assertEqual(list((self.work / 'state').glob('.release-metadata-*')), [])
 
     def test_online_install_and_repeat_without_download(self):
         status, output = self.run_client()

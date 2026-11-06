@@ -9,7 +9,6 @@ import os
 import stat
 from pathlib import Path
 import secrets
-import shutil
 import tempfile
 import time
 
@@ -300,27 +299,43 @@ def _verify_sparse_local(crypto, candidate, current, directory, trust):
     return reusable_ids
 
 
+@contextmanager
+def release_snapshot(crypto, public, trust, directory, *, prefix='', repositories=()):
+    """Hold authenticated metadata in an owned private directory until exit."""
+    channel_bytes, _ = public.read(_key(prefix, 'current.p7m'), MAX_ENVELOPE,
+                                  headers={'cache-control': 'no-cache'})
+    for attempt in range(2):
+        with tempfile.TemporaryDirectory(prefix='.release-metadata-', dir=directory) as work:
+            snapshot = Path(work) / 'snapshot'
+            snapshot.mkdir(mode=0o700)
+            try:
+                release = _fetch_snapshot(crypto, public, trust, snapshot, prefix,
+                                          repositories, channel_bytes)
+            except HTTPStatusError as exc:
+                if exc.status != 404 or attempt:
+                    raise
+                newer, _ = public.read(_key(prefix, 'current.p7m'), MAX_ENVELOPE,
+                                      headers={'cache-control': 'no-cache'})
+                if newer == channel_bytes:
+                    raise
+                channel_bytes = newer
+                continue
+            yield release, snapshot
+            return
+
+
 def fetch_release(crypto, public, trust, output, *, prefix='', repositories=()):
-    """Pin one authenticated release and its selected indexes, without payloads."""
+    """Export one authenticated snapshot without replacing a destination entry."""
     output = Path(output).absolute()
     if output.exists() or output.is_symlink():
         raise SDKError('metadata destination already exists; select a new snapshot directory')
-    channel_bytes, _ = public.read(_key(prefix, 'current.p7m'), MAX_ENVELOPE,
-                                   headers={'cache-control': 'no-cache'})
-    for attempt in range(2):
-        try:
-            return _fetch_snapshot(crypto, public, trust, output, prefix, repositories, channel_bytes)
-        except HTTPStatusError as exc:
-            if exc.status != 404 or attempt:
-                raise
-            newer, _ = public.read(_key(prefix, 'current.p7m'), MAX_ENVELOPE,
-                                   headers={'cache-control': 'no-cache'})
-            if newer == channel_bytes:
-                raise
-            channel_bytes = newer
+    with release_snapshot(crypto, public, trust, output.parent, prefix=prefix,
+                          repositories=repositories) as (release, snapshot):
+        publish_directory_noreplace(snapshot, output)
+        return release
 
 
-def _fetch_snapshot(crypto, public, trust, output, prefix, repositories, channel_bytes):
+def _fetch_snapshot(crypto, public, trust, snapshot, prefix, repositories, channel_bytes):
     content = crypto.verify_cms(channel_bytes, trust)
     pointer = parse_channel(content, CHANNEL)
     reference = pointer['release']
@@ -331,29 +346,23 @@ def _fetch_snapshot(crypto, public, trust, output, prefix, repositories, channel
         raise SDKError('channel and release identities differ')
     base = reference['path'].removesuffix('/release.p7m')
     requested, found = set(repositories), set()
-    scratch = Path(tempfile.mkdtemp(prefix='.release-metadata-', dir=output.parent))
-    try:
-        write_new(scratch / 'current.p7m', channel_bytes)
-        write_new(scratch / 'release.p7m', envelope)
-        for artifact in release['artifacts']:
-            if artifact['kind'] != 'package-index':
-                continue
-            repository = artifact['path'].split('/')[0]
-            if requested and repository not in requested:
-                continue
-            found.add(repository)
-            destination = scratch / artifact['path']
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            with destination.open('xb') as stream:
-                public.verify(_key(prefix, base + '/' + artifact['path']),
-                              artifact['size'], artifact['sha256'], sink=stream)
-        if requested - found:
-            raise SDKError('requested repository is not present in this release')
-        publish_directory_noreplace(scratch, output)
-        return release
-    finally:
-        if scratch.exists():
-            shutil.rmtree(scratch)
+    write_new(snapshot / 'current.p7m', channel_bytes)
+    write_new(snapshot / 'release.p7m', envelope)
+    for artifact in release['artifacts']:
+        if artifact['kind'] != 'package-index':
+            continue
+        repository = artifact['path'].split('/')[0]
+        if requested and repository not in requested:
+            continue
+        found.add(repository)
+        destination = snapshot / artifact['path']
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open('xb') as stream:
+            public.verify(_key(prefix, base + '/' + artifact['path']),
+                          artifact['size'], artifact['sha256'], sink=stream)
+    if requested - found:
+        raise SDKError('requested repository is not present in this release')
+    return release
 
 
 def fetch_artifact(crypto, public, trust, output, artifact_id, *, prefix=''):
@@ -361,9 +370,7 @@ def fetch_artifact(crypto, public, trust, output, artifact_id, *, prefix=''):
     _pattern(artifact_id, _SLUG, 'artifact id')
     output = Path(output).absolute()
     with directory_lock(output.parent / (output.name + '.sdk-lock')):
-        with tempfile.TemporaryDirectory(prefix='.artifact-metadata-', dir=output.parent) as work:
-            snapshot = Path(work) / 'snapshot'
-            release = fetch_release(crypto, public, trust, snapshot, prefix=prefix)
+        with release_snapshot(crypto, public, trust, output.parent, prefix=prefix) as (release, snapshot):
             selected = [item for item in release['artifacts'] if item['id'] == artifact_id]
             if len(selected) != 1:
                 raise SDKError('artifact id is absent or ambiguous in current')

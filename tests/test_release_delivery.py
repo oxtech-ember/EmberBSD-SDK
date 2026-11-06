@@ -23,7 +23,7 @@ from emberbsd_sdk.release_cli import seal_release
 from emberbsd_sdk.release_catalog import parse_release
 import emberbsd_sdk.release_delivery as release_delivery
 from emberbsd_sdk.release_signing import ReleaseCrypto
-from emberbsd_sdk.release_delivery import publish_release, fetch_release, fetch_artifact
+from emberbsd_sdk.release_delivery import publish_release, fetch_release, fetch_artifact, release_snapshot
 
 
 class S3CLIProxyTests(unittest.TestCase):
@@ -130,6 +130,69 @@ class DeliveryTests(unittest.TestCase):
         self.assertFalse((self.work / 'state.json').exists())
         self.assertIn('immutable', self.server.headers['/bucket/current/host/darwin-arm64/payload']['cache-control'])
         self.assertIn('no-cache', self.server.headers['/bucket/current.p7m']['cache-control'])
+
+    def test_private_snapshot_works_without_publication_and_cleans_up(self):
+        self.publish(self.release())
+        with patch.object(release_delivery, 'publish_directory_noreplace', side_effect=SDKError('unsupported')) as publish:
+            with release_snapshot(self.crypto, self.public, self.ca.certificate, self.work) as (release, snapshot):
+                self.assertEqual(release['release_id'], 'one')
+                self.assertEqual(snapshot.stat().st_mode & 0o777, 0o700)
+                self.assertTrue((snapshot / 'host/pkg_summary.gz').is_file())
+            self.assertFalse(snapshot.exists())
+            with self.assertRaisesRegex(RuntimeError, 'consumer'):
+                with release_snapshot(self.crypto, self.public, self.ca.certificate, self.work) as (_, snapshot):
+                    raise RuntimeError('consumer')
+            self.assertFalse(snapshot.exists())
+            output = self.work / 'client.pyz'
+            output.write_bytes(b'old')
+            fetch_artifact(self.crypto, self.public, self.ca.certificate, output, 'bootstrap')
+            self.assertEqual(output.read_bytes(), b'payload' * 1000)
+            publish.assert_not_called()
+            with self.assertRaisesRegex(SDKError, 'unsupported'):
+                self.fetch('public-output')
+            self.assertFalse((self.work / 'public-output').exists())
+        self.assertEqual(list(self.work.glob('.release-metadata-*')), [])
+
+    def test_private_snapshot_rejects_bad_signature_and_index_before_yield(self):
+        pointer = self.publish(self.release())
+        current = self.server.objects['/bucket/current.p7m']
+        base = pointer['release']['path'].removesuffix('/release.p7m')
+        index = '/bucket/' + base + '/host/pkg_summary.gz'
+        original = self.server.objects[index]
+        for key in ('/bucket/current.p7m', index):
+            with self.subTest(key=key):
+                self.server.objects[key] = b'corrupt'
+                with self.assertRaises(SDKError):
+                    with release_snapshot(self.crypto, self.public, self.ca.certificate, self.work):
+                        self.fail('corrupt metadata was yielded')
+                self.assertEqual(list(self.work.glob('.release-metadata-*')), [])
+                self.server.objects[key] = current if key.endswith('current.p7m') else original
+
+    def test_private_snapshot_retry_changed_and_unchanged_current_cleans_up(self):
+        first = self.publish(self.release())
+        old = self.server.objects['/bucket/current.p7m']
+        self.publish(self.release('two'))
+        read = self.public.read
+        for changed in (False, True):
+            with self.subTest(changed=changed):
+                calls = 0
+                def switch(key, *args, **kwargs):
+                    nonlocal calls
+                    if key == 'current.p7m':
+                        calls += 1
+                        if calls == 1 or not changed:
+                            return old, {}
+                    return read(key, *args, **kwargs)
+                with patch.object(self.public, 'read', side_effect=switch):
+                    if changed:
+                        with release_snapshot(self.crypto, self.public, self.ca.certificate, self.work) as (release, snapshot):
+                            self.assertEqual(release['release_id'], 'two')
+                        self.assertFalse(snapshot.exists())
+                    else:
+                        with self.assertRaises(SDKError):
+                            with release_snapshot(self.crypto, self.public, self.ca.certificate, self.work):
+                                self.fail('missing metadata was yielded')
+                self.assertEqual(list(self.work.glob('.release-metadata-*')), [])
 
     def test_fetch_artifact_authenticated_atomic_replacement(self):
         self.publish(self.release())
