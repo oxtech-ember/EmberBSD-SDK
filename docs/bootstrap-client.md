@@ -100,7 +100,8 @@ revision; the first publication can qualify an existing recipe's package.
 
 The signed `@comment emberbsd-prefix-independent-v1` packing-list marker permits
 host installation at another prefix. Unqualified packages retain the exact-prefix
-check; target packages retain their fixed target prefix and no-script install.
+check; target packages retain their fixed target prefix. Sysroot installs suppress
+scripts, while native target installs run them.
 This deliberately narrow contract is not a generic relocator for arbitrary
 applications, scripts or configuration files.
 

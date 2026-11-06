@@ -2,6 +2,9 @@
 from copy import deepcopy
 import hashlib
 import io
+import json
+import platform
+from contextlib import redirect_stderr
 from pathlib import Path
 import sys
 import tarfile
@@ -57,6 +60,32 @@ class ClientTests(unittest.TestCase):
 
     def plan(self, **kw):
         return installation_plan(self.release, self.catalogs, self.cfg, self.installer, self.cache, **kw)
+
+    def test_cli_passes_explicit_https_proxy_and_direct_default(self):
+        from emberbsd_sdk.sdk_client import main
+        host = dict(os=platform.system(), arch=platform.machine(), abi='test', runtime='native')
+        config = dict(schema='emberbsd.sdk-client.v1', host_prefix=str(self.root),
+                      cache_dir=str(self.root / 'cache'), state_dir=str(self.root / 'state'),
+                      trust_root=str(self.root / 'trust.pem'), url='https://packages.example',
+                      https_ca=str(self.root / 'https-ca.pem'),
+                      repositories={'native': dict(host=host, prefix=str(self.root / 'prefix'),
+                                                   pkgdb=str(self.root / 'pkgdb'))})
+        path = self.root / 'client.json'
+        proxy = 'http://127.0.0.1:12345'
+        for value in (None, proxy):
+            with self.subTest(proxy=value):
+                if value is None:
+                    config.pop('https_proxy', None)
+                else:
+                    config['https_proxy'] = value
+                path.write_text(json.dumps(config))
+                with patch('emberbsd_sdk.sdk_client.load_host_prefix'), \
+                     patch('emberbsd_sdk.sdk_client.ReleaseCrypto'), \
+                     patch('emberbsd_sdk.sdk_client.HTTPStore', side_effect=SDKError('fixture stop')) as store, \
+                     redirect_stderr(io.StringIO()):
+                    self.assertEqual(main(['--config', str(path), 'plan', '--package', 'net/app@native']), 1)
+                store.assert_called_once_with('https://packages.example',
+                    ca_file=str(self.root / 'https-ca.pem'), proxy_url=value)
 
     def test_empty_selection_does_nothing(self):
         self.assertEqual(self.plan()['packages'], [])

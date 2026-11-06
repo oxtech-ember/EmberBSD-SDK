@@ -225,12 +225,33 @@ python3 scripts/s3-release.py --host-prefix /work/host-pkg-llvm fetch \
   --repository darwin-arm64
 ```
 
+For an explicit HTTP CONNECT proxy, place `--https-proxy http://host:port`
+before the subcommand. TLS authentication still verifies the final HTTPS server;
+proxy environment variables are not selected automatically.
+
 The output parent must exist and the output directory must be new. The reader
 verifies current, its exact manifest and selected index sizes/hashes, then
 publishes the local snapshot without persistent channel replay state. Indexes
 stream to disk; package archives are not downloaded. If superseded metadata
 disappears during reading, it retries once only when current has changed.
 An ordinary missing file, invalid signature or corrupt bytes is an error.
+
+Download one artifact selected by its exact ID from authenticated current:
+
+```sh
+python3 scripts/s3-release.py --host-prefix /work/host-pkg-llvm fetch-artifact \
+  --url https://emberbsd-pkg.oxteam.me \
+  --trust-root trust/emberbsd-release-root.pem \
+  --artifact bootstrap-netbsd-amd64-client --output /work/ember-sdk.pyz
+```
+
+The command verifies the signed channel and release and the selected artifact's
+size and SHA-256 before atomically creating or replacing the regular output file.
+A sibling `.sdk-lock` serializes writers; download or verification failure leaves
+the previous file intact. After an interruption the verified replacement may have
+committed; rerunning is safe. It does not install packages or choose a platform. A standalone client can be
+run with the selected Python and an explicit `--config` JSON file; deployment
+to another host is an administrator operation.
 
 Choose package sets from the snapshot with `scripts/binary-catalog.py plan`.
 The [SDK client](sdk-client.md) finishes downloading and verifying its whole selection

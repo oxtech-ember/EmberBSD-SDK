@@ -5,6 +5,8 @@
 from contextlib import contextmanager
 import hashlib
 import io
+import os
+import stat
 from pathlib import Path
 import secrets
 import shutil
@@ -15,6 +17,7 @@ from .binary_catalog import load_release_catalogs
 from .errors import SDKError
 from .jsonio import json_bytes, loads_json
 from .paths import open_regular, verify_stable
+from .package_cache import directory_lock
 from .publication import publish_directory_noreplace
 from .release_catalog import (MAX_ENVELOPE, _relative, _pattern, _SLUG, _SHA256, CHANNEL_SCHEMA,
                               file_reference, local_artifact, parse_channel, parse_release)
@@ -351,3 +354,54 @@ def _fetch_snapshot(crypto, public, trust, output, prefix, repositories, channel
     finally:
         if scratch.exists():
             shutil.rmtree(scratch)
+
+
+def fetch_artifact(crypto, public, trust, output, artifact_id, *, prefix=''):
+    """Download one artifact from authenticated current and atomically replace output."""
+    _pattern(artifact_id, _SLUG, 'artifact id')
+    output = Path(output).absolute()
+    with directory_lock(output.parent / (output.name + '.sdk-lock')):
+        with tempfile.TemporaryDirectory(prefix='.artifact-metadata-', dir=output.parent) as work:
+            snapshot = Path(work) / 'snapshot'
+            release = fetch_release(crypto, public, trust, snapshot, prefix=prefix)
+            selected = [item for item in release['artifacts'] if item['id'] == artifact_id]
+            if len(selected) != 1:
+                raise SDKError('artifact id is absent or ambiguous in current')
+            artifact = selected[0]
+            current = parse_channel(crypto.verify_cms((snapshot / 'current.p7m').read_bytes(), trust), CHANNEL)
+            base = current['release']['path'].removesuffix('/release.p7m')
+            key = _key(prefix, artifact_key(artifact, base))
+            try:
+                before = output.lstat()
+                if not stat.S_ISREG(before.st_mode):
+                    raise SDKError('artifact output must be a regular file or absent')
+            except FileNotFoundError:
+                before = None
+            fd, temporary = tempfile.mkstemp(prefix='.artifact-', dir=output.parent)
+            try:
+                with os.fdopen(fd, 'wb') as stream:
+                    public.verify(key, artifact['size'], artifact['sha256'], sink=stream)
+                    os.fchmod(stream.fileno(), stat.S_IMODE(before.st_mode) if before else 0o644)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                try:
+                    after = output.lstat()
+                except FileNotFoundError:
+                    after = None
+                if ((before is None) != (after is None) or
+                        (before is not None and (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) !=
+                         (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns))):
+                    raise SDKError('artifact output changed during download')
+                directory = os.open(output.parent, os.O_RDONLY)
+                try:
+                    os.replace(temporary, output)
+                    try:
+                        os.fsync(directory)
+                    except OSError as exc:
+                        raise SDKError(f'artifact installed, but output directory sync failed: {exc}') from exc
+                finally:
+                    os.close(directory)
+            finally:
+                if os.path.lexists(temporary):
+                    os.unlink(temporary)
+            return artifact

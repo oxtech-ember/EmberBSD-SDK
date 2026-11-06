@@ -418,7 +418,7 @@ def main(argv=None, *, default_config=None):
                 trust = temporary.enter_context(resources.as_file(
                     resources.files('emberbsd_sdk').joinpath('emberbsd-release-root.pem')))
             store = temporary.enter_context(HTTPStore(config.get('url', DEFAULT_URL),
-                                                      ca_file=config.get('https_ca')))
+                                                      ca_file=config.get('https_ca'), proxy_url=config.get('https_proxy')))
             installer = PackageInstaller(crypto, trust)
             previous = None
             for attempt in range(2):

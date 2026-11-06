@@ -46,6 +46,14 @@ file; `trust_root` overrides the bundled EmberBSD signing root for private/test
 repositories. They have different purposes. `url_prefix` selects a server
 namespace. No S3 credentials are needed.
 
+An optional `https_proxy` is an explicit HTTP CONNECT URL, such as
+`http://proxy.example:8080`. TLS, SNI and certificate verification remain bound
+to the repository hostname through the tunnel. Proxy credentials, paths,
+queries, fragments and HTTPS-to-proxy transport are unsupported and refused.
+Without this setting the client connects directly; environment proxy variables
+are not consulted. This setting changes transport only, never release or package
+authentication.
+
 ```sh
 python3 scripts/packages.py --config /work/client.json list
 python3 scripts/packages.py --config /work/client.json show --set host-fetch

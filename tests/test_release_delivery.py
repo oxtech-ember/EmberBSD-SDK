@@ -3,7 +3,10 @@
 """Publish real signed metadata through the local conditional object server."""
 
 import hashlib
+import importlib.util
+import io
 import os
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -20,7 +23,29 @@ from emberbsd_sdk.release_cli import seal_release
 from emberbsd_sdk.release_catalog import parse_release
 import emberbsd_sdk.release_delivery as release_delivery
 from emberbsd_sdk.release_signing import ReleaseCrypto
-from emberbsd_sdk.release_delivery import publish_release, fetch_release
+from emberbsd_sdk.release_delivery import publish_release, fetch_release, fetch_artifact
+
+
+class S3CLIProxyTests(unittest.TestCase):
+    def test_explicit_proxy_reaches_public_and_publisher_transports(self):
+        script = Path(__file__).resolve().parents[1] / 'scripts/s3-release.py'
+        spec = importlib.util.spec_from_file_location('s3_release_cli_test', script)
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        proxy = 'http://127.0.0.1:4444'
+        public = unittest.mock.MagicMock()
+        store = unittest.mock.MagicMock()
+        with patch.object(cli, 'HTTPStore', return_value=public) as public_factory, \
+             patch.object(cli.S3Store, 'from_environment', return_value=store) as store_factory, \
+             patch.object(cli.ReleaseCrypto, 'from_prefix'), \
+             patch.object(cli, 'publish_release', return_value={}), \
+             patch.object(cli.sys, 'stdout', SimpleNamespace(buffer=io.BytesIO())):
+            result = cli.main(['--host-prefix', '/prefix', '--https-proxy', proxy, 'publish',
+                               '--url', 'https://example.org', '--trust-root', '/root.pem',
+                               '--signer-directory', '/signer', '/release.p7m'])
+        self.assertEqual(result, 0)
+        self.assertEqual(public_factory.call_args.kwargs['proxy_url'], proxy)
+        self.assertEqual(store_factory.call_args.kwargs['proxy_url'], proxy)
 
 
 @unittest.skipUnless(os.environ.get('EMBERBSD_TEST_HOST_PREFIX'), 'select native Ports OpenSSL')
@@ -105,6 +130,73 @@ class DeliveryTests(unittest.TestCase):
         self.assertFalse((self.work / 'state.json').exists())
         self.assertIn('immutable', self.server.headers['/bucket/current/host/darwin-arm64/payload']['cache-control'])
         self.assertIn('no-cache', self.server.headers['/bucket/current.p7m']['cache-control'])
+
+    def test_fetch_artifact_authenticated_atomic_replacement(self):
+        self.publish(self.release())
+        output = self.work / 'client.pyz'
+        output.write_bytes(b'old-client')
+        old_inode = output.stat().st_ino
+        result = fetch_artifact(self.crypto, self.public, self.ca.certificate, output, 'bootstrap')
+        self.assertEqual(result['id'], 'bootstrap')
+        self.assertEqual(output.read_bytes(), b'payload' * 1000)
+        self.assertNotEqual(output.stat().st_ino, old_inode)
+        output.write_bytes(b'preserve-me')
+        original = self.server.objects['/bucket/current/host/darwin-arm64/payload']
+        for corrupt in (b'bad', b'x' * len(original)):
+            self.server.objects['/bucket/current/host/darwin-arm64/payload'] = corrupt
+            with self.assertRaises(SDKError):
+                fetch_artifact(self.crypto, self.public, self.ca.certificate, output, 'bootstrap')
+            self.assertEqual(output.read_bytes(), b'preserve-me')
+        self.server.objects['/bucket/current/host/darwin-arm64/payload'] = original
+        with self.assertRaises(SDKError):
+            fetch_artifact(self.crypto, self.public, self.ca.certificate, output, 'missing')
+        self.assertEqual(output.read_bytes(), b'preserve-me')
+        current = self.server.objects['/bucket/current.p7m']
+        self.server.objects['/bucket/current.p7m'] = b'invalid signed channel'
+        with self.assertRaises(SDKError):
+            fetch_artifact(self.crypto, self.public, self.ca.certificate, output, 'bootstrap')
+        self.assertEqual(output.read_bytes(), b'preserve-me')
+        self.server.objects['/bucket/current.p7m'] = current
+        link = self.work / 'link.pyz'
+        link.symlink_to(output)
+        with self.assertRaises(SDKError):
+            fetch_artifact(self.crypto, self.public, self.ca.certificate, link, 'bootstrap')
+        self.assertEqual(output.read_bytes(), b'preserve-me')
+        self.assertTrue(link.is_symlink())
+
+    def test_fetch_artifact_busy_lock_preserves_output(self):
+        self.publish(self.release())
+        output = self.work / 'client.pyz'
+        output.write_bytes(b'old-client')
+        from emberbsd_sdk.package_cache import directory_lock
+        with directory_lock(self.work / 'client.pyz.sdk-lock'):
+            with self.assertRaisesRegex(SDKError, 'writer is busy'):
+                fetch_artifact(self.crypto, self.public, self.ca.certificate, output, 'bootstrap')
+        self.assertEqual(output.read_bytes(), b'old-client')
+
+    def test_fetch_artifact_directory_sync_failure_reports_commit(self):
+        self.publish(self.release())
+        output = self.work / 'client.pyz'
+        output.write_bytes(b'old-client')
+        real_fsync = os.fsync
+        def fail_directory(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError('fixture sync failure')
+            return real_fsync(fd)
+        # Metadata publication syncs directories first; inject only after the
+        # selected artifact's verified bytes have been written.
+        verify = self.public.verify
+        def inject_after_payload(key, *args, **kwargs):
+            result = verify(key, *args, **kwargs)
+            if key.endswith('/payload'):
+                self.sync_patch = patch('emberbsd_sdk.release_delivery.os.fsync', side_effect=fail_directory)
+                self.sync_patch.start()
+                self.addCleanup(self.sync_patch.stop)
+            return result
+        with patch.object(self.public, 'verify', side_effect=inject_after_payload):
+            with self.assertRaisesRegex(SDKError, 'artifact installed, but output directory sync failed'):
+                fetch_artifact(self.crypto, self.public, self.ca.certificate, output, 'bootstrap')
+        self.assertEqual(output.read_bytes(), b'payload' * 1000)
 
     def test_failed_upload_does_not_advance_channel(self):
         self.publish(self.release())

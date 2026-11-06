@@ -51,13 +51,23 @@ def sign_request(method, path, headers, region, access_key, secret_key):
 
 
 class HTTPStore:
-    def __init__(self, base_url, *, ca_file=None, timeout=60):
+    def __init__(self, base_url, *, ca_file=None, timeout=60, proxy_url=None):
         url = urlsplit(base_url)
         if (url.scheme != 'https' or not url.hostname or url.username is not None or
                 url.password is not None or url.query or url.fragment or
                 any(ord(char) < 33 for char in base_url)):
             raise SDKError('repository base must be an HTTPS URL without credentials, query or fragment')
         self.host = url.netloc
+        self.destination = (url.hostname, url.port or 443)
+        self.proxy = None
+        if proxy_url is not None:
+            proxy = urlsplit(proxy_url)
+            if (proxy.scheme != 'http' or not proxy.hostname or proxy.username is not None or
+                    proxy.password is not None or proxy.path not in ('', '/') or proxy.query or
+                    proxy.fragment or any(ord(char) < 33 or ord(char) == 127 for char in proxy_url) or
+                    proxy.port == 0):
+                raise SDKError('HTTPS proxy must be an HTTP CONNECT URL without credentials or a path')
+            self.proxy = (proxy.hostname, proxy.port or 80)
         self.prefix = url.path.strip('/')
         if self.prefix:
             _relative(self.prefix)
@@ -85,8 +95,15 @@ class HTTPStore:
                 return self._idle_connections.get_nowait()
             except queue.Empty:
                 pass
-        return http.client.HTTPSConnection(self.host, timeout=self.timeout, context=self.context,
-                                           blocksize=64 * 1024)
+        if self.proxy is None:
+            return http.client.HTTPSConnection(self.host, timeout=self.timeout, context=self.context,
+                                               blocksize=64 * 1024)
+        connection = http.client.HTTPSConnection(self.proxy[0], self.proxy[1],
+            timeout=self.timeout, context=self.context, blocksize=64 * 1024)
+        # HTTPSConnection performs CONNECT first, then TLS with the destination
+        # hostname for SNI and certificate verification, not the proxy hostname.
+        connection.set_tunnel(*self.destination)
+        return connection
 
     def _headers(self, method, path, headers):
         return headers
@@ -193,8 +210,8 @@ class HTTPStore:
 
 
 class S3Store(HTTPStore):
-    def __init__(self, endpoint, region, bucket, access_key, secret_key, *, ca_file=None, timeout=60):
-        super().__init__(endpoint, ca_file=ca_file, timeout=timeout)
+    def __init__(self, endpoint, region, bucket, access_key, secret_key, *, ca_file=None, timeout=60, proxy_url=None):
+        super().__init__(endpoint, ca_file=ca_file, timeout=timeout, proxy_url=proxy_url)
         if (not re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]*', bucket) or
                 not re.fullmatch('[A-Za-z0-9-]+', region) or not access_key or not secret_key):
             raise SDKError('S3 requires bucket, region and credentials')
@@ -202,11 +219,11 @@ class S3Store(HTTPStore):
         self.region, self.access_key, self.secret_key = region, access_key, secret_key
 
     @classmethod
-    def from_environment(cls, *, endpoint=None, region=None, bucket=None, ca_file=None):
+    def from_environment(cls, *, endpoint=None, region=None, bucket=None, ca_file=None, proxy_url=None):
         values = {key: os.environ.get('EMBERBSD_S3_' + key, '') for key in
                   ('ENDPOINT', 'REGION', 'BUCKET', 'ACCESS_KEY', 'SECRET_KEY')}
         return cls(endpoint or values['ENDPOINT'], region or values['REGION'], bucket or values['BUCKET'],
-                   values['ACCESS_KEY'], values['SECRET_KEY'], ca_file=ca_file)
+                   values['ACCESS_KEY'], values['SECRET_KEY'], ca_file=ca_file, proxy_url=proxy_url)
 
     def _headers(self, method, path, headers):
         headers.setdefault('x-amz-content-sha256', EMPTY_SHA256)
