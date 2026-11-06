@@ -22,8 +22,9 @@ from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.package_cache import directory_lock
 from emberbsd_sdk.package_selection import launch_recorded
 from emberbsd_sdk.source_wave import (
-    SourceWaveLock, _creation, _descendants, _process_table, _recover_killed_owner,
-    _release_if_ours, _stop_recorded, _write_controller, _write_stamp)
+    SourceWaveLock, _creation, _descendants, _linux_start, _process_table,
+    _recover_killed_owner, _release_if_ours, _same_identity, _signal_proven,
+    _stop_recorded, _write_controller, _write_stamp)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,7 +56,8 @@ class RealControllerTests(unittest.TestCase):
         self._bmake(sleep=False)
         self._pkg_info()
 
-    def _bmake(self, *, sleep):
+    def _bmake(self, *, sleep, fail=False):
+        self.bmake_fail = fail
         path = self.fix / 'bin' / 'bmake'
         path.write_text(r'''#!/bin/sh
 printf '%s\n' "$*" >> "$FIXTURE/bmake.log"
@@ -66,7 +68,12 @@ for arg in "$@"; do
         VARNAMES=*) vars=${arg#VARNAMES=} ;;
         package-install|package|replace)
             echo "$arg" >> "$FIXTURE/targets"
+            if [ -n "$BMAKE_FAIL" ]; then
+                echo EMBER_LOG_MARKER failing-controller
+                exit 1
+            fi
             if [ -n "$BMAKE_SLEEP_ON_BUILD" ]; then
+                echo EMBER_LOG_MARKER sleeping-controller
                 echo ready > "$FIXTURE/bmake.ready"
                 while :; do
                     if [ -f "$FIXTURE/overlap-check" ]; then
@@ -78,6 +85,7 @@ for arg in "$@"; do
             fi
             mkdir -p "$FIXTURE/packages/All"
             echo package > "$FIXTURE/packages/All/app-9.tgz"
+            echo EMBER_LOG_MARKER built-controller
             exit 0
             ;;
         clean) exit 0 ;;
@@ -145,6 +153,7 @@ exit 0
             CROSS_BULK_VARS_CACHE='no',
             CROSS_BULK_SHELL='/bin/sh',
             BMAKE_SLEEP_ON_BUILD='1' if self.sleep else '',
+            BMAKE_FAIL='1' if self.bmake_fail else '',
         )
         return env
 
@@ -229,6 +238,7 @@ exit 0
             self.assertFalse((self.fix / 'overlap').exists())
             self.assertEqual((state / 'order').read_text(), 'x11/app\n')
             self.assertIn('start x11/app', (state / 'progress').read_text())
+            self.assertIn('EMBER_LOG_MARKER sleeping-controller', (state / 'logs' / 'x11_app.log').read_text())
             self.sleep = False
             result = self._run(state)
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -283,6 +293,7 @@ exit 0
             (self.fix / 'overlap-check').write_text('x')
             self.assertFalse((self.fix / 'overlap').exists())
             self.assertIn('start x11/app', (state / 'progress').read_text())
+            self.assertIn('EMBER_LOG_MARKER sleeping-controller', (state / 'logs' / 'x11_app.log').read_text())
             self.sleep = False
             result = self._run(state)
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -333,6 +344,7 @@ exit 0
             _pid, status = os.waitpid(client_pid, 0)
             self.assertTrue(os.WIFEXITED(status))
             self.assertIn('start x11/app', (state / 'progress').read_text())
+            self.assertIn('EMBER_LOG_MARKER sleeping-controller', (state / 'logs' / 'x11_app.log').read_text())
             (self.fix / 'overlap-check').write_text('x')
             self.assertFalse((self.fix / 'overlap').exists())
         finally:
@@ -465,6 +477,7 @@ exit 0
             (self.fix / 'overlap-check').write_text('x')
             self.assertFalse((self.fix / 'overlap').exists())
             self.assertIn('start x11/app', (state / 'progress').read_text())
+            self.assertIn('EMBER_LOG_MARKER sleeping-controller', (state / 'logs' / 'x11_app.log').read_text())
             self.sleep = False
             result = self._run(state)
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -594,6 +607,206 @@ exit 0
         for path in set(Path('/tmp').glob('ember-wave-*')) - private_before:
             shutil.rmtree(path, ignore_errors=True)
 
+    def test_failing_controller_log_is_copied_before_cleanup(self):
+        self._bmake(sleep=False, fail=True)
+        state = self.fix / 'state'
+        private_before = set(Path(tempfile.gettempdir()).glob('ember-wave-*'))
+        os.environ.update(self._env())
+        session = SourceWaveLock(state)
+        try:
+            with self.assertRaisesRegex(SDKError, 'logs were retained'):
+                session.build(self._build_config(), ['x11/app'], [])
+        finally:
+            session.close()
+        self.assertFalse((state / 'build.lock').exists())
+        self.assertIn('x11/app', (state / 'failed').read_text())
+        self.assertIn('EMBER_LOG_MARKER failing-controller', (state / 'logs' / 'x11_app.log').read_text())
+        self.assertFalse(set(Path(tempfile.gettempdir()).glob('ember-wave-*')) - private_before)
+
+    def test_successful_build_copies_the_controller_log(self):
+        self._bmake(sleep=False)
+        state = self.fix / 'state'
+        private_before = set(Path(tempfile.gettempdir()).glob('ember-wave-*'))
+        os.environ.update(self._env())
+        session = SourceWaveLock(state)
+        try:
+            receipts = session.build(self._build_config(), ['x11/app'], [])
+        finally:
+            session.close()
+        self.assertFalse((state / 'build.lock').exists())
+        self.assertTrue(any(row[:2] == ['x11/app', 'app-9'] for row in receipts['done']))
+        self.assertIn('EMBER_LOG_MARKER built-controller', (state / 'logs' / 'x11_app.log').read_text())
+        self.assertFalse(set(Path(tempfile.gettempdir()).glob('ember-wave-*')) - private_before)
+
+    def test_log_copy_failure_keeps_the_private_schedule_and_lock(self):
+        self._bmake(sleep=False, fail=True)
+        state = self.fix / 'state'
+        (state / 'logs').write_text('not-a-directory')
+        private_before = set(Path(tempfile.gettempdir()).glob('ember-wave-*'))
+        os.environ.update(self._env())
+        session = SourceWaveLock(state)
+        try:
+            with self.assertRaisesRegex(SDKError, 'not a directory'):
+                session.build(self._build_config(), ['x11/app'], [])
+            kept = set(Path(tempfile.gettempdir()).glob('ember-wave-*')) - private_before
+            self.assertTrue((state / 'build.lock').is_dir())
+            self.assertEqual((state / 'logs').read_text(), 'not-a-directory')
+            self.assertTrue(any((path / 'logs' / 'x11_app.log').is_file() and
+                                'EMBER_LOG_MARKER failing-controller' in (path / 'logs' / 'x11_app.log').read_text()
+                                for path in kept))
+        finally:
+            session.close()
+        self.assertTrue((state / 'build.lock').is_dir())
+        kept = set(Path(tempfile.gettempdir()).glob('ember-wave-*')) - private_before
+        self.assertTrue(kept)
+        for path in kept:
+            shutil.rmtree(path, ignore_errors=True)
+
+    def test_reparented_grandchild_keeps_the_lock_and_is_not_signaled(self):
+        state = self.fix / 'state'
+        ready = self.fix / 'grandchild.ready'
+        hold = self.fix / 'intermediate.hold'
+        script = self.fix / 'reparent.py'
+        script.write_text(
+            'import os, sys, time\n'
+            'ready, hold = sys.argv[1], sys.argv[2]\n'
+            'intermediate = os.fork()\n'
+            'if intermediate == 0:\n'
+            '    grandchild = os.fork()\n'
+            '    if grandchild == 0:\n'
+            '        os.setsid()\n'
+            '        with open(ready, "w") as stream:\n'
+            '            stream.write(str(os.getpid()))\n'
+            '        while True:\n'
+            '            time.sleep(30)\n'
+            '    while not os.path.exists(hold):\n'
+            '        time.sleep(0.02)\n'
+            '    os._exit(0)\n'
+            'os.waitpid(intermediate, 0)\n'
+            'while True:\n'
+            '    time.sleep(30)\n')
+        private_before = set(Path(tempfile.gettempdir()).glob('ember-wave-*'))
+
+        def client():
+            session = SourceWaveLock(state)
+            try:
+                session.exec_controller(
+                    [sys.executable, str(script), str(ready), str(hold)], {}, ['x11/app'])
+            finally:
+                session.close()
+
+        client_pid = self._fork_client(client)
+        grandchild = None
+        try:
+            deadline = time.monotonic() + 20
+            while not ready.exists():
+                ended, _status = os.waitpid(client_pid, os.WNOHANG)
+                if ended:
+                    self.fail('client exited before the grandchild was ready')
+                if time.monotonic() > deadline:
+                    self.fail('reparented grandchild did not start')
+                time.sleep(0.05)
+            grandchild = int(ready.read_text().strip())
+            while True:
+                seen = (state / 'build.lock' / 'seen').read_text() if (state / 'build.lock' / 'seen').is_file() else ''
+                if f'{grandchild}\t' in seen:
+                    break
+                if time.monotonic() > deadline:
+                    self.fail('drainer did not observe the grandchild while it was parented')
+                time.sleep(0.05)
+            if os.path.isdir('/proc'):
+                start = seen.splitlines()
+                matched = [line.split('\t') for line in start if line.startswith(f'{grandchild}\t')]
+                self.assertTrue(matched and matched[0][1].isdigit())
+            time.sleep(0.2)
+            hold.write_text('x')
+            while _process_table().get(grandchild, (None,))[0] != 1:
+                if time.monotonic() > deadline:
+                    self.fail('grandchild was not reparented to init')
+                time.sleep(0.05)
+            created = _creation(grandchild)
+            self.assertFalse(_signal_proven(grandchild, created))
+            self.assertIsNone(_signal_proven(grandchild, created, root=os.getpid()))
+            self.assertTrue(self._alive(grandchild))
+            self.assertFalse(_process_table()[grandchild][1].startswith(('Z', 'z')))
+            controller = int((state / 'build.lock' / 'controller').read_text().splitlines()[0])
+            lock_pid = int((state / 'build.lock' / 'pid').read_text().strip())
+            os.kill(lock_pid, signal.SIGKILL)
+            while True:
+                row = _process_table().get(controller)
+                if row is None or row[1].startswith(('Z', 'z')):
+                    break
+                self.assertTrue((state / 'build.lock').exists())
+                if time.monotonic() > deadline:
+                    self.fail('recorded controller stayed alive after the owner was killed')
+                time.sleep(0.05)
+            time.sleep(0.3)
+            self.assertTrue((state / 'build.lock').is_dir())
+            self.assertTrue(self._alive(grandchild))
+            self.assertEqual(_process_table()[grandchild][0], 1)
+            self.assertFalse(_process_table()[grandchild][1].startswith(('Z', 'z')))
+            self.assertTrue(set(Path(tempfile.gettempdir()).glob('ember-wave-*')) - private_before)
+        finally:
+            if grandchild:
+                try:
+                    os.kill(grandchild, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            self._reap(client_pid)
+            for path in set(Path(tempfile.gettempdir()).glob('ember-wave-*')) - private_before:
+                shutil.rmtree(path, ignore_errors=True)
+
+    def test_kernel_start_time_disagreement_does_not_signal_or_count_as_identity(self):
+        if not os.path.isdir('/proc'):
+            self.skipTest('kernel start time is not available')
+        pid = os.fork()
+        if pid == 0:
+            try:
+                while True:
+                    time.sleep(30)
+            finally:
+                os._exit(0)
+        try:
+            created = _creation(pid)
+            start = _linux_start(pid)
+            self.assertTrue(created and start and start.isdigit())
+            rows = _process_table()
+            self.assertTrue(_same_identity(rows, pid, created, start))
+            self.assertTrue(_same_identity(rows, pid, created, None))
+            self.assertFalse(_same_identity(rows, pid, created, str(int(start) + 1)))
+            self.assertFalse(_signal_proven(pid, created, starttime=str(int(start) + 1)))
+            self.assertTrue(self._alive(pid))
+            self.assertEqual(_creation(pid), created)
+        finally:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
+
+    def test_controller_fork_is_not_multithreaded(self):
+        state = self.fix / 'state'
+        code = (
+            'import os, sys\n'
+            f'sys.path.insert(0, {str(ROOT / "src")!r})\n'
+            'from emberbsd_sdk.source_wave import SourceWaveLock\n'
+            f'state = {str(state)!r}\n'
+            'session = SourceWaveLock(state)\n'
+            'try:\n'
+            '    session.exec_controller(["/bin/sleep", "0.1"], {}, ["x11/app"])\n'
+            'finally:\n'
+            '    session.close()\n'
+        )
+        result = subprocess.run(
+            [sys.executable, '-W', 'always', '-c', code],
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('multi-threaded', result.stderr)
+        self.assertNotIn('deadlock', result.stderr.lower())
+
     def _command_map(self):
         result = subprocess.run(
             ['ps', '-ax', '-o', 'pid=,command='], capture_output=True, text=True, check=False)
@@ -630,6 +843,9 @@ exit 0
         self.assertGreater(controller, 1)
         self.assertNotEqual(controller, lock_pid)
         self.assertEqual(record[1], _creation(controller))
+        if os.path.isdir('/proc'):
+            self.assertEqual(record[3], _linux_start(controller))
+            self.assertTrue(record[3].isdigit())
         self.assertEqual(os.getsid(controller), controller)
         self.assertTrue(record[2].startswith('/'))
         self.assertIn('ember-wave-', record[2])

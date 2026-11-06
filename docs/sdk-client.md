@@ -206,17 +206,30 @@ the saved graph is read under that lock, current is reread under that lock,
 and every wave's controller runs under that lock. The lock PID is the process
 that starts the controller, not the client. That directory carries a token
 only that owner writes. A second client whose `mkdir` is rejected does not
-read, signal, or remove it. Before the controller may exec, the owner records
-its PID and `ps` creation time. An outer drainer survives the lock PID and
-acts only when that PID was killed and the token is still its own. It rereads
-the record after the death, stops that same process, and stops a child only
-while its parent is still in that tree. A reused PID, a child now parented to
-init or launchd, or a receipt copy that fails leaves the lock and the private
-schedule in place. A killed client closes the death pipe; one interrupt does
-the same. `STATE/order` is not rewritten. The controller receives a private
-copy of the edges and receipts, and its own `build.lock` is on that copy
-because the Ports lock is not reentrant. Do not remove `build.lock` while
-its PID is alive or while the recorded controller is running.
+read, signal, or remove it. Before the controller may exec, the owner records its PID, the `ps` creation
+time, and, when `/proc` has it, the kernel start time. The owner does not
+start a thread. It polls the death pipe while it waits, and the controller is
+forked from that single-threaded process. An outer drainer survives the lock
+PID and acts only when that PID was killed and the token is still its own. It
+rereads the record after the death. It signals the recorded controller only
+when a fresh `ps` row still matches and, if a kernel start time was stored,
+that start time still matches. A controller that init or launchd has inherited
+is not signaled when the only stamp on hand is the one-second `ps` creation
+time. A child is signaled only when a fresh row still shows it inside that
+tree. The drainer remembers descendants it actually saw there. A process now
+parented to init or launchd is not signaled, and the lock stays while any
+remembered identity is still alive. `ps` creation time is not absolute proof:
+the same PID can be reused in the same second, and a double-fork that leaves
+the tree before a poll can be missed. A reused PID, a failed receipt copy, a
+failed log copy, or no record leaves the lock and the private schedule in
+place. A killed client closes the death pipe; one interrupt does the same.
+`STATE/order` is not rewritten. The controller receives a private copy of the
+edges and receipts. Its logs are copied into `STATE/logs` before that private
+directory is removed, both when the owner finishes and when a killed owner is
+recovered. The controller's own `build.lock` is on that private copy because
+the Ports lock is not reentrant. Do not remove `build.lock` while its PID is
+alive, while the recorded controller is running, or while a remembered
+descendant identity is still alive.
 The private copy keeps the full edges, so a native tool that
 a later target package feeds still receives that target's settings.
 The client does not order a native-only subset with `selected-build`.

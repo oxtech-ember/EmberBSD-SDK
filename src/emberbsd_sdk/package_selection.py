@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 from .errors import SDKError
 from .host_prefix import load_host_prefix
@@ -134,6 +135,14 @@ def _close_inherited_fds():
             pass
 
 
+def _wait_status(status):
+    if os.WIFEXITED(status):
+        return os.WEXITSTATUS(status)
+    if os.WIFSIGNALED(status):
+        return -os.WTERMSIG(status)
+    return 1
+
+
 class _RecordedChild:
     def __init__(self, pid):
         self.pid = pid
@@ -142,16 +151,37 @@ class _RecordedChild:
         os.kill(self.pid, number)
 
     def wait(self):
+        """Wait for the recorded child.
+
+        The lock owner installs a pulse so this wait can notice the death pipe
+        without a second Python thread. ``os.fork`` then stays on that
+        single-threaded owner. Callers outside the owner block as before.
+        """
+        pulse = None
+        try:
+            from .source_wave import current_controller_pulse
+        except ImportError:
+            current_controller_pulse = None
+        if current_controller_pulse is not None:
+            pulse = current_controller_pulse()
+        if pulse is None:
+            while True:
+                try:
+                    _pid, status = os.waitpid(self.pid, 0)
+                except InterruptedError:
+                    continue
+                return _wait_status(status)
         while True:
+            pulse()
             try:
-                _pid, status = os.waitpid(self.pid, 0)
+                pid, status = os.waitpid(self.pid, os.WNOHANG)
             except InterruptedError:
                 continue
-            if os.WIFEXITED(status):
-                return os.WEXITSTATUS(status)
-            if os.WIFSIGNALED(status):
-                return -os.WTERMSIG(status)
-            return 1
+            except ChildProcessError:
+                return 0
+            if pid:
+                return _wait_status(status)
+            time.sleep(0.02)
 
 
 def launch_recorded(argv, env, record, stdout=None):
