@@ -280,15 +280,25 @@ def _same_identity(rows, pid, created, starttime):
     return fresh == starttime
 
 
+def _row_gone(pid):
+    """True when a fresh ``ps`` row is missing or already a zombie."""
+    try:
+        row = _process_table().get(pid)
+    except SDKError:
+        return False
+    return row is None or row[1].startswith(('Z', 'z'))
+
+
 def _signal_proven(pid, created, root=None, starttime=None):
     """Signal one PID only after a fresh identity check.
 
     True means the process was already gone or this call signaled it. None
     means it is no longer inside ``root`` (its parent may now be init or
-    launchd) and was not signaled. False means the identity did not match and
-    nothing was signaled. A remembered PID is never signaled once it has left
-    the tree, and one-second ``lstart`` is never enough to signal a process
-    init or launchd has inherited.
+    launchd) and was not signaled. False means a live process did not match
+    and nothing was signaled. A process that exits between the two reads is
+    gone, not a mismatched identity. A remembered PID is never signaled once
+    it has left the tree, and one-second ``lstart`` is never enough to signal
+    a process init or launchd has inherited.
     """
     if pid <= 1 or not created:
         return False
@@ -307,6 +317,8 @@ def _signal_proven(pid, created, root=None, starttime=None):
         return False
     current = _linux_start(pid)
     if starttime and current != starttime:
+        if current is None and _row_gone(pid):
+            return True
         return False
     try:
         rows = _process_table()
@@ -321,9 +333,14 @@ def _signal_proven(pid, created, root=None, starttime=None):
         return None
     if root is None and row[0] <= 1 and not starttime:
         return False
-    if current is not None and _linux_start(pid) != current:
+    fresh = _linux_start(pid)
+    if current is not None and fresh != current:
+        if fresh is None and _row_gone(pid):
+            return True
         return False
-    if starttime and _linux_start(pid) != starttime:
+    if starttime and fresh != starttime:
+        if fresh is None and _row_gone(pid):
+            return True
         return False
     try:
         os.kill(pid, signal.SIGKILL)
@@ -365,6 +382,8 @@ def _stop_recorded(pid, created, starttime=None):
         if row[2] != created:
             return False
         if starttime and _linux_start(pid) != starttime:
+            if _linux_start(pid) is None and _row_gone(pid):
+                return confirmed and not _live_descendants(_process_table(), pid)
             return False
         confirmed = True
         if not _signal_descendants(rows, pid):

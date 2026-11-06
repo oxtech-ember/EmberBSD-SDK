@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.package_cache import directory_lock
 from emberbsd_sdk.package_selection import launch_recorded
+import emberbsd_sdk.source_wave as source_wave
 from emberbsd_sdk.source_wave import (
     SourceWaveLock, _creation, _descendants, _linux_start, _process_table,
     _recover_killed_owner, _release_if_ours, _same_identity, _signal_proven,
@@ -755,6 +756,114 @@ exit 0
             self._reap(client_pid)
             for path in set(Path(tempfile.gettempdir()).glob('ember-wave-*')) - private_before:
                 shutil.rmtree(path, ignore_errors=True)
+
+    def test_descendant_that_exits_during_the_identity_check_does_not_abort_the_drain(self):
+        """A child that disappears between reads is gone, not a reused PID.
+
+        Treating that as a mismatch aborted the owner-kill drain and left the
+        cross-bulk shell in its signal trap. The deadline is not extended.
+        """
+        if not os.path.isdir('/proc'):
+            self.skipTest('kernel start time is not available')
+        pid = os.fork()
+        if pid == 0:
+            try:
+                while True:
+                    time.sleep(30)
+            finally:
+                os._exit(0)
+        created = _creation(pid)
+        start = _linux_start(pid)
+        original = source_wave._linux_start
+
+        def exit_on_second_read(target):
+            if target == pid and exit_on_second_read.calls:
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+                return None
+            if target == pid:
+                exit_on_second_read.calls += 1
+            return original(target)
+
+        exit_on_second_read.calls = 0
+        source_wave._linux_start = exit_on_second_read
+        try:
+            self.assertTrue(_signal_proven(pid, created, root=os.getpid(), starttime=start))
+        finally:
+            source_wave._linux_start = original
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
+        self.assertFalse(self._alive(pid))
+
+    def test_short_lived_children_do_not_leave_the_controller_after_owner_kill(self):
+        script = self.fix / 'short-lived.py'
+        script.write_text(
+            'import os, sys, time\n'
+            'ready = sys.argv[1]\n'
+            'child = os.fork()\n'
+            'if child == 0:\n'
+            '    open(ready, "w").write("x")\n'
+            '    while True:\n'
+            '        time.sleep(30)\n'
+            'while True:\n'
+            '    grandchild = os.fork()\n'
+            '    if grandchild == 0:\n'
+            '        time.sleep(0.03)\n'
+            '        os._exit(0)\n'
+            '    try:\n'
+            '        os.waitpid(grandchild, 0)\n'
+            '    except ChildProcessError:\n'
+            '        pass\n')
+        state = self.fix / 'state'
+        for _ in range(5):
+            ready = self.fix / 'short-lived.ready'
+            ready.unlink(missing_ok=True)
+            if (state / 'build.lock').exists():
+                self.fail('previous owner left the lock behind')
+
+            def client():
+                session = SourceWaveLock(state)
+                try:
+                    session.exec_controller([sys.executable, str(script), str(ready)], {}, ['x11/app'])
+                finally:
+                    session.close()
+
+            client_pid = self._fork_client(client)
+            controller = None
+            try:
+                deadline = time.monotonic() + 8
+                while not ready.exists():
+                    if time.monotonic() > deadline:
+                        self.fail('short-lived controller did not start')
+                    time.sleep(0.02)
+                lock_pid = int((state / 'build.lock' / 'pid').read_text())
+                controller = int((state / 'build.lock' / 'controller').read_text().splitlines()[0])
+                os.kill(lock_pid, signal.SIGKILL)
+                drain_deadline = time.monotonic() + 3
+                while True:
+                    row = _process_table().get(controller)
+                    if row is None or row[1].startswith(('Z', 'z')):
+                        break
+                    if time.monotonic() > drain_deadline:
+                        self.fail(f'owner kill left the controller running: {_process_table().get(controller)}')
+                    time.sleep(0.05)
+                while (state / 'build.lock').exists():
+                    if time.monotonic() > drain_deadline:
+                        self.fail('owner kill left the lock after the controller exited')
+                    time.sleep(0.05)
+            finally:
+                if controller:
+                    try:
+                        os.kill(controller, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                self._reap(client_pid)
 
     def test_kernel_start_time_disagreement_does_not_signal_or_count_as_identity(self):
         if not os.path.isdir('/proc'):
