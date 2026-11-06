@@ -116,7 +116,7 @@ def _source_config(config, roots):
             raise SDKError(f'Ports source requires an absolute {key}')
 
 
-def run_source(config, roots, command, *, binaries=(), controller_mode=None):
+def run_source(config, roots, command, *, binaries=(), controller_mode=None, controller_ready=None):
     """Invoke the existing selector; Ports owns dependency solving and reuse."""
     if not roots:
         return
@@ -163,8 +163,12 @@ def run_source(config, roots, command, *, binaries=(), controller_mode=None):
             os.environ[binary_variable] = str(selected)
             try:
                 with redirect_stdout(sys.stderr):
+                    if controller_ready is None:
+                        from .source_wave import current_controller_ready
+                        controller_ready = current_controller_ready()
                     status = package_selection.main(arguments, controller_stdout=sys.stderr,
-                                                    controller_mode=controller_mode)
+                                                    controller_mode=controller_mode,
+                                                    controller_ready=controller_ready)
             finally:
                 if old_binary is None:
                     os.environ.pop(binary_variable, None)

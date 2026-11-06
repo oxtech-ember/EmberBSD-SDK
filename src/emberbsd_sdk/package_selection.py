@@ -110,7 +110,96 @@ def _require_environment(args):
     return values, native, shell, selected_bmake, state
 
 
-def _run_controller(ports_root, state, native, roots, command, build_environment, *, stdout=None):
+def _close_inherited_fds():
+    """Close inherited descriptors before exec. A leaked death pipe would hide the client."""
+    for folder in ('/proc/self/fd', '/dev/fd'):
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            continue
+        for name in names:
+            if not name.isdigit():
+                continue
+            number = int(name)
+            if number > 2:
+                try:
+                    os.close(number)
+                except OSError:
+                    pass
+        return
+    for number in range(3, 256):
+        try:
+            os.close(number)
+        except OSError:
+            pass
+
+
+class _RecordedChild:
+    def __init__(self, pid):
+        self.pid = pid
+
+    def send_signal(self, number):
+        os.kill(self.pid, number)
+
+    def wait(self):
+        while True:
+            try:
+                _pid, status = os.waitpid(self.pid, 0)
+            except InterruptedError:
+                continue
+            if os.WIFEXITED(status):
+                return os.WEXITSTATUS(status)
+            if os.WIFSIGNALED(status):
+                return -os.WTERMSIG(status)
+            return 1
+
+
+def launch_recorded(argv, env, record, stdout=None):
+    """Fork ``argv`` and call ``record(pid)`` before that child may exec.
+
+    The child exits without running the command when the parent dies or
+    ``record`` fails. ``record`` therefore publishes the identity first.
+    """
+    if not argv or any(not isinstance(part, str) or '\0' in part for part in argv):
+        raise ValueError('invalid controller command')
+    stdout_fd = None if stdout is None else stdout.fileno()
+    gate_read, gate_write = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.close(gate_write)
+            try:
+                allowed = os.read(gate_read, 1)
+            except OSError:
+                os._exit(0)
+            os.close(gate_read)
+            if allowed != b'G':
+                os._exit(0)
+            if stdout_fd not in (None, 1):
+                os.dup2(stdout_fd, 1)
+            _close_inherited_fds()
+            os.setsid()
+            os.execvpe(argv[0], argv, env)
+        except OSError:
+            os._exit(127)
+        os._exit(127)
+    os.close(gate_read)
+    try:
+        record(pid)
+    except BaseException:
+        os.close(gate_write)
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:
+            pass
+        raise
+    os.write(gate_write, b'G')
+    os.close(gate_write)
+    return _RecordedChild(pid)
+
+
+def _run_controller(ports_root, state, native, roots, command, build_environment, *,
+                    stdout=None, controller_ready=None):
     tmp_root = Path(os.environ.get("TMPDIR") or state.parent)
     if not tmp_root.is_absolute():
         raise ValueError("TMPDIR must be absolute when set")
@@ -143,10 +232,12 @@ def _run_controller(ports_root, state, native, roots, command, build_environment
         try:
             for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
                 previous[number] = signal.signal(number, forward)
-            child = subprocess.Popen(
-                [os.fspath(shell), os.fspath(ports_root / "scripts" / "cross-bulk.sh"),
-                 command, os.fspath(roots_path), os.fspath(state)],
-                env=environment, stdout=stdout, start_new_session=True)
+            command_argv = [os.fspath(shell), os.fspath(ports_root / "scripts" / "cross-bulk.sh"),
+                            command, os.fspath(roots_path), os.fspath(state)]
+            if controller_ready is None:
+                child = subprocess.Popen(command_argv, env=environment, stdout=stdout, start_new_session=True)
+            else:
+                child = launch_recorded(command_argv, environment, controller_ready, stdout=stdout)
             if forwarded:
                 child.send_signal(forwarded[0])
             while True:
@@ -163,7 +254,7 @@ def _run_controller(ports_root, state, native, roots, command, build_environment
         roots_path.unlink(missing_ok=True)
 
 
-def main(argv=None, *, controller_stdout=None, controller_mode=None):
+def main(argv=None, *, controller_stdout=None, controller_mode=None, controller_ready=None):
     args = _parser().parse_args(argv)
     try:
         ports_root = args.ports_root.resolve(strict=True)
@@ -204,7 +295,7 @@ def main(argv=None, *, controller_stdout=None, controller_mode=None):
         else:
             raise ValueError("unsupported controller mode")
         status = _run_controller(ports_root, state, native, roots, mode, build_environment,
-                                 stdout=controller_stdout)
+                                 stdout=controller_stdout, controller_ready=controller_ready)
         if status:
             return status
         if args.command == "build":

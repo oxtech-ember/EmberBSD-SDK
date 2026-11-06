@@ -204,15 +204,16 @@ failure, not a reason to compile the package.
 The source schedule holds the Ports `build.lock` for the whole interval:
 the saved graph is read under that lock, current is reread under that lock,
 and every wave's controller runs under that lock. The lock PID is the process
-that starts the controller, not the client. That PID records the controller
-PID and the private schedule directory in the lock. An outer drainer survives
-the lock PID. Killing the lock PID does not leave the controller writing: the
-drainer stops the recorded controller and every process still parented under
-it, copies receipts the controller had already written, and only then removes
-the lock. The parent walk is `ps`, on Darwin and on Linux. A killed client
-closes the death pipe; one interrupt does the same, and the wait ends when
-the drainer finishes rather than when the controller notices a terminal
-signal. `STATE/order` is not rewritten. The controller receives a private
+that starts the controller, not the client. That directory carries a token
+only that owner writes. A second client whose `mkdir` is rejected does not
+read, signal, or remove it. Before the controller may exec, the owner records
+its PID and `ps` creation time. An outer drainer survives the lock PID and
+acts only when that PID was killed and the token is still its own. It rereads
+the record after the death, stops that same process, and stops a child only
+while its parent is still in that tree. A reused PID, a child now parented to
+init or launchd, or a receipt copy that fails leaves the lock and the private
+schedule in place. A killed client closes the death pipe; one interrupt does
+the same. `STATE/order` is not rewritten. The controller receives a private
 copy of the edges and receipts, and its own `build.lock` is on that copy
 because the Ports lock is not reentrant. Do not remove `build.lock` while
 its PID is alive or while the recorded controller is running.
