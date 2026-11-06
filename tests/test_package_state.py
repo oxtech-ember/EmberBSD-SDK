@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: BSD-2-Clause
+from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
 import subprocess
@@ -186,21 +187,30 @@ class UpdateSelectionTests(unittest.TestCase):
         import io
         cfg = dict(self.cfg, state_dir=str(self.root / 'state'), cache_dir=str(self.cache.root),
                    host_prefix=str(self.root / 'tools'))
-        def fetch(_crypto, _store, _trust, snapshot, **kwargs):
-            snapshot.mkdir()
-            (snapshot / 'release.p7m').write_bytes(b'authenticated fixture')
-            return self.release
+        snapshots = []
+        @contextmanager
+        def snapshot_context(_crypto, _store, _trust, state, **kwargs):
+            with tempfile.TemporaryDirectory(prefix='.release-metadata-', dir=state) as work:
+                snapshot = Path(work) / 'snapshot'
+                snapshot.mkdir()
+                (snapshot / 'release.p7m').write_bytes(b'authenticated fixture')
+                snapshots.append(snapshot)
+                yield self.release, snapshot
         output = io.TextIOWrapper(io.BytesIO(), encoding='utf-8')
         with patch('emberbsd_sdk.sdk_client.load_config', return_value=cfg), \
              patch('emberbsd_sdk.sdk_client.load_host_prefix'), \
              patch('emberbsd_sdk.sdk_client.PackageInstaller', installer_factory(self.installer)), \
              patch('emberbsd_sdk.sdk_client.HTTPStore') as store, \
-             patch('emberbsd_sdk.sdk_client.fetch_release', side_effect=fetch) as fetched, \
+             patch('emberbsd_sdk.sdk_client.release_snapshot', side_effect=snapshot_context) as fetched, \
              patch('emberbsd_sdk.sdk_client.load_release_catalogs', return_value=self.catalogs), \
              patch('sys.stdout', output):
             store.return_value.__enter__.return_value = self.store
             status = main(['--config', 'unused', *command])
-            self.assertEqual(fetched.call_args.args[3].name, 'snapshot')
+            self.assertTrue(fetched.call_count)
+            self.assertEqual(len(snapshots), fetched.call_count)
+            self.assertTrue(all(call.args[3] == self.root / 'state'
+                                for call in fetched.call_args_list))
+            self.assertTrue(all(snapshot.name == 'snapshot' for snapshot in snapshots))
             self.assertFalse((self.root / 'state/channel.json').exists())
         output.seek(0)
         return status, output.read()
