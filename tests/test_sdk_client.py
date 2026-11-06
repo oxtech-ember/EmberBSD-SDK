@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: BSD-2-Clause
 from copy import deepcopy
 import hashlib
+import io
 from pathlib import Path
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -11,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.sdk_client import installation_plan, apply_plan, include_source_dependencies, install_selection
 from emberbsd_sdk.package_cache import PackageCache
+from emberbsd_sdk.package_install import PackageInstaller
 from test_package_cache import Store
 
 
@@ -110,6 +113,91 @@ class ClientTests(unittest.TestCase):
             with self.assertRaisesRegex(SDKError, 'incompatible update'):
                 apply_plan(self.plan(sets=['task']), self.cfg, self.installer, self.cache, self.store)
         self.assertEqual([a[0] for a in self.installer.actions], ['check', 'check'])
+
+    def test_apply_reuses_compatible_newer_provider_and_source_selection_uses_installed_name(self):
+        root = self.root
+        prefix, database = root / 'prefix', root / 'pkgdb'
+        prefix.mkdir()
+        database.mkdir()
+        installed_name = 'libxml2-2.15.4nb5'
+        installed_dir = database / installed_name
+        installed_dir.mkdir()
+        (installed_dir / '+CONTENTS').write_text('@cwd /prefix\n@name ' + installed_name + '\n')
+        (installed_dir / '+BUILD_INFO').write_text('PROVIDES=/prefix/lib/libxml2.so.2\n')
+
+        def package_archive(path, name, *, depends=(), providers=()):
+            contents = '@cwd /producer/prefix\n@name ' + name + '\n' + ''.join(
+                '@pkgdep ' + value + '\n' for value in depends)
+            info = ''.join('PROVIDES=/producer/prefix/' + value + '\n' for value in providers)
+            with tarfile.open(path, 'w:gz') as archive:
+                for filename, data in (('+CONTENTS', contents), ('+BUILD_INFO', info)):
+                    content = data.encode()
+                    member = tarfile.TarInfo(filename)
+                    member.size = len(content)
+                    archive.addfile(member, io.BytesIO(content))
+            return path
+
+        provider = package_archive(root / 'provider.tgz', 'libxml2-2.15.4nb4',
+                                   providers=('lib/libxml2.so.2',))
+        consumer = package_archive(root / 'consumer.tgz', 'consumer-1',
+                                   depends=('libxml2>=2.14.6nb2',))
+        archives = {'provider': provider, 'consumer': consumer}
+        artifacts = {}
+        for identity, path, deps in (('provider', provider, []), ('consumer', consumer, ['provider'])):
+            payload = path.read_bytes()
+            artifacts[identity] = dict(id=identity, path=f'native/{identity}.tgz', kind='host-package',
+                host=self.host, target=None, size=len(payload), sha256=hashlib.sha256(payload).hexdigest(),
+                unpacked_size=1, depends=deps)
+
+        class Cache:
+            def __init__(self):
+                self.root = root / 'client-cache'
+                self.root.mkdir()
+            def trim(self, *_args, **_kwargs):
+                pass
+            def fetch(self, _store, _key, artifact):
+                return archives[artifact['id']]
+
+        class RealInstaller(PackageInstaller):
+            def __init__(self):
+                self.crypto = object()
+                self.present = {installed_name}
+                self.checked_updates = []
+                self.installed_paths = []
+            def installed(self, _config, *, recover=True):
+                return self.present
+            def check(self, _path, _config):
+                pass
+            def check_updates(self, packages, _archives, _config):
+                self.checked_updates.extend(packages)
+            def install(self, path, _config, *, checked=False, configure=True):
+                self.installed_paths.append(path.name)
+            def configure(self, _config):
+                pass
+
+        cfg = dict(host=self.host, prefix=str(prefix), pkgdb=str(database))
+        installer, cache = RealInstaller(), Cache()
+        plan = dict(roots=['cad/consumer@native'], build_roots=[], packages=[
+            dict(root='textproc/libxml2@native', repository='native', pkgname='libxml2-2.15.4nb4',
+                 action='download', replaces=[installed_name], artifact=artifacts['provider']),
+            dict(root='cad/consumer@native', repository='native', pkgname='consumer-1',
+                 action='download', replaces=[], artifact=artifacts['consumer']),
+        ], download_size=sum(item['size'] for item in artifacts.values()), unpacked_size=2)
+        selected = []
+        def pmatch(_crypto, pattern, name):
+            if pattern.startswith('libxml2>='):
+                return name in ('libxml2-2.15.4nb4', installed_name)
+            return False
+        with patch('emberbsd_sdk.sdk_client.check_space'), \
+             patch('emberbsd_sdk.package_install.inspect_install_paths'), \
+             patch('emberbsd_sdk.package_updates._matches', side_effect=pmatch), \
+             patch('emberbsd_sdk.sdk_client.build_missing', side_effect=lambda _cfg, _roots, rows: selected.extend(rows)):
+            install_selection(plan, dict(repositories={'native': cfg}), installer, cache, object())
+        provider_row = next(item for item in installer.checked_updates if item['root'].startswith('textproc/'))
+        self.assertEqual(provider_row['pkgname'], installed_name)
+        self.assertIsNone(provider_row['artifact'])
+        self.assertEqual(installer.installed_paths, [consumer.name])
+        self.assertIn(('textproc/libxml2@native', installed_name), selected)
 
     def test_all_archives_checked_before_any_install(self):
         plan = self.plan(sets=['task'])

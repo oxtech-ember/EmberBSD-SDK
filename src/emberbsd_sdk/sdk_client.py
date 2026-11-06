@@ -22,6 +22,7 @@ from .host_prefix import load_host_prefix
 from .jsonio import json_bytes, read_json, write_json
 from .package_cache import PackageCache, check_space, directory_lock
 from .package_install import PackageInstaller, install_paths
+from .package_updates import reuse_compatible_dependencies
 from .package_selection import _package_sets, _parse_root, _read_roots
 from .release_delivery import artifact_key, fetch_release, _key
 from .release_signing import ReleaseCrypto
@@ -263,6 +264,20 @@ def apply_plan(plan, config, installer, cache, store):
         for repository in sorted(selected_repositories):
             _, database = install_paths(config['repositories'][repository])
             locks.enter_context(directory_lock(database.parent / (database.name + '.sdk-lock')))
+        # The signed graph pins artifact identities. Before applying replacements,
+        # retain a newer installed dependency when selected consumers' authenticated
+        # pkg_tools constraints accept it. This stays inside the pkgdb lock and never
+        # suppresses an explicitly requested package root.
+        if isinstance(installer, PackageInstaller):
+            compatible_reuse = []
+            for repository in sorted(selected_repositories):
+                cfg = config['repositories'][repository]
+                _, database = install_paths(cfg)
+                repository_packages = [p for p in plan['packages'] if p['repository'] == repository]
+                compatible_reuse.extend(reuse_compatible_dependencies(installer.crypto, database,
+                    repository_packages, archives, installer.installed(cfg, recover=False), plan['roots']))
+            plan['compatible_reuse'] = compatible_reuse
+            pending = [p for p in plan['packages'] if p['action'] != 'installed']
         # Check every replacement before changing any package. pkg_add remains
         # the dependency and file owner; this path preserves installed consumers.
         for repository in sorted(selected_repositories):
@@ -291,6 +306,7 @@ def install_selection(plan, config, installer, cache, store):
     build_missing(config, plan['build_roots'], [(p['root'], p['pkgname']) for p in plan['packages']])
     if plan.get('sysroot'):
         sysroot_package.bind_compiler(config, plan['sysroot'])
+    return plan.get('compatible_reuse', [])
 
 
 def include_sysroot(plan, release, config, cache, target):
@@ -422,7 +438,7 @@ def main(argv=None, *, default_config=None):
                         return 0
                     print(f"Install: reuse {sum(p['action'] == 'installed' for p in plan['packages'])}; "
                           f"add {sum(p['action'] != 'installed' and not p['replaces'] for p in plan['packages'])}; "
-                          f"replace {sum(bool(p['replaces']) for p in plan['packages'])}; "
+                          f"replace candidates {sum(bool(p['replaces']) for p in plan['packages'])}; "
                           f"cached {sum(p['action'] == 'cache' for p in plan['packages'])}; "
                           f"{int(bool(plan.get('sysroot')) and plan['sysroot']['action'] != 'installed')} sysroots; "
                           f"download {plan['download_size']} bytes; unpack {plan['unpacked_size']} bytes; "
@@ -430,12 +446,16 @@ def main(argv=None, *, default_config=None):
                     for package in plan.get('retained', []):
                         print(f"Retain {package['repository']}/{package['pkgname']}: {package['reason']}", file=sys.stderr)
                     try:
-                        install_selection(plan, config, installer, cache, store)
+                        compatible_reuse = install_selection(plan, config, installer, cache, store)
                     except HTTPStatusError as exc:
                         if exc.status != 404 or attempt:
                             raise
                         previous = identity
                         continue
+                    for package in compatible_reuse:
+                        print(f"Reuse compatible installed {package['pkgname']} for "
+                              f"{package['root']} (catalog candidate {package['catalog_candidate']})",
+                              file=sys.stderr)
                     if not updating:
                         selected = state / 'selection.json'
                         old = read_json(selected) if selected.exists() else {'roots': []}
