@@ -54,13 +54,18 @@ the transition to the selected native prefix. Keep recipes and version pins ther
    archive tools, linker, assembler and readelf explicitly for nested builds.
    Build native Clang/LLVM from the common recipes in that same prefix, with the
    host backend and the target backends required by the task.
+   Install and select the prefix's `mksh` before CMake, as the Ports guide
+   specifies. Check the shell in a generated Unix Makefile. Rebuild an initial
+   CMake that still selects the host `/bin/sh` before ordinary builds.
 5. Follow the documented [gettext composition](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/common-build-tools/gettext-bootstrap.md):
    plain gettext tools, then GLib/libcroco, then replacement with the full style
    variant. Keep object directories separate. After CMake becomes available,
    replace the transitional `EMBERBSD_NATIVE_BOOTSTRAP` lz4 package with its
    ordinary full package as the native bootstrap guide requires.
 6. Complete the task's native roles from common Ports recipes, including fetch
-   and its OpenSSL CA package. Generate the SDK native-tool include with Python
+   and its OpenSSL CA package. Select `PKG_OPTIONS.libfetch+=openssl` when
+   acquiring fetch through the initial bootstrap configuration.
+   Generate the SDK native-tool include with Python
    from that prefix and configure the normal Ports native profile. Ordinary
    builds then use tools and compiler components from the selected prefix.
 
