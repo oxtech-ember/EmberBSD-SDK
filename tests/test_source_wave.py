@@ -23,7 +23,7 @@ from emberbsd_sdk.package_cache import directory_lock
 from emberbsd_sdk.package_selection import launch_recorded
 import emberbsd_sdk.source_wave as source_wave
 from emberbsd_sdk.source_wave import (
-    SourceWaveLock, _creation, _descendants, _linux_start, _process_table,
+    SourceWaveLock, _creation, _descendants, _linux_start, _live_descendants, _process_table,
     _recover_killed_owner, _release_if_ours, _same_identity, _signal_proven,
     _stop_recorded, _write_controller, _write_stamp)
 
@@ -280,6 +280,7 @@ exit 0
                 time.sleep(0.05)
             lock_pid = int((state / 'build.lock' / 'pid').read_text().strip())
             controller = self._assert_recorded_controller(state, lock_pid)
+            roles = self._ports_roles(controller)
             self._assert_same_pid_namespace(lock_pid)
             self._assert_same_pid_namespace(controller)
             os.kill(lock_pid, 9)
@@ -287,6 +288,7 @@ exit 0
                 if time.monotonic() > deadline:
                     self.fail('controller kept running after the published lock owner was killed')
                 time.sleep(0.05)
+            self._assert_roles_stopped(roles)
             while (state / 'build.lock').exists():
                 if time.monotonic() > deadline:
                     self.fail('build lock remained after the controller stopped')
@@ -333,11 +335,15 @@ exit 0
                 if time.monotonic() > deadline:
                     self.fail('real controller did not reach bmake')
                 time.sleep(0.05)
+            controller = self._assert_recorded_controller(
+                state, int((state / 'build.lock' / 'pid').read_text().strip()))
+            roles = self._ports_roles(controller)
             os.kill(client_pid, signal.SIGINT)
             while self._fixture_commands():
                 if time.monotonic() > deadline:
                     self.fail('one interrupt left the controller running')
                 time.sleep(0.05)
+            self._assert_roles_stopped(roles)
             while (state / 'build.lock').exists():
                 if time.monotonic() > deadline:
                     self.fail('one interrupt left the build lock')
@@ -757,6 +763,109 @@ exit 0
             for path in set(Path(tempfile.gettempdir()).glob('ember-wave-*')) - private_before:
                 shutil.rmtree(path, ignore_errors=True)
 
+    def _session_tree_script(self):
+        script = self.fix / 'session-tree.py'
+        script.write_text(
+            'import os, sys, time\n'
+            'ready = sys.argv[1]\n'
+            'middle = os.fork()\n'
+            'if middle == 0:\n'
+            '    os.setsid()\n'
+            '    leaf = os.fork()\n'
+            '    if leaf == 0:\n'
+            '        os.setsid()\n'
+            '        open(ready, "w").write(str(os.getpid()))\n'
+            '        while True:\n'
+            '            time.sleep(30)\n'
+            '    while True:\n'
+            '        time.sleep(30)\n'
+            'while True:\n'
+            '    time.sleep(30)\n')
+        return script
+
+    def _assert_session_tree_drained(self, client_pid, leaf, controller):
+        deadline = time.monotonic() + 8
+        while True:
+            leaf_row = _process_table().get(leaf)
+            controller_row = _process_table().get(controller)
+            leaf_alive = leaf_row is not None and not leaf_row[1].startswith(('Z', 'z'))
+            controller_alive = controller_row is not None and not controller_row[1].startswith(('Z', 'z'))
+            if not leaf_alive and not controller_alive and not (self.fix / 'state' / 'build.lock').exists():
+                return
+            if leaf_alive and leaf_row[0] == 1 and not controller_alive:
+                self.fail('session leader died and left the new-session child reparented')
+            if time.monotonic() > deadline:
+                self.fail(f'session tree still running leaf={leaf_row} controller={controller_row}')
+            time.sleep(0.05)
+
+    def test_interrupt_drains_a_new_session_grandchild_before_the_leader(self):
+        state = self.fix / 'state'
+        ready = self.fix / 'session.ready'
+        script = self._session_tree_script()
+
+        def client():
+            session = SourceWaveLock(state)
+            try:
+                session.exec_controller([sys.executable, str(script), str(ready)], {}, ['x11/app'])
+            finally:
+                session.close()
+
+        client_pid = self._fork_client(client)
+        leaf = None
+        try:
+            deadline = time.monotonic() + 8
+            while not ready.exists():
+                if time.monotonic() > deadline:
+                    self.fail('new-session grandchild did not start')
+                time.sleep(0.02)
+            leaf = int(ready.read_text())
+            controller = int((state / 'build.lock' / 'controller').read_text().splitlines()[0])
+            self.assertIn(leaf, _descendants(controller))
+            self.assertNotEqual(leaf, controller)
+            os.kill(client_pid, signal.SIGINT)
+            self._assert_session_tree_drained(client_pid, leaf, controller)
+        finally:
+            if leaf:
+                try:
+                    os.kill(leaf, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            self._reap(client_pid)
+
+    def test_owner_kill_drains_a_new_session_grandchild_before_the_leader(self):
+        state = self.fix / 'state'
+        ready = self.fix / 'session.ready'
+        script = self._session_tree_script()
+
+        def client():
+            session = SourceWaveLock(state)
+            try:
+                session.exec_controller([sys.executable, str(script), str(ready)], {}, ['x11/app'])
+            finally:
+                session.close()
+
+        client_pid = self._fork_client(client)
+        leaf = None
+        try:
+            deadline = time.monotonic() + 8
+            while not ready.exists():
+                if time.monotonic() > deadline:
+                    self.fail('new-session grandchild did not start')
+                time.sleep(0.02)
+            leaf = int(ready.read_text())
+            controller = int((state / 'build.lock' / 'controller').read_text().splitlines()[0])
+            self.assertIn(leaf, _descendants(controller))
+            owner = int((state / 'build.lock' / 'pid').read_text())
+            os.kill(owner, signal.SIGKILL)
+            self._assert_session_tree_drained(client_pid, leaf, controller)
+        finally:
+            if leaf:
+                try:
+                    os.kill(leaf, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            self._reap(client_pid)
+
     def test_descendant_that_exits_during_the_identity_check_does_not_abort_the_drain(self):
         """A child that disappears between reads is gone, not a reused PID.
 
@@ -918,7 +1027,7 @@ exit 0
 
     def _command_map(self):
         result = subprocess.run(
-            ['ps', '-ax', '-o', 'pid=,command='], capture_output=True, text=True, check=False)
+            ['ps', '-axww', '-o', 'pid=,command='], capture_output=True, text=True, check=False)
         mapping = {}
         for line in result.stdout.splitlines():
             line = line.strip()
@@ -964,9 +1073,49 @@ exit 0
         descendants = _descendants(controller)
         self.assertIn(controller, commands)
         self.assertIn('cross-bulk.sh', commands[controller])
+        self.assertNotIn('stage-context-supervisor.py', commands[controller])
         self.assertTrue(any('stage-context-supervisor.py' in commands.get(pid, '') for pid in descendants))
         self.assertTrue(any('bmake' in commands.get(pid, '') for pid in descendants))
         return controller
+
+    def _ports_roles(self, controller):
+        """Recorded controller, stage supervisor, real shell, and stub bmake are different pids.
+
+        The supervisor's command line names cross-bulk.sh because it starts it.
+        The real Ports shell is the descendant that has exec'd that script and
+        is the parent of the stub bmake. Those are not the same pid.
+        """
+        commands = self._command_map()
+        rows = _live_descendants(_process_table(), controller)
+        descendants = [pid for pid, _parent, _stamp in rows]
+        parent_of = {pid: parent for pid, parent, _stamp in rows}
+        supervisors = [pid for pid in descendants if 'stage-context-supervisor.py' in commands.get(pid, '')]
+        builds = [pid for pid in descendants if str(self.fix / 'bin' / 'bmake') in commands.get(pid, '')]
+        self.assertTrue(supervisors, commands)
+        self.assertTrue(builds, commands)
+        shells = []
+        for build in builds:
+            current = parent_of.get(build)
+            seen = set()
+            while current and current not in seen and current != controller:
+                seen.add(current)
+                command = commands.get(current, '')
+                if 'cross-bulk.sh' in command and 'stage-context-supervisor.py' not in command:
+                    shells.append(current)
+                    break
+                current = parent_of.get(current)
+        self.assertTrue(shells, (commands, parent_of))
+        self.assertNotIn(controller, supervisors)
+        self.assertNotIn(controller, shells)
+        self.assertTrue(set(supervisors).isdisjoint(shells))
+        self.assertTrue(set(builds).isdisjoint(supervisors + shells))
+        return [controller, *supervisors, *shells, *builds]
+
+    def _assert_roles_stopped(self, pids):
+        rows = _process_table()
+        for pid in pids:
+            row = rows.get(pid)
+            self.assertTrue(row is None or row[1].startswith(('Z', 'z')), (pid, row))
 
     def _reap(self, pid):
         try:

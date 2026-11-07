@@ -13,6 +13,7 @@ that stamp alone.
 """
 
 import contextvars
+import ctypes
 import json
 import os
 from pathlib import Path
@@ -70,6 +71,8 @@ class SourceWaveLock:
         os.close(self._death[0])
         child.close()
         self._buffer = b''
+        self._previous_interrupt = signal.getsignal(signal.SIGINT)
+        self._arm_interrupt()
         ready = self._read()
         if ready.get('op') == 'error':
             self.close()
@@ -97,6 +100,29 @@ class SourceWaveLock:
             raise SDKError('source wave lock returned no build result')
         return reply['receipts']
 
+    def _arm_interrupt(self):
+        """Close the death pipe from SIGINT.
+
+        Python 3.15 on Darwin can leave ``recv`` blocked across a SIGINT, so
+        the default KeyboardInterrupt never runs and the owner never drains.
+        ``close`` is async-signal-safe. The owner then stops children before
+        their session leader, which is what keeps the real shell from being
+        reparented to launchd.
+        """
+        write_end = self._death[1]
+
+        def stop(_number, _frame):
+            try:
+                os.close(write_end)
+            except OSError:
+                pass
+            raise KeyboardInterrupt
+
+        try:
+            signal.signal(signal.SIGINT, stop)
+        except OSError:
+            pass
+
     def close(self):
         """Stop the controller, if one is running, and wait until the lock is released.
 
@@ -104,6 +130,13 @@ class SourceWaveLock:
         the controller it started; this wait does not depend on that controller
         noticing a terminal signal.
         """
+        previous = getattr(self, '_previous_interrupt', None)
+        if previous is not None:
+            try:
+                signal.signal(signal.SIGINT, previous)
+            except OSError:
+                pass
+            self._previous_interrupt = None
         if self._parent is None:
             return
         death = self._death[1]
@@ -169,8 +202,9 @@ def _process_table():
     """pid -> (ppid, state, creation). The ``ps`` helper itself is not a build process."""
     last = ''
     for columns in ('pid=,ppid=,stat=,lstart=,command=', 'pid=,ppid=,state=,lstart=,command='):
+        # -ww keeps Darwin from truncating command lines at the terminal width.
         result = subprocess.run(
-            ['ps', '-ax', '-o', columns], capture_output=True, text=True, check=False)
+            ['ps', '-axww', '-o', columns], capture_output=True, text=True, check=False)
         last = result.stderr.strip()
         if result.returncode != 0 or not result.stdout.strip():
             continue
@@ -195,24 +229,159 @@ def _parents():
     return {pid: row[0] for pid, row in _process_table().items()}
 
 
+_LIST_FAILED = object()
+_LIBPROC = None
+_LIBPROC_FAILED = False
+
+
+class _DarwinUsage(ctypes.Structure):
+    """Public RUSAGE_INFO_V0. ``start`` is the Mach absolute birth tick."""
+    _fields_ = [('uuid', ctypes.c_ubyte * 16)] + [
+        (name, ctypes.c_uint64) for name in (
+            'user', 'system', 'idle', 'interrupt', 'pageins', 'wired',
+            'resident', 'footprint', 'start', 'exit')]
+
+
+def _libproc():
+    """Darwin libproc, or None when this host has no such library."""
+    global _LIBPROC, _LIBPROC_FAILED
+    if sys.platform != 'darwin' or _LIBPROC_FAILED:
+        return None
+    if _LIBPROC is None:
+        try:
+            if ctypes.sizeof(_DarwinUsage) != 96 or _DarwinUsage.start.offset != 80:
+                raise OSError('unsupported Darwin rusage_info_v0 ABI')
+            library = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
+            library.proc_listchildpids.argtypes = (ctypes.c_int, ctypes.c_void_p, ctypes.c_int)
+            library.proc_listchildpids.restype = ctypes.c_int
+            library.proc_pid_rusage.argtypes = (ctypes.c_int, ctypes.c_int, ctypes.c_void_p)
+            library.proc_pid_rusage.restype = ctypes.c_int
+            _LIBPROC = library
+        except (OSError, AttributeError):
+            _LIBPROC_FAILED = True
+            return None
+    return _LIBPROC
+
+
+def _darwin_birth(pid):
+    """Mach birth tick, or None when this host or PID has no such stamp.
+
+    This is the Darwin equivalent of the Linux ``/proc`` start time. A matching
+    tick is strong enough to signal a recorded controller launchd has inherited.
+    A one-second ``ps`` creation time is not.
+    """
+    if pid <= 1:
+        return None
+    library = _libproc()
+    if library is None:
+        return None
+    record = _DarwinUsage()
+    ctypes.set_errno(0)
+    if library.proc_pid_rusage(pid, 0, ctypes.byref(record)) != 0 or record.start <= 0:
+        return None
+    return str(int(record.start))
+
+
+def _darwin_children(pid):
+    """Direct children from ``proc_listchildpids``, ``[]`` when there are none.
+
+    ``None`` means the library is absent. ``_LIST_FAILED`` means it could not
+    be read, so the caller must not signal the parent.
+    """
+    if pid <= 1:
+        return []
+    library = _libproc()
+    if library is None:
+        return None
+    count = library.proc_listchildpids(pid, None, 0)
+    if count < 0:
+        return _LIST_FAILED
+    if count == 0:
+        return []
+    capacity = count + 32
+    buffer = (ctypes.c_int * capacity)()
+    got = library.proc_listchildpids(pid, buffer, capacity * ctypes.sizeof(ctypes.c_int))
+    if got < 0 or got > capacity:
+        return _LIST_FAILED
+    children = []
+    for index in range(got):
+        child = int(buffer[index])
+        if child > 1 and child != pid:
+            children.append(child)
+    return children
+
+
+def _darwin_subtree(pid):
+    """``{parent: [child, ...]}`` for ``pid``, or None when Darwin listing is unavailable."""
+    if sys.platform != 'darwin':
+        return None
+    children = {}
+    pending = [pid]
+    seen = {pid}
+    while pending:
+        current = pending.pop()
+        listed = _darwin_children(current)
+        if listed is None:
+            return None
+        if listed is _LIST_FAILED:
+            return _LIST_FAILED
+        children[current] = listed
+        for child in listed:
+            if child not in seen:
+                seen.add(child)
+                pending.append(child)
+    return children
+
+
 def _descendants(pid):
     if pid <= 1:
         raise SDKError('refusing to walk host init')
-    return [row[0] for row in _live_descendants(_process_table(), pid)]
+    found = _live_descendants(_process_table(), pid)
+    if any(child <= 1 or created is None for child, _parent, created in found):
+        raise SDKError('ps parent walk failed')
+    return [child for child, _parent, _created in found]
+
+
+def _child_links(rows, pid):
+    """Parent-to-children links for ``pid``'s tree.
+
+    Darwin session leaders stay children of the process that started them.
+    ``ps`` can still report them as reparented, which made the drain kill the
+    stage supervisor and leave the real shell running. ``proc_listchildpids``
+    is the parent link on Darwin. Elsewhere the link is the ``ps`` parent.
+    ``None`` means the Darwin listing itself failed.
+    """
+    if pid <= 1:
+        return {}
+    listed = _darwin_subtree(pid)
+    if listed is not None:
+        return listed
+    children = {}
+    for child, (parent, state, _created) in rows.items():
+        if state.startswith(('Z', 'z')):
+            continue
+        children.setdefault(parent, []).append(child)
+    return children
 
 
 def _live_descendants(rows, pid):
     """Current non-zombie descendants as ``(pid, ppid, creation)`` in parent-before-child order."""
-    children = {}
-    for child, (parent, _state, _created) in rows.items():
-        children.setdefault(parent, []).append(child)
+    if pid <= 1:
+        return []
+    children = _child_links(rows, pid)
+    if children is _LIST_FAILED:
+        return [(-1, pid, None)]
     found = []
 
     def walk(current):
         for child in children.get(current, ()):
-            parent, state, created = rows[child]
-            if state.startswith(('Z', 'z')):
+            if child <= 1 or child == current:
                 continue
+            row = rows.get(child)
+            if row is not None and row[1].startswith(('Z', 'z')):
+                continue
+            created = row[2] if row is not None else None
+            parent = row[0] if row is not None and row[0] > 1 else current
             found.append((child, parent, created))
             walk(child)
 
@@ -258,6 +427,11 @@ def _linux_start(pid):
     return fields[19]
 
 
+def _kernel_start(pid):
+    """Linux ``/proc`` start time, or the Darwin Mach birth tick, or None."""
+    return _linux_start(pid) or _darwin_birth(pid)
+
+
 def _in_tree(rows, root, pid):
     return any(child == pid for child, _parent, _stamp in _live_descendants(rows, root))
 
@@ -271,10 +445,12 @@ def _same_identity(rows, pid, created, starttime):
     """
     row = rows.get(pid)
     if row is None or row[1].startswith(('Z', 'z')) or row[2] != created:
+        if row is None and starttime and _kernel_start(pid) == starttime:
+            return True
         return False
     if not starttime:
         return True
-    fresh = _linux_start(pid)
+    fresh = _kernel_start(pid)
     if fresh is None:
         return True
     return fresh == starttime
@@ -289,7 +465,7 @@ def _row_gone(pid):
     return row is None or row[1].startswith(('Z', 'z'))
 
 
-def _signal_proven(pid, created, root=None, starttime=None):
+def _signal_proven(pid, created, root=None, starttime=None, number=signal.SIGKILL, allow_left=False):
     """Signal one PID only after a fresh identity check.
 
     True means the process was already gone or this call signaled it. None
@@ -308,14 +484,20 @@ def _signal_proven(pid, created, root=None, starttime=None):
         return False
     row = rows.get(pid)
     if row is None or row[1].startswith(('Z', 'z')):
-        return True
-    if row[2] != created:
+        if row is None and starttime and _kernel_start(pid) == starttime:
+            if root is not None and not _in_tree(rows, root, pid):
+                return None
+        else:
+            return True
+    elif row[2] != created:
         return False
-    if root is not None and (row[0] <= 1 or not _in_tree(rows, root, pid)):
+    elif root is not None and not allow_left and not _in_tree(rows, root, pid):
         return None
-    if root is None and row[0] <= 1 and not starttime:
+    elif root is None and row[0] <= 1 and not starttime:
         return False
-    current = _linux_start(pid)
+    if row is not None and root is not None and not allow_left and not _in_tree(rows, root, pid):
+        return None
+    current = _kernel_start(pid)
     if starttime and current != starttime:
         if current is None and _row_gone(pid):
             return True
@@ -326,14 +508,15 @@ def _signal_proven(pid, created, root=None, starttime=None):
         return False
     row = rows.get(pid)
     if row is None or row[1].startswith(('Z', 'z')):
-        return True
-    if row[2] != created:
+        if not (row is None and starttime and _kernel_start(pid) == starttime):
+            return True
+    elif row[2] != created:
         return False
-    if root is not None and (row[0] <= 1 or not _in_tree(rows, root, pid)):
+    elif root is not None and not allow_left and not _in_tree(rows, root, pid):
         return None
-    if root is None and row[0] <= 1 and not starttime:
+    elif root is None and row[0] <= 1 and not starttime:
         return False
-    fresh = _linux_start(pid)
+    fresh = _kernel_start(pid)
     if current is not None and fresh != current:
         if fresh is None and _row_gone(pid):
             return True
@@ -343,57 +526,167 @@ def _signal_proven(pid, created, root=None, starttime=None):
             return True
         return False
     try:
-        os.kill(pid, signal.SIGKILL)
+        os.kill(pid, number)
     except ProcessLookupError:
         return True
+    if number == signal.SIGSTOP and (starttime and _kernel_start(pid) not in (None, starttime)):
+        try:
+            os.kill(pid, signal.SIGCONT)
+        except ProcessLookupError:
+            pass
+        return False
     return True
+
+
+def _direct_children(pid):
+    """Live direct children. ``_LIST_FAILED`` means the parent must not be signaled."""
+    if pid <= 1:
+        return []
+    try:
+        rows = _process_table()
+    except SDKError:
+        return _LIST_FAILED
+    links = _child_links(rows, pid)
+    if links is _LIST_FAILED:
+        return _LIST_FAILED
+    alive = []
+    for child in links.get(pid, ()):
+        if child <= 1:
+            continue
+        row = rows.get(child)
+        if row is not None and row[1].startswith(('Z', 'z')):
+            continue
+        if row is None and _kernel_start(child) is None:
+            continue
+        alive.append(child)
+    return alive
 
 
 def _signal_descendants(rows, root):
-    """Signal one fresh snapshot from the leaves up.
+    """Stop descendants without letting a parent fork or exit first.
 
-    A child that has left the tree is skipped. A changed creation stamp or
-    kernel start time stops the drain and does not signal that PID.
+    The snapshot is frozen parent-before-child, then killed leaf-first.
+    Freezing the shell first keeps it from spawning another ``sleep`` or
+    leaving the real cross-bulk session behind when the supervisor stops.
+    A process already reparented before this snapshot is not in it and is
+    not signaled.
     """
-    for child, _parent, stamp in reversed(_live_descendants(rows, root)):
-        if _signal_proven(child, stamp, root=root) is False:
+    for _ in range(50):
+        try:
+            rows = _process_table()
+        except SDKError:
             return False
-    return True
+        descendants = _live_descendants(rows, root)
+        if any(child <= 1 for child, _parent, _stamp in descendants):
+            return False
+        nodes = []
+        for child, _parent, stamp in descendants:
+            if not stamp:
+                if _kernel_start(child) is None:
+                    continue
+                return False
+            nodes.append((child, stamp, _kernel_start(child)))
+        if not nodes:
+            return True
+        frozen = []
+
+        def thaw():
+            for stopped in frozen:
+                try:
+                    os.kill(stopped, signal.SIGCONT)
+                except ProcessLookupError:
+                    pass
+
+        for child, stamp, birth in nodes:
+            if _signal_proven(child, stamp, root=root, starttime=birth, number=signal.SIGSTOP) is not True:
+                thaw()
+                return False
+            frozen.append(child)
+        for child, stamp, birth in reversed(nodes):
+            if _signal_proven(child, stamp, root=root, starttime=birth,
+                              number=signal.SIGKILL, allow_left=True) is not True:
+                thaw()
+                return False
+        time.sleep(0.01)
+    return False
 
 
 def _stop_recorded(pid, created, starttime=None):
     """Stop one recorded controller and children still parented under it.
 
-    The controller is proven by the identity captured before it could exec.
-    A child is signaled only while a fresh row still places it in that tree.
-    A PID whose parent is now init or launchd is not signaled. Without a
-    stored kernel start time, the controller itself is not signaled once init
-    or launchd has inherited it: one-second ``lstart`` is not proof. False
-    means the lock must stay.
+    The controller is frozen before its descendants. A live shell keeps
+    forking (the short-lived child loop, or ``bmake``'s ``sleep``), and
+    stopping the stage supervisor while that shell can still run leaves the
+    real Ports session reparented to init or launchd. Descendants of the
+    frozen controller are then frozen parent-before-child and killed
+    leaf-first. The controller itself is killed only after that snapshot is
+    gone. A process that had already left the tree is not in the snapshot
+    and is not signaled. Without a stored kernel start time, the controller
+    itself is not signaled once init or launchd has inherited it.
     """
     if pid <= 1 or not created:
         return False
     confirmed = False
+    held = False
+
+    def release():
+        nonlocal held
+        if not held:
+            return
+        held = False
+        try:
+            os.kill(pid, signal.SIGCONT)
+        except ProcessLookupError:
+            pass
+
     for _ in range(50):
         rows = _process_table()
         row = rows.get(pid)
         if row is None or row[1].startswith(('Z', 'z')):
-            return confirmed and not _live_descendants(rows, pid)
+            descendants = _live_descendants(rows, pid)
+            if any(child > 1 and stamp for child, _parent, stamp in descendants):
+                if not _signal_descendants(rows, pid):
+                    release()
+                    return False
+                time.sleep(0.05)
+                continue
+            return confirmed and not descendants
         if row[2] != created:
+            release()
             return False
-        if starttime and _linux_start(pid) != starttime:
-            if _linux_start(pid) is None and _row_gone(pid):
+        if starttime and _kernel_start(pid) != starttime:
+            if _kernel_start(pid) is None and _row_gone(pid):
                 return confirmed and not _live_descendants(_process_table(), pid)
+            release()
             return False
         confirmed = True
+        if not held:
+            if _signal_proven(pid, created, starttime=starttime, number=signal.SIGSTOP) is not True:
+                return False
+            row = _process_table().get(pid)
+            if row is None or row[1].startswith(('Z', 'z')):
+                continue
+            held = True
+            continue
         if not _signal_descendants(rows, pid):
+            release()
             return False
+        children = _direct_children(pid)
+        if children is _LIST_FAILED:
+            release()
+            return False
+        if children:
+            time.sleep(0.01)
+            continue
         if _signal_proven(pid, created, starttime=starttime) is not True:
+            release()
             return False
-        time.sleep(0.05)
+        held = False
+        time.sleep(0.01)
+    release()
     rows = _process_table()
     row = rows.get(pid)
-    if starttime and row is not None and not row[1].startswith(('Z', 'z')) and _linux_start(pid) == starttime:
+    if starttime and row is not None and not row[1].startswith(('Z', 'z')) and _kernel_start(pid) == starttime:
         return False
     return (row is None or row[1].startswith(('Z', 'z')) or row[2] != created) and not _live_descendants(rows, pid)
 
@@ -401,15 +694,14 @@ def _stop_recorded(pid, created, starttime=None):
 def _stop_our_children():
     """Stop live descendants of this process. Unproven rows leave the lock held."""
     me = os.getpid()
-    for _ in range(50):
+    try:
         rows = _process_table()
-        descendants = _live_descendants(rows, me)
-        if not descendants:
-            return True
-        if not _signal_descendants(rows, me):
-            return False
-        time.sleep(0.05)
-    return not _live_descendants(_process_table(), me)
+    except SDKError:
+        return False
+    if not _signal_descendants(rows, me):
+        return False
+    children = _direct_children(me)
+    return children is not _LIST_FAILED and not children
 
 
 def _read_text(path):
@@ -690,7 +982,9 @@ def _observe(lock, seen, *, persist=False):
         if (row is not None and row[2] == created and not row[1].startswith(('Z', 'z'))
                 and _same_identity(rows, pid, created, starttime)):
             for child, _parent, stamp in _live_descendants(rows, pid):
-                start = _linux_start(child)
+                if child <= 1 or not stamp:
+                    continue
+                start = _kernel_start(child)
                 old = seen.get(child)
                 if old is None or old[0] != stamp or (start and old[1] != start):
                     seen[child] = (stamp, start)
@@ -781,8 +1075,8 @@ def _recover_killed_owner(state, token, owner_pid, seen=None):
 def _remember_controller(lock, private):
     def record(pid):
         created = _creation(pid)
-        starttime = _linux_start(pid)
-        if not created or (os.path.isdir('/proc') and not starttime):
+        starttime = _kernel_start(pid)
+        if not created or ((os.path.isdir('/proc') or sys.platform == 'darwin') and not starttime):
             raise SDKError('controller identity was not visible before it could run')
         _write_controller(lock, pid, created, private, starttime)
     return record
