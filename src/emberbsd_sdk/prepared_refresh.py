@@ -98,7 +98,7 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
         for subdir, owner in nested.items():
             relative(subdir)
             relative(owner)
-            if len(PurePosixPath(owner).parts) < 2 or not subdir.startswith(owner + '/'):
+            if not subdir.startswith(owner + '/'):
                 raise ValueError('invalid nested object owner')
         patterns = [relative(p, pattern=True) for p in contract['header_independent_object_patterns']]
         archive_patterns = [relative(p, pattern=True) for p in contract['header_independent_archive_patterns']]

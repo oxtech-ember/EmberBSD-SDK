@@ -348,6 +348,23 @@ class PreparedRefreshTests(unittest.TestCase):
         self.assertIn('external/cbor', dirs)
         self.assertEqual(outputs, [str(nested)])
 
+    def test_top_level_crunched_owner_covers_only_its_nested_output(self):
+        (self.os / 'rescue').mkdir()
+        (self.os / 'rescue/Makefile').write_text('')
+        nested = self.obj / 'rescue/wsconsctl'
+        nested.mkdir(parents=True)
+        (nested / 'unit.o').write_bytes(b'object without dependency output')
+        self.contract['nested_object_owners'] = {'rescue/wsconsctl': 'rescue'}
+        self.write_contract()
+        outputs = []
+        dirs = prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [], outputs)
+        self.assertIn('rescue', dirs)
+        self.assertEqual(outputs, [str(nested)])
+        self.contract['nested_object_owners'] = {'other/consumer': 'rescue'}
+        self.write_contract()
+        with self.assertRaisesRegex(SDKError, 'invalid nested object owner'):
+            prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [])
+
     def test_unselected_nested_alias_is_still_refused(self):
         nested = self.obj / 'other/consumer/generated'
         nested.mkdir(parents=True)
