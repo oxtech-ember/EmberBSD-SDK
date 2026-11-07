@@ -178,7 +178,14 @@ class _RecordedChild:
             except InterruptedError:
                 continue
             except ChildProcessError:
-                return 0
+                # ECHILD is not an exit. The pid can still be the recorded
+                # controller after Darwin has dropped it from the child list.
+                from .source_wave import _echild_is_recorded_exit, current_controller_lock
+                lock = current_controller_lock()
+                if lock is not None and _echild_is_recorded_exit(lock):
+                    return 0
+                time.sleep(0.02)
+                continue
             if pid:
                 return _wait_status(status)
             time.sleep(0.02)

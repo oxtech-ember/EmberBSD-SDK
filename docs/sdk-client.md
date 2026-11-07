@@ -232,7 +232,11 @@ the snapshot has been killed, so the Ports shell cannot start a replacement
 supervisor, or killing the outer shell first, delivers `SIGHUP` to the
 supervisor and leaves the real shell and `bmake` running under launchd. One
 `SIGINT` closes the owner's death pipe; the drain does not depend on `recv`
-raising `KeyboardInterrupt`.
+raising `KeyboardInterrupt`. The owner reaps that recorded controller with
+`waitpid` before it removes the lock. `ECHILD` is not an exit while a fresh
+`ps` row is still that process or the stored kernel birth still matches. A
+zombie is not signaled; if its identity cannot be shown to be gone, the lock
+stays.
 The drainer remembers descendants it actually saw in that tree. A process
 that had already left the tree is not signaled from the `ps` creation time,
 and the lock stays while any remembered identity is still alive. `ps` creation time is not absolute proof:

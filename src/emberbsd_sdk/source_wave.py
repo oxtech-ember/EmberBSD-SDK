@@ -35,6 +35,7 @@ _RECEIPTS = ('done', 'failed', 'blocked', 'skipped')
 _COPIED = ('edges', 'packages', 'progress', *_RECEIPTS)
 _CONTROLLER_READY = contextvars.ContextVar('ember_controller_ready', default=None)
 _CONTROLLER_PULSE = contextvars.ContextVar('ember_controller_pulse', default=None)
+_CONTROLLER_LOCK = contextvars.ContextVar('ember_controller_lock', default=None)
 _OWNER_SEEN = {}
 
 
@@ -46,6 +47,11 @@ def current_controller_ready():
 def current_controller_pulse():
     """Single-threaded poll installed by the lock owner, if any."""
     return _CONTROLLER_PULSE.get()
+
+
+def current_controller_lock():
+    """Lock directory whose recorded controller this owner is waiting on."""
+    return _CONTROLLER_LOCK.get()
 
 
 class SourceWaveLock:
@@ -536,6 +542,70 @@ def _signal_proven(pid, created, root=None, starttime=None, number=signal.SIGKIL
             pass
         return False
     return True
+
+
+def _pid_identity_gone(pid, created, starttime):
+    """True when this pid is no longer the recorded process.
+
+    A missing ``ps`` row whose kernel birth still matches is not gone.
+    A zombie is not signaled; the same birth means it has not been reaped.
+    A ``ps`` or birth read that fails stays closed.
+    """
+    if pid <= 1:
+        return False
+    try:
+        rows = _process_table()
+    except SDKError:
+        return False
+    birth = _kernel_start(pid)
+    row = rows.get(pid)
+    if row is None:
+        return not (starttime and birth == starttime)
+    if row[2] != created:
+        return True
+    if starttime and birth not in (None, starttime):
+        return True
+    return False
+
+
+def _recorded_controller_reaped(lock):
+    """Reap the recorded controller if it is our child, then require it gone.
+
+    ``ECHILD`` is not enough. The fresh ``ps`` row must be absent, or the
+    kernel birth must have changed. Anything short of that keeps the lock.
+    """
+    record = _read_controller(lock) if lock.is_dir() else None
+    if record is None:
+        return True
+    pid, created, _private, starttime = record
+    for _ in range(50):
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            pass
+        except InterruptedError:
+            continue
+        if _pid_identity_gone(pid, created, starttime):
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def _echild_is_recorded_exit(lock):
+    """``ECHILD`` counts as exit only after the recorded identity is gone."""
+    return _recorded_controller_reaped(lock)
+
+
+def _owner_may_release(lock, seen, children_gone):
+    """Owner-alive unlock used by client kill, SIGINT, and a second lock.
+
+    An empty direct-child list skips zombies and does not include a
+    controller that ``ps`` still shows. Remembered descendants do not
+    include that controller either. Release waits until its identity is gone.
+    """
+    if not children_gone or _any_alive(seen):
+        return False
+    return _recorded_controller_reaped(lock)
 
 
 def _direct_children(pid):
@@ -1259,6 +1329,7 @@ def _owner(sock, death_read, state, token):
     drained = [False]
     _OWNER_SEEN.clear()
     os.set_blocking(death_read, False)
+    lock_scope = _CONTROLLER_LOCK.set(lock)
 
     def pulse():
         if dead[0]:
@@ -1347,13 +1418,14 @@ def _owner(sock, death_read, state, token):
             drained = drained[0] or _stop_our_children()
         except SDKError:
             drained = False
-        if _any_alive(_OWNER_SEEN):
+        if not _owner_may_release(lock, _OWNER_SEEN, drained):
             drained = False
         if owned and drained and not retain:
             if not _release_if_ours(lock, token, os.getpid()):
                 os._exit(3)
         elif owned and not drained:
             os._exit(3)
+        _CONTROLLER_LOCK.reset(lock_scope)
         try:
             sock.close()
         except OSError:

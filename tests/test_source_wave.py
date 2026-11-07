@@ -6,6 +6,7 @@ The controller is the reviewed Ports script, blob e4eac7cbbb1b48b3282ef834a84dc8
 with a bmake stub. It is not a reimplementation of the scheduler.
 """
 
+import contextvars
 import hashlib
 import os
 from pathlib import Path
@@ -14,13 +15,15 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.package_cache import directory_lock
-from emberbsd_sdk.package_selection import launch_recorded
+from emberbsd_sdk.package_selection import _RecordedChild, launch_recorded
+import emberbsd_sdk.package_selection as package_selection
 import emberbsd_sdk.source_wave as source_wave
 from emberbsd_sdk.source_wave import (
     SourceWaveLock, _creation, _descendants, _linux_start, _live_descendants, _process_table,
@@ -939,6 +942,119 @@ exit 0
                 except ProcessLookupError:
                     pass
             self._reap(client_pid)
+
+    def test_owner_alive_unlock_waits_until_the_controller_identity_is_reaped(self):
+        """Client kill, SIGINT, and the contender share this owner-alive gate.
+
+        Darwin's direct-child list omits a zombie, and the remembered set
+        does not contain the controller. Neither fact may remove the lock
+        while that pid is still the recorded process. ``ECHILD`` is not an
+        exit until a fresh ``ps`` row is gone or the kernel birth changed.
+        """
+        child = os.fork()
+        if child == 0:
+            try:
+                while True:
+                    time.sleep(30)
+            finally:
+                os._exit(0)
+        state = self.fix / 'state'
+        lock = state / 'build.lock'
+        birth = None
+        try:
+            created = _creation(child)
+            birth = source_wave._kernel_start(child)
+            self.assertTrue(created and birth)
+            lock.mkdir()
+            _write_stamp(lock, 'ab' * 16, os.getpid())
+            _write_controller(lock, child, created, self.fix / 'ember-wave-reap', birth)
+            self.assertFalse(source_wave._owner_may_release(lock, {}, True))
+            self.assertTrue(lock.is_dir())
+            self.assertFalse(source_wave._echild_is_recorded_exit(lock))
+            os.kill(child, signal.SIGKILL)
+            deadline = time.monotonic() + 2
+            while not source_wave._owner_may_release(lock, {}, True):
+                if time.monotonic() > deadline:
+                    row = _process_table().get(child)
+                    self.fail(f'reaped controller was still the recorded identity: {row}')
+                time.sleep(0.02)
+            row = _process_table().get(child)
+            self.assertTrue(row is None or row[1].startswith(('Z', 'z')), row)
+            if row is not None:
+                self.assertNotEqual(source_wave._kernel_start(child), birth)
+            self.assertTrue(source_wave._echild_is_recorded_exit(lock))
+        finally:
+            try:
+                os.kill(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                os.waitpid(child, 0)
+            except ChildProcessError:
+                pass
+
+    def test_echild_does_not_finish_the_recorded_controller_before_reap(self):
+        """``wait`` must not turn ``ECHILD`` into exit 0 while the identity remains."""
+        child = os.fork()
+        if child == 0:
+            try:
+                while True:
+                    time.sleep(30)
+            finally:
+                os._exit(0)
+        state = self.fix / 'state'
+        lock = state / 'build.lock'
+        original_wait = package_selection.os.waitpid
+        finished = []
+        try:
+            created = _creation(child)
+            birth = source_wave._kernel_start(child)
+            self.assertTrue(created and birth)
+            lock.mkdir()
+            _write_controller(lock, child, created, self.fix / 'ember-wave-reap', birth)
+            pulse = source_wave._CONTROLLER_PULSE.set(lambda: None)
+            held = source_wave._CONTROLLER_LOCK.set(lock)
+
+            def no_child(*_args, **_kwargs):
+                raise ChildProcessError
+
+            package_selection.os.waitpid = no_child
+
+            def run_wait():
+                finished.append(_RecordedChild(child).wait())
+
+            thread = threading.Thread(target=contextvars.copy_context().run, args=(run_wait,))
+            thread.start()
+            thread.join(0.3)
+            self.assertTrue(thread.is_alive(), 'ECHILD finished a controller that is still the same identity')
+            os.kill(child, signal.SIGKILL)
+            try:
+                original_wait(child, 0)
+            except ChildProcessError:
+                pass
+            deadline = time.monotonic() + 2
+            while _process_table().get(child) is not None and source_wave._kernel_start(child) == birth:
+                if time.monotonic() > deadline:
+                    break
+                time.sleep(0.02)
+            thread.join(2)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(finished, [0])
+        finally:
+            package_selection.os.waitpid = original_wait
+            try:
+                source_wave._CONTROLLER_PULSE.reset(pulse)
+                source_wave._CONTROLLER_LOCK.reset(held)
+            except UnboundLocalError:
+                pass
+            try:
+                os.kill(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                os.waitpid(child, 0)
+            except ChildProcessError:
+                pass
 
     def test_owner_kill_drains_a_new_session_grandchild_before_the_leader(self):
         state = self.fix / 'state'
