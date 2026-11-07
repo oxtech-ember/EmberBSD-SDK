@@ -59,6 +59,7 @@ authentication.
 ```sh
 python3 scripts/packages.py --config /work/client.json list
 python3 scripts/packages.py --config /work/client.json show --set host-fetch
+python3 scripts/packages.py --config /work/client.json catalog --state-dir /work/user-state --cache-dir /work/user-cache
 python3 scripts/packages.py --config /work/client.json plan --set host-fetch
 python3 scripts/packages.py --config /work/client.json install --set host-fetch
 python3 scripts/packages.py --config /work/client.json install --package net/fetch@native
@@ -67,6 +68,14 @@ python3 scripts/packages.py --config /work/client.json plan --installed
 python3 scripts/packages.py --config /work/client.json update
 python3 scripts/packages.py --config /work/client.json cache-clean
 ```
+
+`catalog` prints every verified package in the configured repositories. It does
+not install. `desktop_metadata` is false: the signed record is PKGPATH,
+PKGNAME and artifact size. `role` is `library` for library categories and
+`lib`/`py-` names, otherwise `package`. `plan --package` remains the closure
+of that one root, not this index. `--state-dir` and `--cache-dir` redirect
+the temporary snapshot and cache for read-only commands. They are rejected
+for `install`, `update` and `cache-clean`.
 
 Empty `plan`/`install` does nothing. Plans show roots, exact package names,
 dependencies, `installed`/`cache`/`download` actions, bytes to download/unpack,

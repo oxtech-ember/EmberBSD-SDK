@@ -31,6 +31,90 @@ from .release_s3 import HTTPStore, HTTPStatusError
 DEFAULT_URL = 'https://emberbsd-pkg.oxteam.me'
 
 
+LIBRARY_CATEGORIES = frozenset({
+    'archivers', 'converters', 'databases', 'devel', 'fonts', 'lang',
+    'print', 'security', 'textproc',
+})
+
+
+def package_role(root, pkgname):
+    """Classify a signed package without desktop metadata.
+
+    The catalog records PKGPATH and PKGNAME only. A library category or a
+    lib/py- name stays out of the default application list. Search still
+    sees every signed package.
+    """
+    category = root.split('@', 1)[0].split('/', 1)[0]
+    base = pkgname.rsplit('-', 1)[0]
+    if category in LIBRARY_CATEGORIES or base.startswith(('lib', 'py-', 'py3')):
+        return 'library'
+    return 'package'
+
+
+def catalog_index(release, catalogs, config, installer):
+    """Read-only index of one verified release for the configured repositories."""
+    artifacts = {item['id']: item for item in release['artifacts']}
+    installed_by_repo = {}
+    rows = []
+    for catalog in catalogs:
+        repository = catalog['repository']
+        if repository not in config['repositories']:
+            continue
+        cfg = config['repositories'][repository]
+        if repository not in installed_by_repo:
+            installed_by_repo[repository] = installer.installed(cfg, recover=False)
+        present = installed_by_repo[repository]
+        for package in catalog['packages']:
+            name = package['pkgname']
+            base, version = name.rsplit('-', 1)
+            artifact = artifacts[package['artifact']]
+            siblings = sorted(item for item in present if '-' in item and item.rsplit('-', 1)[0] == base)
+            if name in present:
+                action = 'installed'
+                installed_pkgname = name
+            elif not siblings:
+                action = 'available'
+                installed_pkgname = None
+            elif _replacement_is_upgrade(installer, name, present):
+                action = 'upgrade'
+                installed_pkgname = siblings[0]
+            elif _installed_is_current(installer, name, present):
+                action = 'installed-newer'
+                installed_pkgname = siblings[0]
+            else:
+                action = 'version-uncompared'
+                installed_pkgname = siblings[0]
+            rows.append(dict(
+                repository=repository, root=package['root'], pkgname=name, base=base,
+                version=version, role=package_role(package['root'], name), action=action,
+                installed_pkgname=installed_pkgname, size=artifact['size']))
+    rows.sort(key=lambda row: (row['repository'], row['root'], row['pkgname']))
+    counts = dict(total=len(rows), package=0, library=0, installed=0, upgrade=0, available=0,
+                  installed_newer=0, version_uncompared=0)
+    for row in rows:
+        counts[row['role']] += 1
+        key = row['action'].replace('-', '_')
+        counts[key] = counts.get(key, 0) + 1
+    return dict(schema='emberbsd.catalog-index.v1', release_id=release['release_id'],
+                desktop_metadata=False, counts=counts, packages=rows)
+
+
+def _read_only_directories(config, state_dir, cache_dir, command):
+    """Keep a read-only caller off the configuration's state and cache."""
+    if state_dir is None and cache_dir is None:
+        return config
+    if command in ('install', 'update', 'auto-update', 'cache-clean'):
+        raise SDKError('directory overrides are only for read-only commands')
+    config = dict(config)
+    for key, path in (('state_dir', state_dir), ('cache_dir', cache_dir)):
+        if path is None:
+            continue
+        if not Path(path).is_absolute():
+            raise SDKError(f'{key} override must be absolute')
+        config[key] = str(Path(path))
+    return config
+
+
 def available_sets(catalogs, config):
     sets = {}
     for catalog in catalogs:
@@ -701,12 +785,14 @@ def validate_config(value):
 def main(argv=None, *, default_config=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=default_config is None)
-    parser.add_argument('command', choices=('list', 'show', 'plan', 'install', 'installed', 'update', 'auto-update', 'cache-clean'))
+    parser.add_argument('command', choices=('list', 'show', 'plan', 'catalog', 'install', 'installed', 'update', 'auto-update', 'cache-clean'))
     parser.add_argument('--set', action='append', default=[], dest='sets')
     parser.add_argument('--package', action='append', default=[], dest='roots')
     parser.add_argument('--target', help='also acquire the application sysroot for this target')
     parser.add_argument('--installed', action='store_true', help='plan updates for installed packages')
     parser.add_argument('--interval', type=float, help='seconds between auto-update attempts (default: 3600)')
+    parser.add_argument('--state-dir', type=Path, help='read-only command state directory; does not change the configuration')
+    parser.add_argument('--cache-dir', type=Path, help='read-only command cache directory; does not change the configuration')
     args = parser.parse_args(argv)
     try:
         if args.installed and args.command != 'plan':
@@ -728,6 +814,7 @@ def main(argv=None, *, default_config=None):
             return watch_updates(lambda: main(arguments, default_config=default_config),
                                  3600 if args.interval is None else args.interval)
         config = load_config(args.config) if args.config else validate_config(default_config)
+        config = _read_only_directories(config, args.state_dir, args.cache_dir, args.command)
         state = Path(config['state_dir'])
         state.mkdir(parents=True, exist_ok=True)
         cache = PackageCache(config['cache_dir'])
@@ -762,6 +849,10 @@ def main(argv=None, *, default_config=None):
                     if previous == identity:
                         raise SDKError('published package is missing from unchanged current; retry after publisher repair')
                     catalogs = load_release_catalogs(release, snapshot, ())
+                    if args.command == 'catalog':
+                        sys.stdout.buffer.write(json_bytes(catalog_index(
+                            release, catalogs, config, installer)))
+                        return 0
                     if args.command in ('list', 'show'):
                         sets = available_sets(catalogs, config)
                         if args.command == 'show':

@@ -991,5 +991,74 @@ printf '%s\\n' 'start devel/lib@native' >> "$state/progress"
         self.assertFalse((state / 'failed.rotated').exists())
 
 
+class CatalogIndexTests(unittest.TestCase):
+    def test_mixed_roots_are_not_one_plan(self):
+        from emberbsd_sdk.sdk_client import catalog_index, installation_plan, _read_only_directories
+        host = dict(os='NetBSD', arch='amd64', abi='netbsd-11', runtime='libc++')
+        target = dict(arch='x86_64', triplet='x86_64--netbsd', abi='netbsd-11', runtime='libc++')
+        root = Path(self.id())  # unused path; installer is a fake
+        del root
+        cfg = dict(repositories={
+            'netbsd-amd64': dict(target=target, prefix='/usr/pkg', pkgdb='/usr/pkg/pkgdb',
+                                 os_version='11.0', install_mode='native'),
+            'other': dict(target=dict(target), prefix='/other', pkgdb='/other/pkgdb',
+                          os_version='11.0', install_mode='native'),
+        })
+        def artifact(name, deps):
+            return dict(id=name, path=f'netbsd-amd64/{name}.tgz', kind='target-package',
+                        host=None, target=target, size=100 + len(name), sha256='ab' * 32,
+                        unpacked_size=200, depends=deps)
+        release = dict(release_id='current-test', artifacts=[
+            artifact('browser', []), artifact('lib', []), artifact('game', []), artifact('tool', [])])
+        catalogs = [dict(repository='netbsd-amd64', sets={'desktop': ['www/blanc', 'games/game']}, packages=[
+            dict(root='www/blanc', pkgname='ember-browser-1.46.0nb1', artifact='browser'),
+            dict(root='devel/libxml2', pkgname='libxml2-2.15.4nb5', artifact='lib'),
+            dict(root='games/game', pkgname='game-2.0', artifact='game'),
+            dict(root='textproc/tool', pkgname='py-tool-1', artifact='tool'),
+        ]), dict(repository='ignored', sets={}, packages=[
+            dict(root='www/other', pkgname='other-1', artifact='browser')])]
+        installer = Installer()
+        installer.target_present = {'ember-browser-1.46.0nb1', 'libxml2-2.15.4nb4', 'game-3.0'}
+        index = catalog_index(release, catalogs, cfg, installer)
+        self.assertFalse(index['desktop_metadata'])
+        self.assertEqual(index['release_id'], 'current-test')
+        self.assertEqual(index['counts']['total'], 4)
+        self.assertEqual(index['counts']['package'], 2)
+        self.assertEqual(index['counts']['library'], 2)
+        by_root = {row['root']: row for row in index['packages']}
+        self.assertEqual(by_root['www/blanc']['action'], 'installed')
+        self.assertEqual(by_root['www/blanc']['role'], 'package')
+        self.assertEqual(by_root['devel/libxml2']['role'], 'library')
+        self.assertEqual(by_root['textproc/tool']['role'], 'library')
+        self.assertEqual(by_root['games/game']['role'], 'package')
+        self.assertEqual(by_root['devel/libxml2']['action'], 'version-uncompared')
+        self.assertNotIn('other-1', [row['pkgname'] for row in index['packages']])
+        cache = tempfile.TemporaryDirectory()
+        self.addCleanup(cache.cleanup)
+        one = installation_plan(release, catalogs, cfg, installer, PackageCache(Path(cache.name)),
+                                roots=['www/blanc'])
+        self.assertEqual([row['root'] for row in one['packages']], ['www/blanc'])
+        self.assertGreater(index['counts']['total'], len(one['packages']))
+
+        def matches(_crypto, _pattern, name):
+            return name == 'game-3.0'
+
+        installer.crypto = object()
+        with patch('emberbsd_sdk.sdk_client._matches', side_effect=matches):
+            upgraded = catalog_index(release, catalogs, cfg, installer)
+        actions = {row['root']: row['action'] for row in upgraded['packages']}
+        self.assertEqual(actions['devel/libxml2'], 'upgrade')
+        self.assertEqual(actions['games/game'], 'installed-newer')
+        overridden = _read_only_directories(
+            dict(state_dir='/root/state', cache_dir='/root/cache'), Path('/home/maks/.local/state'),
+            Path('/home/maks/.cache'), 'catalog')
+        self.assertEqual(overridden['state_dir'], '/home/maks/.local/state')
+        self.assertEqual(overridden['cache_dir'], '/home/maks/.cache')
+        with self.assertRaises(SDKError):
+            _read_only_directories(dict(state_dir='/root/state'), Path('/tmp/state'), None, 'install')
+        with self.assertRaises(SDKError):
+            _read_only_directories(dict(state_dir='/root/state'), Path('relative'), None, 'catalog')
+
+
 if __name__ == '__main__':
     unittest.main()
