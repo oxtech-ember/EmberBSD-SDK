@@ -12,7 +12,7 @@ import re
 import shutil
 
 from .errors import SDKError
-from . import inventory, jsonio, libedit, llvm_runtime, llvm_runtime_install, native_toolset, process
+from . import inventory, jsonio, libedit, llvm_runtime, llvm_runtime_install, native_toolset, prepared_refresh, process
 from .target_toolchain import validate_clang_identity
 from .sysroot_builder import (SysrootBuilder, native_host_flags,
                               gettext_target_host_flags, gnu_target_host_flags,
@@ -342,8 +342,10 @@ def validate_profile(profile, sha, target):
                                        install_base_cxx=profile['schema'] in BASE_CXX_SCHEMAS,
                                        boot_sets=target == 'aarch64' and profile_boot_sets(profile))
     check(signature['flags'] == flags and profile['commands'] == commands, 'Build command does not select the exact required profile')
+    preparation = source_refresh_commands(paths, flags, commands, target,
+                                         receipt.get('prepared_source_refresh', []))
     executed = [r for r in receipt['commands'] if r.get('scope') != 'runtime-check']
-    check([r['argv'] for r in executed] == commands and all(r['status'] == 'passed' and r['exit_status'] == 0 for r in executed),
+    check([r['argv'] for r in executed] == preparation + commands and all(r['status'] == 'passed' and r['exit_status'] == 0 for r in executed),
           'Missing successful producer execution')
     environment = signature['environment']
     check(set(environment).issubset({'PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'USER', 'LOGNAME', 'LC_ALL', 'MAKECONF',
@@ -357,6 +359,34 @@ def validate_profile(profile, sha, target):
                else ['release/images/' + n for n in images(version)])
     check(set(profile['output_sha256']) == set(outputs) and all(full_hash(h) for h in profile['output_sha256'].values()), 'Incomplete output hashes')
     check(receipt['outputs'] == profile['output_sha256'], 'Mixed output receipts')
+
+
+def source_refresh_commands(paths, flags, commands, target, directories):
+    """Reconstruct the owner's exact pre-build refresh commands from its record."""
+    check(isinstance(directories, list) and all(isinstance(d, str) for d in directories),
+          'Invalid prepared source refresh directories')
+    check(directories == sorted(set(directories)), 'Invalid prepared source refresh order')
+    if not directories:
+        return []
+    for directory in directories:
+        prepared_refresh.relative(directory)
+        check(os.path.normpath(directory) == directory, 'Invalid prepared source refresh directory')
+    # The first canonical producer selects this phase's make flags and paths.
+    first = commands[0]
+    end = first.index('-R') + 2
+    while end < len(first) and first[end] == '-V':
+        end += 2
+    check(end < len(first), 'Invalid source refresh producer')
+    result = [first[:end] + ['makewrapper']]
+    for directory in directories:
+        command = [paths['tools'] + '/bin/nbmake-' + target_definition(target)['machine'],
+                   '-C', os.path.join(paths['os'], directory),
+                   'DESTDIR=' + paths['destination'],
+                   'EMBER_NATIVE_TOOLS=' + paths['native-routing'], *flags]
+        if 'openssl-source' in paths:
+            command.append('EMBER_OPENSSL_GENERATED=' + paths['objects'] + '/crypto/external/apache2/openssl/generated')
+        result.append(command + ['MKCLEANSRC=no', 'cleandir'])
+    return result
 
 
 def make_release_profile(receipt, timestamp, jobs, shell, commands, source_tree):
@@ -454,6 +484,8 @@ def finalize_release(destination):
         # The saved commit names the source; its Git tree is the source identity.
         source_tree, version = git_source_identity(git, paths['os'], receipt['sources']['os']['commit'])
         check(version == signature['product_version'], 'OS product version differs from receipt')
+        if target == 'aarch64':
+            kernel_check(output / KERNEL, receipt['sources']['os']['commit'])
         profile = make_release_profile(receipt, timestamp, jobs, shell, commands, source_tree)
         for name, expected in receipt['outputs'].items():
             check(inventory.sha256_file(output / name) == expected, 'Release output changed: ' + name)

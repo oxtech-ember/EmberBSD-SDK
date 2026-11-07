@@ -513,6 +513,66 @@ def retarget_runtime_amd64(runtime):
 
 
 class BuilderReleaseTests(TemporaryCase):
+    def test_refresh_wrapper_matches_each_canonical_release_operation_layout(self):
+        from types import SimpleNamespace
+        from emberbsd_sdk.os_release_builder import source_refresh_commands
+        paths = {name: '/sdk/' + name for name in (
+            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
+            'libedit-source', 'objects', 'tools', 'destination', 'os', 'python', 'ports',
+            'git', 'sdk-source', 'host-prefix', 'native-routing')}
+        roles = ('cc', 'cxx', 'sh', 'python', 'gmake', 'pkg-config', 'od', 'msgfmt',
+                 'msgmerge', 'xgettext', 'msginit', 'msgconv', 'msgfilter', 'sed')
+        native = {'format': 'emberbsd-host-prefix', 'version': 2,
+            'tools': {role: '/host/' + role for role in roles},
+            'compiler': {'family': 'clang', 'triplet': 'host-triplet'},
+            'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
+        for target in ('amd64', 'aarch64'):
+            for gettext in (False, True):
+                with self.subTest(target=target, gettext=gettext):
+                    selected = dict(paths)
+                    if gettext:
+                        selected['gettext-source'] = '/prepared/gettext'
+                    flags, commands = producer_commands(target, selected, {}, 'a' * 40, 1,
+                        '2', '/host/sh', native, 'clang', base_cxx=True)
+                    prelude = source_refresh_commands(selected, flags, commands, target, ['lib/libexample'])
+                    owner = SimpleNamespace(release_commands=commands, paths=selected, flags=flags)
+                    self.assertEqual(prelude[0], ProductionReleaseBuilder.native_makewrapper_command(owner))
+                    machine = 'evbarm' if target == 'aarch64' else 'amd64'
+                    self.assertEqual(prelude[1][0], selected['tools'] + '/bin/nbmake-' + machine)
+                    self.assertEqual(prelude[1][-2:], ['MKCLEANSRC=no', 'cleandir'])
+
+    def test_exact_source_refresh_prelude_precedes_required_release_producers(self):
+        options = release_fixture(self.root, 'aarch64')
+        receipt = OSReleaseBuilder(options).run()
+        profile = jsonio.read_json(Path(options['destination']) / 'build-profile.json')
+        saved = profile['sdk_receipt']
+        paths = saved['paths']
+        saved['prepared_source_refresh'] = ['lib/libexample']
+        first = profile['commands'][0]
+        prelude = [first[:-2] + ['makewrapper'],
+            [paths['tools'] + '/bin/nbmake-evbarm', '-C', paths['os'] + '/lib/libexample',
+             'DESTDIR=' + paths['destination'], 'EMBER_NATIVE_TOOLS=' + paths['native-routing'],
+             *saved['signature']['flags'], 'MKCLEANSRC=no', 'cleandir']]
+        saved['commands'] = [dict(argv=a, status='passed', exit_status=0) for a in prelude] + saved['commands']
+        sha = receipt['sources']['os']['commit']
+        validate_profile(profile, sha, 'aarch64')
+        for fault in ('failed-clean', 'wrong-flags', 'extra-command', 'reordered', 'escaped-owner'):
+            with self.subTest(fault=fault):
+                bad = copy.deepcopy(profile)
+                rows = bad['sdk_receipt']['commands']
+                if fault == 'failed-clean':
+                    rows[1]['exit_status'] = 1
+                elif fault == 'wrong-flags':
+                    rows[1]['argv'][-2] = 'MKCLEANSRC=yes'
+                elif fault == 'extra-command':
+                    rows.append(dict(argv=['/bin/true'], status='passed', exit_status=0))
+                elif fault == 'reordered':
+                    rows[0], rows[1] = rows[1], rows[0]
+                else:
+                    bad['sdk_receipt']['prepared_source_refresh'] = ['../outside']
+                with self.assertRaises(SDKError):
+                    validate_profile(bad, sha, 'aarch64')
+
     def test_release_rejects_a_reused_kernel_with_an_old_build_identity(self):
         options = release_fixture(self.root, 'aarch64')
         control = jsonio.read_json(self.root / 'control.json')
@@ -929,7 +989,7 @@ class BuilderReleaseTests(TemporaryCase):
         (output / 'build-success').unlink()
         receipt_path = output / '.prebuild-sdk-build.json'
         original_receipt = receipt_path.read_bytes()
-        for mutation in ('incomplete', 'failed', 'output', 'marker', 'old-receipt', 'runtime'):
+        for mutation in ('incomplete', 'failed', 'output', 'marker', 'old-receipt', 'runtime', 'kernel-source'):
             with self.subTest(mutation=mutation):
                 if mutation in ('incomplete', 'failed', 'old-receipt'):
                     bad = copy.deepcopy(receipt)
@@ -949,6 +1009,13 @@ class BuilderReleaseTests(TemporaryCase):
                 elif mutation == 'marker':
                     changed = output / 'dest/usr/share/emberbsd/ports/editline.distinfo'
                     prior = changed.read_bytes(); changed.write_bytes(b'changed')
+                elif mutation == 'kernel-source':
+                    changed = output / kit.KERNEL
+                    prior = changed.read_bytes()
+                    changed.write_bytes(gzip.compress(header() + b'EmberBSD:' + b'0' * 40 + b'\n\0', mtime=0))
+                    bad = copy.deepcopy(receipt)
+                    bad['outputs'][kit.KERNEL] = hashlib.sha256(changed.read_bytes()).hexdigest()
+                    jsonio.write_json(receipt_path, bad, exclusive=False)
                 else:
                     # A reused stage is named by its manifest, so a missing
                     # file is refused without hashing the others again.
@@ -961,6 +1028,7 @@ class BuilderReleaseTests(TemporaryCase):
                     self.assertFalse((output / 'build-success').exists())
                 finally:
                     changed.write_bytes(prior)
+                    receipt_path.write_bytes(original_receipt)
         incomplete = output / '.prebuild-sdk-build-incomplete'
         incomplete.write_text('interrupted')
         with self.assertRaises(SDKError):
