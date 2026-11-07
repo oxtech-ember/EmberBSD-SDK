@@ -43,7 +43,7 @@ class NativeOSRunnerTests(TemporaryCase):
         self.assertTrue(names <= {
             'EMBER_HOST_ABI_CPPFLAGS', 'EMBER_HOST_ABI_CFLAGS',
             'EMBER_HOST_ABI_CXXFLAGS', 'EMBER_HOST_ABI_LDFLAGS',
-            'EMBER_HOST_COMPILER_FAMILY', 'HOST_SH'})
+            'EMBER_HOST_COMPILER_FAMILY', 'EMBER_HOST_PREFIX', 'HOST_SH'})
         self.assertTrue({
             'EMBER_HOST_ABI_CPPFLAGS', 'EMBER_HOST_ABI_CFLAGS',
             'EMBER_HOST_ABI_CXXFLAGS', 'EMBER_HOST_ABI_LDFLAGS'} <= names)
@@ -63,15 +63,18 @@ class NativeOSRunnerTests(TemporaryCase):
                 build_sh=True, log=self.root/'build.log', append=True,
                 environment={'CC':'/ambient/target', 'CXX':'/ambient/cxx', 'CFLAGS':'-target',
                              'HOST_CC':'/foreign/host', 'HOST_SH':'/foreign/sh',
+                             'EMBER_HOST_PREFIX':'/foreign/prefix',
                              'PATH':'/usr/bin', 'HOME':str(self.root)})
         argv = run.call_args.args[0]
         self.assertEqual(argv[:2], [self.native.tool('sh'), str(self.source/'build.sh')])
         self.assertIn('EMBER_COMPILER_FAMILY=gcc', argv)
         self.assertIn('EMBER_HOST_COMPILER_FAMILY=clang', argv)
+        self.assertIn('EMBER_HOST_PREFIX=' + self.native.bundle_root, argv)
         for flag in native_os_routing.native_host_flags(self.native.as_dict()):
             self.assertIn(flag, argv)
         env = run.call_args.kwargs['env']
         self.assertEqual(env['EMBER_NATIVE_TOOLS'], str(self.routing))
+        self.assertEqual(env['EMBER_HOST_PREFIX'], self.native.bundle_root)
         self.assertEqual(env['EMBER_HOST_COMPILER_FAMILY'], 'clang')
         self.assertEqual(env.get('HOST_SH'), self.native.tool('sh'))
         self.assertEqual(env['PATH'], str(self.routing)+os.pathsep+self.native.path)
@@ -174,7 +177,8 @@ class NativeOSRunnerTests(TemporaryCase):
         for args in (('-V','HOST_CC=/foreign'), ('-VHOST_CFLAGS=-bad',), ('-ZHOST_MSGFMT',),
                      ('-V', 'HOST_SH=/foreign/sh'),
                      ('-V','EMBER_HOST_ABI_CPPFLAGS=-bad'),
-                     ('-V','EMBER_HOST_COMPILER_FAMILY=gcc'), ('-V','PATH=/usr/bin')):
+                     ('-V','EMBER_HOST_COMPILER_FAMILY=gcc'),
+                     ('-V','EMBER_HOST_PREFIX=/foreign/prefix'), ('-V','PATH=/usr/bin')):
             with self.subTest(args=args), self.assertRaisesRegex(SDKError, 'selected native'):
                 self.run_os(*args, 'tools', build_sh=True, log=self.root/'build.log')
 

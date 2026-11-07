@@ -79,7 +79,8 @@ def _check_build_arguments(arguments, *, gnu_target=False):
             continue
         name = value.split('=', 1)[0]
         if (name.startswith('HOST_') or name.startswith('EMBER_HOST_ABI_') or
-                name in ('EMBER_NATIVE_TOOLS', 'EMBER_HOST_COMPILER_FAMILY', 'PATH') or
+                name in ('EMBER_NATIVE_TOOLS', 'EMBER_HOST_COMPILER_FAMILY',
+                         'EMBER_HOST_PREFIX', 'PATH') or
                 (gnu_target and name in ('TOOLDIR', 'GNU_TARGET_LIBTOOL', 'EMBER_TARGET_TOOL_DIR', 'EMBER_HOST_GNU_TRIPLE'))):
             raise SDKError('build.sh arguments cannot override the selected native tools or ABI')
     return options

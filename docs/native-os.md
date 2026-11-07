@@ -30,6 +30,10 @@ through build.sh `-V`, preserving them in generated make wrappers. Caller
 arguments cannot override these selected native variables. The environment
 contains native routing and `HOST_*` flags, without setting target `CC`, `CXX`,
 `CPP`, `CFLAGS`, `CXXFLAGS`, `CPPFLAGS` or `LDFLAGS`.
+It also passes `EMBER_HOST_PREFIX` to `build.sh` as a `-V` make variable and
+sets it in the producer environment to the explicitly selected host Ports prefix,
+so OS host recipes can add that prefix's dependency include or library paths
+without deriving them from a compiler command or mixing them into target paths.
 `HOST_SH` always names the selected native shell, including for direct make
 metadata queries; an inherited shell selection cannot replace it.
 

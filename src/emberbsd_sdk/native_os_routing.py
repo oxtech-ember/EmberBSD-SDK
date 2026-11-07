@@ -29,6 +29,7 @@ def native_host_flags(selection):
     flags = selection['abi_flags']
     result = ['EMBER_HOST_ABI_' + name.upper() + '=' + shlex.join(flags[name])
               for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')]
+    result.append('EMBER_HOST_PREFIX=' + selection['bundle_root'])
     if selection['format'] != 'emberbsd-host-prefix':
         result.append('HOST_SH=' + selection['tools']['sh'])
     elif selection['version'] >= 2:
