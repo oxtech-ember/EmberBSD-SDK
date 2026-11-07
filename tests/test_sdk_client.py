@@ -995,11 +995,16 @@ class CatalogIndexTests(unittest.TestCase):
     def test_mixed_roots_are_not_one_plan(self):
         from emberbsd_sdk.sdk_client import catalog_index, installation_plan, _read_only_directories
         host = dict(os='NetBSD', arch='amd64', abi='netbsd-11', runtime='libc++')
+        del host
         target = dict(arch='x86_64', triplet='x86_64--netbsd', abi='netbsd-11', runtime='libc++')
-        root = Path(self.id())  # unused path; installer is a fake
-        del root
+        empty = tempfile.TemporaryDirectory()
+        self.addCleanup(empty.cleanup)
+        prefix = Path(empty.name) / 'pkg'
+        pkgdb = prefix / 'pkgdb'
+        prefix.mkdir()
+        pkgdb.mkdir()
         cfg = dict(repositories={
-            'netbsd-amd64': dict(target=target, prefix='/usr/pkg', pkgdb='/usr/pkg/pkgdb',
+            'netbsd-amd64': dict(target=target, prefix=str(prefix), pkgdb=str(pkgdb),
                                  os_version='11.0', install_mode='native'),
             'other': dict(target=dict(target), prefix='/other', pkgdb='/other/pkgdb',
                           os_version='11.0', install_mode='native'),
@@ -1021,6 +1026,8 @@ class CatalogIndexTests(unittest.TestCase):
         installer.target_present = {'ember-browser-1.46.0nb1', 'libxml2-2.15.4nb4', 'game-3.0'}
         index = catalog_index(release, catalogs, cfg, installer)
         self.assertFalse(index['desktop_metadata'])
+        self.assertEqual(index['desktop_binding'], 'installed-pkgdb')
+        self.assertEqual(index['counts']['desktop'], 0)
         self.assertEqual(index['release_id'], 'current-test')
         self.assertEqual(index['counts']['total'], 4)
         self.assertEqual(index['counts']['package'], 2)

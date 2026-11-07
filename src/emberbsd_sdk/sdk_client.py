@@ -16,6 +16,7 @@ import tempfile
 
 from . import sysroot_package, package_automatic
 from .binary_catalog import load_release_catalogs, select_packages
+from .desktop_apps import bind_installed_desktops
 from .binary_release import _arch, _matches
 from .errors import ChannelExpired, SDKError, TransportError
 from .host_prefix import load_host_prefix
@@ -38,11 +39,11 @@ LIBRARY_CATEGORIES = frozenset({
 
 
 def package_role(root, pkgname):
-    """Classify a signed package without desktop metadata.
+    """Classify a signed package that has no verified desktop file.
 
-    The catalog records PKGPATH and PKGNAME only. A library category or a
-    lib/py- name stays out of the default application list. Search still
-    sees every signed package.
+    This is not a GUI-application test. ``library`` is a library category or a
+    ``lib``/``py-`` name. Everything else stays ``package``, including curl.
+    ``desktop`` is assigned only by an installed desktop file.
     """
     category = root.split('@', 1)[0].split('/', 1)[0]
     base = pkgname.rsplit('-', 1)[0]
@@ -84,19 +85,23 @@ def catalog_index(release, catalogs, config, installer):
             else:
                 action = 'version-uncompared'
                 installed_pkgname = siblings[0]
+            role = package_role(package['root'], name)
             rows.append(dict(
                 repository=repository, root=package['root'], pkgname=name, base=base,
-                version=version, role=package_role(package['root'], name), action=action,
-                installed_pkgname=installed_pkgname, size=artifact['size']))
+                version=version, role=role, catalog_role=role, action=action,
+                installed_pkgname=installed_pkgname, size=artifact['size'],
+                prefix=cfg.get('prefix')))
     rows.sort(key=lambda row: (row['repository'], row['root'], row['pkgname']))
-    counts = dict(total=len(rows), package=0, library=0, installed=0, upgrade=0, available=0,
-                  installed_newer=0, version_uncompared=0)
+    binding = bind_installed_desktops(rows, config['repositories'])
+    counts = dict(total=len(rows), package=0, library=0, desktop=0, installed=0, upgrade=0,
+                  available=0, installed_newer=0, version_uncompared=0)
     for row in rows:
         counts[row['role']] += 1
         key = row['action'].replace('-', '_')
         counts[key] = counts.get(key, 0) + 1
+    counts['desktop'] = sum(len(row['desktops']) for row in rows)
     return dict(schema='emberbsd.catalog-index.v1', release_id=release['release_id'],
-                desktop_metadata=False, counts=counts, packages=rows)
+                desktop_metadata=False, desktop_binding=binding, counts=counts, packages=rows)
 
 
 def _read_only_directories(config, state_dir, cache_dir, command):

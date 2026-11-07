@@ -71,11 +71,17 @@ python3 scripts/packages.py --config /work/client.json cache-clean
 
 `catalog` prints every verified package in the configured repositories. It does
 not install. `desktop_metadata` is false: the signed record is PKGPATH,
-PKGNAME and artifact size. `role` is `library` for library categories and
-`lib`/`py-` names, otherwise `package`. `plan --package` remains the closure
-of that one root, not this index. `--state-dir` and `--cache-dir` redirect
-the temporary snapshot and cache for read-only commands. They are rejected
-for `install`, `update` and `cache-clean`.
+PKGNAME and artifact size. `catalog_role` is `library` for library categories
+and `lib`/`py-` names, otherwise `package`. That value is not a GUI test.
+`role` becomes `desktop` only when the installed pkgdb lists a regular
+`share/applications/*.desktop` file for that package, the file is a visible
+GUI application, and its executable resolves inside the configured prefix.
+The name, icon, categories and `exec` come from that file. `desktop_binding`
+is `installed-pkgdb` or `unavailable`. `counts.desktop` is the number of those
+applications. `counts.total` stays the number of signed packages. `plan
+--package` remains the closure of that one root, not this index. `--state-dir`
+and `--cache-dir` redirect the temporary snapshot and cache for read-only
+commands. They are rejected for `install`, `update` and `cache-clean`.
 
 Empty `plan`/`install` does nothing. Plans show roots, exact package names,
 dependencies, `installed`/`cache`/`download` actions, bytes to download/unpack,
