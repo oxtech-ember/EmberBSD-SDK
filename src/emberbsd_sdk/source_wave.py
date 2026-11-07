@@ -562,52 +562,119 @@ def _direct_children(pid):
     return alive
 
 
-def _signal_descendants(rows, root):
-    """Stop descendants without letting a parent fork or exit first.
+def _signal_birth(pid, birth, number):
+    """Signal a descendant that has a kernel birth but no ``ps`` stamp yet.
 
-    The snapshot is frozen parent-before-child, then killed leaf-first.
-    Freezing the shell first keeps it from spawning another ``sleep`` or
-    leaving the real cross-bulk session behind when the supervisor stops.
-    A process already reparented before this snapshot is not in it and is
-    not signaled.
+    The pid was listed under the drain root after ``ps`` returned. The birth
+    tick is the identity. A different birth is another process and is not
+    signaled. One-second ``lstart`` is not required and is not consulted.
     """
+    if pid <= 1 or not birth:
+        return False
+    current = _kernel_start(pid)
+    if current != birth:
+        if current is None and _row_gone(pid):
+            return True
+        return False
+    try:
+        os.kill(pid, number)
+    except ProcessLookupError:
+        return True
+    if number == signal.SIGSTOP and _kernel_start(pid) not in (None, birth):
+        try:
+            os.kill(pid, signal.SIGCONT)
+        except ProcessLookupError:
+            pass
+        return False
+    return True
+
+
+def _signal_descendants(rows, root):
+    """Stop descendants without letting a parent fork a replacement.
+
+    Stable rows are frozen parent-before-child. A child that shows up only
+    in the later child list has a kernel birth and no ``ps`` stamp; that does
+    not cancel the freeze. Nothing is killed until a fresh snapshot shows
+    every remaining descendant already frozen, and a parent is not continued
+    after one of those children has been killed. A process that had already
+    left the tree is not in the snapshot and is not signaled.
+    """
+    killed_any = False
+    frozen = []
+
+    def thaw():
+        if killed_any:
+            return
+        for stopped in list(frozen):
+            try:
+                os.kill(stopped, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
+        frozen.clear()
+
+    def classify(descendants):
+        if any(child <= 1 for child, _parent, _stamp in descendants):
+            return None
+        nodes = []
+        for child, _parent, stamp in descendants:
+            birth = _kernel_start(child)
+            if not stamp and not birth:
+                continue
+            nodes.append((child, stamp, str(birth) if birth else None))
+        return nodes
+
     for _ in range(50):
         try:
             rows = _process_table()
         except SDKError:
+            thaw()
             return False
-        descendants = _live_descendants(rows, root)
-        if any(child <= 1 for child, _parent, _stamp in descendants):
+        nodes = classify(_live_descendants(rows, root))
+        if nodes is None:
+            thaw()
             return False
-        nodes = []
-        for child, _parent, stamp in descendants:
-            if not stamp:
-                if _kernel_start(child) is None:
-                    continue
-                return False
-            nodes.append((child, stamp, _kernel_start(child)))
         if not nodes:
             return True
-        frozen = []
-
-        def thaw():
-            for stopped in frozen:
-                try:
-                    os.kill(stopped, signal.SIGCONT)
-                except ProcessLookupError:
-                    pass
-
         for child, stamp, birth in nodes:
-            if _signal_proven(child, stamp, root=root, starttime=birth, number=signal.SIGSTOP) is not True:
+            if child in frozen:
+                continue
+            if stamp:
+                result = _signal_proven(
+                    child, stamp, root=root, starttime=birth, number=signal.SIGSTOP)
+            elif birth:
+                result = _signal_birth(child, birth, signal.SIGSTOP)
+            else:
+                thaw()
+                return False
+            if result is not True:
                 thaw()
                 return False
             frozen.append(child)
-        for child, stamp, birth in reversed(nodes):
-            if _signal_proven(child, stamp, root=root, starttime=birth,
-                              number=signal.SIGKILL, allow_left=True) is not True:
-                thaw()
+        try:
+            rows = _process_table()
+        except SDKError:
+            thaw()
+            return False
+        confirmed = classify(_live_descendants(rows, root))
+        if confirmed is None:
+            thaw()
+            return False
+        if any(child not in frozen for child, _stamp, _birth in confirmed):
+            continue
+        if not confirmed:
+            return True
+        for child, stamp, birth in reversed(confirmed):
+            if stamp:
+                result = _signal_proven(
+                    child, stamp, root=root, starttime=birth,
+                    number=signal.SIGKILL, allow_left=True)
+            else:
+                result = _signal_birth(child, birth, signal.SIGKILL)
+            if result is not True:
                 return False
+            killed_any = True
         time.sleep(0.01)
+    thaw()
     return False
 
 
@@ -1189,16 +1256,19 @@ def _owner(sock, death_read, state, token):
     owned = False
     retain = False
     dead = [False]
+    drained = [False]
     _OWNER_SEEN.clear()
     os.set_blocking(death_read, False)
 
     def pulse():
         if dead[0]:
+            if not drained[0]:
+                drained[0] = _stop_our_children() is True
             return
         _observe(lock, _OWNER_SEEN, persist=True)
         if _death_requested(death_read):
             dead[0] = True
-            _stop_our_children()
+            drained[0] = _stop_our_children() is True
 
     _CONTROLLER_PULSE.set(pulse)
     try:
@@ -1274,7 +1344,7 @@ def _owner(sock, death_read, state, token):
         except OSError:
             pass
         try:
-            drained = _stop_our_children()
+            drained = drained[0] or _stop_our_children()
         except SDKError:
             drained = False
         if _any_alive(_OWNER_SEEN):

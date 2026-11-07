@@ -832,6 +832,114 @@ exit 0
                     pass
             self._reap(client_pid)
 
+    def test_unproven_child_does_not_let_the_shell_replace_its_leaf(self):
+        """A child born after ps must not cancel the freeze or resume the shell.
+
+        The table is fixed. The new pid has a kernel birth and no ps stamp.
+        The shell is stopped before the leaf is killed, and it is not continued
+        after that kill, so it cannot start a replacement.
+        """
+        owner = 7
+        controller, shell, leaf, newborn = 100, 101, 102, 103
+        alive = {controller, shell, leaf, newborn}
+        stamps = {controller: 'stamp-controller', shell: 'stamp-shell', leaf: 'stamp-leaf'}
+        births = {controller: '1000', shell: '1001', leaf: '1002', newborn: '1003'}
+        parents = {controller: owner, shell: controller, leaf: shell, newborn: shell}
+        signals = []
+
+        def table():
+            rows = {owner: (1, 'Ss', 'stamp-owner')}
+            for pid in list(alive):
+                if pid == newborn:
+                    continue
+                rows[pid] = (parents[pid], 'S', stamps[pid])
+            return rows
+
+        def descendants(_rows, root):
+            self.assertEqual(root, owner)
+            order = (controller, shell, leaf, newborn)
+            return [(pid, parents[pid], stamps.get(pid)) for pid in order if pid in alive]
+
+        def kernel(pid):
+            return births.get(pid) if pid in alive else None
+
+        def kill(pid, number):
+            signals.append((pid, number))
+            if number == signal.SIGKILL:
+                alive.discard(pid)
+
+        original = (source_wave._process_table, source_wave._live_descendants,
+                    source_wave._kernel_start, source_wave.os.kill)
+        source_wave._process_table = table
+        source_wave._live_descendants = descendants
+        source_wave._kernel_start = kernel
+        source_wave.os.kill = kill
+        try:
+            self.assertTrue(source_wave._signal_descendants(table(), owner))
+        finally:
+            (source_wave._process_table, source_wave._live_descendants,
+             source_wave._kernel_start, source_wave.os.kill) = original
+        self.assertFalse(alive)
+        self.assertIn((shell, signal.SIGSTOP), signals)
+        self.assertIn((leaf, signal.SIGKILL), signals)
+        self.assertIn((newborn, signal.SIGKILL), signals)
+        self.assertLess(signals.index((shell, signal.SIGSTOP)), signals.index((leaf, signal.SIGKILL)))
+        leaf_kill = signals.index((leaf, signal.SIGKILL))
+        self.assertNotIn((shell, signal.SIGCONT), signals[leaf_kill:])
+        self.assertNotIn((controller, signal.SIGCONT), signals[leaf_kill:])
+
+    def test_interrupt_retries_a_drain_whose_first_snapshot_failed(self):
+        """One refused descendant snapshot must not be the last drain attempt."""
+        state = self.fix / 'state'
+        calls = {'n': 0}
+        real = source_wave._signal_descendants
+
+        def first_fails(rows, root):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                return False
+            return real(rows, root)
+
+        source_wave._signal_descendants = first_fails
+
+        def client():
+            session = SourceWaveLock(state)
+            try:
+                session.exec_controller(['/bin/sleep', '30'], {}, ['x11/app'])
+            finally:
+                session.close()
+
+        client_pid = self._fork_client(client)
+        controller = None
+        try:
+            deadline = time.monotonic() + 8
+            while True:
+                record = state / 'build.lock' / 'controller'
+                if record.is_file():
+                    controller = int(record.read_text().splitlines()[0])
+                    if self._alive(controller):
+                        break
+                if time.monotonic() > deadline:
+                    self.fail('sleep controller was not recorded')
+                time.sleep(0.02)
+            os.kill(client_pid, signal.SIGINT)
+            while True:
+                row = _process_table().get(controller)
+                if ((row is None or row[1].startswith(('Z', 'z')))
+                        and not (state / 'build.lock').exists()):
+                    break
+                if time.monotonic() > deadline:
+                    self.fail(f'first failed snapshot left the controller running: {row}')
+                time.sleep(0.05)
+        finally:
+            source_wave._signal_descendants = real
+            if controller:
+                try:
+                    os.kill(controller, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            self._reap(client_pid)
+
     def test_owner_kill_drains_a_new_session_grandchild_before_the_leader(self):
         state = self.fix / 'state'
         ready = self.fix / 'session.ready'
@@ -1128,15 +1236,40 @@ exit 0
             pass
 
     def _stop_fixture_processes(self):
-        """Stop a controller that outlived the test, including its stage session."""
+        """Stop fixture processes that outlived a Linux test.
+
+        A cmdline match is not enough. This process and its ancestors are
+        excluded, and a parent is killed only after its children. Darwin has
+        no ``/proc`` here; the kit runner uses recorded kernel births instead.
+        """
         needle = str(self.fix).encode()
+        ancestors = set()
+        current = os.getpid()
+        for _ in range(64):
+            if current <= 1 or current in ancestors:
+                break
+            ancestors.add(current)
+            try:
+                status = Path(f'/proc/{current}/status').read_text()
+            except OSError:
+                break
+            parent = next((int(line.split()[1]) for line in status.splitlines()
+                           if line.startswith('PPid:')), None)
+            if not parent:
+                break
+            current = parent
+        ancestors.add(1)
         for _ in range(20):
             parents, commands = {}, {}
-            for entry in os.listdir('/proc'):
+            try:
+                entries = os.listdir('/proc')
+            except OSError:
+                return
+            for entry in entries:
                 if not entry.isdigit():
                     continue
                 pid = int(entry)
-                if pid == os.getpid():
+                if pid in ancestors:
                     continue
                 try:
                     command = Path('/proc', entry, 'cmdline').read_bytes().replace(b'\0', b' ')
@@ -1149,16 +1282,23 @@ exit 0
                         parents[pid] = int(line.split()[1])
                         break
             wanted = {pid for pid, command in commands.items() if needle in command}
+            wanted.difference_update(ancestors)
             if not wanted:
                 return
             changed = True
             while changed:
                 changed = False
                 for pid, parent in parents.items():
+                    if pid in ancestors:
+                        continue
                     if parent in wanted and pid not in wanted:
                         wanted.add(pid)
                         changed = True
-            for pid in wanted:
+            leaves = [pid for pid in wanted
+                      if not any(parents.get(child) == pid and child in wanted for child in wanted)]
+            if not leaves:
+                return
+            for pid in leaves:
                 try:
                     os.kill(pid, signal.SIGKILL)
                 except ProcessLookupError:

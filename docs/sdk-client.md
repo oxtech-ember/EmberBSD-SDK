@@ -223,10 +223,16 @@ because the real cross-bulk shell is a new session: `ps` can report it as
 reparented while it is still a child of the stage supervisor. The recorded
 controller is the outer shell, not the supervisor. That shell is frozen
 before any descendant is killed, and a parent is killed only after the
-children from that snapshot are gone. Killing the supervisor, or killing the
-outer shell first, delivers `SIGHUP` to the supervisor and leaves the real
-shell and `bmake` running under launchd. One `SIGINT` closes the owner's
-death pipe; the drain does not depend on `recv` raising `KeyboardInterrupt`.
+children from that snapshot are gone. A child that appears in
+`proc_listchildpids` after the `ps` snapshot has a kernel birth and no `ps`
+stamp. That child does not cancel the freeze. It is stopped by that birth
+and killed before its parent. The parent is not continued after a child from
+the snapshot has been killed, so the Ports shell cannot start a replacement
+`bmake`. One refused snapshot is not the last attempt. Killing the
+supervisor, or killing the outer shell first, delivers `SIGHUP` to the
+supervisor and leaves the real shell and `bmake` running under launchd. One
+`SIGINT` closes the owner's death pipe; the drain does not depend on `recv`
+raising `KeyboardInterrupt`.
 The drainer remembers descendants it actually saw in that tree. A process
 that had already left the tree is not signaled from the `ps` creation time,
 and the lock stays while any remembered identity is still alive. `ps` creation time is not absolute proof:
