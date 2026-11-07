@@ -32,9 +32,13 @@ def _native_target(config):
     target = config['target']
     definitions = [value for value in TARGETS.values() if _arch(value['arch']) == _arch(target['arch'])]
     release = platform.release()
+    # pkg_tools os_version stays on the package ABI (11.0) while uname -r
+    # can be a later kernel in the same major release (11.1). The ABI field
+    # still has to be netbsd-<major>.
     if (platform.system() != 'NetBSD' or _arch(platform.machine()) != _arch(target['arch']) or
             len(definitions) != 1 or target['triplet'] != definitions[0]['triplet'] or
-            config.get('os_version') != release or target['abi'] != 'netbsd-' + release.split('.')[0]):
+            str(config.get('os_version', '')).split('.', 1)[0] != release.split('.', 1)[0] or
+            target['abi'] != 'netbsd-' + release.split('.', 1)[0]):
         raise SDKError('native target repository differs from this running OS/CPU/ABI')
     if 'sysroot' in config:
         raise SDKError('native target installation must not configure a sysroot')

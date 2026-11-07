@@ -51,6 +51,8 @@ class NativeTargetTests(unittest.TestCase):
         with patch('emberbsd_sdk.package_install.platform.machine', return_value='aarch64'):
             with self.assertRaises(SDKError):
                 install_paths(self.cfg)
+        with patch('emberbsd_sdk.package_install.platform.release', return_value='11.1'):
+            self.assertEqual(install_paths(self.cfg)[0], Path(self.cfg['prefix']))
 
     def test_pkg_add_native_arguments_and_hook_path(self):
         trust = self.root / 'trust'; trust.write_bytes(b'trust')
