@@ -25,7 +25,7 @@ querying build tools or tests. Existing `all` or `build` graphs also work:
 composition projects their runtime edges. Version patterns remain the
 responsibility of pkgsrc and `pkg_admin pmatch`.
 
-Pass actual source commits and an explicit package-file map:
+Pass the source commits for the release and its graph, and an explicit package-file map:
 
 ```json
 {
@@ -52,7 +52,10 @@ Pass actual source commits and an explicit package-file map:
 ```
 
 These versions illustrate producer output; package sets do not pin versions.
-Graph `provenance.revision` must match `sources.ports`. Use absolute local paths
+Graph `provenance.revision` must match `sources.ports`. These `sources` identify
+the release inputs and graph, not the compile commit of each package. Compatible
+previously built artifacts can be reused; the release-level fields do not prove
+that every included binary was compiled from those commits. Use absolute local paths
 and graph node IDs, including any context suffix. Sets come directly from the
 Ports checkout's `profiles/package-sets/*.txt`. Repositories may also specify an optional
 `"roots": ["devel/bmake@native"]` array to publish individual versionless
