@@ -18,8 +18,7 @@ Ports consumers receive the SDK source through `--sdk-source` or the recipe's
 check the library API version. The initial API version is `1`.
 
 Select the build-host Python executable explicitly for a build. Record its
-resolved path, version and identity with the SDK/Ports source commits. Do not
-substitute the target Python executable for a host controller.
+resolved path, version and identity with the SDK/Ports source commits. Use that native Python executable for host controllers; reserve target Python for target execution.
 
 The control modules require no third-party Python packages, `pip` installation
 or virtual environment. Upstream components retain their documented tools and
@@ -84,8 +83,7 @@ root.
 `ProcessOwnershipError` means that producer shutdown could not be confirmed.
 It contains the session ID, reason and optional log path. A consumer must keep
 the work and reject its reuse after this error. Keep a persistent refusal
-marker outside immutable input inventories. Do not treat an uncertain shutdown
-as an ordinary failed command or remove its work automatically.
+marker outside immutable input inventories. Classify an uncertain shutdown as an ownership error and retain its work for inspection.
 
 Resolve source and destination identities before writes. Refuse overlapping
 input/output trees and unexpected links. Keep exclusive creation, locks,

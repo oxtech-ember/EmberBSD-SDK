@@ -3,7 +3,8 @@
 > Retired bootstrap admission interface. This document describes historical data.
 > Normal native tools are Ports packages in `host-pkg-llvm`, built with Clang.
 > GCC16 is an explicitly selected alternative.
-> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+> For normal builds, use [host prefix selection](native-toolset.md).
+> Retain the acceptance receipts below only for the historical workflow they describe.
 
 The `compat-filetime-bootstrap` stage builds the complete canonical OS
 `lib/libc/gen/utimens.c`. It produces one static archive and public subset headers.

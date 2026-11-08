@@ -5,7 +5,7 @@ Build the cross SDK from this prefix. Pass it through `--host-prefix` or the
 shared [load_host_prefix API](native-toolset.md).
 Clang is the default compiler family. Select GCC explicitly for a platform
 that requires it. Host and target compiler families are independent inputs.
-Do not retry a failed LLVM selection with GCC or a system compiler.
+Repair a failed LLVM selection in the selected producer while retaining the explicitly selected compiler family.
 No qualification report, acceptance receipt, or tool hash is an admission requirement.
 Existing control Python, Git, and patch can download and prepare source before
 the native prefix exists. Source acquisition does not require an installed compiler.
@@ -30,8 +30,7 @@ and script interpreter paths. Set the build `PATH` from the selected prefix
 and any explicitly bounded OS service route.
 Reject a missing tool or an external build-tool path instead of substituting one.
 
-Do not select build tools from ambient `PATH`, Xcode, Homebrew, MacPorts,
-or host package directories. Host ABI libraries and headers, loaders,
+Select build tools exclusively through the declared prefix and routing contract. Host ABI libraries and headers, loaders,
 and OS process services are normal host inputs. Keep native ABI paths out of
 target include, library, and pkg-config searches.
 Git source inspection and documentation checks are separate from artifact builds.
@@ -55,7 +54,7 @@ Check configuration files and nested commands for external tool selection.
 An exported `HOST_CC` is insufficient if the producer overrides it.
 Fix a concrete selection defect in SDK, Ports, or OS.
 Add a causal regression test for a logic or behavior defect; a trivial path or typo fix needs none.
-Do not add a qualification pipeline to establish that an installed tool is usable.
+Use the prefix, architecture and interpreter checks above to select an installed tool; validate changed behavior through its producer.
 
 Sysroot and release builders read the selected OS `tools/native-tools/contract`.
 They load its roles from the prefix and publish the OS command mapping.

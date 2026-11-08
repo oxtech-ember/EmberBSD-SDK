@@ -63,7 +63,7 @@ all nodes downstream of a cycle.
 The collector owns target and triplet validation. Node IDs are opaque strings.
 Use distinct IDs for host tools and target packages, such as `host:devel/bmake`
 and `target:devel/bmake`. A cross graph must evaluate each context correctly.
-Do not describe native host tools as target packages. The planner cannot infer
+Record native host tools in the host context and target packages in the target context. The planner cannot infer
 machine context from a dependency kind or qualify cross metadata by itself.
 
 `input_sha256` must bind the package recipe, patches, distfile checksums,

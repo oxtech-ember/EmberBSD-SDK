@@ -164,10 +164,9 @@ channel `--state` options have no aliases. Existing installed package databases
 and valid package caches are retained: they are not channel state.
 
 The new client does not read or create former channel-state files. Those files
-are obsolete, not a migration input. Do not add fallback readers or dual
-publication paths. The cutover must establish the v2 current with the intended
-complete inventory and the existing publication lock/conditional-write rules;
-do not reset installed packages or bypass signature checks to make it work.
+are obsolete. Migrate through the single v2 current contract with the intended
+complete inventory and the existing publication lock/conditional-write rules.
+Preserve installed packages and signature verification throughout the cutover.
 
 ## Keys and commands
 
@@ -205,9 +204,8 @@ The format separates download bytes from expanded payload bytes and identifies
 identical compressed objects by SHA256. A binary client can therefore share one
 content-addressed cache across releases and target profiles, download only
 missing objects and keep one compatible installation of shared host tools.
-Runtime, development, documentation and debug data should be separate producer
-artifacts where useful; do not bundle the whole Ports checkout or build tree
-into bootstrap. Kernel-only work needs no application sysroot.
+Separate runtime, development, documentation and debug producer artifacts
+where useful. Package the selected bootstrap components and metadata; keep source checkouts and build trees outside the bootstrap payload. Kernel-only work needs no application sysroot.
 
 The installer must account for cache misses, new expanded components and peak
 staging/rollback space before writing. Reflinks or hardlinks are optional local

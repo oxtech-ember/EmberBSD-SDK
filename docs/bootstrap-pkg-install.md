@@ -3,7 +3,8 @@
 > Retired bootstrap admission interface. This document describes historical data.
 > Normal native tools are Ports packages in `host-pkg-llvm`, built with Clang.
 > GCC16 is an explicitly selected alternative.
-> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+> For normal builds, use [host prefix selection](native-toolset.md).
+> Retain the acceptance receipts below only for the historical workflow they describe.
 
 The `pkg-install-bootstrap` producer stage builds the canonical libarchive and
 `pkg_install` sources with the selected GCC 16 driver and native ABI. It uses

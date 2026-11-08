@@ -44,8 +44,7 @@ tools = application_toolchain.bind_clang_application_commands(
 ```
 
 The returned paths preserve caller argv. They add the C or C++ runtime flags
-only for link operations. Do not add the same runtime flags again through
-global LDFLAGS. The target search path of libc++, libc++abi and libunwind
+only for link operations. Let these returned paths supply the runtime flags once; keep global LDFLAGS for other required options. The target search path of libc++, libc++abi and libunwind
 (`clang_application_runtime_rpath`) stays only in outputs that need one of
 them: a C++ link gets it unless `-nostdlib`, `-nodefaultlibs`, `-nostdlib++`
 or `-static` drops the C++ library, a C link does not. After a successful

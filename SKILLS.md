@@ -25,12 +25,11 @@ an installed skill package.
 Keep build-host tools and target output separate. Clang/LLVM is the default
 compiler family; select GCC only through an explicit platform profile.
 Keep the SDK minimal for the requested task: select only its required native roles and target/ABI sysroot.
-Do not build every target or optional package group by default. Kernel-only work does not require an application sysroot.
+Build optional package groups and additional targets only when selected for the task. Kernel-only work uses its freestanding inputs.
 Keep diagnostic fuzz objects out of target packages and sysroots. Reuse shared
 objects by their [input key](docs/input-keys.md): Git tree hashes and declared
 compiler, configuration, ABI and target. A matching key means reuse without
-rereading or rehashing. Do not add checks that reread or rehash inputs that a
-git hash or input key already identifies.
+rereading or rehashing. Reuse the recorded identification for inputs already covered by a Git hash or input key.
 
 Treat workspace structure, completed sysroot, installed package closure and
 target execution as separate evidence. Use the
@@ -46,7 +45,7 @@ Keep ABI/API compatibility floors explicit; they need not equal today's revision
 
 Pin the SDK, OS and Ports commits for one build and its recovery. Updating those
 inputs starts a changed-input operation, with compatible reuse decided by the
-existing input-key contracts. Do not update tools used by an active build.
+existing input-key contracts. Keep the selected tools unchanged until their active build finishes.
 Before an expensive build, evaluate the selected dependency plan and check
 unsatisfied version patterns together through the owning Ports checks.
 
@@ -54,8 +53,6 @@ For changes to resumable operations, test first use, unchanged repeat,
 compatible changed inputs, interruption before and after commit, recovery with
 the same arguments, and a competing incompatible operation. Use representative
 metadata, including read-only hooks, supported schemas and exact dependencies when
-relevant. Test explicit rejection of retired schemas in normal operations; do not retain a legacy reader
-only to keep an old test passing. Update affected consumers and tests with the
-current contract. Keep state-machine regressions runnable without a production SDK;
+relevant. Test explicit rejection of retired schemas in normal operations. Remove legacy readers retained only to satisfy obsolete tests; update affected consumers and tests with the current contract. Keep state-machine regressions runnable without a production SDK;
 native signing, package lifecycle and target tests remain separate evidence.
 Report executed and skipped checks, including missing integration prerequisites.

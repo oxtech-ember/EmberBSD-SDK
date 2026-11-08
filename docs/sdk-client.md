@@ -416,7 +416,7 @@ This supports in-place component and package revision updates. It deliberately
 refuses transitions which require removing library providers or replacing an
 installed consumer before its dependency can change. Such coordinated ABI
 transitions, sysroot replacement and updating tools during an active build remain
-separate work. Do not update a prefix while a build uses it. A configured Ports
+separate work. Keep a prefix unchanged until builds using it finish. A configured Ports
 source build and binary installation share the existing build lock. Existing
 Ports source builds retain their owner-defined replacement rules.
 An exact runtime/devel dependency can require such a coordinated transition

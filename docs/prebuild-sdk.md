@@ -105,8 +105,7 @@ Reuse a component by its [input key](input-keys.md). The key covers the Git
 tree hash of each source, the compiler key, the recipe and configuration, the
 dependency ABI and the target/triplet. A matching key means reuse without
 rereading, rehashing or re-archiving sources, stages or outputs. A different key
-or a dirty worktree means a new build. Do not add checks that reread or rehash
-inputs that a git hash or input key already identifies. Keep the producer's
+or a dirty worktree means a new build. Reuse the recorded identity of inputs already covered by a Git hash or input key. Keep the producer's
 normal incremental rules. A failed build records no key, so a previous artifact
 at the same output path is not reused.
 

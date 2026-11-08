@@ -127,7 +127,7 @@ sampling is used. The workspace target must match the
 profile. The destination must be new or empty and must be outside the active
 sysroot. Use paths without whitespace. `--objects` and `--tools` select shared
 workspace object paths; reuse requires an identical compatible context.
-Do not point this producer at a core-sysroot object's incompatible context.
+Select an object directory with this producer's compatible context; keep incompatible core-sysroot objects separate.
 
 `--object-mode incremental` (the default) keeps the objects and tools of the
 same profile between builds. The kept trees are reused only when their recorded

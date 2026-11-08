@@ -3,7 +3,8 @@
 > Retired bootstrap admission interface. This document describes historical data.
 > Normal native tools are Ports packages in `host-pkg-llvm`, built with Clang.
 > GCC16 is an explicitly selected alternative.
-> Use [host prefix selection](native-toolset.md); do not create these acceptance receipts for a normal build.
+> For normal builds, use [host prefix selection](native-toolset.md).
+> Retain the acceptance receipts below only for the historical workflow they describe.
 
 This narrow producer builds the first native `bmake` when no accepted bmake
 input exists. It uses the shared [Ports bmake source owner](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/common-build-tools/bmake.md)

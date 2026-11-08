@@ -45,8 +45,7 @@ The output directory must not exist or overlap an input. `--timeout` bounds the
 fuzzer process in seconds. `--input-timeout` bounds a libFuzzer input and each
 production replay process. The SDK session backend drains owned child processes on
 failure or timeout. A failed run retains `INCOMPLETE` and its available logs.
-Do not treat a failed run or a successful process without a libFuzzer completion
-record as accepted. Run budgets are finite; a short run is not a soak test.
+Accept a run only after process success and a libFuzzer completion record. Run budgets are finite; a short run is not a soak test.
 
 The runner copies the initial seeds into its working corpus. It runs libFuzzer
 with the declared seed, run count, maximum input length and memory budget. It
@@ -164,8 +163,7 @@ Add `--manifest` to compare the snapshot with an explicit current build and
 rehash its recorded source, tool, binary, build-log and corpus inputs. This
 rejects stale or modified recorded inputs. It does not detect unlisted files;
 regenerate the manifest with the owning build adapter when its input set
-changes. Keep exact evidence outside the source tree. Do not confuse a passing
-finite campaign with proof of absence of defects.
+changes. Keep exact evidence outside the source tree. Report the tested inputs and bounds of the passing finite campaign; absence of defects remains unproven.
 
 ## Check the runner
 

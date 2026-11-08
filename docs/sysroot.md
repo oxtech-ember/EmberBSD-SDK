@@ -162,7 +162,7 @@ same shared workspace. A destination inside the active `sysroot` is rejected.
 For an exclusively owned, completed SDK work stage, `--update-stage` reuses
 its original destination and compatible objects. The builder marks the stage
 incomplete during the update; a later invocation with the same option resumes
-an interrupted update. Do not use the stage as a consumer input while updating.
+an interrupted update. Resume consumers only after the stage update completes.
 Keep the active sysroot unchanged while other consumers use it.
 
 `--objects` and `--tools` can select existing compatible component paths under
@@ -344,7 +344,7 @@ it cannot prove drainage; it never treats an uncertain snapshot as empty.
 A successful builder result qualifies a build artifact. Target execution,
 loader/runtime behavior, package closure and physical hardware remain separate
 checks. Run the producer's prebuilt consumers on the selected EmberBSD target.
-Do not claim those checks from command dispatch fixtures or `--plan` output.
+Record target-check results from execution of the producer's prebuilt consumers on the selected EmberBSD target.
 
 Use [sysroot transfer](sysroot-transfer.md) to export this completed output and
 restore a pinned copy into a new local directory on a developer host.

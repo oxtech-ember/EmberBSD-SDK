@@ -21,13 +21,13 @@ Select the canonical main cache file with `cache_main`.
 Its parent directory must be exactly one declared ABI library root.
 Use that root's existing SDK inventory reference.
 Keep SDK headers and link-library stubs as separate ABI inputs.
-Do not replace a host SDK with the runtime cache.
+Use the runtime cache alongside the separately selected host SDK.
 
 The reader checks the complete cache-directory inventory against current bytes.
 It streams file hashes through the existing SDK inventory API.
 It does not extract images or copy cache files.
 Keep all input roots immutable until producer drainage completes.
-Do not update the host OS or change its selected cache during that interval.
+Keep the host OS and selected cache unchanged during that interval.
 
 The reader validates the main cache UUID and every mapped subcache UUID.
 It checks the suffix table, VM offsets, file mappings, and image table bounds.

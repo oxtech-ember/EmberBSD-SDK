@@ -115,8 +115,7 @@ for live build objects or distributed locks.
 
 An existing workspace's empty `sysroot` directory is not an import destination.
 Use a new versioned directory, including a new `stages/NAME` inside a workspace,
-and select it explicitly in the consuming build. Do not change a path while
-another build uses it. Re-export of imported trees is not implemented in v1;
+and select it explicitly in the consuming build. Keep the selected path unchanged while another build uses it. Re-export of imported trees is not implemented in v1;
 retain the original bundle and pin.
 
 ## Format and limits

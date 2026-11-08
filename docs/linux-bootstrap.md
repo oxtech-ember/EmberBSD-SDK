@@ -86,8 +86,8 @@ After a failed OS run, select a new empty destination and retain compatible
 object, tool and runtime directories. See [OS release orchestration](os-release.md).
 
 Retain verified source archives, installed packages and compatible build objects.
-Do not delete them and rebuild solely because a binary host repository is absent.
-Do not mark a partially bootstrapped prefix as a verified native toolset.
+Reuse these inputs and outputs when a binary host repository is absent.
+Keep a partially bootstrapped prefix labelled as partial until native toolset verification succeeds.
 
 ## Return to the component client
 

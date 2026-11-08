@@ -69,8 +69,7 @@ checks include real process exits, changed process groups, interrupted
 controllers, orphan writers, zombies and foreign process churn. Build-command
 fixtures do not qualify a real compiler, sysroot or target program.
 
-Do not run Darwin tools on Linux, or Linux tools on native Windows. Build and
-distribute host tools for the declared host environment. Target ELF libraries
+Build, distribute and execute host tools for the declared host environment. Target ELF libraries
 remain separate from those native tools.
 
 ## NetBSD 11 amd64 qualification

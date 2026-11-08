@@ -195,8 +195,8 @@ selection returns current without signing, switching its pointer or cleanup.
 
 Keep the private workdir outside source packages and graphs. After an interrupted
 operation, rerun the same command: a prepared signed batch is frozen and resumes
-with its original expected-current hash. Do not edit that batch to add more packages;
-finish it, then use a new `release_id`. If another publisher changed current,
+with its original expected-current hash. Keep that batch unchanged until it finishes, then use a new `release_id`
+for additional packages. If another publisher changed current,
 the current-hash precondition refuses to overwrite it; coordinate the writer before
 starting. This tool does not bypass the existing publication lock.
 

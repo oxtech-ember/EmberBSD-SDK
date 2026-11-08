@@ -107,7 +107,7 @@ arguments separate from the target compiler and persists them in build.sh wrappe
 
 `NativeToolset`, `load_native_toolset`, and the old seed readers remain for compatibility with historical data.
 Their descriptor and receipt schemas are not the current native tool installation procedure.
-Do not create old seed acceptance records to use an installed prefix.
+Select an installed prefix through the current host-prefix procedure.
 The retired bootstrap documents describe their old data, not prerequisites for ordinary SDK builds.
 Archive checksums and distribution integrity checks remain applicable to downloaded content.
 
