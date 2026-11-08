@@ -49,11 +49,7 @@ def directory_lock(path):
             if held is not None or path.exists():
                 break
             continue
-        try:
-            held = _hold(path, os.O_RDWR | os.O_CREAT)
-        finally:
-            if held is None:
-                _release(path, None)
+        held = _hold(path, os.O_RDWR | os.O_CREAT)
         break
     if held is None:
         raise SDKError(f'writer is busy: {path}; a build owns this lock and its controller is recorded there')
@@ -65,13 +61,14 @@ def directory_lock(path):
 
 
 def _release(path, held):
-    """Remove the owner's files before the kernel lock ends; keep the descriptor closed."""
+    """Remove owner files only while holding their kernel lock."""
+    if held is None:
+        return
     try:
         (path / 'held').unlink(missing_ok=True)
         (path / 'pid').unlink(missing_ok=True)
     finally:
-        if held is not None:
-            os.close(held)
+        os.close(held)
     path.rmdir()
 
 

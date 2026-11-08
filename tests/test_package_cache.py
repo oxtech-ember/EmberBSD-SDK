@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import textwrap
 import unittest
 from unittest.mock import patch
@@ -116,13 +117,94 @@ class CacheTests(unittest.TestCase):
             self.assertEqual((lock / 'pid').read_text().strip(), str(os.getpid()))
         self.assertFalse(lock.exists())
 
-    def test_failed_owner_file_leaves_no_lock_directory(self):
+    def test_failed_owner_file_is_reclaimed_on_next_acquisition(self):
         lock = self.root / 'write.lock'
         with patch('emberbsd_sdk.package_cache.fcntl.flock', side_effect=OSError(errno.ENOLCK, 'no locks')):
             with self.assertRaisesRegex(SDKError, 'busy'):
                 with directory_lock(lock):
                     self.fail('entered without the owner file')
+        self.assertTrue((lock / 'held').is_file())
+        with directory_lock(lock):
+            self.assertEqual((lock / 'pid').read_text().strip(), str(os.getpid()))
         self.assertFalse(lock.exists())
+
+    def test_losing_creator_does_not_remove_another_writers_lock(self):
+        lock = self.root / 'write.lock'
+        creator_at_flock = threading.Event()
+        release_creator = threading.Event()
+        writer_entered = threading.Event()
+        release_writer = threading.Event()
+        creator_errors = []
+        writer_errors = []
+        real_flock = __import__('emberbsd_sdk.package_cache', fromlist=['fcntl']).fcntl.flock
+
+        def gated_flock(descriptor, operation):
+            if threading.current_thread().name == 'creator-A':
+                creator_at_flock.set()
+                if not release_creator.wait(5):
+                    raise TimeoutError('creator was not released')
+            return real_flock(descriptor, operation)
+
+        def creator():
+            try:
+                with directory_lock(lock):
+                    creator_errors.append('creator entered')
+            except SDKError as error:
+                creator_errors.append(str(error))
+            except BaseException as error:
+                creator_errors.append(repr(error))
+
+        def writer():
+            try:
+                with directory_lock(lock):
+                    writer_entered.set()
+                    if not release_writer.wait(5):
+                        raise TimeoutError('writer was not released')
+            except BaseException as error:
+                writer_errors.append(repr(error))
+
+        with patch('emberbsd_sdk.package_cache.fcntl.flock', side_effect=gated_flock):
+            a = threading.Thread(target=creator, name='creator-A')
+            b = threading.Thread(target=writer, name='writer-B')
+            creator_c_entered = False
+            a_started = b_started = False
+            try:
+                a.start()
+                a_started = True
+                self.assertTrue(creator_at_flock.wait(5), 'creator did not reach flock')
+                b.start()
+                b_started = True
+                self.assertTrue(writer_entered.wait(5), 'writer B did not acquire the lock')
+                release_creator.set()
+                a.join(5)
+                self.assertFalse(a.is_alive(), 'creator A did not finish')
+                self.assertTrue((lock / 'held').is_file(), 'creator A removed writer B\'s lock file')
+                self.assertEqual((lock / 'pid').read_text().strip(), str(os.getpid()))
+
+                with directory_lock(lock):
+                    creator_c_entered = True
+            except SDKError:
+                pass
+            finally:
+                release_creator.set()
+                release_writer.set()
+                if a_started:
+                    a.join(5)
+                if b_started:
+                    b.join(5)
+
+            if a_started:
+                self.assertFalse(a.is_alive(), 'creator A did not finish')
+            if b_started:
+                self.assertFalse(b.is_alive(), 'writer B did not finish')
+
+        self.assertFalse(creator_c_entered, 'creator C entered while writer B still owned the lock')
+        self.assertEqual(len(creator_errors), 1, creator_errors)
+        self.assertIn('busy', creator_errors[0])
+        self.assertEqual(writer_errors, [])
+        self.assertFalse(lock.exists())
+        with directory_lock(lock):
+            self.assertEqual((lock / 'pid').read_text().strip(), str(os.getpid()))
 
     def test_foreign_owner_lock_is_kept(self):
         lock = self.root / 'build.lock'
