@@ -28,6 +28,7 @@ SOURCE_PREPARATION_API = 2
 ARCHIVE_SKIP_DIRECTORIES_API = 1
 ARCHIVE_FLAT_LAYOUT_API = 1
 ARCHIVE_INTERNAL_SYMLINKS_API = 1
+ARCHIVE_OPTIONAL_COMPONENTS_API = 1
 ZIP_ARCHIVE_API = 1
 
 
@@ -108,7 +109,8 @@ class _ZipArchive:
 
 def extract_archive(archive, destination, root_name, label, *, components=None,
                     max_members=MAX_ARCHIVE_MEMBERS, max_bytes=MAX_EXTRACTED_BYTES,
-                    skip_directories=(), layout='rooted', internal_symlinks=False):
+                    skip_directories=(), layout='rooted', internal_symlinks=False,
+                    require_components=True):
     """Extract selected source components with explicit resource bounds.
 
     By default links and special files are unsupported. With internal_symlinks,
@@ -118,6 +120,8 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
     metadata directories, whose members are omitted before any other check.
     Repeated regular files must have the same path, data, extracted mode and timestamp.
     Each occurrence counts toward the extraction limits.
+    With require_components=False, selected paths may be absent from the archive.
+    This supports preimages of files that a patch will create.
     """
     def safe_name(name):
         return (isinstance(name, str) and name and not name.startswith('/') and
@@ -128,6 +132,8 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
         raise SDKError(f'invalid {label} archive layout')
     if type(internal_symlinks) is not bool:
         raise SDKError(f'invalid {label} symlink selection')
+    if type(require_components) is not bool:
+        raise SDKError(f'invalid {label} component requirement')
     if not safe_name(root_name) or '/' in root_name:
         raise SDKError(f'invalid {label} archive root')
     if (type(max_members) is not int or max_members < 1 or
@@ -248,8 +254,11 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
                     os.utime(path, (member.mtime, member.mtime))
                 except (OSError, OverflowError, ValueError) as exc:
                     raise SDKError(f'invalid {label} archive timestamp') from exc
-    if components is not None and matched != set(components):
-        raise SDKError(f'{label} archive is missing selected source components')
+    if components is not None:
+        if require_components and matched != set(components):
+            raise SDKError(f'{label} archive is missing selected source components')
+        if not require_components:
+            make_parents(destination / root_name)
     if links:
         make_parents(destination / root_name)
         root = (destination / root_name).resolve(strict=True)

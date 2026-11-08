@@ -122,6 +122,25 @@ class SourceArchiveTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, 'too many members'):
             self.extract(components=('libcxx',), max_members=1)
 
+    def test_optional_preimages_omit_unselected_case_collisions(self):
+        self.pack([('src/file.c', b'source', None),
+                   ('Documentation/URL.html', b'one', None),
+                   ('Documentation/url.html', b'two', None)])
+        self.extract(components=('src/file.c', 'src/new.c'), require_components=False)
+        self.assertEqual((self.output / 'source/src/file.c').read_bytes(), b'source')
+        self.assertFalse((self.output / 'source/src/new.c').exists())
+        self.assertFalse((self.output / 'source/Documentation').exists())
+
+    def test_optional_absent_preimages_provide_an_empty_source_root(self):
+        self.pack([('unselected', b'untouched', None)])
+        self.extract(components=('new/file.c',), require_components=False)
+        self.assertEqual(list((self.output / 'source').iterdir()), [])
+
+    def test_optional_preimages_keep_selected_collision_checks(self):
+        self.pack([('src/File.c', b'one', None), ('src/file.c', b'two', None)])
+        with self.assertRaisesRegex(SDKError, 'duplicate'):
+            self.extract(components=('src', 'new.c'), require_components=False)
+
     def test_selected_byte_bound_is_enforced(self):
         self.pack([('libcxx/selected', b'xx', None)])
         with self.assertRaisesRegex(SDKError, 'size limit'):
