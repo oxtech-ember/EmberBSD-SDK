@@ -11,13 +11,16 @@ import hashlib
 import os
 from pathlib import Path
 import shutil
+import shlex
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
@@ -255,7 +258,7 @@ exit 0
         self._bmake(sleep=True)
         state = self.fix / 'state'
         ready = self.fix / 'bmake.ready'
-        private_before = set(Path('/tmp').glob('ember-wave-*'))
+        private_before = set(Path(tempfile.gettempdir()).glob('ember-wave-*'))
 
         def client():
             session = SourceWaveLock(state)
@@ -306,7 +309,7 @@ exit 0
             self.assertNotIn('Another build', result.stderr)
         finally:
             self._reap(client_pid)
-            for path in set(Path('/tmp').glob('ember-wave-*')) - private_before:
+            for path in set(Path(tempfile.gettempdir()).glob('ember-wave-*')) - private_before:
                 shutil.rmtree(path, ignore_errors=True)
 
     def test_one_interrupt_stops_the_controller(self):
@@ -407,7 +410,8 @@ exit 0
                 f'    execv("{target}", argv);\n'
                 '    return 127;\n'
                 '}\n')
-            subprocess.check_call(['cc', '-o', str(host / 'bin' / name), str(wrapper)],
+            subprocess.check_call(shlex.split(os.environ.get('CC', 'cc')) +
+                                  ['-o', str(host / 'bin' / name), str(wrapper)],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         ports = self.fix / 'ports'
         (ports / 'profiles' / 'package-sets').mkdir(parents=True, exist_ok=True)
@@ -494,6 +498,30 @@ exit 0
             self.assertNotIn('Another build', result.stderr)
         finally:
             self._reap(client_pid)
+
+    def test_rejected_owner_does_not_drain_or_check_the_existing_controller(self):
+        state = self.fix / 'state'
+        lock = state / 'build.lock'
+        lock.mkdir()
+        (lock / 'owner').write_text('another-owner\n')
+        parent, child = socket.socketpair()
+        read_fd, write_fd = os.pipe()
+        pulse_token = source_wave._CONTROLLER_PULSE.set(None)
+        try:
+            with patch.object(source_wave, '_stop_our_children') as stop, \
+                 patch.object(source_wave, '_owner_may_release', return_value=True) as may_release, \
+                 patch.object(source_wave, '_release_if_ours') as release:
+                source_wave._owner(child, read_fd, state, 'rejected-token')
+                self.assertIn(b'writer is busy', parent.recv(4096))
+                stop.assert_not_called()
+                may_release.assert_not_called()
+                release.assert_not_called()
+            self.assertEqual((lock / 'owner').read_text(), 'another-owner\n')
+        finally:
+            source_wave._CONTROLLER_PULSE.reset(pulse_token)
+            parent.close()
+            child.close()
+            os.close(write_fd)
 
     def test_rejected_second_build_lock_does_not_touch_the_first(self):
         self._bmake(sleep=True)
@@ -629,20 +657,20 @@ exit 0
         self._bmake(sleep=False)
         state = self.fix / 'state'
         (state / 'progress').mkdir()
-        private_before = set(Path('/tmp').glob('ember-wave-*'))
+        private_before = set(Path(tempfile.gettempdir()).glob('ember-wave-*'))
         os.environ.update(self._env())
         session = SourceWaveLock(state)
         try:
             with self.assertRaisesRegex(SDKError, 'not a regular file'):
                 session.build(self._build_config(), ['x11/app'], [])
             self.assertTrue((state / 'build.lock').is_dir())
-            kept = set(Path('/tmp').glob('ember-wave-*')) - private_before
+            kept = set(Path(tempfile.gettempdir()).glob('ember-wave-*')) - private_before
             self.assertTrue(kept)
         finally:
             session.close()
         self.assertTrue((state / 'build.lock').is_dir())
-        self.assertTrue(set(Path('/tmp').glob('ember-wave-*')) - private_before)
-        for path in set(Path('/tmp').glob('ember-wave-*')) - private_before:
+        self.assertTrue(set(Path(tempfile.gettempdir()).glob('ember-wave-*')) - private_before)
+        for path in set(Path(tempfile.gettempdir()).glob('ember-wave-*')) - private_before:
             shutil.rmtree(path, ignore_errors=True)
 
     def test_failing_controller_log_is_copied_before_cleanup(self):
@@ -891,6 +919,25 @@ exit 0
                 except ProcessLookupError:
                     pass
             self._reap(client_pid)
+
+    def test_child_exiting_between_ps_and_parent_walk_is_already_stopped(self):
+        child, root, stamp, birth = 102, 100, 'child-stamp', 'child-birth'
+        # Darwin's later child list may omit a child from the earlier ps row.
+        # A vanished child is done; a still-live or reused PID is not signaled.
+        for fresh_birth, fresh_rows, expected in (
+                (None, {}, True),
+                (birth, {child: (1, 'S', stamp)}, None),
+                ('another-birth', {child: (1, 'S', 'another-stamp')}, None),
+                (None, {child: (1, 'S', stamp)}, None)):
+            with self.subTest(birth=fresh_birth, rows=fresh_rows):
+                with patch.object(source_wave, '_process_table', side_effect=[
+                        {child: (root, 'S', stamp)}, fresh_rows]), \
+                     patch.object(source_wave, '_in_tree', return_value=False), \
+                     patch.object(source_wave, '_kernel_start', return_value=fresh_birth), \
+                     patch.object(source_wave.os, 'kill') as kill:
+                    self.assertIs(source_wave._signal_proven(
+                        child, stamp, root=root, starttime=birth, number=signal.SIGSTOP), expected)
+                    kill.assert_not_called()
 
     def test_unproven_child_does_not_let_the_shell_replace_its_leaf(self):
         """A child born after ps must not cancel the freeze or resume the shell.
@@ -1351,7 +1398,11 @@ exit 0
         stamp = (state / 'build.lock' / 'owner').read_text().splitlines()
         self.assertEqual(int(stamp[1]), lock_pid)
         commands = self._command_map()
-        descendants = _descendants(controller)
+        # Darwin can list a short-lived child born after the ps snapshot.
+        # Only the persistent controller roles below need command-line rows.
+        rows = _live_descendants(_process_table(), controller)
+        self.assertTrue(all(child > 1 for child, _parent, _stamp in rows), rows)
+        descendants = [child for child, _parent, _stamp in rows]
         self.assertIn(controller, commands)
         self.assertIn('cross-bulk.sh', commands[controller])
         self.assertNotIn('stage-context-supervisor.py', commands[controller])

@@ -484,6 +484,11 @@ def _signal_proven(pid, created, root=None, starttime=None, number=signal.SIGKIL
     """
     if pid <= 1 or not created:
         return False
+
+    def left_tree():
+        # The parent walk is newer than ps. A short-lived child may have
+        # exited between them; only a fresh absence proves it already gone.
+        return True if _kernel_start(pid) is None and _row_gone(pid) else None
     try:
         rows = _process_table()
     except SDKError:
@@ -492,17 +497,17 @@ def _signal_proven(pid, created, root=None, starttime=None, number=signal.SIGKIL
     if row is None or row[1].startswith(('Z', 'z')):
         if row is None and starttime and _kernel_start(pid) == starttime:
             if root is not None and not _in_tree(rows, root, pid):
-                return None
+                return left_tree()
         else:
             return True
     elif row[2] != created:
         return False
     elif root is not None and not allow_left and not _in_tree(rows, root, pid):
-        return None
+        return left_tree()
     elif root is None and row[0] <= 1 and not starttime:
         return False
     if row is not None and root is not None and not allow_left and not _in_tree(rows, root, pid):
-        return None
+        return left_tree()
     current = _kernel_start(pid)
     if starttime and current != starttime:
         if current is None and _row_gone(pid):
@@ -519,7 +524,7 @@ def _signal_proven(pid, created, root=None, starttime=None, number=signal.SIGKIL
     elif row[2] != created:
         return False
     elif root is not None and not allow_left and not _in_tree(rows, root, pid):
-        return None
+        return left_tree()
     elif root is None and row[0] <= 1 and not starttime:
         return False
     fresh = _kernel_start(pid)
@@ -1421,17 +1426,18 @@ def _owner(sock, death_read, state, token):
             os.close(death_read)
         except OSError:
             pass
-        try:
-            drained = drained[0] or _stop_our_children()
-        except SDKError:
-            drained = False
-        if not _owner_may_release(lock, _OWNER_SEEN, drained):
-            drained = False
-        if owned and drained and not retain:
-            if not _release_if_ours(lock, token, os.getpid()):
+        if owned:
+            try:
+                drained = drained[0] or _stop_our_children()
+            except SDKError:
+                drained = False
+            if not _owner_may_release(lock, _OWNER_SEEN, drained):
+                drained = False
+            if drained and not retain:
+                if not _release_if_ours(lock, token, os.getpid()):
+                    os._exit(3)
+            elif not drained:
                 os._exit(3)
-        elif owned and not drained:
-            os._exit(3)
         _CONTROLLER_LOCK.reset(lock_scope)
         try:
             sock.close()

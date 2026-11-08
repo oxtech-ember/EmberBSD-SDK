@@ -956,7 +956,6 @@ state=$1
 printf '%s' "$state" > "$2"
 grep -F 'devel/lib@native net/app@native' "$state/edges" >/dev/null
 grep -qx 'devel/lib@native' "$state/order"
-test "$(stat -c %i "$3/order")" = "$4"
 mv "$state/failed" "$state/failed.rotated"
 printf '%s\\n' 'devel/lib@native failed' > "$state/failed"
 printf '%s\\n' 'net/app@native app-1 built' >> "$state/done"
@@ -969,7 +968,8 @@ printf '%s\\n' 'start devel/lib@native' >> "$state/progress"
             self.assertEqual((roots, command, controller_mode), ([lib], 'build', 'build'))
             self.assertFalse((private / 'failed').is_symlink())
             self.assertTrue((state / 'build.lock').is_dir())
-            subprocess.run([str(script), config['source']['state'], str(marker), str(state), str(inode)], check=True)
+            self.assertEqual((state / 'order').stat().st_ino, inode)
+            subprocess.run([str(script), config['source']['state'], str(marker)], check=True)
 
         with patch('emberbsd_sdk.sdk_client.run_source', side_effect=source):
             session = SourceWaveLock(state)
