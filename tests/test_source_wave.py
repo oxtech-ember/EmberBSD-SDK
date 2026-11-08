@@ -30,7 +30,7 @@ import emberbsd_sdk.package_selection as package_selection
 import emberbsd_sdk.source_wave as source_wave
 from emberbsd_sdk.source_wave import (
     SourceWaveLock, _creation, _descendants, _linux_start, _live_descendants, _process_table,
-    _recover_killed_owner, _release_if_ours, _same_identity, _signal_proven,
+    _read_controller, _recover_killed_owner, _release_if_ours, _same_identity, _signal_proven,
     _stop_recorded, _write_controller, _write_stamp)
 
 
@@ -52,6 +52,7 @@ class RealControllerTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.addCleanup(self._stop_fixture_processes)
         self.root = Path(self.tmp.name)
+        self._owned_clients = set()
         self.fix = self.root / 'tree'
         for path in ('pkgsrc/pkgtools/pkg_install', 'pkgsrc/x11/app', 'state', 'packages/All', 'bin', 'pkgdb'):
             (self.fix / path).mkdir(parents=True)
@@ -63,8 +64,9 @@ class RealControllerTests(unittest.TestCase):
         self._bmake(sleep=False)
         self._pkg_info()
 
-    def _bmake(self, *, sleep, fail=False):
+    def _bmake(self, *, sleep, fail=False, hold_child=False):
         self.bmake_fail = fail
+        self.hold_child = hold_child
         path = self.fix / 'bin' / 'bmake'
         path.write_text(r'''#!/bin/sh
 printf '%s\n' "$*" >> "$FIXTURE/bmake.log"
@@ -78,6 +80,11 @@ for arg in "$@"; do
             if [ -n "$BMAKE_FAIL" ]; then
                 echo EMBER_LOG_MARKER failing-controller
                 exit 1
+            fi
+            if [ -n "$BMAKE_HOLD_CHILD" ]; then
+                sleep 30 &
+                echo $! > "$FIXTURE/held-child.pid"
+                wait
             fi
             if [ -n "$BMAKE_SLEEP_ON_BUILD" ]; then
                 echo EMBER_LOG_MARKER sleeping-controller
@@ -161,13 +168,50 @@ exit 0
             CROSS_BULK_SHELL='/bin/sh',
             BMAKE_SLEEP_ON_BUILD='1' if self.sleep else '',
             BMAKE_FAIL='1' if self.bmake_fail else '',
+            BMAKE_HOLD_CHILD='1' if self.hold_child else '',
         )
         return env
 
-    def _run(self, state):
-        return subprocess.run(
-            ['/bin/sh', str(SCRIPT), 'build', str(self.fix / 'roots'), str(state)],
-            env=self._env(), capture_output=True, text=True, timeout=30)
+    def _run(self, state, *, timeout=30):
+        command = ['/bin/sh', str(SCRIPT), 'build', str(self.fix / 'roots'), str(state)]
+        child = subprocess.Popen(command, env=self._env(), stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True, start_new_session=True)
+        created = _creation(child.pid)
+        starttime = source_wave._kernel_start(child.pid)
+
+        def finish():
+            drained = _stop_recorded(child.pid, created, starttime)
+            try:
+                output = child.communicate(timeout=2)
+            except subprocess.TimeoutExpired as error:
+                if child.poll() is None:
+                    # Popen still owns this direct child; never signal its descendants by name.
+                    child.kill()
+                try:
+                    child.communicate(timeout=1)
+                except subprocess.TimeoutExpired:
+                    raise AssertionError('direct cross-bulk fixture did not reap its leader') from error
+                raise AssertionError('direct cross-bulk fixture descendants kept its pipes open') from error
+            if not drained:
+                raise AssertionError('could not prove the direct cross-bulk fixture tree drained')
+            return output
+
+        try:
+            try:
+                stdout, stderr = child.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired as error:
+                stdout, stderr = finish()
+                error.output, error.stderr = stdout, stderr
+                raise
+            return subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
+        finally:
+            try:
+                finish()
+            finally:
+                if child.stdout:
+                    child.stdout.close()
+                if child.stderr:
+                    child.stderr.close()
 
     def test_fixture_is_the_reviewed_cross_bulk_blob(self):
         self.assertEqual(_blob(SCRIPT), BLOB)
@@ -182,6 +226,21 @@ exit 0
         self.assertEqual(len(done), 1)
         self.assertTrue(done[0].startswith('x11/app app-9 '))
         self.assertNotIn('app-1', done[0])
+
+    def test_direct_cross_bulk_timeout_drains_its_owned_children(self):
+        self._bmake(sleep=False, hold_child=True)
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self._run(self.fix / 'state', timeout=5)
+        pid = int((self.fix / 'held-child.pid').read_text())
+        deadline = time.monotonic() + 2
+        while True:
+            row = _process_table().get(pid)
+            if row is None or row[1].startswith(('Z', 'z')):
+                break
+            if time.monotonic() >= deadline:
+                self.fail(f'direct cross-bulk timeout left fixture child {pid} alive')
+            time.sleep(0.02)
+        self.assertFalse(self._fixture_commands())
 
     def test_open_wave_lock_rejects_a_second_real_controller(self):
         state = self.fix / 'state'
@@ -212,12 +271,7 @@ exit 0
             finally:
                 session.close()
 
-        client_pid = os.fork()
-        if client_pid == 0:
-            try:
-                client()
-            finally:
-                os._exit(0)
+        client_pid = self._fork_client(client)
         try:
             deadline = time.monotonic() + 20
             while not ready.exists():
@@ -269,12 +323,7 @@ exit 0
             finally:
                 session.close()
 
-        client_pid = os.fork()
-        if client_pid == 0:
-            try:
-                client()
-            finally:
-                os._exit(0)
+        client_pid = self._fork_client(client)
         try:
             deadline = time.monotonic() + 20
             while not ready.exists():
@@ -326,12 +375,7 @@ exit 0
             finally:
                 session.close()
 
-        client_pid = os.fork()
-        if client_pid == 0:
-            try:
-                client()
-            finally:
-                os._exit(0)
+        client_pid = self._fork_client(client)
         try:
             deadline = time.monotonic() + 20
             while not ready.exists():
@@ -454,6 +498,7 @@ exit 0
                 client()
             finally:
                 os._exit(0)
+        self._owned_clients.add(pid)
         return pid
 
     def _wait_ready(self, client_pid, ready):
@@ -496,6 +541,28 @@ exit 0
             result = self._run(state)
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             self.assertNotIn('Another build', result.stderr)
+        finally:
+            self._reap(client_pid)
+
+    def test_fixture_cleanup_drains_its_recorded_controller_after_an_early_failure(self):
+        self._bmake(sleep=True)
+        state = self.fix / 'state'
+        client_pid = self._fork_client(self._build_client(state))
+        try:
+            self._wait_ready(client_pid, self.fix / 'bmake.ready')
+            lock = state / 'build.lock'
+            record = _read_controller(lock)
+            self.assertIsNotNone(record)
+            controller, created, private, starttime = record
+            roles = self._ports_roles(controller)
+            self.assertTrue(self._alive(controller))
+
+            # This is the same cleanup path unittest calls after an assertion or timeout.
+            self._stop_fixture_processes()
+
+            self._assert_roles_stopped(roles)
+            self.assertFalse(self._alive(controller))
+            self.assertFalse(Path(private).exists())
         finally:
             self._reap(client_pid)
 
@@ -1451,6 +1518,14 @@ exit 0
 
     def _reap(self, pid):
         try:
+            ended, _status = os.waitpid(pid, os.WNOHANG)
+            if ended == pid:
+                self._owned_clients.discard(pid)
+                return
+        except ChildProcessError:
+            self._owned_clients.discard(pid)
+            return
+        try:
             os.kill(pid, 9)
         except ProcessLookupError:
             pass
@@ -1458,76 +1533,33 @@ exit 0
             os.waitpid(pid, 0)
         except ChildProcessError:
             pass
+        self._owned_clients.discard(pid)
 
     def _stop_fixture_processes(self):
-        """Stop fixture processes that outlived a Linux test.
-
-        A cmdline match is not enough. This process and its ancestors are
-        excluded, and a parent is killed only after its children. Darwin has
-        no ``/proc`` here; the kit runner uses recorded kernel births instead.
-        """
-        needle = str(self.fix).encode()
-        ancestors = set()
-        current = os.getpid()
-        for _ in range(64):
-            if current <= 1 or current in ancestors:
-                break
-            ancestors.add(current)
+        """Drain only controllers recorded by this fixture's own state locks."""
+        locks = list(self.fix.rglob('build.lock'))
+        private_paths = []
+        for lock in locks:
+            if lock.is_symlink() or not lock.is_dir():
+                continue
+            record = _read_controller(lock)
+            if record is None:
+                continue
+            pid, created, private, starttime = record
+            if not _stop_recorded(pid, created, starttime):
+                continue
+            private_path = Path(private)
+            temp_root = Path(tempfile.gettempdir()).resolve()
             try:
-                status = Path(f'/proc/{current}/status').read_text()
+                if (private_path.resolve().is_relative_to(temp_root) and
+                        private_path.name.startswith('ember-wave-')):
+                    private_paths.append(private_path)
             except OSError:
-                break
-            parent = next((int(line.split()[1]) for line in status.splitlines()
-                           if line.startswith('PPid:')), None)
-            if not parent:
-                break
-            current = parent
-        ancestors.add(1)
-        for _ in range(20):
-            parents, commands = {}, {}
-            try:
-                entries = os.listdir('/proc')
-            except OSError:
-                return
-            for entry in entries:
-                if not entry.isdigit():
-                    continue
-                pid = int(entry)
-                if pid in ancestors:
-                    continue
-                try:
-                    command = Path('/proc', entry, 'cmdline').read_bytes().replace(b'\0', b' ')
-                    status = Path('/proc', entry, 'status').read_text()
-                except OSError:
-                    continue
-                commands[pid] = command
-                for line in status.splitlines():
-                    if line.startswith('PPid:'):
-                        parents[pid] = int(line.split()[1])
-                        break
-            wanted = {pid for pid, command in commands.items() if needle in command}
-            wanted.difference_update(ancestors)
-            if not wanted:
-                return
-            changed = True
-            while changed:
-                changed = False
-                for pid, parent in parents.items():
-                    if pid in ancestors:
-                        continue
-                    if parent in wanted and pid not in wanted:
-                        wanted.add(pid)
-                        changed = True
-            leaves = [pid for pid in wanted
-                      if not any(parents.get(child) == pid and child in wanted for child in wanted)]
-            if not leaves:
-                return
-            for pid in leaves:
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            time.sleep(0.05)
+                pass
+        for pid in tuple(self._owned_clients):
+            self._reap(pid)
+        for private_path in private_paths:
+            shutil.rmtree(private_path, ignore_errors=True)
 
 
 if __name__ == '__main__':
