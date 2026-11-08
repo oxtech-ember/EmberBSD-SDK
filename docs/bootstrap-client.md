@@ -120,6 +120,13 @@ resume; a failed package installation must be repaired first.
 Overlapping old and new prefixes are refused when a replacement
 would not be safe to repeat.
 
+For relocated Python sources, native package configuration refreshes only their
+package-owned bytecode caches and corresponding checksums, before running deferred
+hooks. It uses the running SDK Python and requires a matching cache tag, retaining
+each cache's optimization and invalidation mode. Batch installation postpones this
+step until configuration; unrelated caches and local configuration files are left
+unchanged. Target sysroot packages are not executed or bytecode-refreshed on the host.
+
 `--package-revision N` increases a package's pkgsrc `nb` revision while
 qualifying it, without changing its upstream version or compiled provenance.
 First bump the matching Ports recipe; use this only for a metadata or packaging

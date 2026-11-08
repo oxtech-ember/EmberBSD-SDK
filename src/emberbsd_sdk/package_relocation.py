@@ -5,7 +5,7 @@
 from pathlib import Path
 
 from .bootstrap_bundle import (_replace_file, relative_path, relocate_text,
-                               refresh_checksums, relocate_build_info, run_install_hooks)
+                               refresh_bytecode, refresh_checksums, relocate_build_info, run_install_hooks)
 from .errors import SDKError
 
 INDEPENDENT = '@comment emberbsd-prefix-independent-v1'
@@ -97,6 +97,13 @@ def finish(prefix, database, name, *, configure=True):
         if content != updated:
             _replace_file(path, updated)
     relocate_build_info(metadata / '+BUILD_INFO', original.encode(), str(prefix).encode())
+    # Keep the declared sources on retries too: the text may already have been
+    # moved before interruption, while its caches still contain producer paths.
+    python_sources = {prefix / name for name in names if name.endswith('.py')}
+    caches = set()
+    if configure and python_sources:
+        caches = refresh_bytecode(prefix, [metadata.name], python_sources,
+                                  database=database, only_changed=True)
     if HOOKS in lines and configure:
         for member in ('+INSTALL', '+DEINSTALL'):
             path = metadata / member
@@ -110,8 +117,8 @@ def finish(prefix, database, name, *, configure=True):
                 if content != updated:
                     _replace_file(path, updated)
         run_install_hooks(prefix, database, metadata.name)
-    refresh_checksums(prefix, [metadata.name], database=database, selected=set(names))
-    if HOOKS in lines and not configure:
+    refresh_checksums(prefix, [metadata.name], database=database, selected=set(names) | caches)
+    if not configure and (HOOKS in lines or python_sources):
         return
     lines = contents.read_text().splitlines()
     complete(prefix, metadata, lines)

@@ -331,12 +331,13 @@ def relocate_text(content, old, new):
     return content
 
 
-def package_paths(root, packages):
+def package_paths(root, packages, *, database=None):
     """Return exact owned payload paths, excluding ignored packing-list entries."""
+    database = root / 'pkgdb' if database is None else Path(database)
     paths = {}
     for package in packages:
         ignored = False
-        for line in (root / 'pkgdb' / package / '+CONTENTS').read_text().splitlines():
+        for line in (database / package / '+CONTENTS').read_text().splitlines():
             if line == '@ignore':
                 ignored = True
             elif line and not line.startswith('@'):
@@ -422,19 +423,26 @@ def run_install_hooks(root, database, name):
                            result.stderr[-4096:].decode('utf-8', 'replace'))
 
 
-def refresh_bytecode(root, packages, changed_sources):
-    """Refresh owned Python caches after extraction and actual text relocation."""
+def refresh_bytecode(root, packages, changed_sources, *, database=None, only_changed=False):
+    """Refresh owned caches using this interpreter's checked cache format.
+
+    Bootstrap validates all caches; package relocation limits the operation to
+    caches of its declared, owned sources, including interrupted text edits.
+    """
     import importlib.util
     import py_compile
 
     changed = set()
-    for path in package_paths(root, packages):
+    owned = set(package_paths(root, packages, database=database))
+    for path in sorted(owned):
         if path.suffix != '.pyc' or path.is_symlink():
             continue
         try:
             source = Path(importlib.util.source_from_cache(str(path)))
         except ValueError as exc:
             raise SDKError('unsupported bootstrap bytecode path: ' + str(path)) from exc
+        if only_changed and (source not in changed_sources or source not in owned):
+            continue
         _destination(root, source.relative_to(root).as_posix())
         if not source.is_file() or source.is_symlink():
             raise SDKError('bootstrap bytecode lacks its source: ' + str(path))
