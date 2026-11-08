@@ -154,14 +154,29 @@ def installation_plan(release, catalogs, config, installer, cache, *, sets=(), r
             artifact = artifacts[package['artifact']]
             if (artifact['host'] != cfg.get('host') or artifact['target'] != cfg.get('target')):
                 raise SDKError(f'binary repository platform differs from configuration: {repository}')
-            records[artifact['id']] = dict(package, repository=repository)
+            records[artifact['id']] = dict(package, repository=repository,
+                                           conflicts=catalog.get('conflicts', {}).get(package['pkgname'], []))
             platforms.setdefault(package['root'], []).append(artifact['id'])
     missing = [root for root in requested if root not in platforms]
     for root in requested:
         role = 'host' if root.endswith('@native') else 'target'
         if not any(cfg.get(role) for cfg in config['repositories'].values()):
             raise SDKError(f'no {role} destination configured for {root}')
-    selection = select_packages(release, catalogs, roots=[r for r in requested if r in platforms])
+    selected = [r for r in requested if r in platforms]
+    while True:
+        packages, downloads, unpacked = _order_packages(release, catalogs, records, installed, cache, selected)
+        # A split or renamed package conflicts with an installed one that pkg_add
+        # cannot replace by itself. Its current successor joins the same selection.
+        additions = _conflict_replacements(packages, records, installed, installer)
+        if not additions:
+            break
+        selected = selected + additions
+    return dict(release_id=release['release_id'], roots=requested, packages=packages,
+                build_roots=missing, download_size=sum(downloads.values()), unpacked_size=unpacked)
+
+
+def _order_packages(release, catalogs, records, installed, cache, roots):
+    selection = select_packages(release, catalogs, roots=roots)
     by_id = {p['id']: p for p in selection['packages']}
     ordered, visited = [], set()
     def visit(identity):
@@ -186,9 +201,45 @@ def installation_plan(release, catalogs, config, installer, cache, *, sets=(), r
             unpacked += item['unpacked_size']
             if action == 'download':
                 downloads[item['sha256']] = item['size']
-        packages.append(dict(record, artifact=item, action=action, replaces=replaces))
-    return dict(release_id=release['release_id'], roots=requested, packages=packages,
-                build_roots=missing, download_size=sum(downloads.values()), unpacked_size=unpacked)
+        packages.append(dict(record, artifact=item, action=action, replaces=replaces, removes=[]))
+    return packages, downloads, unpacked
+
+
+def _conflict_replacements(packages, records, installed, installer):
+    """Resolve explicit CONFLICTS of planned packages against installed ones.
+
+    pkg_add forgives a conflict only with the version it replaces. Any other
+    installed match must leave before that pkg_add. It may leave only when
+    this current carries a newer package of its PKGBASE; that successor is
+    returned as an additional root and the planned package records the removal.
+    Without pkg_tools (test installers) conflicts are left to pkg_add.
+    """
+    crypto = getattr(installer, 'crypto', None)
+    if crypto is None:
+        return []
+    planned = {package['root'] for package in packages}
+    additions = []
+    for package in packages:
+        if package['action'] == 'installed':
+            continue
+        names = installed[package['repository']]
+        for pattern in package['conflicts']:
+            for name in sorted(names):
+                if name in package['replaces'] or not _matches(crypto, pattern, name):
+                    continue
+                base = name.rsplit('-', 1)[0]
+                successors = [r for r in records.values() if r['repository'] == package['repository']
+                              and r['pkgname'].rsplit('-', 1)[0] == base]
+                if (len(successors) != 1 or successors[0]['pkgname'] == name or
+                        not _replacement_is_upgrade(installer, successors[0]['pkgname'], {name})):
+                    raise SDKError(f"{package['pkgname']} conflicts with installed {name}; "
+                                   f'current has no newer {base} to replace it')
+                root = successors[0]['root']
+                if root not in planned and root not in additions:
+                    additions.append(root)
+                if name not in package['removes']:
+                    package['removes'].append(name)
+    return additions
 
 
 def _source_config(config, roots):
@@ -386,25 +437,53 @@ def apply_plan(plan, config, installer, cache, store, *, source_locked=False):
             if isinstance(installer, PackageInstaller):
                 automatic_states[repository] = package_automatic.plan(cfg,
                     [p for p in selected if p['action'] != 'installed'], plan['roots'])
-        for package in pending:
-            cfg = config['repositories'][package['repository']]
-            # Recheck paths after earlier packages have populated the prefix.
-            from .package_install import inspect_install_paths
-            if isinstance(installer, PackageInstaller):
-                inspect_install_paths(archives[package['artifact']['id']], cfg)
-                automatic = automatic_states[package['repository']][package['pkgname']]
-                package_automatic.prepare(cfg, package['pkgname'], automatic)
-                installer.install(archives[package['artifact']['id']], cfg, checked=True,
-                                  configure=False, automatic=automatic == 'yes')
-                package_automatic.finish(installer.crypto, cfg, package['pkgname'])
-            else:
-                installer.install(archives[package['artifact']['id']], cfg, checked=True, configure=False)
+        removed = set()
+        try:
+            for package in pending:
+                cfg = config['repositories'][package['repository']]
+                # Recheck paths after earlier packages have populated the prefix.
+                from .package_install import inspect_install_paths
+                if isinstance(installer, PackageInstaller):
+                    inspect_install_paths(archives[package['artifact']['id']], cfg)
+                    for name in package.get('removes', []):
+                        _remove_conflicting(installer, cfg, package['repository'], name, pending,
+                                            automatic_states[package['repository']], removed)
+                    automatic = automatic_states[package['repository']][package['pkgname']]
+                    package_automatic.prepare(cfg, package['pkgname'], automatic)
+                    installer.install(archives[package['artifact']['id']], cfg, checked=True,
+                                      configure=False, automatic=automatic == 'yes')
+                    package_automatic.finish(installer.crypto, cfg, package['pkgname'])
+                else:
+                    installer.install(archives[package['artifact']['id']], cfg, checked=True, configure=False)
+        finally:
+            # Dependents of a removed package keep their files; the dependency
+            # tree is rebuilt even when a later package of the batch failed.
+            for repository in sorted({repository for repository, _ in removed}):
+                installer.rebuild_tree(config['repositories'][repository])
         # Configure only after every selected payload has been installed and
         # relocated. Pending hooks are retried even when this selection reused
         # every exact installed package.
         for repository in sorted(selected_repositories):
             installer.configure(config['repositories'][repository])
     cache.trim(config.get('cache_limit', 512 * 1024 * 1024))
+
+
+def _remove_conflicting(installer, cfg, repository, name, pending, automatic_states, removed):
+    """Delete one installed package that the next pkg_add conflicts with.
+
+    The plan proved a newer successor of its PKGBASE is in this batch. When
+    that successor was installed first, pkg_add -U already replaced the old
+    package and nothing remains to delete. Otherwise the successor's automatic
+    state intent is recorded first: it was read from the old package, which is
+    gone after this call.
+    """
+    if (repository, name) in removed or name not in installer.installed(cfg, recover=False):
+        return
+    for successor in pending:
+        if successor['repository'] == repository and name in successor['replaces']:
+            package_automatic.prepare(cfg, successor['pkgname'], automatic_states[successor['pkgname']])
+    installer.remove(name, cfg)
+    removed.add((repository, name))
 
 
 def _read_source_graph(state):
@@ -832,7 +911,7 @@ def main(argv=None, *, default_config=None):
             if args.command in ('plan', 'install') and not updating and not args.sets and not args.roots and not args.target:
                 print('Nothing selected; no download, install or build requested.')
                 return 0
-            roles = ('pkg_info',) if args.command == 'installed' else ('openssl', 'pkg_info', 'pkg_admin', 'pkg_add')
+            roles = ('pkg_info',) if args.command == 'installed' else ('openssl', 'pkg_info', 'pkg_admin', 'pkg_add', 'pkg_delete')
             crypto = ReleaseCrypto(load_host_prefix(config['host_prefix'], required_roles=roles))
             trust = Path(config.get('trust_root', Path(__file__).resolve().parents[2] / 'trust/emberbsd-release-root.pem'))
             if args.command == 'installed':

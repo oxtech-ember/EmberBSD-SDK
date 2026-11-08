@@ -6,8 +6,11 @@ No version solver, source tree, build tools or package execution is used here.
 Authentication is provided by the enclosing signed release, before parsing.
 """
 
+import gzip
 import hashlib
+import io
 import re
+import zlib
 
 from .errors import SDKError
 from .jsonio import loads_json
@@ -76,6 +79,24 @@ def parse_summary(data):
             raise SDKError(f'duplicate pkg_summary field: {key}')
         record.setdefault(key, []).append(value)
     return records
+
+
+def summary_conflicts(data, pkgnames):
+    """Map each catalog package to its explicit CONFLICTS patterns from the signed summary."""
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(data)) as stream:
+            records = parse_summary(stream.read(16 * 1024 * 1024 + 1))
+    except (OSError, EOFError, zlib.error) as exc:
+        raise SDKError('pkg_summary is not valid gzip data') from exc
+    conflicts = {}
+    for record in records:
+        name = scalar(record, 'PKGNAME')
+        if name in conflicts:
+            raise SDKError(f'duplicate pkg_summary package: {name}')
+        conflicts[name] = list(record.get('CONFLICTS', []))
+    if set(conflicts) != set(pkgnames):
+        raise SDKError('binary summary and catalog packages differ')
+    return conflicts
 
 
 def scalar(record, key):
@@ -154,6 +175,11 @@ def load_release_catalogs(release, directory, repositories=()):
         catalog = parse_catalog(data, release, artifact)
         if catalog['repository'] != repository:
             raise SDKError('catalog repository differs from its signed path')
+        summary = next(item for item in release['artifacts'] if item['id'] == catalog['summary'])
+        data = read_bytes(local_artifact(directory, summary['path']))
+        if len(data) != summary['size'] or hashlib.sha256(data).hexdigest() != summary['sha256']:
+            raise SDKError('binary summary size or SHA256 differs from signed release')
+        catalog['conflicts'] = summary_conflicts(data, {p['pkgname'] for p in catalog['packages']})
         catalogs.append(catalog)
     if requested - {catalog['repository'] for catalog in catalogs}:
         raise SDKError('requested binary repository is missing')

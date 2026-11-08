@@ -83,6 +83,18 @@ class ProjectionTests(unittest.TestCase):
         with self.assertRaises(SDKError):
             catalog.parse_summary(b'PKGNAME=a-1\nPKGNAME=b-1\n\n')
 
+    def test_summary_conflicts_follow_the_catalog_packages(self):
+        summary = gzip.compress(b'PKGNAME=zint-lib-2\nCONFLICTS=zint<2\nCONFLICTS=libzint<1\n\n'
+                                b'PKGNAME=zint-2\n\n')
+        self.assertEqual(catalog.summary_conflicts(summary, {'zint-lib-2', 'zint-2'}),
+                         {'zint-lib-2': ['zint<2', 'libzint<1'], 'zint-2': []})
+        with self.assertRaisesRegex(SDKError, 'summary and catalog packages differ'):
+            catalog.summary_conflicts(summary, {'zint-lib-2'})
+        with self.assertRaisesRegex(SDKError, 'duplicate pkg_summary package'):
+            catalog.summary_conflicts(gzip.compress(b'PKGNAME=a-1\n\nPKGNAME=a-1\n\n'), {'a-1'})
+        with self.assertRaisesRegex(SDKError, 'not valid gzip'):
+            catalog.summary_conflicts(b'PKGNAME=a-1\n\n', {'a-1'})
+
 
 @unittest.skipUnless(os.environ.get('EMBERBSD_TEST_HOST_PREFIX'), 'select native Ports pkg_tools')
 class BinaryReleaseFixture(unittest.TestCase):

@@ -28,7 +28,7 @@ class InstallTests(unittest.TestCase):
         cls.addClassCleanup(cls.tmp.cleanup)
         cls.root = Path(cls.tmp.name)
         cls.crypto = ReleaseCrypto(load_host_prefix(os.environ['EMBERBSD_TEST_HOST_PREFIX'],
-            required_roles=('openssl', 'pkg_admin', 'pkg_info', 'pkg_create', 'pkg_add')))
+            required_roles=('openssl', 'pkg_admin', 'pkg_info', 'pkg_create', 'pkg_add', 'pkg_delete')))
         cls.ca = cls.crypto.create_root(cls.root / 'root')
         cls.signer = cls.crypto.issue_signer(cls.ca, cls.root / 'signer')
 
@@ -215,6 +215,40 @@ class InstallTests(unittest.TestCase):
                       (self.destination / 'pkgdb/fixture-2.0/+REQUIRED_BY').read_text().splitlines())
         self.assertIn('@pkgdep fixture>=1',
                       (self.destination / 'pkgdb/consumer-1.0/+CONTENTS').read_text())
+
+    def test_split_package_removes_the_conflicting_old_package_and_keeps_its_consumer(self):
+        installer = PackageInstaller(self.crypto, self.ca.certificate)
+        installer.install(self.package(package_name='fixture-1.0', provides=True), self.cfg)
+        shutil.rmtree(self.work / 'stage')
+        installer.install(self.package(package_name='consumer-1.0', payload_path='share/consumer',
+                                       commands='@pkgdep fixture>=1\n'), self.cfg)
+        shutil.rmtree(self.work / 'stage')
+        # The library moved to fixture-lib; fixture-2.0 keeps only the frontend.
+        library = self.package(package_name='fixture-lib-1.0', provides=True, payload='moved library',
+                               commands='@pkgcfl fixture<2\n')
+        shutil.rmtree(self.work / 'stage')
+        frontend = self.package(package_name='fixture-2.0', payload_path='bin/fixture',
+                                commands='@pkgdep fixture-lib>=1\n')
+        with self.assertRaisesRegex(SDKError, 'conflicts with'):
+            installer.install(library, self.cfg)
+        packages = [dict(pkgname='fixture-lib-1.0', replaces=[], removes=['fixture-1.0'],
+                         artifact={'id': 'library'}, action='download'),
+                    dict(pkgname='fixture-2.0', replaces=['fixture-1.0'], removes=[],
+                         artifact={'id': 'frontend'}, action='download')]
+        check_updates(self.crypto, self.cfg, packages, {'library': library, 'frontend': frontend},
+                      installer.installed(self.cfg))
+        with self.assertRaisesRegex(SDKError, 'coordinated ABI update'):
+            check_updates(self.crypto, self.cfg, packages[1:], {'frontend': frontend}, installer.installed(self.cfg))
+        installer.remove('fixture-1.0', self.cfg)
+        installer.install(library, self.cfg)
+        installer.install(frontend, self.cfg)
+        installer.rebuild_tree(self.cfg)
+        self.assertEqual(installer.installed(self.cfg), {'fixture-lib-1.0', 'fixture-2.0', 'consumer-1.0'})
+        self.assertEqual((self.destination / 'payload').read_text(), 'moved library')
+        self.assertIn('consumer-1.0',
+                      (self.destination / 'pkgdb/fixture-2.0/+REQUIRED_BY').read_text().splitlines())
+        self.assertIn('fixture-2.0',
+                      (self.destination / 'pkgdb/fixture-lib-1.0/+REQUIRED_BY').read_text().splitlines())
 
     def test_target_scripts_do_not_run_on_host(self):
         marker = self.work / 'executed'

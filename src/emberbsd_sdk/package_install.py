@@ -209,6 +209,35 @@ class PackageInstaller:
             raise SDKError('cannot read installed package database: ' + result.stderr.decode('utf-8', 'replace'))
         return set(result.stdout.decode('utf-8').splitlines())
 
+    def _admin(self, config, tool, arguments):
+        _, database = install_paths(config)
+        if tool == 'pkg_delete':
+            # Like pkg_add: unprefixed database and prefix, -P adds the sysroot.
+            args = [self.crypto.prefix.tool(tool), '-K', config['pkgdb'], '-p', config['prefix']]
+            if target_sysroot(config):
+                args += ['-P', config['sysroot']]
+        else:
+            args = [self.crypto.prefix.tool(tool), '-K', str(database)]
+        hook_path = self.crypto.prefix.path
+        if config.get('target') and not target_sysroot(config):
+            hook_path += os.pathsep + os.defpath + os.pathsep + '/sbin:/usr/sbin'
+        result = subprocess.run(args + arguments, env={'PATH': hook_path, 'LC_ALL': 'C'},
+                                capture_output=True, timeout=600)
+        if result.returncode:
+            raise SDKError(f'{tool} failed: ' + result.stderr[-4096:].decode('utf-8', 'replace'))
+
+    def remove(self, name, config):
+        """Delete one installed package that a planned package conflicts with.
+
+        The plan has proved a newer package of the same PKGBASE follows in the
+        batch, so dependents keep working; ``-f`` skips their dependency check.
+        """
+        self._admin(config, 'pkg_delete', ['-f', name])
+
+    def rebuild_tree(self, config):
+        """Recompute +REQUIRED_BY after a conflict removal and its successor install."""
+        self._admin(config, 'pkg_admin', ['rebuild-tree'])
+
     def configure(self, config):
         """Finish deferred native package hooks after the selected batch is installed.
 

@@ -398,7 +398,17 @@ multi-package rollback, and the client does not claim one.
 Re-running `install` selects the current versions of the requested components
 and their dependencies. Exact installed versions are reused. Compatible
 replacements use `pkg_add -U`, preserving the package database and reverse
-dependencies. New transitive dependencies are marked automatic; new requested
+dependencies. A split or renamed package declares `CONFLICTS` with the old
+package that owned its files. `pkg_add` forgives a conflict only with the
+version it replaces. The plan reads those patterns from the signed
+`pkg_summary.gz` and matches them against installed packages. A match must
+have a newer successor of its PKGBASE in the same current. That successor
+joins the selection and the plan records the removal. Libraries that moved to
+the conflicting package count as preserved for the successor's dependents.
+`install` runs `pkg_delete -f` on the old package right before the
+conflicting `pkg_add` and `pkg_admin rebuild-tree` after the batch. Without
+a newer successor the plan stops before any download.
+New transitive dependencies are marked automatic; new requested
 roots are manual. Replacements preserve `automatic=yes`, `automatic=no`, or the
 absence of that field, even for explicitly requested updates. The client records
 an intent beside the package database before `pkg_add` and removes it only after

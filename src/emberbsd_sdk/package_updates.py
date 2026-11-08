@@ -167,8 +167,14 @@ def check_updates(crypto, config, packages, archives, installed):
         old = metadata(old_name)
         required_by = database / old_name / '+REQUIRED_BY'
         dependents = set(read_bytes(required_by, 8 * 1024 * 1024).decode('utf-8').splitlines()) if required_by.exists() else set()
+        # A split moves libraries to the package that conflicts with the old one
+        # and removes it in this batch; those providers stay installed.
+        providers = set(new['providers'])
+        for other in packages:
+            if old_name in other.get('removes', ()):
+                providers |= set(_archive(archives[other['artifact']['id']])['providers'])
         if dependents and not providers_preserved(config, archives[package['artifact']['id']],
-                                                 old['providers'], new['providers']):
+                                                 old['providers'], providers):
             # REQUIRES omits dlopen users. Preserve exact providers unless the
             # payloads prove a versioned implementation of the retained SONAME.
             raise SDKError(f'{old_name}: replacement removes library providers used by installed consumers; '

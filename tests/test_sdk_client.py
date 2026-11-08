@@ -125,6 +125,126 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(plan['packages'][0]['action'], 'download')
         self.assertEqual(self.installer.actions, [])
 
+    def _with_conflicting_split(self, installed_old, catalog_old):
+        """lib-1 took files from old; the catalog carries old-<catalog_old> and lib conflicts with old<2."""
+        self.release['artifacts'].append(dict(id='old', path='native/old-x.tgz', kind='host-package',
+            host=self.host, target=None, size=13, sha256=hashlib.sha256(self.store.payload).hexdigest(),
+            unpacked_size=20, depends=['lib']))
+        self.catalogs[0]['packages'].append(dict(root='devel/old@native', pkgname=f'old-{catalog_old}', artifact='old'))
+        self.catalogs[0]['conflicts'] = {'lib-1': ['old<2']}
+        self.installer.present.add(f'old-{installed_old}')
+        self.installer.crypto = object()
+
+        def matches(_crypto, pattern, name):
+            base, operator, version = (pattern.partition('>=') if '>=' in pattern else pattern.partition('<'))
+            if name.rsplit('-', 1)[0] != base:
+                return False
+            installed = int(name.rsplit('-', 1)[1])
+            return installed >= int(version) if operator == '>=' else installed < int(version)
+        return patch('emberbsd_sdk.sdk_client._matches', side_effect=matches)
+
+    def test_split_package_conflict_schedules_the_installed_successor(self):
+        with self._with_conflicting_split(installed_old=1, catalog_old=2):
+            plan = self.plan(sets=['task'])
+        by_name = {package['pkgname']: package for package in plan['packages']}
+        self.assertEqual(plan['roots'], ['net/app@native'])
+        self.assertEqual(by_name['lib-1']['removes'], ['old-1'])
+        self.assertEqual(by_name['old-2']['replaces'], ['old-1'])
+        self.assertEqual(by_name['old-2']['action'], 'download')
+        self.assertEqual(by_name['app-1']['removes'], [])
+        order = [package['pkgname'] for package in plan['packages']]
+        self.assertLess(order.index('lib-1'), order.index('old-2'))
+        self.assertEqual(self.installer.actions, [])
+
+    def test_conflict_without_a_newer_successor_is_refused_before_download(self):
+        with self._with_conflicting_split(installed_old=1, catalog_old=1):
+            with self.assertRaisesRegex(SDKError, 'lib-1 conflicts with installed old-1; current has no newer old'):
+                self.plan(sets=['task'])
+        self.assertEqual(self.installer.actions, [])
+
+    def test_conflict_with_the_replaced_version_is_left_to_pkg_add(self):
+        self.catalogs[0]['conflicts'] = {'lib-1': ['lib<1']}
+        self.installer.present.add('lib-0')
+        self.installer.crypto = object()
+        with patch('emberbsd_sdk.sdk_client._matches', return_value=True) as matches:
+            plan = self.plan(sets=['task'])
+        self.assertEqual(plan['packages'][0]['replaces'], ['lib-0'])
+        self.assertEqual(plan['packages'][0]['removes'], [])
+        matches.assert_not_called()
+
+    def test_conflicting_package_is_removed_before_its_successor_and_tree_is_rebuilt(self):
+        with self._with_conflicting_split(installed_old=1, catalog_old=2):
+            plan = self.plan(sets=['task'])
+        events = []
+
+        class RealInstaller(PackageInstaller):
+            def __init__(self):
+                self.crypto = object()
+            def installed(self, _config, *, recover=True):
+                return {'old-1'}
+            def check(self, _path, _config):
+                pass
+            def check_updates(self, packages, _archives, _config):
+                pass
+            def remove(self, name, _config):
+                events.append(('remove', name))
+            def install(self, path, _config, *, checked=False, configure=True, automatic=False):
+                events.append(('install', path.name))
+            def rebuild_tree(self, _config):
+                events.append(('rebuild-tree',))
+            def configure(self, _config):
+                events.append(('configure',))
+
+        with patch('emberbsd_sdk.sdk_client.check_space'), \
+             patch('emberbsd_sdk.package_install.inspect_install_paths'), \
+             patch('emberbsd_sdk.sdk_client.reuse_compatible_dependencies', return_value=[]), \
+             patch('emberbsd_sdk.package_automatic.recover'), \
+             patch('emberbsd_sdk.package_automatic.plan', return_value={'lib-1': 'yes', 'old-2': 'no', 'app-1': 'no'}), \
+             patch('emberbsd_sdk.package_automatic.prepare',
+                   side_effect=lambda _cfg, name, _automatic: events.append(('prepare', name))), \
+             patch('emberbsd_sdk.package_automatic.finish'):
+            apply_plan(plan, self.cfg, RealInstaller(), self.cache, self.store)
+        # The successor's automatic intent is durable before its source of truth is removed.
+        self.assertEqual(events[:3], [('prepare', 'old-2'), ('remove', 'old-1'), ('prepare', 'lib-1')])
+        self.assertEqual(events[-2:], [('rebuild-tree',), ('configure',)])
+        self.assertEqual([event[1] for event in events if event[0] == 'prepare'],
+                         ['old-2', 'lib-1', 'app-1', 'old-2'])
+        self.assertEqual(sum(event[0] == 'install' for event in events), 3)
+        self.assertEqual(sum(event[0] == 'remove' for event in events), 1)
+
+    def test_removal_is_skipped_when_the_successor_already_replaced_the_old_package(self):
+        with self._with_conflicting_split(installed_old=1, catalog_old=2):
+            plan = self.plan(sets=['task'])
+        events = []
+
+        class RealInstaller(PackageInstaller):
+            def __init__(self):
+                self.crypto = object()
+            def installed(self, _config, *, recover=True):
+                return {'old-2'}  # pkg_add -U of the successor ran before the conflicting package
+            def check(self, _path, _config):
+                pass
+            def check_updates(self, packages, _archives, _config):
+                pass
+            def remove(self, name, _config):
+                events.append(('remove', name))
+            def install(self, path, _config, *, checked=False, configure=True, automatic=False):
+                events.append(('install',))
+            def rebuild_tree(self, _config):
+                events.append(('rebuild-tree',))
+            def configure(self, _config):
+                pass
+
+        with patch('emberbsd_sdk.sdk_client.check_space'), \
+             patch('emberbsd_sdk.package_install.inspect_install_paths'), \
+             patch('emberbsd_sdk.sdk_client.reuse_compatible_dependencies', return_value=[]), \
+             patch('emberbsd_sdk.package_automatic.recover'), \
+             patch('emberbsd_sdk.package_automatic.plan', return_value={'lib-1': 'yes', 'old-2': 'no', 'app-1': 'no'}), \
+             patch('emberbsd_sdk.package_automatic.prepare'), \
+             patch('emberbsd_sdk.package_automatic.finish'):
+            apply_plan(plan, self.cfg, RealInstaller(), self.cache, self.store)
+        self.assertEqual(events, [('install',)] * 3)
+
     def test_selected_batch_is_installed_before_hooks_and_retries_failed_configuration(self):
         plan = self.plan(sets=['task'])
         def configure_once(config):
