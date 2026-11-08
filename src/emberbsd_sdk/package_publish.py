@@ -68,12 +68,14 @@ def packages_from_state(spec, state, packages):
             excluded.update(line.split()[0] for line in path.read_text(encoding='utf-8').splitlines() if line.split())
     paths, checksums, roots = {}, {}, []
     for root, (pkgname,) in sorted(planned.items()):
-        if root in excluded:
+        # The shared STATE also contains successful packages from other tasks.
+        # This publication is bounded by its existing producer graph.
+        if root in excluded or root not in by_root:
             continue
         done = completed.get(root)
         if not done or done[0] != pkgname or done[1] is None or done[1] == 'native':
             continue
-        nodes = by_root.get(root, [])
+        nodes = by_root[root]
         if len(nodes) != 1 or nodes[0]['version'] != pkgname.rsplit('-', 1)[-1]:
             raise SDKError('successful Ports result is missing or differs from graph: ' + root)
         path = str(packages / (pkgname + '.tgz'))

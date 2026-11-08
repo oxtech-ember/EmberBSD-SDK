@@ -89,6 +89,33 @@ class PackagesFromStateTests(unittest.TestCase):
         self.assertEqual(result['repositories'][0]['roots'], ['devel/generator@native'])
         self.assertEqual(checksums, {path: 'a' * 64})
 
+    def test_shared_state_selects_only_completed_packages_in_the_graph(self):
+        for role in ('target', 'host'):
+            with self.subTest(role=role):
+                suffix = '@native' if role == 'host' else ''
+                root = 'devel/py-setuptools' + suffix
+                unrelated = 'archivers/gzip-hpp' + suffix
+                identity = role + ':devel/py-setuptools'
+                self.graph_path.write_text(json.dumps(graph([
+                    (identity, '84.2.1nb3')
+                ])), encoding='utf-8')
+                spec = dict(schema='emberbsd.package-build.v1', repositories=[dict(
+                    id=role, host={'os': 'Darwin'} if role == 'host' else None,
+                    target={'arch': 'aarch64'} if role == 'target' else None,
+                    graph=str(self.graph_path), roots=[root], packages={})])
+                self.write_state(
+                    packages=[root + ' py315-setuptools-84.2.1nb3',
+                              unrelated + ' gzip-hpp-0.1.0'],
+                    done=[root + ' py315-setuptools-84.2.1nb3 ' + 'a' * 64,
+                          unrelated + ' gzip-hpp-0.1.0 ' + 'b' * 64])
+
+                result, checksums = packages_from_state(spec, self.state, self.packages)
+
+                path = str((self.packages / 'py315-setuptools-84.2.1nb3.tgz').absolute())
+                self.assertEqual(result['repositories'][0]['packages'], {identity: path})
+                self.assertEqual(result['repositories'][0]['roots'], [root])
+                self.assertEqual(checksums, {path: 'a' * 64})
+
     def test_latest_native_install_marker_supersedes_older_host_archive(self):
         self.graph_path.write_text(json.dumps(graph([('host:devel/generator', '5.0')])), encoding='utf-8')
         spec = dict(schema='emberbsd.package-build.v1', repositories=[dict(
@@ -135,12 +162,13 @@ class PackagesFromStateTests(unittest.TestCase):
         self.assertEqual(checksums, {path: '2' * 64})
 
     def test_missing_or_mismatched_graph_version_is_rejected(self):
-        for nodes in ([], [('target:net/app', '9.9')]):
+        for nodes, message in (([], 'no successful packages'),
+                               ([('target:net/app', '9.9')], 'differs from graph')):
             with self.subTest(nodes=nodes):
                 spec = self.target_spec()
                 self.graph_path.write_text(json.dumps(graph(nodes)), encoding='utf-8')
                 self.write_state(packages=['net/app app-1.2'], done=['net/app app-1.2 ' + 'b' * 64])
-                with self.assertRaises(SDKError):
+                with self.assertRaisesRegex(SDKError, message):
                     packages_from_state(spec, self.state, self.packages)
 
     def test_rejects_invalid_state_and_multiple_repositories(self):

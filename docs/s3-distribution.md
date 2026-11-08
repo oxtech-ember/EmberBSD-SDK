@@ -163,8 +163,10 @@ python3 scripts/publish-additions.py package-build.json \
 ```
 
 The input can leave `packages` empty in this mode. `STATE/packages` names must
-match successful `STATE/done` entries and graph versions. Failed, blocked and
-skipped entries stay out; native entries stay out of a target repository.
+match successful `STATE/done` entries and graph versions. Completed packages
+outside the supplied graph are ignored, so tasks can share one STATE directory.
+Failed, blocked and skipped entries stay out; native entries stay out of a
+target repository.
 For native publication, select a host repository and its native archive directory.
 The state can mix target archives and native tools installed by cross-bulk.
 Two-column `STATE/done` rows omit the archive checksum. Host rows ending in
