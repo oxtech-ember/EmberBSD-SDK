@@ -648,6 +648,35 @@ exit 0
         self.assertIn('EMBER_LOG_MARKER built-controller', (state / 'logs' / 'x11_app.log').read_text())
         self.assertFalse(set(Path(tempfile.gettempdir()).glob('ember-wave-*')) - private_before)
 
+    def test_native_role_log_is_merged_and_copied(self):
+        state = self.fix / 'state'
+        script = self.fix / 'native-log.py'
+        private_path = self.fix / 'native-log-private-path.txt'
+        script.write_text(
+            'from pathlib import Path\n'
+            'import sys\n'
+            'state = Path(sys.argv[1])\n'
+            '(state / "logs" / "devel_patch@native.log").write_text("native controller log\\n")\n'
+            '(state / "done").write_text("devel/patch@native patch-2.8.1nb1 " + "a" * 64 + "\\n")\n'
+            'Path(sys.argv[2]).write_text(str(state))\n'
+        )
+        session = SourceWaveLock(state)
+        try:
+            receipts = session.exec_controller(
+                [sys.executable, str(script), '{state}', str(private_path)], {}, ['devel/patch@native'])
+        finally:
+            session.close()
+            if private_path.is_file():
+                private = Path(private_path.read_text())
+                assert private.parent == Path(tempfile.gettempdir()) and private.name.startswith('ember-wave-')
+                shutil.rmtree(private, ignore_errors=True)
+        self.assertIn(['devel/patch@native', 'patch-2.8.1nb1', 'a' * 64], receipts['done'])
+        self.assertEqual((state / 'logs' / 'devel_patch@native.log').read_text(), 'native controller log\n')
+        self.assertFalse((state / 'build.lock').exists())
+        self.assertTrue(source_wave._safe_log_name('devel_patch@native.log'))
+        self.assertFalse(source_wave._safe_log_name('../devel_patch@native.log'))
+        self.assertFalse(source_wave._safe_log_name('devel/patch@native.log'))
+
     def test_log_copy_failure_keeps_the_private_schedule_and_lock(self):
         self._bmake(sleep=False, fail=True)
         state = self.fix / 'state'

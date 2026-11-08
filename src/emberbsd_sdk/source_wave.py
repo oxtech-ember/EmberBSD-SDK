@@ -884,7 +884,7 @@ def _merge_receipts(real_state, private, before):
 def _safe_log_name(name):
     if not name or name in {'.', '..'} or len(name) > 200:
         return False
-    return all(character.isalnum() or character in '._+-' for character in name)
+    return all(character.isalnum() or character in '._+-@' for character in name)
 
 
 def _require_directory(path, label, *, create):
