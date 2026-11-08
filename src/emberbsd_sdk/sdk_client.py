@@ -25,7 +25,7 @@ from .package_cache import PackageCache, check_space, directory_lock
 from .package_install import PackageInstaller, install_paths, target_sysroot
 from .package_updates import reuse_compatible_dependencies
 from .package_selection import _package_sets, _parse_root, _read_roots
-from .release_delivery import artifact_key, release_snapshot, _key
+from .release_delivery import MetadataCache, artifact_key, release_snapshot, _key
 from .release_signing import ReleaseCrypto
 from .release_s3 import HTTPStore, HTTPStatusError
 
@@ -719,9 +719,9 @@ def _install_source_waves(plan, config, installer, cache, store, refresh_current
         session.close()
 
 
-def _read_channel(crypto, store, trust, state, prefix):
+def _read_channel(crypto, store, trust, state, prefix, metadata):
     """Load one authenticated current into memory. The snapshot directory does not outlive this call."""
-    with release_snapshot(crypto, store, trust, state, prefix=prefix) as (release, snapshot):
+    with release_snapshot(crypto, store, trust, state, prefix=prefix, cache=metadata) as (release, snapshot):
         catalogs = load_release_catalogs(release, snapshot, ())
         identity = hashlib.sha256((snapshot / 'current.p7m').read_bytes()).hexdigest()
         return release, catalogs, identity
@@ -826,6 +826,7 @@ def main(argv=None, *, default_config=None):
         with directory_lock(state / 'client.lock'), ExitStack() as temporary:
             if args.command == 'cache-clean':
                 with directory_lock(cache.root / '.lock'):
+                    MetadataCache(cache.root / 'metadata').keep(())
                     print(f'Removed {cache.trim(0)} cached bytes; installed packages are unchanged.')
                 return 0
             if args.command in ('plan', 'install') and not updating and not args.sets and not args.roots and not args.target:
@@ -846,9 +847,12 @@ def main(argv=None, *, default_config=None):
                                                       ca_file=config.get('https_ca'), proxy_url=config.get('https_proxy')))
             installer = PackageInstaller(crypto, trust)
             previous = None
+            # Signed release and index bytes are immutable per digest; only the
+            # channel pointer is read from the network when nothing changed.
+            metadata = MetadataCache(cache.root / 'metadata')
             for attempt in range(2):
-                with release_snapshot(crypto, store, trust, state,
-                                      prefix=config.get('url_prefix', '')) as (release, snapshot):
+                with release_snapshot(crypto, store, trust, state, prefix=config.get('url_prefix', ''),
+                                      cache=metadata) as (release, snapshot):
                     identity = hashlib.sha256((snapshot / 'release.p7m').read_bytes()).hexdigest()
                     channel = hashlib.sha256((snapshot / 'current.p7m').read_bytes()).hexdigest()
                     if previous == identity:
@@ -890,7 +894,7 @@ def main(argv=None, *, default_config=None):
                         compatible_reuse = install_selection(
                             plan, config, installer, cache, store,
                             refresh_current=lambda: _read_channel(
-                                crypto, store, trust, state, config.get('url_prefix', '')),
+                                crypto, store, trust, state, config.get('url_prefix', ''), metadata),
                             accepted_channel=channel)
                     except HTTPStatusError as exc:
                         if exc.status != 404 or attempt:

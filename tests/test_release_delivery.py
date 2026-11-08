@@ -153,6 +153,67 @@ class DeliveryTests(unittest.TestCase):
             self.assertFalse((self.work / 'public-output').exists())
         self.assertEqual(list(self.work.glob('.release-metadata-*')), [])
 
+    def test_metadata_cache_reads_only_the_channel_pointer_when_current_is_unchanged(self):
+        pointer = self.publish(self.release())
+        cache = release_delivery.MetadataCache(self.work / 'cache' / 'metadata')
+        requested = []
+        original = http_fixture.ObjectHandler.get
+
+        def counting_get(handler, head=False):
+            requested.append(handler.path.removeprefix('/bucket/'))
+            return original(handler, head)
+
+        with patch.object(http_fixture.ObjectHandler, 'get', counting_get):
+            with release_snapshot(self.crypto, self.public, self.ca.certificate, self.work,
+                                  cache=cache) as (release, snapshot):
+                self.assertEqual(release['release_id'], 'one')
+                first = (snapshot / 'host/pkg_summary.gz').read_bytes()
+            self.assertEqual(len(requested), 3)
+            self.assertEqual(sorted(path.name for path in cache.root.iterdir()),
+                             sorted([pointer['release']['sha256'], hashlib.sha256(first).hexdigest()]))
+            requested.clear()
+            with release_snapshot(self.crypto, self.public, self.ca.certificate, self.work,
+                                  cache=cache) as (release, snapshot):
+                self.assertEqual((snapshot / 'host/pkg_summary.gz').read_bytes(), first)
+            self.assertEqual(requested, ['current.p7m'])
+
+            # A changed cache entry is never trusted; it is replaced by a verified download.
+            cached_index = cache.root / hashlib.sha256(first).hexdigest()
+            cached_release = cache.root / pointer['release']['sha256']
+            cached_index.write_bytes(b'tampered')
+            cached_release.write_bytes(cached_release.read_bytes() + b'x')  # longer than size
+            stale = cache.root / ('f' * 64)
+            stale.write_bytes(b'old release')
+            old_temp = cache.root / '.release-abandoned'
+            old_temp.write_bytes(b'partial')
+            os.utime(old_temp, (time.time() - 200000, time.time() - 200000))
+            foreign = cache.root / ('e' * 64)
+            foreign.mkdir()  # unlink fails; the cache must stay an accelerator only
+            requested.clear()
+            with release_snapshot(self.crypto, self.public, self.ca.certificate, self.work,
+                                  cache=cache) as (release, snapshot):
+                self.assertEqual((snapshot / 'host/pkg_summary.gz').read_bytes(), first)
+            self.assertEqual(len(requested), 3)
+            self.assertEqual(cached_index.read_bytes(), first)
+            self.assertFalse(stale.exists())
+            self.assertFalse(old_temp.exists())
+            self.assertTrue(foreign.is_dir())
+            foreign.rmdir()
+            requested.clear()
+            with release_snapshot(self.crypto, self.public, self.ca.certificate, self.work, cache=cache):
+                pass
+            self.assertEqual(requested, ['current.p7m'])
+
+            # A corrupt server index is still refused with a clean cache entry present.
+            base = pointer['release']['path'].removesuffix('/release.p7m')
+            self.server.objects['/bucket/' + base + '/host/pkg_summary.gz'] = b'corrupt'
+            cached_index.unlink()
+            with self.assertRaises(SDKError):
+                with release_snapshot(self.crypto, self.public, self.ca.certificate, self.work, cache=cache):
+                    self.fail('corrupt index was yielded')
+            self.assertFalse(cached_index.exists())
+        self.assertEqual(list(self.work.glob('.release-metadata-*')), [])
+
     def test_private_snapshot_rejects_bad_signature_and_index_before_yield(self):
         pointer = self.publish(self.release())
         current = self.server.objects['/bucket/current.p7m']

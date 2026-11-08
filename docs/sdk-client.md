@@ -379,7 +379,12 @@ published exact package without starting the client again.
 
 The default cache budget is 512 MiB. The active selection may temporarily exceed
 it; older archives are removed first and the budget is restored after success.
-`cache-clean` removes cached archives/partials only, preserving installed files,
+`CACHE/metadata/<sha256>` keeps the signed release envelope and package indexes
+of the last seen release. While the channel pointer still names that release,
+a command reads only the 2 KiB pointer from the network. A cached entry is used
+only after its size and SHA256 match the signed reference. A changed pointer
+downloads the new release metadata once. `cache-clean` removes cached
+archives/partials and that metadata only, preserving installed files,
 pkgdb, incremental build objects and remembered roots. Writer locks fail quickly
 instead of waiting indefinitely; after a crash, remove a named lock only after
 confirming its owner stopped. Re-running a partially completed install reads

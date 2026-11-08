@@ -6,6 +6,7 @@ from contextlib import contextmanager
 import hashlib
 import io
 import os
+import re
 import stat
 from pathlib import Path
 import secrets
@@ -299,8 +300,72 @@ def _verify_sparse_local(crypto, candidate, current, directory, trust):
     return reusable_ids
 
 
+class MetadataCache:
+    """Hash-addressed copies of immutable release metadata.
+
+    Every entry is used only after its size and SHA256 match the signed
+    reference, exactly like a fresh download. The channel pointer itself is
+    never cached.
+    """
+
+    def __init__(self, root):
+        self.root = Path(root)
+
+    def _path(self, reference):
+        _pattern(reference['sha256'], _SHA256, 'metadata digest')
+        return self.root / reference['sha256']
+
+    def read(self, reference, fetch):
+        path = self._path(reference)
+        try:
+            data = read_bytes(path, reference['size'])
+        except (OSError, SDKError):
+            data = None
+        if data is not None and _digest(data) == {key: reference[key] for key in ('size', 'sha256')}:
+            _ignore_os_error(os.utime, path, None)
+            return data
+        # Anything else at this path is wrong: a changed, oversized or non-regular entry.
+        _ignore_os_error(path.unlink, missing_ok=True)
+        data = fetch()
+        _check(data, reference)
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            write_new(path, data, 0o600)
+        except OSError:
+            pass  # A cache miss is not an error; another reader may have stored it.
+        return data
+
+    def keep(self, references):
+        """Drop entries that this release no longer references and stale temporary files."""
+        wanted = {reference['sha256'] for reference in references}
+        try:
+            entries = list(self.root.iterdir())
+        except OSError:
+            return
+        for path in entries:
+            if path.name in wanted or path.is_symlink():
+                continue
+            if re.fullmatch('[0-9a-f]{64}', path.name) or (
+                    path.name.startswith('.release-') and _older_than(path, 86400)):
+                _ignore_os_error(path.unlink, missing_ok=True)
+
+
+def _ignore_os_error(call, *args, **kwargs):
+    try:
+        call(*args, **kwargs)
+    except OSError:
+        pass  # The cache is an accelerator; a failed entry only costs a download.
+
+
+def _older_than(path, seconds):
+    try:
+        return path.lstat().st_mtime < time.time() - seconds
+    except OSError:
+        return False
+
+
 @contextmanager
-def release_snapshot(crypto, public, trust, directory, *, prefix='', repositories=()):
+def release_snapshot(crypto, public, trust, directory, *, prefix='', repositories=(), cache=None):
     """Hold authenticated metadata in an owned private directory until exit."""
     channel_bytes, _ = public.read(_key(prefix, 'current.p7m'), MAX_ENVELOPE,
                                   headers={'cache-control': 'no-cache'})
@@ -310,7 +375,7 @@ def release_snapshot(crypto, public, trust, directory, *, prefix='', repositorie
             snapshot.mkdir(mode=0o700)
             try:
                 release = _fetch_snapshot(crypto, public, trust, snapshot, prefix,
-                                          repositories, channel_bytes)
+                                          repositories, channel_bytes, cache)
             except HTTPStatusError as exc:
                 if exc.status != 404 or attempt:
                     raise
@@ -335,11 +400,16 @@ def fetch_release(crypto, public, trust, output, *, prefix='', repositories=()):
         return release
 
 
-def _fetch_snapshot(crypto, public, trust, snapshot, prefix, repositories, channel_bytes):
+def _fetch_snapshot(crypto, public, trust, snapshot, prefix, repositories, channel_bytes, cache=None):
     content = crypto.verify_cms(channel_bytes, trust)
     pointer = parse_channel(content, CHANNEL)
     reference = pointer['release']
-    envelope, _ = public.read(_key(prefix, reference['path']), MAX_ENVELOPE)
+
+    def fetch_envelope():
+        envelope, _ = public.read(_key(prefix, reference['path']), MAX_ENVELOPE)
+        return envelope
+
+    envelope = fetch_envelope() if cache is None else cache.read(reference, fetch_envelope)
     _check(envelope, reference)
     release = parse_release(crypto.verify_cms(envelope, trust))
     if release['release_id'] != reference['id']:
@@ -348,6 +418,7 @@ def _fetch_snapshot(crypto, public, trust, snapshot, prefix, repositories, chann
     requested, found = set(repositories), set()
     write_new(snapshot / 'current.p7m', channel_bytes)
     write_new(snapshot / 'release.p7m', envelope)
+    cached = [reference]
     for artifact in release['artifacts']:
         if artifact['kind'] != 'package-index':
             continue
@@ -357,11 +428,23 @@ def _fetch_snapshot(crypto, public, trust, snapshot, prefix, repositories, chann
         found.add(repository)
         destination = snapshot / artifact['path']
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with destination.open('xb') as stream:
-            public.verify(_key(prefix, base + '/' + artifact['path']),
-                          artifact['size'], artifact['sha256'], sink=stream)
+        key = _key(prefix, base + '/' + artifact['path'])
+        if cache is None:
+            with destination.open('xb') as stream:
+                public.verify(key, artifact['size'], artifact['sha256'], sink=stream)
+            continue
+
+        def fetch_index(key=key, artifact=artifact):
+            stream = io.BytesIO()
+            public.verify(key, artifact['size'], artifact['sha256'], sink=stream)
+            return stream.getvalue()
+
+        write_new(destination, cache.read(artifact, fetch_index))
+        cached.append(artifact)
     if requested - found:
         raise SDKError('requested repository is not present in this release')
+    if cache is not None:
+        cache.keep(cached)
     return release
 
 
