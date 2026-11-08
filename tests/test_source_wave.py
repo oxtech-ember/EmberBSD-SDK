@@ -248,6 +248,21 @@ exit 0
             time.sleep(0.02)
         self.assertFalse(self._fixture_commands())
 
+    def test_wave_uses_os_process_service_with_restricted_tool_path(self):
+        state = self.fix / 'state'
+        with patch.dict(os.environ, {'PATH': str(self.fix / 'bin')}):
+            # Fail before forking on the old implementation: no ps belongs
+            # to this deliberately restricted build-tool prefix.
+            self.assertIn(os.getpid(), _process_table())
+            session = SourceWaveLock(state)
+            try:
+                receipts = session.exec_controller(
+                    [sys.executable, '-c', 'pass'], {}, ['x11/app'])
+                self.assertEqual(receipts['done'], [])
+            finally:
+                session.close()
+        self.assertFalse((state / 'build.lock').exists())
+
     def test_open_wave_lock_rejects_a_second_real_controller(self):
         state = self.fix / 'state'
         session = SourceWaveLock(state)

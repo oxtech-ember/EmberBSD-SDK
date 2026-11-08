@@ -29,6 +29,7 @@ import tempfile
 import time
 
 from .errors import SDKError
+from .host_services import _service_path
 
 
 _RECEIPTS = ('done', 'failed', 'blocked', 'skipped')
@@ -207,10 +208,11 @@ def _ignore_terminal_signals():
 def _process_table():
     """pid -> (ppid, state, creation). The ``ps`` helper itself is not a build process."""
     last = ''
+    process_service = _service_path('ps')
     for columns in ('pid=,ppid=,stat=,lstart=,command=', 'pid=,ppid=,state=,lstart=,command='):
         # -ww keeps Darwin from truncating command lines at the terminal width.
         result = subprocess.run(
-            ['ps', '-axww', '-o', columns], capture_output=True, text=True, check=False)
+            [process_service, '-axww', '-o', columns], capture_output=True, text=True, check=False)
         last = result.stderr.strip()
         if result.returncode != 0 or not result.stdout.strip():
             continue

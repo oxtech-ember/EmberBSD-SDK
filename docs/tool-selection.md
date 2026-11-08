@@ -32,7 +32,9 @@ Reject a missing tool or an external build-tool path instead of substituting one
 
 Select build tools exclusively through the declared prefix and routing contract. Host ABI libraries and headers, loaders,
 and OS process services are normal host inputs. Keep native ABI paths out of
-target include, library, and pkg-config searches.
+target include, library, and pkg-config searches. Source-build supervision
+resolves `ps` through the OS default command path, so process inspection works
+with a restricted native-tool `PATH`.
 Git source inspection and documentation checks are separate from artifact builds.
 
 Standalone producers can use `host_services.build_path(native, work)` for
