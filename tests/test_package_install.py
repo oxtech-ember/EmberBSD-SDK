@@ -235,6 +235,44 @@ class InstallTests(unittest.TestCase):
             PackageInstaller(self.crypto, self.ca.certificate).install(package, self.cfg)
         self.assertFalse(self.destination.exists())
 
+    def test_absolute_link_inside_the_package_prefix_is_accepted(self):
+        # pkgsrc Qt6 modules link lib/pkgconfig/*.pc to the qt6 subprefix.
+        package = self.package(payload_path='lib/pkgconfig/Qt6Svg.pc',
+                               link=str(self.destination / 'qt6/lib/pkgconfig/Qt6Svg.pc'))
+        inspect_install_paths(package, self.cfg)
+
+    def test_absolute_link_outside_the_package_prefix_is_refused(self):
+        for link in (str(self.work / 'outside'), str(self.destination) + '-sibling/x',
+                     str(self.destination / 'qt6/../../outside')):
+            with self.subTest(link=link):
+                package = self.package(payload_path='lib/pkgconfig/Qt6Svg.pc', link=link)
+                with self.assertRaisesRegex(SDKError, 'escape'):
+                    inspect_install_paths(package, self.cfg)
+                self.assertFalse(self.destination.exists())
+                package.unlink()
+                shutil.rmtree(self.work / 'stage')
+
+    def test_absolute_link_in_a_sysroot_is_inspected_again_after_installation(self):
+        package = self.package(target=True, payload_path='lib/pkgconfig/Qt6Svg.pc',
+                               link='/usr/pkg/qt6/lib/pkgconfig/Qt6Svg.pc')
+        self.cfg = dict(prefix='/usr/pkg', pkgdb='/usr/pkg/pkgdb', sysroot=str(self.work / 'sysroot'),
+                        target=dict(arch='aarch64', triplet='aarch64--netbsd', abi='11.0', runtime='test'),
+                        os_version='11.0')
+        installer = PackageInstaller(self.crypto, self.ca.certificate)
+        installer.install(package, self.cfg)
+        installed = self.work / 'sysroot/usr/pkg/lib/pkgconfig/Qt6Svg.pc'
+        self.assertEqual(os.readlink(installed), '/usr/pkg/qt6/lib/pkgconfig/Qt6Svg.pc')
+        inspect_install_paths(package, self.cfg)
+        installed.unlink()
+        installed.symlink_to(self.work / 'outside')
+        with self.assertRaisesRegex(SDKError, 'escape'):
+            inspect_install_paths(package, self.cfg)
+
+    def test_absolute_link_in_a_prefix_independent_package_is_refused(self):
+        package = self.package(link=str(self.destination / 'qt6/target'), commands=PORTABLE_PREFIX + '\n')
+        with self.assertRaisesRegex(SDKError, 'relocated'):
+            inspect_install_paths(package, self.cfg)
+
     def test_target_amd64_uses_pkgsrc_machine_arch(self):
         package = self.package(target=True, arch='x86_64')
         self.cfg = dict(prefix='/usr/pkg', pkgdb='/usr/pkg/pkgdb', sysroot=str(self.work / 'sysroot'),

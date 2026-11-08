@@ -5,6 +5,7 @@
 import os
 import platform
 from pathlib import Path, PurePosixPath
+import posixpath
 import subprocess
 import tarfile
 import tempfile
@@ -67,6 +68,12 @@ def _relative(name):
     return path
 
 
+def _inside_prefix(target, original_prefix):
+    """Absolute symlink target that stays inside the package's declared prefix."""
+    path = PurePosixPath(target)
+    return path.is_absolute() and '..' not in path.parts and path.is_relative_to(original_prefix)
+
+
 def inspect_install_paths(package, config, *, visit=None):
     """Inspect signed archives before pkg_add; never unpack target files ourselves."""
     prefix, _ = install_paths(config)
@@ -126,14 +133,27 @@ def inspect_install_paths(package, config, *, visit=None):
                     hooks = True
                 continue
             destination = prefix / str(path)
-            if not destination.resolve().is_relative_to(root):
+            # pkgsrc symlinks into its own prefix, for example
+            # lib/pkgconfig/Qt6Svg.pc -> /usr/pkg/qt6/lib/pkgconfig/Qt6Svg.pc.
+            # pkg_add replaces such a link; it is valid only inside the target
+            # root, so the host must not resolve it when the root is a sysroot.
+            prefix_link = member.issym() and not portable and relocation is None and original_prefix is not None
+            replaced = (prefix_link and destination.is_symlink() and
+                        _inside_prefix(os.readlink(destination), original_prefix))
+            existing = destination.parent if replaced else destination
+            if not existing.resolve().is_relative_to(root):
                 raise SDKError(f'existing package path escapes prefix: {name}')
             if any(parent in links for parent in path.parents):
                 raise SDKError(f'package writes through an archive link: {name}')
             if member.issym() or member.islnk():
                 target = PurePosixPath(member.linkname)
                 if target.is_absolute():
-                    raise SDKError(f'absolute package link escapes install root: {name}')
+                    if not prefix_link:
+                        raise SDKError(f'absolute package link cannot be relocated: {name}')
+                    if not _inside_prefix(str(target), original_prefix):
+                        raise SDKError(f'absolute package link escapes install root: {name}')
+                    parent = posixpath.join(original_prefix, str(path.parent))
+                    target = PurePosixPath(posixpath.relpath(str(target), parent))
                 linked = (destination.parent if member.issym() else prefix) / str(target)
                 if not linked.resolve().is_relative_to(root):
                     raise SDKError(f'package link escapes prefix: {name}')

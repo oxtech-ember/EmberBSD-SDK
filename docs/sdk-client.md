@@ -316,8 +316,12 @@ pkg_add receives `-P SYSROOT -I` and the explicit foreign platform. Its package
 database lives inside that root; scripts, packing-list commands and replacement
 deinstallation scripts are not run on the host. The client does not unpack
 packages itself. Paths and links are inspected before installation, including
-existing paths; escaping and absolute payload links are refused. Installed files
-are ordinary package files, never mutable hardlinks into the archive cache.
+existing paths; escaping payload links are refused. An absolute symlink is
+accepted only when its target stays inside the package's declared prefix
+(pkgsrc Qt6 modules link `lib/pkgconfig/*.pc` into `qt6/`). The target reads
+it with its own root; the host does not resolve it. Prefix-independent
+packages must not contain one. Installed files are ordinary package files,
+never mutable hardlinks into the archive cache.
 This installs package payloads into an existing target environment; base headers,
 CRT/libc and producer sysroot bundles retain their existing SDK/OS ownership.
 
