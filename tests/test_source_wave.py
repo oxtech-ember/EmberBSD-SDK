@@ -29,7 +29,7 @@ from emberbsd_sdk.package_selection import _RecordedChild, launch_recorded
 import emberbsd_sdk.package_selection as package_selection
 import emberbsd_sdk.source_wave as source_wave
 from emberbsd_sdk.source_wave import (
-    SourceWaveLock, _creation, _descendants, _linux_start, _live_descendants, _process_table,
+    SourceWaveLock, _creation, _descendants, _kernel_start, _linux_start, _live_descendants, _process_table,
     _read_controller, _recover_killed_owner, _release_if_ours, _same_identity, _signal_proven,
     _stop_recorded, _write_controller, _write_stamp)
 
@@ -567,7 +567,11 @@ exit 0
             self._stop_fixture_processes()
 
             self._assert_roles_stopped(roles)
-            self.assertFalse(self._alive(controller))
+            row = _process_table().get(controller)
+            self.assertFalse(
+                self._alive(controller),
+                f'controller remains present: pid={controller}, row={row}, '
+                f'recorded_birth={starttime}, current_birth={_kernel_start(controller)}')
             self.assertFalse(Path(private).exists())
         finally:
             self._reap(client_pid)
@@ -1523,14 +1527,22 @@ exit 0
             self.assertTrue(row is None or row[1].startswith(('Z', 'z')), (pid, row))
 
     def _reap(self, pid):
-        try:
-            ended, _status = os.waitpid(pid, os.WNOHANG)
-            if ended == pid:
+        # Give a drained client time to reap its controller before force-stopping
+        # the client. Otherwise launchd may briefly retain the controller as a
+        # zombie, which looks present to kill(pid, 0) even though it is stopped.
+        deadline = time.monotonic() + 1.0
+        while True:
+            try:
+                ended, _status = os.waitpid(pid, os.WNOHANG)
+                if ended == pid:
+                    self._owned_clients.discard(pid)
+                    return
+            except ChildProcessError:
                 self._owned_clients.discard(pid)
                 return
-        except ChildProcessError:
-            self._owned_clients.discard(pid)
-            return
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.02)
         try:
             os.kill(pid, 9)
         except ProcessLookupError:
