@@ -3,6 +3,7 @@
 """Shared archive cache. Callers hold its directory lock through installation."""
 
 from contextlib import contextmanager
+import fcntl
 import hashlib
 import os
 from pathlib import Path
@@ -13,20 +14,65 @@ from .errors import SDKError
 from .paths import open_regular, verify_stable
 
 
+def _hold(path, flags):
+    """Hold the kernel lock on the owner file; the kernel drops it with a dead owner."""
+    try:
+        descriptor = os.open(path / 'held', flags | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    except FileNotFoundError:
+        return None
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # A released lock unlinks this file before it closes the descriptor.
+        if os.fstat(descriptor).st_ino != os.stat(path / 'held').st_ino:
+            raise FileNotFoundError
+    except OSError:
+        os.close(descriptor)
+        return None
+    return descriptor
+
+
 @contextmanager
 def directory_lock(path):
+    """Directory lock shared with other owners; only a dead owner's own lock is reclaimed.
+
+    A foreign owner (cross-bulk, a source-wave controller) records its identity
+    without ``held``; such a lock is never removed here.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        path.mkdir()
-    except FileExistsError as exc:
-        raise SDKError(f'writer is busy: {path}; a build owns this lock and its controller is recorded there') from exc
+    held = None
+    for _ in range(2):
+        try:
+            path.mkdir()
+        except FileExistsError:
+            held = _hold(path, os.O_RDWR)
+            if held is not None or path.exists():
+                break
+            continue
+        try:
+            held = _hold(path, os.O_RDWR | os.O_CREAT)
+        finally:
+            if held is None:
+                _release(path, None)
+        break
+    if held is None:
+        raise SDKError(f'writer is busy: {path}; a build owns this lock and its controller is recorded there')
     try:
         (path / 'pid').write_text(str(os.getpid()) + '\n')
         yield
     finally:
+        _release(path, held)
+
+
+def _release(path, held):
+    """Remove the owner's files before the kernel lock ends; keep the descriptor closed."""
+    try:
+        (path / 'held').unlink(missing_ok=True)
         (path / 'pid').unlink(missing_ok=True)
-        path.rmdir()
+    finally:
+        if held is not None:
+            os.close(held)
+    path.rmdir()
 
 
 def check_space(path, required):

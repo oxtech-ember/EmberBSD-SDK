@@ -266,6 +266,15 @@ recovered. The controller's own `build.lock` is on that private copy because
 the Ports lock is not reentrant. Do not remove `build.lock` while its PID is
 alive, while the recorded controller is running, or while a remembered
 descendant identity is still alive.
+Every lock the client takes itself (`client.lock`, the cache `.lock`,
+`.sdk-lock`, `update.lock`, `bootstrap.lock`, and `build.lock` when no
+supervisor holds it) keeps a kernel `flock` on `held` inside the lock
+directory. A killed client or a reboot leaves the directory, but the kernel
+releases `held`; the next client reclaims that lock itself. A lock without
+`held` belongs to another owner, or to a client killed in the short window
+before `held` existed; it stays until that owner's recovery removes it.
+Lock directories live on a host-local filesystem: `flock` is not shared
+between hosts.
 The private copy keeps the full edges, so a native tool that
 a later target package feeds still receives that target's settings.
 The client does not order a native-only subset with `selected-build`.

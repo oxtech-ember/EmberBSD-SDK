@@ -1,9 +1,14 @@
 # SPDX-License-Identifier: BSD-2-Clause
+import errno
 import hashlib
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
@@ -86,6 +91,47 @@ class CacheTests(unittest.TestCase):
                 with directory_lock(lock):
                     self.fail('second writer entered')
         self.assertFalse(lock.exists())
+
+    def test_killed_owner_lock_is_reclaimed(self):
+        lock = self.root / 'write.lock'
+        owner = subprocess.Popen([sys.executable, '-c', textwrap.dedent(f'''
+            import sys, time
+            sys.path.insert(0, {str(Path(__file__).resolve().parents[1] / 'src')!r})
+            from emberbsd_sdk.package_cache import directory_lock
+            with directory_lock({str(lock)!r}):
+                print('held', flush=True)
+                time.sleep(60)
+            ''')], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(owner.stdout.readline().strip(), 'held')
+            with self.assertRaisesRegex(SDKError, 'busy'):
+                with directory_lock(lock):
+                    self.fail('entered a live owner lock')
+        finally:
+            owner.kill()
+            owner.wait()
+            owner.stdout.close()
+        self.assertEqual((lock / 'pid').read_text().strip(), str(owner.pid))
+        with directory_lock(lock):
+            self.assertEqual((lock / 'pid').read_text().strip(), str(os.getpid()))
+        self.assertFalse(lock.exists())
+
+    def test_failed_owner_file_leaves_no_lock_directory(self):
+        lock = self.root / 'write.lock'
+        with patch('emberbsd_sdk.package_cache.fcntl.flock', side_effect=OSError(errno.ENOLCK, 'no locks')):
+            with self.assertRaisesRegex(SDKError, 'busy'):
+                with directory_lock(lock):
+                    self.fail('entered without the owner file')
+        self.assertFalse(lock.exists())
+
+    def test_foreign_owner_lock_is_kept(self):
+        lock = self.root / 'build.lock'
+        lock.mkdir()
+        (lock / 'pid').write_text('1\n')
+        with self.assertRaisesRegex(SDKError, 'busy'):
+            with directory_lock(lock):
+                self.fail('entered a foreign lock')
+        self.assertEqual((lock / 'pid').read_text(), '1\n')
 
 
 if __name__ == '__main__':
