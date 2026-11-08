@@ -570,6 +570,34 @@ exit 0
             except ChildProcessError:
                 pass
 
+    def test_absent_recorded_controller_with_kernel_birth_is_drained(self):
+        pid = 987654321
+        original_table = source_wave._process_table
+        original_start = source_wave._kernel_start
+        original_descendants = source_wave._live_descendants
+        original_signal = source_wave._signal_descendants
+        try:
+            source_wave._process_table = lambda: {}
+            source_wave._kernel_start = lambda _pid: None
+            source_wave._live_descendants = lambda _rows, _pid: []
+            self.assertTrue(_stop_recorded(pid, 'Nov 8 15:36:09 2026', '1522223777680'))
+
+            source_wave._kernel_start = lambda _pid: '1522223777680'
+            self.assertFalse(_stop_recorded(pid, 'Nov 8 15:36:09 2026', '1522223777680'))
+
+            source_wave._kernel_start = lambda _pid: '1522223777681'
+            self.assertFalse(_stop_recorded(pid, 'Nov 8 15:36:09 2026', '1522223777680'))
+
+            source_wave._kernel_start = lambda _pid: None
+            source_wave._live_descendants = lambda _rows, _pid: [(987654322, pid, 'Nov 8 15:36:10 2026')]
+            source_wave._signal_descendants = lambda _rows, _pid: False
+            self.assertFalse(_stop_recorded(pid, 'Nov 8 15:36:09 2026', '1522223777680'))
+        finally:
+            source_wave._process_table = original_table
+            source_wave._kernel_start = original_start
+            source_wave._live_descendants = original_descendants
+            source_wave._signal_descendants = original_signal
+
     def test_controller_cannot_run_before_its_record_is_written(self):
         marker = self.fix / 'ran'
         seen = {}

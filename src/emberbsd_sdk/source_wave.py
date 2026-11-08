@@ -787,6 +787,13 @@ def _stop_recorded(pid, created, starttime=None):
                     return False
                 time.sleep(0.05)
                 continue
+            # A failed owner may leave its lock after the controller has
+            # already exited. Its recorded kernel birth lets recovery prove
+            # that a missing PID is no longer that controller, even if this
+            # drainer never observed it alive. Without that birth, absence
+            # from one process-table snapshot is not enough to release.
+            if row is None and starttime and _kernel_start(pid) is None:
+                return not descendants
             return confirmed and not descendants
         if row[2] != created:
             release()
