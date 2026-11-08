@@ -6,8 +6,10 @@ import stat
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+from emberbsd_sdk import desktop_apps
 from emberbsd_sdk.desktop_apps import bind_installed_desktops
 from emberbsd_sdk.sdk_client import catalog_index
 
@@ -174,6 +176,29 @@ class DesktopBindingTests(unittest.TestCase):
         self.assertEqual(by_root['textproc/libxml2']['role'], 'library')
         self.assertEqual(by_root['textproc/libxml2']['desktops'], [])
         self.assertEqual(len(rows), 4)
+
+    def test_large_packing_list_only_inspects_desktop_names(self):
+        # Installed Plasma sets carry ~130 000 packing-list lines; the catalog
+        # read runs at every Discover start and must not build a Path per line.
+        _contents(self.pkgdb, self.prefix, 'large-1.0',
+                  [f'lib/qt6/mkspecs/file-{index}.pri' for index in range(20000)]
+                  + ['share/applications/kbd-layout-viewer5.desktop'])
+        rows = [dict(repository='netbsd-amd64', root='x11/large', pkgname='large-1.0',
+                     role='package', action='installed', installed_pkgname='large-1.0')]
+        built = []
+
+        class CountingPath(type(Path())):
+            def __new__(cls, *args, **kwargs):
+                built.append(args)
+                return super().__new__(cls, *args, **kwargs)
+
+        with patch.object(desktop_apps, 'Path', CountingPath):
+            bind_installed_desktops(rows, {
+                'netbsd-amd64': dict(prefix=str(self.prefix), pkgdb=str(self.pkgdb)),
+            })
+        self.assertEqual([entry['file'] for entry in rows[0]['desktops']],
+                         ['share/applications/kbd-layout-viewer5.desktop'])
+        self.assertLess(len(built), 200)
 
     def test_empty_application_list_is_not_replaced_with_packages(self):
         empty = Path(self.tmp.name) / 'empty'

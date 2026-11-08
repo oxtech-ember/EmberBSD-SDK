@@ -109,6 +109,9 @@ def _listed_desktop_files(contents, prefix, pkgdb):
             continue
         if line.startswith('@') or cwd is None:
             continue
+        # A packing list has thousands of files; only a .desktop name can match.
+        if not line.endswith('.desktop'):
+            continue
         candidate = Path(line)
         if candidate.is_absolute() or '..' in candidate.parts:
             continue
