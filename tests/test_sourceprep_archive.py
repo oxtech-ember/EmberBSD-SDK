@@ -141,6 +141,19 @@ class SourceArchiveTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, 'duplicate'):
             self.extract(components=('src', 'new.c'), require_components=False)
 
+    def test_exact_preimages_reject_case_aliases_even_without_an_exact_member(self):
+        for rows in ([('src/File.c', b'alias', None)],
+                     [('Src/file.c', b'alias', None)],
+                     [('src/file.c', b'one', None), ('src/File.c', b'two', None)],
+                     [('src/File.c', b'one', None), ('src/file.c', b'two', None)]):
+            with self.subTest(rows=rows):
+                import shutil
+                shutil.rmtree(self.output)
+                self.output.mkdir()
+                self.pack(rows)
+                with self.assertRaisesRegex(SDKError, 'duplicate'):
+                    self.extract(components=('src/file.c',), require_components=False)
+
     def test_selected_byte_bound_is_enforced(self):
         self.pack([('libcxx/selected', b'xx', None)])
         with self.assertRaisesRegex(SDKError, 'size limit'):

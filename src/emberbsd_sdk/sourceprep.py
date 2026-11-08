@@ -159,6 +159,17 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
     links = []
     extracted_size = 0
 
+    def remember_case(parts):
+        for length in range(1, len(parts) + 1):
+            parent = '/'.join(parts[:length])
+            if folded.get(parent.casefold(), parent) != parent:
+                raise SDKError(f'duplicate {label} archive member')
+            folded[parent.casefold()] = parent
+
+    folded_components = tuple(component.casefold() for component in components or ())
+    for component in components or ():
+        remember_case([root_name, *component.split('/')])
+
     def make_parents(path):
         current = destination
         for part in path.relative_to(destination).parts:
@@ -190,7 +201,9 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
                 chosen = [component for component in components
                           if relative == component or relative.startswith(component + '/')]
                 matched.update(chosen)
-                if not chosen and not any(component.startswith(relative + '/') for component in components):
+                folded_relative = relative.casefold()
+                if not any(folded_relative == component or folded_relative.startswith(component + '/') or
+                           component.startswith(folded_relative + '/') for component in folded_components):
                     continue
             previous = seen.get(name)
             if previous is not None:
@@ -200,11 +213,7 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
                         previous.mtime != member.mtime):
                     raise SDKError(f'duplicate {label} archive member')
             seen[name] = member
-            for length in range(1, len(parts) + 1):
-                parent = '/'.join(parts[:length])
-                if folded.get(parent.casefold(), parent) != parent:
-                    raise SDKError(f'duplicate {label} archive member')
-                folded[parent.casefold()] = parent
+            remember_case(parts)
             if member.issym() and internal_symlinks:
                 target = member.linkname
                 if (not isinstance(target, str) or not target or target.startswith('/') or
