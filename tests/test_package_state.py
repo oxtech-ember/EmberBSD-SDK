@@ -194,6 +194,7 @@ class UpdateSelectionTests(unittest.TestCase):
                 snapshot = Path(work) / 'snapshot'
                 snapshot.mkdir()
                 (snapshot / 'release.p7m').write_bytes(b'authenticated fixture')
+                (snapshot / 'current.p7m').write_bytes(b'authenticated channel fixture')
                 snapshots.append(snapshot)
                 yield self.release, snapshot
         output = io.TextIOWrapper(io.BytesIO(), encoding='utf-8')

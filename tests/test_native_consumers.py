@@ -111,8 +111,10 @@ class NativeConsumerTests(TemporaryCase):
         self.assertEqual(commands[0][0], builder.native.tool('sh'))
         self.assertFalse(any(word.startswith(('HOST_CC=', 'HOST_CXX=', 'HOST_SH=')) for word in flags))
         self.assertIn('EMBER_HOST_COMPILER_FAMILY=clang', flags)
-        self.assertTrue(all(word.startswith(('HOST_', 'EMBER_HOST_ABI_', 'EMBER_HOST_COMPILER_FAMILY='))
-                            for word in native_host_flags(builder.native_selection)))
+        host_flags = native_host_flags(builder.native_selection)
+        self.assertIn('EMBER_HOST_PREFIX=' + builder.native.bundle_root, host_flags)
+        self.assertTrue(all(word.startswith(('HOST_', 'EMBER_HOST_ABI_', 'EMBER_HOST_COMPILER_FAMILY=',
+                                             'EMBER_HOST_PREFIX=')) for word in host_flags))
         release = OSReleaseBuilder(self.options() | {'target': 'aarch64'})
         release.flags, release.release_commands = flags, commands
         release.paths = {'os': paths['os']}

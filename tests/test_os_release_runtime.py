@@ -24,6 +24,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
             'libedit-source', 'rcs-source', 'objects', 'tools', 'destination', 'os')}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {'cc': '/host/clang', 'cxx': '/host/clang++', 'gmake': '/host/gmake'},
                      'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
@@ -41,6 +42,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
             'libedit-source', 'ekermit-source', 'objects', 'tools', 'destination', 'os')}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
                      'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
@@ -56,6 +58,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
             'libedit-source', 'nvi-source', 'objects', 'tools', 'destination', 'os')}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
                      'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
@@ -71,6 +74,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
             'libedit-source', 'top-source', 'objects', 'tools', 'destination', 'os')}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
                      'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
@@ -86,6 +90,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
             'libedit-source', 'iscsi-source', 'ntp-source', 'libopts-source', 'objects', 'tools', 'destination', 'os')}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
                      'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
@@ -105,6 +110,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
             'libedit-source', 'libpcap-source', 'objects', 'tools', 'destination', 'os')}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
                      'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
@@ -120,6 +126,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
             'libedit-source', 'tcpdump-source', 'objects', 'tools', 'destination', 'os')}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
                      'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
@@ -135,6 +142,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
             'libedit-source', 'tcp-wrappers-source', 'objects', 'tools', 'destination', 'os')}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
                      'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
@@ -150,6 +158,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
             'libedit-source', 'ppp-source', 'objects', 'tools', 'destination', 'os')}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
                      'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
@@ -165,6 +174,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
             'libedit-source', 'diffutils-source', 'objects', 'tools', 'destination', 'os')}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {'cc': '/host/clang', 'cxx': '/host/clang++', 'gmake': '/host/gmake'},
                      'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
@@ -182,6 +192,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
             'libedit-source', 'tdb-source', 'nvi-source', 'objects', 'tools', 'destination', 'os')}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {'cc': '/host/clang', 'cxx': '/host/clang++', 'python': '/host/python'},
                      'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
@@ -287,6 +298,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
         roles = ('cc', 'cxx', 'gmake', 'pkg-config', 'od', 'msgfmt', 'msgmerge',
                  'xgettext', 'msginit', 'msgconv', 'msgfilter', 'sed')
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {role: '/host/' + role for role in roles},
                      'compiler': {'family': 'clang', 'triplet': 'host-triplet'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
@@ -313,6 +325,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
         roles = ('cc', 'cxx', 'gmake', 'pkg-config', 'od', 'msgfmt', 'msgmerge',
                  'xgettext', 'msginit', 'msgconv', 'msgfilter', 'sed')
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {role: '/host/' + role for role in roles},
                      'compiler': {'family': 'clang', 'triplet': 'host-triplet'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
@@ -335,6 +348,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
             'libedit-source', 'grep-source', 'objects', 'tools', 'destination', 'os')}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {'cc': '/host/clang', 'cxx': '/host/clang++', 'gmake': '/host/gmake'},
                      'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
@@ -362,6 +376,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
             'libedit-source', 'texinfo-source', 'objects', 'tools', 'destination', 'os')}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {'cc': '/host/clang', 'cxx': '/host/clang++', 'gmake': '/host/gmake'},
                      'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
@@ -461,6 +476,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
                  'llvm-resource', 'libedit-source', 'objects', 'tools', 'destination', 'os')
         paths = {name: '/sdk/' + name for name in names}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {'cc': '/host/clang', 'cxx': '/host/clang++',
                                'perl': '/host/perl', 'python': '/host/python',
                                'gmake': '/host/gmake', 'autoconf': '/host/autoconf'},
@@ -487,6 +503,7 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
             'libedit-source', 'openssl-source', 'objects', 'tools', 'destination', 'os')}
         selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                     'bundle_root': '/host',
                      'tools': {'cc': '/host/clang', 'cxx': '/host/clang++', 'perl': '/host/perl', 'python': '/host/python', 'gmake': '/host/gmake'},
                      'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27'},
                      'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}

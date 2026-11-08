@@ -523,6 +523,7 @@ class BuilderReleaseTests(TemporaryCase):
         roles = ('cc', 'cxx', 'sh', 'python', 'gmake', 'pkg-config', 'od', 'msgfmt',
                  'msgmerge', 'xgettext', 'msginit', 'msgconv', 'msgfilter', 'sed')
         native = {'format': 'emberbsd-host-prefix', 'version': 2,
+            'bundle_root': '/host',
             'tools': {role: '/host/' + role for role in roles},
             'compiler': {'family': 'clang', 'triplet': 'host-triplet'},
             'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}

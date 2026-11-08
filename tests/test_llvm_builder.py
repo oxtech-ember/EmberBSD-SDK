@@ -273,25 +273,63 @@ class LLVMBuilderTests(TemporaryCase):
             builder.require_ppp_source_support()
             run.assert_not_called()
 
-    def test_gettext_requires_both_actual_os_producers(self):
+    def test_gettext_requires_all_three_actual_os_producers(self):
         from types import SimpleNamespace
         builder = SysrootBuilder({})
         builder.paths = {'os': str(self.root / 'os'), 'gettext-source': '/prepared/gettext',
-                         'libxml2-source': '/prepared/xml', 'tools': '/build/tools'}
+                         'libxml2-source': '/prepared/xml', 'tree-sitter-source': '/prepared/tree-sitter',
+                         'tools': '/build/tools'}
         builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
         builder.environment = {}
         builder.native = SimpleNamespace(tool=lambda name: '/host/' + name,
                                          compiler={'triplet': 'host-triplet'})
+
         def result(data):
-            return SimpleNamespace(stdout=data)
-        xml = result(b'/prepared/xml\n')
-        good = result(b'/prepared/gettext\nEMBER_GETTEXT_PLAIN_STYLE=yes\n/obj/gnu-build/.libs/libxml2.a\n')
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=[xml, good]):
+            return SimpleNamespace(stdout=data.encode() if isinstance(data, str) else data)
+
+        queries = [result('/prepared/xml\n'), result('/prepared/tree-sitter\n')]
+        gettext = result('/prepared/gettext\n'
+                         'PKG_CONFIG=/host/pkg-config EMBER_GETTEXT_PLAIN_STYLE=yes\n'
+                         '/obj/gnu-build/.libs/libxml2.a /obj/libtree-sitter.a '
+                         '/obj/tree-sitter-uninstalled.pc\n')
+        with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                   side_effect=[*queries, gettext]) as run:
             builder.require_gettext_source_support()
-        bad = result(b'/prepared/gettext\n\n/obj/gnu-build/.libs/libxml2.a\n')
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=[xml, bad]):
-            with self.assertRaisesRegex(SDKError, 'does not support'):
-                builder.require_gettext_source_support()
+        self.assertEqual(run.call_count, 3)
+        tree_query = run.call_args_list[1].args[0]
+        self.assertIn('-C', tree_query)
+        self.assertEqual(tree_query[tree_query.index('-C') + 1],
+                         str(self.root / 'os/external/mit/tree-sitter/lib'))
+        self.assertEqual(tree_query[-2:], ['-V', '${EMBER_TREE_SITTER_SOURCE}'])
+        gettext_query = run.call_args_list[2].args[0]
+        self.assertEqual(gettext_query[-6:], ['-V', '${GNU_SOURCE}', '-V', '${GNU_CONFIGURE_ENV}',
+                                              '-V', '${GNU_CONFIGURE_DEPENDENCY}'])
+
+        invalid_responses = {
+            'missing tree-sitter producer': [result('/prepared/xml\n'), result('/other/tree-sitter\n'), gettext],
+            'missing libxml2 dependency': [*queries, result('/prepared/gettext\n'
+                'PKG_CONFIG=/host/pkg-config EMBER_GETTEXT_PLAIN_STYLE=yes\n'
+                '/obj/libtree-sitter.a /obj/tree-sitter-uninstalled.pc\n')],
+            'missing tree-sitter archive': [*queries, result('/prepared/gettext\n'
+                'PKG_CONFIG=/host/pkg-config EMBER_GETTEXT_PLAIN_STYLE=yes\n'
+                '/obj/gnu-build/.libs/libxml2.a /obj/tree-sitter-uninstalled.pc\n')],
+            'missing tree-sitter pkg-config metadata': [*queries, result('/prepared/gettext\n'
+                'PKG_CONFIG=/host/pkg-config EMBER_GETTEXT_PLAIN_STYLE=yes\n'
+                '/obj/gnu-build/.libs/libxml2.a /obj/libtree-sitter.a\n')],
+            'missing selected pkg-config': [*queries, result('/prepared/gettext\n'
+                'EMBER_GETTEXT_PLAIN_STYLE=yes\n'
+                '/obj/gnu-build/.libs/libxml2.a /obj/libtree-sitter.a '
+                '/obj/tree-sitter-uninstalled.pc\n')],
+            'plain-style mismatch': [*queries, result('/prepared/gettext\n'
+                'PKG_CONFIG=/host/pkg-config\n'
+                '/obj/gnu-build/.libs/libxml2.a /obj/libtree-sitter.a '
+                '/obj/tree-sitter-uninstalled.pc\n')],
+        }
+        for name, responses in invalid_responses.items():
+            with self.subTest(failure=name), \
+                 patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=responses):
+                with self.assertRaisesRegex(SDKError, 'does not support'):
+                    builder.require_gettext_source_support()
 
     def test_rcs_source_requires_real_os_producer(self):
         from types import SimpleNamespace
