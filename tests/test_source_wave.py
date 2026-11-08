@@ -180,7 +180,13 @@ exit 0
         starttime = source_wave._kernel_start(child.pid)
 
         def finish():
-            drained = _stop_recorded(child.pid, created, starttime)
+            # Normal cross-bulk completion drains its workers itself. The
+            # fixture must take ownership only if the direct child is still
+            # running (notably after TimeoutExpired).
+            if child.poll() is None:
+                drained = _stop_recorded(child.pid, created, starttime)
+            else:
+                drained = True
             try:
                 output = child.communicate(timeout=2)
             except subprocess.TimeoutExpired as error:
