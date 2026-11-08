@@ -19,6 +19,7 @@ import zipfile
 
 from . import process
 from .errors import SDKError
+from .paths import open_regular, verify_stable
 
 MAX_ARCHIVE_MEMBERS = 100000
 MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
@@ -115,6 +116,8 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
     layout='flat' places a flat archive under root_name.
     skip_directories names exact path components below the root, such as VCS
     metadata directories, whose members are omitted before any other check.
+    Repeated regular files must have the same path, data, extracted mode and timestamp.
+    Each occurrence counts toward the extraction limits.
     """
     def safe_name(name):
         return (isinstance(name, str) and name and not name.startswith('/') and
@@ -146,7 +149,7 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
         raise SDKError(f'{label} extraction destination must be a real directory')
     if internal_symlinks and os.path.lexists(destination / root_name):
         raise SDKError(f'{label} archive root must not already exist')
-    seen, folded, matched = set(), {}, set()
+    seen, folded, matched = {}, {}, set()
     links = []
     extracted_size = 0
 
@@ -183,9 +186,14 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
                 matched.update(chosen)
                 if not chosen and not any(component.startswith(relative + '/') for component in components):
                     continue
-            if name in seen:
-                raise SDKError(f'duplicate {label} archive member')
-            seen.add(name)
+            previous = seen.get(name)
+            if previous is not None:
+                if (previous.name != member.name or not previous.isreg() or not member.isreg() or
+                        previous.size != member.size or
+                        bool(previous.mode & 0o111) != bool(member.mode & 0o111) or
+                        previous.mtime != member.mtime):
+                    raise SDKError(f'duplicate {label} archive member')
+            seen[name] = member
             for length in range(1, len(parts) + 1):
                 parent = '/'.join(parts[:length])
                 if folded.get(parent.casefold(), parent) != parent:
@@ -216,12 +224,25 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
                 if source is None:
                     raise SDKError(f'{label} archive member has no data')
                 try:
-                    with source, path.open('xb') as output:
-                        shutil.copyfileobj(source, output)
+                    with source:
+                        if previous is not None:
+                            output, before = open_regular(path)
+                            with output:
+                                while chunk := source.read(64 * 1024):
+                                    if output.read(len(chunk)) != chunk:
+                                        raise SDKError(f'duplicate {label} archive member')
+                                if output.read(1):
+                                    raise SDKError(f'duplicate {label} archive member')
+                            verify_stable(path, before)
+                        else:
+                            with path.open('xb') as output:
+                                shutil.copyfileobj(source, output)
                 except (OSError, RuntimeError, NotImplementedError, zipfile.BadZipFile, EOFError) as exc:
                     if not isinstance(packed, _ZipArchive):
                         raise
                     raise SDKError(f'{label} archive member cannot be extracted') from exc
+                if previous is not None:
+                    continue
                 path.chmod(0o755 if member.mode & 0o111 else 0o644)
                 try:
                     os.utime(path, (member.mtime, member.mtime))
