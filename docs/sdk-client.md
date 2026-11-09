@@ -474,15 +474,20 @@ of a compiler/sysroot pair on current. Clean-host C/aarch64 execution remains
 separate distribution acceptance work until a published pair passes that check.
 
 The current self-contained archive is authenticated by the release referenced
-by [`current.p7m`](https://emberbsd-pkg.oxteam.me/current.p7m). The Python client
-itself is portable; the published bootstrap and native execution checks cover
-Darwin arm64/macOS 27.
+by [`current.p7m`](https://emberbsd-pkg.oxteam.me/current.p7m). The self-contained
+bootstrap covers Darwin arm64/macOS 27. The separate
+`bootstrap-netbsd-aarch64-client` zipapp uses an installed Python 3.15 and
+native pkg_tools. On an EmberBSD 11 aarch64 VM it reads 14 installed runtime
+packages and plans the Python closure without downloads. The native signed
+package lifecycle regression also passes installation hooks and replacement.
+This checks package operations, not a compiler, graphical session or device
+hardware.
 
 Checks cover shared dependencies, repeat installation, missing binaries versus
 broken downloads, resumed transfers, insufficient disk, wrong platforms,
 escaping archive links and target scripts. A native installation test uses real
 pkg_tools and signed fixture archives. These contracts do not themselves prove
-a complete portable compiler or execution on EmberBSD. The source-free zipapp
+a complete portable compiler or application execution on EmberBSD. The source-free zipapp
 also reads the live public current and reuses installed fetch/OpenSSL on the
 developer host without downloading or rebuilding them.
 `tests/test_package_state.py` covers actual-pkgdb update selection, independent

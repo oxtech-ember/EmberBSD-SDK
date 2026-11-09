@@ -249,6 +249,10 @@ python3 scripts/s3-release.py --host-prefix /work/host-pkg-llvm fetch-artifact \
   --artifact bootstrap-netbsd-amd64-client --output /work/ember-sdk.pyz
 ```
 
+For an EmberBSD aarch64 device, select `bootstrap-netbsd-aarch64-client`.
+This portable Python zipapp requires Python 3.15 and native pkg_tools already
+installed on the device; it does not contain a compiler or a Python runtime.
+
 The command verifies the signed channel and release and the selected artifact's
 size and SHA-256 before atomically creating or replacing the regular output file.
 A sibling `.sdk-lock` serializes writers; download or verification failure leaves
