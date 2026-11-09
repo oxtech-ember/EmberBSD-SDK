@@ -82,7 +82,7 @@ class HostIdentityTests(unittest.TestCase):
             struct.pack_into('<HH', header, 16, 2, 183)
             tool.write_bytes(header); tool.chmod(0o755)
             selected = host_prefix.load_host_prefix(root, required_roles=('pkg_info',))
-            self.assertEqual(selected.tool('pkg_info'), str(tool))
+            self.assertEqual(selected.tool('pkg_info'), str(tool.resolve()))
             struct.pack_into('<H', header, 18, 62)
             tool.write_bytes(header)
             with self.assertRaisesRegex(SDKError, 'native executable'):
