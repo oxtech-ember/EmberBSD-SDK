@@ -78,6 +78,30 @@ class NativeTargetTests(unittest.TestCase):
         self.assertIn('/usr/sbin', path)
         self.assertIn('/sbin', path)
 
+    def test_usergroup_creation_only_for_root_native_target(self):
+        trust = self.root / 'trust'; trust.write_bytes(b'trust')
+        package = self.root / 'fixture.tgz'; package.write_bytes(b'fixture')
+        prefix = SimpleNamespace(path='/selected/bin', tool=lambda name: '/selected/bin/' + name)
+        installer = PackageInstaller(SimpleNamespace(prefix=prefix), trust)
+
+        cases = (
+            ('native-target-root', self.cfg, 0, 'YES'),
+            ('native-target-user', self.cfg, 1000, None),
+            ('host-prefix', {'prefix': self.cfg['prefix'], 'pkgdb': self.cfg['pkgdb']}, 0, None),
+            ('target-sysroot', dict(self.cfg, install_mode='sysroot',
+                                    sysroot=str(self.root / 'sysroot')),
+             0, None),
+        )
+        for name, config, euid, expected in cases:
+            with self.subTest(name=name), \
+                 patch('emberbsd_sdk.package_install.os.geteuid', return_value=euid), \
+                 patch('emberbsd_sdk.package_install.inspect_install_paths', return_value=None), \
+                 patch('emberbsd_sdk.package_install.subprocess.run',
+                       return_value=SimpleNamespace(returncode=0, stderr=b'')) as run:
+                installer.install(package, config, checked=True)
+                environment = run.call_args.kwargs['env']
+                self.assertEqual(environment.get('PKG_CREATE_USERGROUP'), expected)
+
     def test_live_sysroot_and_source_fallback_refused(self):
         config = {'repositories': {'target': self.cfg}, 'host_prefix': str(self.root), 'source': {}}
         with self.assertRaises(SDKError):

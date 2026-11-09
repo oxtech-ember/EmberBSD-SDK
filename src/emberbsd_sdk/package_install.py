@@ -288,8 +288,14 @@ class PackageInstaller:
             hook_path = self.crypto.prefix.path
             if config.get('target') and not target_sysroot(config):
                 hook_path += os.pathsep + os.defpath + os.pathsep + '/sbin:/usr/sbin'
-            result = subprocess.run(args, env={'PATH': hook_path, 'LC_ALL': 'C',
-                                              'PKG_PATH': ''}, capture_output=True)
+            environment = {'PATH': hook_path, 'LC_ALL': 'C', 'PKG_PATH': ''}
+            if config.get('target') and not target_sysroot(config) and os.geteuid() == 0:
+                # Packages are commonly produced by unprivileged pkgsrc builds,
+                # which bake PKG_CREATE_USERGROUP=NO into their hooks. A root
+                # install into the matching live target must create declared
+                # service accounts; host prefixes and sysroots must not.
+                environment['PKG_CREATE_USERGROUP'] = 'YES'
+            result = subprocess.run(args, env=environment, capture_output=True)
             if result.returncode:
                 raise SDKError('pkg_add failed: ' + result.stderr[-4096:].decode('utf-8', 'replace'))
             if selected is not None:

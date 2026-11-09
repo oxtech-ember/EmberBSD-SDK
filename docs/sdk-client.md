@@ -358,7 +358,10 @@ pkg_tools `os_version` is the package ABI, so `11.0` matches a NetBSD 11.1 kerne
 A different major release is refused. It does not change the package graph into host `@native` roots: use
 `install --package www/blanc`, for example. Normal `pkg_add` executes installation
 and deinstallation hooks; it receives no alternate root, foreign platform, or
-no-script flag. Hooks can use the device's base OS utilities. Crypto and pkg_tools
+no-script flag. For a root installation into this matching live target, the client
+enables package user/group creation so services declared by packages built with
+unprivileged pkgsrc can add their accounts. Host-prefix and sysroot installs do not
+enable account creation. Hooks can use the device's base OS utilities. Crypto and pkg_tools
 remain explicitly selected executable paths from `host_prefix`; binary operation
 needs no compiler. On devices with base pkg_tools under `/usr/sbin`, `/usr` can be
 selected after the normal tool containment/architecture checks.
