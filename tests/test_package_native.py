@@ -28,6 +28,9 @@ class NativeTargetTests(unittest.TestCase):
                                    release=Mock(return_value='11.0'))
         self.host.start()
         self.addCleanup(self.host.stop)
+        self.cpu = patch('emberbsd_sdk.package_install.native_cpu', return_value='amd64')
+        self.cpu.start()
+        self.addCleanup(self.cpu.stop)
 
     def test_native_prefix_and_default_sysroot(self):
         self.assertEqual(install_paths(self.cfg), (Path(self.cfg['prefix']), Path(self.cfg['pkgdb'])))
@@ -48,7 +51,7 @@ class NativeTargetTests(unittest.TestCase):
         with patch('emberbsd_sdk.package_install.platform.system', return_value='Darwin'):
             with self.assertRaises(SDKError):
                 install_paths(self.cfg)
-        with patch('emberbsd_sdk.package_install.platform.machine', return_value='aarch64'):
+        with patch('emberbsd_sdk.package_install.native_cpu', return_value='aarch64'):
             with self.assertRaises(SDKError):
                 install_paths(self.cfg)
         with patch('emberbsd_sdk.package_install.platform.release', return_value='11.1'):

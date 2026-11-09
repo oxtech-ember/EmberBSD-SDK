@@ -11,6 +11,7 @@ from types import MappingProxyType
 
 from . import process
 from .errors import SDKError
+from .host_identity import native_cpu
 from .native_toolset import _gcc, _native_image, _native_triplet, _require
 from .paths import canonical_existing
 
@@ -228,7 +229,7 @@ def load_host_prefix(prefix, *, required_roles, host=None, compiler_family='clan
                 real = canonical_existing(directory)
                 _require(os.path.isdir(real) and os.path.commonpath((real, root)) == root,
                          f'build PATH directory escapes host prefix: {directory}')
-        selected_host = dict(host or dict(os=platform.system(), cpu=platform.machine()))
+        selected_host = dict(host or dict(os=platform.system(), cpu=native_cpu()))
         _require(set(selected_host) == {'os', 'cpu'}, 'host requires OS and CPU')
         roles = set(required_roles)
         needs_compiler = bool(roles & {'cc', 'cxx', 'cpp'})

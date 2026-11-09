@@ -20,6 +20,7 @@ from .desktop_apps import bind_installed_desktops
 from .binary_release import _arch, _matches
 from .errors import ChannelExpired, SDKError, TransportError
 from .host_prefix import load_host_prefix
+from .host_identity import native_cpu
 from .jsonio import json_bytes, read_json, write_json
 from .package_cache import PackageCache, check_space, directory_lock
 from .package_install import PackageInstaller, install_paths, target_sysroot
@@ -855,7 +856,7 @@ def validate_config(value):
         install_paths(cfg)
         if cfg.get('host'):
             host = cfg['host']
-            if host['os'] != platform.system() or _arch(host['arch']) != _arch(platform.machine()):
+            if host['os'] != platform.system() or _arch(host['arch']) != _arch(native_cpu()):
                 raise SDKError('native repository differs from this host platform')
         else:
             targets += 1

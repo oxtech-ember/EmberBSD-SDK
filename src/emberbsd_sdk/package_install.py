@@ -12,6 +12,7 @@ import tempfile
 
 from .binary_release import _arch, _package_payload
 from .errors import SDKError
+from .host_identity import native_cpu
 from .paths import open_regular, verify_stable
 from . import package_relocation
 from .package_cache import directory_lock
@@ -36,7 +37,7 @@ def _native_target(config):
     # pkg_tools os_version stays on the package ABI (11.0) while uname -r
     # can be a later kernel in the same major release (11.1). The ABI field
     # still has to be netbsd-<major>.
-    if (platform.system() != 'NetBSD' or _arch(platform.machine()) != _arch(target['arch']) or
+    if (platform.system() != 'NetBSD' or _arch(native_cpu()) != _arch(target['arch']) or
             len(definitions) != 1 or target['triplet'] != definitions[0]['triplet'] or
             str(config.get('os_version', '')).split('.', 1)[0] != release.split('.', 1)[0] or
             target['abi'] != 'netbsd-' + release.split('.', 1)[0]):

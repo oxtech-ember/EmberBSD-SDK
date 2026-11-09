@@ -19,6 +19,7 @@ import tempfile
 
 from . import elf, host_prefix, paths
 from .errors import SDKError
+from .host_identity import native_cpu
 
 NATIVE_GENERATOR_RUNTIME_API = 1
 _MAX_TRACE = 4 * 1024 * 1024
@@ -123,7 +124,7 @@ def runtime_inputs(prefix, executable, host, package_dirs, *, search_path):
     """
     system, cpu = host.get('os'), host.get('cpu')
     _require(system in _OS_ROOTS and cpu in _MACHINES, 'unsupported native ELF host')
-    actual_cpu = platform.machine()
+    actual_cpu = native_cpu()
     _require(system == platform.system() and actual_cpu in _MACHINES and
              _MACHINES[cpu] == _MACHINES[actual_cpu], 'selected host differs from actual host')
     prefix = Path(prefix).resolve(strict=True)

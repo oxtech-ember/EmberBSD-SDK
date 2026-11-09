@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
+from emberbsd_sdk.host_identity import native_cpu
 from emberbsd_sdk.package_install import PackageInstaller, inspect_install_paths, PORTABLE_PREFIX
 from emberbsd_sdk.package_updates import check_updates
 from emberbsd_sdk.binary_release import _arch, _package_payload
@@ -37,7 +38,7 @@ class InstallTests(unittest.TestCase):
         self.work.mkdir()
         self.destination = self.work / 'prefix'
         self.cfg = dict(prefix=str(self.destination), pkgdb=str(self.destination / 'pkgdb'),
-                        host=dict(os=platform.system(), arch=platform.machine(), abi='test', runtime='native'))
+                        host=dict(os=platform.system(), arch=native_cpu(), abi='test', runtime='native'))
 
     def package(self, *, target=False, link=None, commands='', arch='aarch64', requires_self=False, preserve=False,
                 payload='installed data', provides=False, install_script=None, install_script_mode=0o755,
@@ -60,7 +61,7 @@ class InstallTests(unittest.TestCase):
             (f'REQUIRES={prefix}/payload\n' if requires_self else '') +
             (f'PROVIDES={prefix}/payload\n' if provides else '') +
             (f'OPSYS=NetBSD\nMACHINE_ARCH={arch}\nOS_VERSION=11.0\n' if target else
-             f'OPSYS={platform.system()}\nMACHINE_ARCH={_arch(platform.machine())}\nOS_VERSION={platform.release()}\n'))
+             f'OPSYS={platform.system()}\nMACHINE_ARCH={_arch(native_cpu())}\nOS_VERSION={platform.release()}\n'))
         unsigned, signed = self.work / 'unsigned.tgz', self.work / (package_name + '.tgz')
         extra = []
         if build_version is not None:
@@ -86,7 +87,7 @@ class InstallTests(unittest.TestCase):
 
     @unittest.skipUnless(platform.system() == 'NetBSD', 'native NetBSD lifecycle')
     def test_native_target_signed_package_hooks_and_replacement(self):
-        arch = _arch(platform.machine())
+        arch = _arch(native_cpu())
         major = platform.release().split('.', 1)[0]
         self.cfg = dict(prefix=str(self.destination), pkgdb=str(self.destination / 'pkgdb'),
                         target=dict(arch=arch, triplet=arch + '--netbsd',
@@ -125,7 +126,7 @@ class InstallTests(unittest.TestCase):
                 self.destination = case / 'prefix'
                 self.cfg = dict(prefix=str(self.destination),
                                 pkgdb=str(self.destination / 'pkgdb'),
-                                host=dict(os=platform.system(), arch=platform.machine(),
+                                host=dict(os=platform.system(), arch=native_cpu(),
                                           abi='test', runtime='native'))
                 installer = PackageInstaller(self.crypto, self.ca.certificate)
                 first = self.package(package_name='fixture-1.0')
@@ -159,7 +160,7 @@ class InstallTests(unittest.TestCase):
         self.work = case
         self.destination = case / 'prefix'
         self.cfg = dict(prefix=str(self.destination), pkgdb=str(self.destination / 'pkgdb'),
-                        host=dict(os=platform.system(), arch=platform.machine(),
+                        host=dict(os=platform.system(), arch=native_cpu(),
                                   abi='test', runtime='native'))
         package = self.package()
         self.destination.mkdir()  # pkgdb lock creates its parent before planning.

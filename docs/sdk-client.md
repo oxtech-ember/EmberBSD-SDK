@@ -352,6 +352,8 @@ For example, a NetBSD 11.0 amd64 device using the published libc++ package graph
 
 The target identity still must match the signed catalog exactly. Before accessing
 its database, native mode checks the running CPU, triplet and major ABI.
+NetBSD CPU detection uses `uname -p`, so an `evbarm` machine running AArch64
+is checked as `aarch64`; a 32-bit ARM system is not accepted as AArch64.
 pkg_tools `os_version` is the package ABI, so `11.0` matches a NetBSD 11.1 kernel.
 A different major release is refused. It does not change the package graph into host `@native` roots: use
 `install --package www/blanc`, for example. Normal `pkg_add` executes installation

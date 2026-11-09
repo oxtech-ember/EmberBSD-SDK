@@ -68,7 +68,7 @@ with tempfile.TemporaryDirectory() as temporary:
     fake = lambda p, machine=None: {'needed': ['liba.so'] if Path(p) == tool else [],
                                      'soname': 'liba.so' if Path(p) == library else None}
     with patch.object(mod.platform, 'system', return_value='Linux'), \
-         patch.object(mod.platform, 'machine', return_value='x86_64'), \
+         patch.object(mod, 'native_cpu', return_value='x86_64'), \
          patch.object(mod.host_prefix, 'validate_host_executable', return_value=str(tool)), \
          patch.object(mod, 'elf_interpreter', return_value=str(interp)), \
          patch.object(mod.elf, 'read_elf_dynamic', side_effect=fake), \
@@ -96,6 +96,11 @@ with tempfile.TemporaryDirectory() as temporary:
              patch.object(mod, '_trace', return_value=f'OBJECT|{library}\n') as trace:
             mod.runtime_inputs(prefix, tool, {'os': 'NetBSD', 'cpu': 'x86_64'}, selected, search_path=str(prefix/'bin'))
             assert trace.call_args.args[0][:2] == ['/usr/bin/ldd', '-f']
+            with patch.object(mod.platform, 'machine', return_value='evbarm'), \
+                 patch.object(mod, 'native_cpu', return_value='aarch64'):
+                inputs = mod.runtime_inputs(prefix, tool, {'os': 'NetBSD', 'cpu': 'aarch64'},
+                                            selected, search_path=str(prefix/'bin'))
+                assert str(library) in inputs
         outside_loader = root/'ld-linux-foreign.so.2'
         outside_loader.write_bytes(b'foreign loader')
         with patch.object(mod, 'elf_interpreter', return_value=str(outside_loader)), \

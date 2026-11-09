@@ -35,6 +35,11 @@ and OS process services are normal host inputs. Keep native ABI paths out of
 target include, library, and pkg-config searches. Source-build supervision
 resolves `ps` through the OS default command path, so process inspection works
 with a restricted native-tool `PATH`.
+On NetBSD, native CPU identity uses the OS `uname -p` extension through that
+same service route. `uname -m` can report a board family such as `evbarm` for
+both 32-bit ARM and AArch64, so it is not an executable ABI identity. Other
+hosts retain `platform.machine()`; failed processor queries are not replaced
+with a guessed architecture.
 Git source inspection and documentation checks are separate from artifact builds.
 
 Standalone producers can use `host_services.build_path(native, work)` for
