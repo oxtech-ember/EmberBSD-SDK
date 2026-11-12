@@ -139,7 +139,18 @@ Choose a new binding directory when the ABI changes so compile commands and
 their build-system caches are invalidated. Existing format 2 and 3 bindings reject a
 selected config that explicitly names a namespace other than `__1`.
 
-For a native replacement stage, `prepare-darwin-stage.py` writes a separate
+For library or package replacement with the existing native toolchain, pass
+`prepare-darwin-stage.py --host-toolchain`. All three compiler roles in the
+validated binding must resolve inside the selected host prefix. Current generic
+format 1 bindings are accepted, as are explicitly bound native runtimes inside
+that prefix. This mode uses the host prefix for cwrappers and rpcgen, refuses
+staged tool overrides and a linker runtime view, and does not require a staged
+libc++ or LLVM. It still selects the stage package database and requested
+buildlinks. It neither builds nor qualifies the compiler or packages; missing
+dependencies must be prepared in the stage. The default mode retains its
+namespace-specific staged C++ runtime requirement.
+
+For a compiler/runtime replacement stage, `prepare-darwin-stage.py` writes a separate
 pkgsrc MAKECONF from an existing Darwin base configuration and an explicit v4
 binding for that stage. Pass `--stage-root`, the final `--prefix`, distinct
 `--object-root` and `--packages` directories. The overlay publishes the selected

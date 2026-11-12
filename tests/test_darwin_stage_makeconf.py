@@ -186,5 +186,79 @@ class NativeStageMakeconfTests(unittest.TestCase):
             write_native_stage_makeconf(**self.options)
 
 
+    def host_binding(self, name, commands=None, runtime=None):
+        root = self.base.parent
+        binding = root/name
+        if commands is None:
+            commands = {role: [str(self.python)] for role in ('cc', 'cxx', 'cpp')}
+        compiler_bindings.bind_compilers(binding, commands=commands, flags=self.flags,
+                                         python=str(self.python), native_cxx_runtime=runtime)
+        return binding/'commands.json'
+
+    def test_host_toolchain_generic_binding_and_repeat(self):
+        import json
+        record = self.host_binding('host-generic')
+        self.assertEqual(json.loads(record.read_text())['version'], 1)
+        opts = self.options | dict(binding_record=str(record), host_toolchain=True)
+        out = Path(write_native_stage_makeconf(**opts))
+        text = out.read_text()
+        self.assertIn('CWRAPPERS_SRC_DIR= '+str(self.prefix/'libexec/cwrappers')+'\n', text)
+        self.assertIn('TOOLS_PATH.rpcgen= '+str(self.prefix/'bin/rpcgen')+'\n', text)
+        self.assertIn('.undef EMBERBSD_NATIVE_CXX_ABI_NAMESPACE\n', text)
+        self.assertIn('PKG_DBDIR= '+str(self.staged/'pkgdb')+'\n', text)
+        self.assertIn('BUILDLINK_PREFIX.llvm= '+str(self.staged)+'\n', text)
+        self.assertEqual(write_native_stage_makeconf(**opts), str(out))
+        self.assertEqual(out.read_text(), text)
+        with self.assertRaises(SDKError):
+            write_native_stage_makeconf(**(opts | dict(host_toolchain=False)))
+        adapter = record.parent/'cc'
+        adapter.chmod(0o755); adapter.write_text('tampered')
+        with self.assertRaises(SDKError):
+            write_native_stage_makeconf(**opts)
+
+    def test_host_toolchain_explicit_prefix_runtime(self):
+        include = self.prefix/'include/libc++/v1'; include.mkdir(parents=True)
+        lib = self.prefix/'lib/libc++'; lib.mkdir(parents=True)
+        (include/'__config_site').write_text('#define _LIBCPP_ABI_NAMESPACE __ember1\n')
+        (lib/'libc++_ember1.1.0.dylib').write_text('fixture')
+        (lib/'libc++_ember1.1.dylib').symlink_to('libc++_ember1.1.0.dylib')
+        (lib/'libc++.dylib').symlink_to('libc++_ember1.1.dylib')
+        runtime = self.runtime | dict(include_dir=str(include), library_dir=str(lib))
+        record = self.host_binding('host-v4', runtime=runtime)
+        opts = self.options | dict(binding_record=str(record), host_toolchain=True)
+        text = Path(write_native_stage_makeconf(**opts)).read_text()
+        self.assertIn('EMBERBSD_NATIVE_CXX_ABI_NAMESPACE= __ember1\n', text)
+        self.assertIn('CWRAPPERS_SRC_DIR= '+str(self.prefix/'libexec/cwrappers')+'\n', text)
+        self.assertEqual(write_native_stage_makeconf(**opts), opts['output'])
+
+    def test_host_toolchain_rejects_wrong_inputs(self):
+        import json
+        root = self.base.parent
+        record = self.host_binding('host-invalid')
+        opts = self.options | dict(binding_record=str(record), host_toolchain=True)
+        with self.assertRaises(SDKError):
+            write_native_stage_makeconf(**(opts | dict(tools=['ld='+str(self.python)])))
+        with self.assertRaises(SDKError):
+            write_native_stage_makeconf(**(opts | dict(linker_runtime_view=str(root))))
+        # The staged v4 runtime remains invalid for a host compiler selection.
+        with self.assertRaises(SDKError):
+            write_native_stage_makeconf(**(opts | dict(binding_record=str(self.record))))
+        stage_cc = self.staged/'bin/cc'; stage_cc.parent.mkdir(parents=True)
+        stage_cc.write_text('fixture'); stage_cc.chmod(0o755)
+        foreign = root/'foreign'; foreign.write_text('fixture'); foreign.chmod(0o755)
+        for name, commands in (
+            ('stage', {role:[str(stage_cc)] for role in ('cc', 'cxx', 'cpp')}),
+            ('mixed', {'cc':[str(stage_cc)], 'cxx':[str(self.python)], 'cpp':[str(self.python)]}),
+            ('foreign', {role:[str(foreign)] for role in ('cc', 'cxx', 'cpp')}),
+        ):
+            candidate = self.host_binding('binding-'+name, commands)
+            with self.subTest(name=name), self.assertRaises(SDKError):
+                write_native_stage_makeconf(**(opts | dict(binding_record=str(candidate))))
+        data = json.loads(record.read_text()); data['format'] = 'invalid'
+        record.chmod(0o644)
+        record.write_text(json.dumps(data))
+        with self.assertRaises(SDKError):
+            write_native_stage_makeconf(**opts)
+
 if __name__ == '__main__':
     unittest.main()

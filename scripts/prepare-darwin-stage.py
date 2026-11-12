@@ -16,6 +16,8 @@ def main():
     parser.add_argument('--tool', action='append', default=[], metavar='ROLE=PATH')
     parser.add_argument('--runtime-view')
     parser.add_argument('--linker-runtime-view')
+    parser.add_argument('--host-toolchain', action='store_true',
+                        help='retain selected host-prefix compilers and C++ runtime while staging library/package replacements')
     args = parser.parse_args()
     source = Path(args.sdk_source).resolve(strict=True)
     sys.path.insert(0, str(source / 'src'))
@@ -24,7 +26,8 @@ def main():
         stage_root=args.stage_root, prefix=args.prefix, object_root=args.object_root,
         packages=args.packages, binding_record=args.binding_record, python=args.python,
         buildlinks=args.buildlink, tools=args.tool, runtime_view=args.runtime_view,
-        linker_runtime_view=args.linker_runtime_view))
+        linker_runtime_view=args.linker_runtime_view,
+        host_toolchain=args.host_toolchain))
 
 
 if __name__ == '__main__':

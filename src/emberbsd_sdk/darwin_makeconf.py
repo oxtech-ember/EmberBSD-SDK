@@ -35,7 +35,8 @@ NATIVE_STAGE_MAKECONF_API = 1
 
 def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root,
                                 packages, binding_record, python, buildlinks, tools=(),
-                                runtime_view=None, linker_runtime_view=None):
+                                runtime_view=None, linker_runtime_view=None,
+                                host_toolchain=False):
     """Render a native replacement-stage overlay using ordinary pkgsrc variables."""
     from . import compiler_bindings, paths
     base = _path(base, existing=True)
@@ -64,20 +65,36 @@ def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root
         record = json.load(stream)
     _require(isinstance(record, dict), 'invalid native C++ binding record')
     runtime = record.get('native_cxx_runtime')
-    _require(isinstance(runtime, dict) and record.get('version') == 4 and
-             runtime.get('include_dir') == os.path.join(staged, 'include/libc++/v1') and
-             runtime.get('library_dir') == os.path.join(staged, 'lib/libc++'),
-             'stage requires its matching namespace-specific native C++ binding')
-    compiler_bindings.compiler_argv(record, 'cxx', ['-fsyntax-only', '-x', 'c++', '/dev/null'])
+    _require(isinstance(host_toolchain, bool), 'host_toolchain must be a boolean')
+    if host_toolchain:
+        _require(not tools and linker_runtime_view is None,
+                 'host toolchain selection cannot replace staged compiler tools')
+        if runtime is not None:
+            _require(isinstance(runtime, dict) and
+                     all(isinstance(runtime.get(name), str) and
+                         os.path.isabs(runtime[name]) and
+                         _inside(os.path.realpath(runtime[name]), prefix)
+                         for name in ('include_dir', 'library_dir')),
+                     'host toolchain must retain its selected host-prefix C++ runtime')
+    else:
+        _require(isinstance(runtime, dict) and record.get('version') == 4 and
+                 runtime.get('include_dir') == os.path.join(staged, 'include/libc++/v1') and
+                 runtime.get('library_dir') == os.path.join(staged, 'lib/libc++'),
+                 'stage requires its matching namespace-specific native C++ binding')
     compiler_roots = set()
     for role in ('cc', 'cxx', 'cpp'):
-        command = record['commands'][role]['argv']
+        compiler_bindings.compiler_argv(record, role, ['-fsyntax-only', '-x', 'c++' if role == 'cxx' else 'c', '/dev/null'])
+        specification = record['commands'][role]
+        command = specification['argv'] if runtime is not None else specification
         _require(bool(command) and (_inside(os.path.realpath(command[0]), prefix) or
                                     _inside(os.path.realpath(command[0]), staged)),
                  'stage binding must use selected host-prefix or staged compilers')
         compiler_roots.add('stage' if _inside(os.path.realpath(command[0]), staged) else 'prefix')
     _require(len(compiler_roots) == 1, 'stage binding cannot mix compiler roots')
-    commands = {role: specification['argv'] for role, specification in record['commands'].items()}
+    _require(not host_toolchain or compiler_roots == {'prefix'},
+             'host toolchain selection requires all compilers in the host prefix')
+    commands = {role: specification['argv'] if runtime is not None else specification
+                for role, specification in record['commands'].items()}
     compiler_bindings.bind_compilers(os.path.dirname(record_path), commands=commands,
         flags=record['flags'], python=python, aliases=record.get('aliases'),
         link_flags=record.get('link_flags'), runtime_rpath=record.get('runtime_rpath'),
@@ -99,11 +116,14 @@ def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root
              'EMBERBSD_DARWIN_SEED_CC= ' + os.path.join(os.path.dirname(record_path), 'cc'),
              'EMBERBSD_DARWIN_SEED_CXX= ' + os.path.join(os.path.dirname(record_path), 'cxx'),
              'EMBERBSD_DARWIN_SEED_CPP= ' + os.path.join(os.path.dirname(record_path), 'cpp'),
-             'EMBERBSD_NATIVE_CXX_ABI_NAMESPACE= ' + runtime['abi_identity']['namespace'],
              'DEPENDS_TARGET= emberbsd-stage-missing-dependency',
-             'CWRAPPERS_SRC_DIR= ' + os.path.join(staged, 'libexec/cwrappers'),
+             'CWRAPPERS_SRC_DIR= ' + os.path.join(prefix if host_toolchain else staged, 'libexec/cwrappers'),
              'EMBERBSD_NATIVE_STAGE_PYTHON= ' + python,
-             'TOOLS_PATH.rpcgen= ' + os.path.join(staged, 'bin/rpcgen')]
+             'TOOLS_PATH.rpcgen= ' + os.path.join(prefix if host_toolchain else staged, 'bin/rpcgen')]
+    if runtime and 'abi_identity' in runtime:
+        lines.append('EMBERBSD_NATIVE_CXX_ABI_NAMESPACE= ' + runtime['abi_identity']['namespace'])
+    else:
+        lines.append('.undef EMBERBSD_NATIVE_CXX_ABI_NAMESPACE')
     tool_vars = {'ld': ('EMBERBSD_DARWIN_LD64_LLD',),
                  'ar': ('EMBERBSD_DARWIN_AR', 'EMBERBSD_DARWIN_TOOL.ar'),
                  'ranlib': ('EMBERBSD_DARWIN_RANLIB', 'EMBERBSD_DARWIN_TOOL.ranlib'),
