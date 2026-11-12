@@ -130,8 +130,12 @@ def unpack_package(archive_path, root):
 
 def _local_reference(name, relative, prefix, image):
     original = Path(prefix) / relative
+    if name == '@loader_path':
+        return original.parent
     if name.startswith('@loader_path/'):
         return original.parent / name[len('@loader_path/'):]
+    if name == '@executable_path' and image['filetype'] == 2:
+        return original.parent
     if name.startswith('@executable_path/') and image['filetype'] == 2:
         return original.parent / name[len('@executable_path/'):]
     if name.startswith('/'):
@@ -259,11 +263,18 @@ def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency
             if image['install_name'] != install_name:
                 options += ['-id', install_name]
         for rpath in image['rpaths']:
-            if rpath.startswith(prefix + '/') or rpath == prefix:
-                options += ['-rpath', rpath, '@loader_path/' + os.path.relpath(
-                    root / Path(rpath).relative_to(prefix), path.parent)]
-            elif not rpath.startswith(('@loader_path/', '@executable_path/', *_SYSTEM)):
+            if rpath.startswith(_SYSTEM):
+                continue
+            reference = _local_reference(rpath, relative, prefix, image)
+            local = Path(os.path.normpath(reference))
+            if not reference.is_relative_to(prefix) or not local.is_relative_to(prefix):
                 raise SDKError('external native RPATH: ' + rpath)
+            anchor = root / reference.relative_to(prefix)
+            if not anchor.resolve().is_relative_to(root.resolve()):
+                raise SDKError('escaping native RPATH: ' + rpath)
+            if rpath.startswith('/'):
+                options += ['-rpath', rpath, '@loader_path/' + os.path.relpath(
+                    anchor.resolve(), path.parent.resolve())]
         if options:
             subprocess.run([str(install_name_tool), *options, str(path)], check=True,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)

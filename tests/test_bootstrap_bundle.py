@@ -56,6 +56,45 @@ class BootstrapTests(unittest.TestCase):
                     stream.addfile(member, io.BytesIO(data))
         return archive
 
+    def test_native_rpath_bare_anchors_and_escapes(self):
+        image = self.root / 'bin' / 'example'
+        image.parent.mkdir()
+        image.write_bytes(b'\xcf\xfa\xed\xfe' + b'\0' * 28)
+        cases = [('@loader_path', 6, True), ('@executable_path', 2, True),
+                 ('@executable_path', 6, False), ('@loader_path_evil', 2, False),
+                 ('@executable_path_evil', 2, False), ('@loader_path/../../outside', 2, False),
+                 ('@executable_path/../../outside', 2, False),
+                 ('/producer/sdk/../outside', 2, False),
+                 ('@loader_path/../lib', 6, True),
+                 ('@executable_path/../lib', 2, True)]
+        for rpath, filetype, allowed in cases:
+            with self.subTest(rpath=rpath, filetype=filetype), \
+                 patch('emberbsd_sdk.bootstrap_bundle.read_macho_runtime', return_value=dict(
+                     loads=[], install_name=None, rpaths=[rpath], filetype=filetype)), \
+                 patch('emberbsd_sdk.bootstrap_bundle.subprocess.run'):
+                if allowed:
+                    make_relative(self.root, '/producer/sdk', {'os':'Darwin', 'cpu':'arm64'},
+                                  '/usr/bin/install_name_tool', '/usr/bin/codesign')
+                else:
+                    with self.assertRaises(SDKError):
+                        make_relative(self.root, '/producer/sdk', {'os':'Darwin', 'cpu':'arm64'},
+                                      '/usr/bin/install_name_tool', '/usr/bin/codesign')
+
+    def test_native_rpath_refuses_escaping_directory_link(self):
+        image = self.root / 'bin' / 'example'
+        image.parent.mkdir()
+        image.write_bytes(b'\xcf\xfa\xed\xfe' + b'\0' * 28)
+        (self.root / 'lib').symlink_to(self.work)
+        for rpath in ('@loader_path/../lib', '/producer/sdk/lib'):
+            with self.subTest(rpath=rpath), \
+                 patch('emberbsd_sdk.bootstrap_bundle.read_macho_runtime', return_value=dict(
+                     loads=[], install_name=None, rpaths=[rpath], filetype=2)), \
+                 patch('emberbsd_sdk.bootstrap_bundle.subprocess.run') as run:
+                with self.assertRaisesRegex(SDKError, 'escaping native RPATH'):
+                    make_relative(self.root, '/producer/sdk', {'os':'Darwin', 'cpu':'arm64'},
+                                  '/usr/bin/install_name_tool', '/usr/bin/codesign')
+                run.assert_not_called()
+
     def test_native_single_slice_fat_static_archive_is_not_rewritten_or_signed(self):
         archive = self.root / 'libclang_rt.a'
         archive.write_bytes(fat_archive())
