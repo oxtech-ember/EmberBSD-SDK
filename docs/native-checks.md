@@ -150,6 +150,14 @@ buildlinks. It neither builds nor qualifies the compiler or packages; missing
 dependencies must be prepared in the stage. The default mode retains its
 namespace-specific staged C++ runtime requirement.
 
+A signed host package can be installed into the same isolated stage using the
+SDK client `native-stage` install mode described in [SDK client](sdk-client.md#host-replacement-stage).
+The client keeps the final logical prefix and package database in metadata while
+placing payload and database under the stage root. `prepare-darwin-stage.py`
+then selects that stage's database and buildlinks without activating it. Package
+hooks and bytecode generation do not run during staged installation; the stage
+is a build input, not an accepted live installation.
+
 For a compiler/runtime replacement stage, `prepare-darwin-stage.py` writes a separate
 pkgsrc MAKECONF from an existing Darwin base configuration and an explicit v4
 binding for that stage. Pass `--stage-root`, the final `--prefix`, distinct

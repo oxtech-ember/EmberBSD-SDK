@@ -360,6 +360,122 @@ class InstallTests(unittest.TestCase):
         self.assertEqual((database / 'fixture-1.0/+CONTENTS').read_bytes(), contents)
         self.crypto.run_package('pkg_admin', ['-K', database, 'check', 'fixture-1.0'])
 
+    def native_stage_config(self):
+        root = self.work / 'native-stage'
+        logical = self.destination
+        cfg = dict(self.cfg, install_mode='native-stage', stage_root=str(root))
+        physical = root / str(logical).lstrip('/')
+        return cfg, physical, physical / 'pkgdb'
+
+    def test_native_stage_same_and_foreign_producer_signed_lifecycle(self):
+        # Signed pkg_tools exercise both an original P and a third-party
+        # producer; physical stage contains P as suffix, which must not cause
+        # text relocation to treat the staging root as the intended prefix.
+        logical = self.destination
+        logical.mkdir()
+        sentinel = logical / 'sentinel'
+        sentinel.write_text('unchanged')
+        cfg, physical, db = self.native_stage_config()
+        installer = PackageInstaller(self.crypto, self.ca.certificate)
+        for number, original in enumerate((logical, self.work / 'producer')):
+            if number:
+                shutil.rmtree(self.work / 'stage')
+                (self.work / 'fixture-1.0.tgz').unlink()
+                self.destination = original
+            commands = (package_relocation.MARKER + '\n' +
+                package_relocation.SOURCE + str(original) + '\n' +
+                package_relocation.TEXT + 'payload\n' + package_relocation.HOOKS + '\n')
+            hook = '#!/bin/sh\ntouch ' + str(self.work / 'hook-ran') + '\n'
+            unhook = '#!/bin/sh\ntouch ' + str(self.work / 'unhook-ran') + '\n'
+            package = self.package(package_name='fixture-1.0', payload=str(original) + '/value',
+                                   provides=True, commands=commands, install_script=hook,
+                                   deinstall_script=unhook)
+            installer.install(package, cfg)
+            installer.install(package, cfg)  # repeated replacement stays stage-local
+            self.assertEqual((physical / 'payload').read_text(), str(logical) + '/value')
+            metadata = db / 'fixture-1.0'
+            info = (metadata / '+BUILD_INFO').read_text()
+            self.assertIn('LOCALBASE=' + str(logical), info)
+            self.assertIn('PROVIDES=' + str(logical) + '/payload', info)
+            self.assertNotIn(str(cfg['stage_root']), info)
+            self.assertTrue((metadata / package_relocation.READY).is_file())
+            self.assertFalse((self.work / 'hook-ran').exists())
+            self.assertIn('fixture-1.0', installer.installed(cfg))
+            installer.configure(cfg)
+            self.assertFalse((self.work / 'hook-ran').exists())
+            self.crypto.run_package('pkg_admin', ['-P', cfg['stage_root'], '-K', db,
+                                                  'check', 'fixture-1.0'])
+            installer.remove('fixture-1.0', cfg)
+            self.assertFalse((physical / 'payload').exists())
+            self.assertFalse((self.work / 'unhook-ran').exists())
+            self.assertEqual(sentinel.read_text(), 'unchanged')
+        self.destination = logical
+
+    def test_native_stage_raw_signed_package_never_executes_scripts(self):
+        cfg, physical, _ = self.native_stage_config()
+        self.destination.mkdir()
+        sentinel = self.destination / 'sentinel'
+        sentinel.write_text('unchanged')
+        markers = {name: self.work / name for name in ('exec-ran', 'unexec-ran', 'install-ran', 'delete-ran')}
+        commands = ('@exec touch ' + str(markers['exec-ran']) + '\n' +
+                    '@unexec touch ' + str(markers['unexec-ran']) + '\n')
+        package = self.package(commands=commands,
+            install_script='#!/bin/sh\ntouch ' + str(markers['install-ran']) + '\n',
+            deinstall_script='#!/bin/sh\ntouch ' + str(markers['delete-ran']) + '\n')
+        installer = PackageInstaller(self.crypto, self.ca.certificate)
+        installer.install(package, cfg)
+        installer.install(package, cfg)
+        self.assertTrue((physical / 'payload').is_file())
+        installer.remove('fixture-1.0', cfg)
+        self.assertFalse((physical / 'payload').exists())
+        self.assertEqual(sentinel.read_text(), 'unchanged')
+        for marker in markers.values():
+            self.assertFalse(marker.exists(), marker)
+
+    def test_native_stage_relocated_python_does_not_compile_bytecode(self):
+        cfg, physical, db = self.native_stage_config()
+        original = self.work / 'producer'
+        self.destination = original
+        commands = (package_relocation.MARKER + '\n' +
+                    package_relocation.SOURCE + str(original) + '\n' +
+                    package_relocation.TEXT + 'module.py\n')
+        package = self.package(payload_path='module.py',
+            payload='PREFIX = ' + repr(str(original)) + '\n', commands=commands)
+        installer = PackageInstaller(self.crypto, self.ca.certificate)
+        installer.install(package, cfg)
+        self.assertIn(repr(cfg['prefix']), (physical / 'module.py').read_text())
+        self.assertTrue((db / 'fixture-1.0' / package_relocation.READY).is_file())
+        installer.installed(cfg)
+        installer.configure(cfg)
+        self.assertFalse(list(physical.rglob('__pycache__')))
+        self.assertTrue((db / 'fixture-1.0' / package_relocation.READY).is_file())
+
+    def test_native_stage_forbids_unqualified_hooks_and_commands(self):
+        cfg, _, _ = self.native_stage_config()
+        package = self.package(commands=PORTABLE_PREFIX + '\n@exec echo unsafe\n')
+        with self.assertRaises(SDKError):
+            PackageInstaller(self.crypto, self.ca.certificate).install(package, cfg)
+        self.assertFalse((self.work / 'hook-ran').exists())
+        shutil.rmtree(self.work / 'stage')
+        package.unlink()
+        package = self.package(commands=PORTABLE_PREFIX + '\n',
+                               install_script='#!/bin/sh\ntouch ' + str(self.work / 'hook-ran') + '\n')
+        with self.assertRaises(SDKError):
+            PackageInstaller(self.crypto, self.ca.certificate).install(package, cfg)
+        self.assertFalse((self.work / 'hook-ran').exists())
+
+    def test_checked_archive_cannot_reuse_validation_for_other_stage(self):
+        package = self.package()
+        cfg, _, _ = self.native_stage_config()
+        installer = PackageInstaller(self.crypto, self.ca.certificate)
+        installer.check(package, cfg)
+        other = dict(cfg, prefix=str(self.work / 'wrong-prefix'),
+                     pkgdb=str(self.work / 'wrong-prefix/pkgdb'),
+                     stage_root=str(self.work / 'other-stage'))
+        with self.assertRaises(SDKError):
+            installer.install(package, other, checked=True)
+        self.assertFalse((self.work / 'other-stage').exists())
+
     def test_prefix_independent_commands_are_refused(self):
         package = self.package(commands=PORTABLE_PREFIX + '\n@exec echo unsafe\n')
         with self.assertRaisesRegex(SDKError, 'installation commands'):

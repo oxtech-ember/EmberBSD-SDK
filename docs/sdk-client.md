@@ -371,6 +371,31 @@ on the developer host through Ports and publish them before device installation.
 The default target mode remains `sysroot`, with its non-root destination and
 non-executing behavior; `install_mode` is not a platform or runtime override.
 
+### Host replacement stage
+
+For an isolated host package replacement, select `"install_mode": "native-stage"`
+with the host identity, the final logical `prefix` and `pkgdb`, and an absolute
+`stage_root` other than `/`. This mode is for host packages only; it does not
+accept a target identity. The logical prefix and package database retain their
+final names, while their physical files live below `stage_root`. Text and package
+metadata relocation use the logical prefix, not the physical staging path.
+The stage root must contain all resolved payload and database paths. The
+physical stage prefix and database must not overlap the resolved live prefix or
+database in either direction; unsafe paths or links are refused. The normal
+signature verification remains required.
+
+The client installs with `pkg_add -P STAGE_ROOT -I` and removes conflicts with
+`pkg_delete -P STAGE_ROOT -D`. This suppresses install/deinstall scripts and
+packing-list exec/unexec commands; it does not execute package hooks or generate
+bytecode. Pending hooks and bytecode are not automatically run or recovered;
+metadata-only automatic-state intents may be recovered. Inspect and repair an
+interrupted stage explicitly before retrying. Staging does not activate the
+packages, copy them into the live prefix, or establish target acceptance.
+This install mode accepts signed binaries. If one is missing, build and sign
+it with the explicit Ports stage configuration first; the SDK client refuses
+source fallback before mutation because its live-prefix producer cannot
+establish stage isolation.
+
 ## Cache and interruption
 
 Archives are stored once as `SHA256.tgz`, with partial downloads as `SHA256.part`.

@@ -71,6 +71,41 @@ class ClientTests(unittest.TestCase):
     def plan(self, **kw):
         return installation_plan(self.release, self.catalogs, self.cfg, self.installer, self.cache, **kw)
 
+    def test_native_stage_configuration_rejects_unsafe_modes_and_roots(self):
+        from emberbsd_sdk.sdk_client import validate_config
+        from emberbsd_sdk.host_identity import native_cpu
+        host = dict(os=platform.system(), arch=native_cpu(), abi='test', runtime='native')
+        base = dict(schema='emberbsd.sdk-client.v1', host_prefix=str(self.root / 'host'),
+                    cache_dir=str(self.root / 'cache'), state_dir=str(self.root / 'state'),
+                    repositories={'native': dict(host=host, prefix=str(self.root / 'prefix'),
+                        pkgdb=str(self.root / 'prefix/pkgdb'), install_mode='native-stage',
+                        stage_root=str(self.root / 'stage'))})
+        validate_config(deepcopy(base))
+        bad = [dict(stage_root='/'), dict(stage_root='relative'), dict(stage_root=''),
+               dict(install_mode='bogus'), dict(stage_root=str(self.root / 'prefix')),
+               dict(stage_root=str(self.root / 'prefix/child')),
+               dict(sysroot=str(self.root / 'target'))]
+        for changes in bad:
+            config = deepcopy(base)
+            config['repositories']['native'].update(changes)
+            with self.subTest(changes=changes), self.assertRaises((SDKError, ValueError)):
+                validate_config(config)
+        active = self.root / 'prefix'
+        active.mkdir()
+        alias = self.root / 'active-alias'
+        alias.symlink_to(active, target_is_directory=True)
+        config = deepcopy(base)
+        config['repositories']['native']['stage_root'] = str(alias / 'child')
+        with self.assertRaises((SDKError, ValueError)):
+            validate_config(config)
+        config = deepcopy(base)
+        repo = config['repositories']['native']
+        repo.pop('host')
+        repo['target'] = dict(arch='aarch64', triplet='aarch64--netbsd', abi='netbsd-11', runtime='libc++')
+        repo['os_version'] = '11.0'
+        with self.assertRaises((SDKError, ValueError)):
+            validate_config(config)
+
     def test_cli_passes_explicit_https_proxy_and_direct_default(self):
         from emberbsd_sdk.sdk_client import main
         host = dict(os=platform.system(), arch=platform.machine(), abi='test', runtime='native')
@@ -381,6 +416,19 @@ class ClientTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'Ports'):
             apply_plan(plan, self.cfg, self.installer, self.cache, self.store)
         self.assertEqual(self.installer.actions, [])
+
+    def test_native_stage_source_fallback_fails_before_mutation(self):
+        self.cfg['repositories']['native'].update(
+            install_mode='native-stage', stage_root=str(self.root / 'stage'))
+        plan = self.plan(sets=['task'], roots=['devel/missing@native'])
+        self.cfg['source'] = {name: str(self.root / name)
+                              for name in ('ports_root', 'pkgsrc', 'makeconf', 'state')}
+        with patch('emberbsd_sdk.sdk_client.run_source') as source:
+            with self.assertRaisesRegex(SDKError, 'native stage installs signed binaries only'):
+                apply_plan(plan, self.cfg, self.installer, self.cache, self.store)
+        source.assert_not_called()
+        self.assertEqual(self.installer.actions, [])
+        self.assertFalse(self.store.calls)
 
     def test_missing_roots_use_existing_ports_after_binary_install(self):
         self.cfg['source'] = {name: str(self.root / name) for name in ('ports_root', 'pkgsrc', 'makeconf', 'state')}

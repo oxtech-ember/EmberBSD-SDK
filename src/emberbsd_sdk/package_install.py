@@ -2,6 +2,7 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """pkg_tools installation into native prefixes or non-executing target roots."""
 
+import json
 import os
 import platform
 from pathlib import Path, PurePosixPath
@@ -21,12 +22,35 @@ from .release_signing import read_bytes
 PORTABLE_PREFIX = package_relocation.INDEPENDENT
 
 
-def target_sysroot(config):
-    """Separate the package's catalog identity from where it executes."""
+def install_mode(config):
+    """Execution policy is distinct from the package's catalog identity."""
     mode = config.get('install_mode', 'sysroot' if config.get('target') else 'native')
-    if mode not in ('native', 'sysroot') or (mode == 'sysroot' and not config.get('target')):
+    if (mode not in ('native', 'sysroot', 'native-stage') or
+            (mode == 'sysroot' and not config.get('target')) or
+            (mode == 'native-stage' and (not config.get('host') or config.get('target'))) or
+            ('stage_root' in config and mode != 'native-stage') or
+            (mode == 'native-stage' and 'sysroot' in config)):
         raise SDKError('invalid package install_mode')
-    return mode == 'sysroot'
+    return mode
+
+
+def target_sysroot(config):
+    return install_mode(config) == 'sysroot'
+
+
+def installation_root(config):
+    """Return an explicit non-executing root, or None for a live prefix."""
+    mode = install_mode(config)
+    if mode == 'native':
+        return None
+    key = 'sysroot' if mode == 'sysroot' else 'stage_root'
+    value = config.get(key)
+    if not isinstance(value, str):
+        raise SDKError(f'package installation requires absolute {key}')
+    root = Path(value)
+    if (not root.is_absolute() or '..' in root.parts or root.resolve() == Path('/')):
+        raise SDKError(f'{key} must be an explicit non-root absolute directory')
+    return root
 
 
 def _native_target(config):
@@ -48,13 +72,22 @@ def _native_target(config):
 
 def install_paths(config):
     prefix, database = Path(config['prefix']), Path(config['pkgdb'])
-    if not prefix.is_absolute() or not database.is_absolute():
-        raise SDKError('package prefix and database must be absolute')
-    if target_sysroot(config):
-        root = Path(config['sysroot'])
-        if not root.is_absolute() or root == Path('/'):
-            raise SDKError('target sysroot must be an explicit non-root absolute directory')
-        return root / str(prefix).lstrip('/'), root / str(database).lstrip('/')
+    if (not prefix.is_absolute() or not database.is_absolute() or
+            '..' in prefix.parts or '..' in database.parts):
+        raise SDKError('package prefix and database must be absolute normalized paths')
+    root = installation_root(config)
+    if root is not None:
+        physical = (root / str(prefix).lstrip('/'), root / str(database).lstrip('/'))
+        if any(not path.resolve().is_relative_to(root.resolve()) for path in physical):
+            raise SDKError('package prefix or database escapes installation root')
+        if install_mode(config) == 'native-stage':
+            if prefix == Path('/'):
+                raise SDKError('native SDK prefix must not be /')
+            live = (prefix.resolve(), database.resolve())
+            if any(path.resolve().is_relative_to(active) or active.is_relative_to(path.resolve())
+                   for path in physical for active in live):
+                raise SDKError('native stage must not overlap its live prefix or database')
+        return physical
     if config.get('target'):
         _native_target(config)
     if prefix == Path('/'):
@@ -200,7 +233,8 @@ class PackageInstaller:
         prefix, database = install_paths(config)
         if not database.exists():
             return set()
-        if recover and not config.get('target') and list(package_relocation.pending(prefix, database)):
+        if (recover and installation_root(config) is None and not config.get('target') and
+                list(package_relocation.pending(prefix, database))):
             with directory_lock(database.parent / (database.name + '.sdk-lock')):
                 for name in package_relocation.pending(prefix, database):
                     package_relocation.finish(prefix, database, name)
@@ -215,8 +249,9 @@ class PackageInstaller:
         if tool == 'pkg_delete':
             # Like pkg_add: unprefixed database and prefix, -P adds the sysroot.
             args = [self.crypto.prefix.tool(tool), '-K', config['pkgdb'], '-p', config['prefix']]
-            if target_sysroot(config):
-                args += ['-P', config['sysroot']]
+            root = installation_root(config)
+            if root is not None:
+                args += ['-P', str(root), '-D']
         else:
             args = [self.crypto.prefix.tool(tool), '-K', str(database)]
         hook_path = self.crypto.prefix.path
@@ -244,16 +279,21 @@ class PackageInstaller:
 
         The caller holds the selected repository's SDK pkgdb lock.
         """
-        if target_sysroot(config):
+        if installation_root(config) is not None:
             return
         prefix, database = install_paths(config)
         for name in package_relocation.pending(prefix, database):
             package_relocation.finish(prefix, database, name)
 
+    @staticmethod
+    def _check_key(package, config):
+        # A path inspected under one root/policy is not checked under another.
+        return str(Path(package).absolute()), json.dumps(config, sort_keys=True)
+
     def check(self, package, config):
         self.crypto.verify_package(package, self.trust)
         result = inspect_install_paths(package, config)
-        self._checked[str(Path(package).absolute())] = result
+        self._checked[self._check_key(package, config)] = result
         return result
 
     def check_updates(self, packages, archives, config):
@@ -263,8 +303,10 @@ class PackageInstaller:
     def install(self, package, config, *, checked=False, configure=True, automatic=False):
         if not checked:
             self.check(package, config)
-        key = str(Path(package).absolute())
-        selected = (self._checked[key] if key in self._checked else inspect_install_paths(package, config))
+        key = self._check_key(package, config)
+        if key not in self._checked:
+            self.check(package, config)
+        selected = self._checked[key]
         prefix, database = install_paths(config)
         database.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='ember-install-') as directory:
@@ -275,9 +317,11 @@ class PackageInstaller:
                             f'GPG_KEYRING_VERIFY={os.devnull}\nPKG_PATH=\n')
             args = [self.crypto.prefix.tool('pkg_add'), '-C', str(conf), '-U',
                     '-K', config['pkgdb'], '-p', config['prefix']]
-            if target_sysroot(config):
-                args += ['-P', config['sysroot'], '-I', '-m',
-                         'NetBSD/' + _arch(config['target']['arch']) + ' ' + config['os_version']]
+            root = installation_root(config)
+            if root is not None:
+                args += ['-P', str(root), '-I']
+                if target_sysroot(config):
+                    args += ['-m', 'NetBSD/' + _arch(config['target']['arch']) + ' ' + config['os_version']]
             elif selected is not None and selected[2]:
                 args.append('-I')
             if automatic:
@@ -300,6 +344,7 @@ class PackageInstaller:
                 raise SDKError('pkg_add failed: ' + result.stderr[-4096:].decode('utf-8', 'replace'))
             if selected is not None:
                 name, relocation, deferred_hooks = selected
-                if relocation is not None and (relocation[0] != str(prefix) or deferred_hooks):
+                if relocation is not None and (relocation[0] != config['prefix'] or deferred_hooks):
                     (database / name / package_relocation.READY).write_text(relocation[0] + '\n')
-                package_relocation.finish(prefix, database, name, configure=configure)
+                package_relocation.finish(prefix, database, name,
+                    configure=configure and root is None, logical_prefix=config['prefix'])

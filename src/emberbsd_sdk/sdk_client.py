@@ -23,7 +23,7 @@ from .host_prefix import load_host_prefix
 from .host_identity import native_cpu
 from .jsonio import json_bytes, read_json, write_json
 from .package_cache import PackageCache, check_space, directory_lock
-from .package_install import PackageInstaller, install_paths, target_sysroot
+from .package_install import PackageInstaller, install_mode, install_paths, target_sysroot
 from .package_updates import reuse_compatible_dependencies
 from .package_selection import _package_sets, _parse_root, _read_roots
 from .release_delivery import MetadataCache, artifact_key, release_snapshot, _key
@@ -246,6 +246,9 @@ def _conflict_replacements(packages, records, installed, installer):
 def _source_config(config, roots):
     if not roots:
         return
+    if any(install_mode(c) == 'native-stage' for c in config['repositories'].values()):
+        raise SDKError('native stage installs signed binaries only; build and sign missing packages '
+                       'with the explicit Ports stage configuration before installing them')
     if any(c.get('target') and not target_sysroot(c) for c in config['repositories'].values()):
         raise SDKError('live target package installation requires published binaries; build with Ports on the developer host')
     source = config.get('source')
