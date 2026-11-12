@@ -77,6 +77,34 @@ class BootstrapTests(unittest.TestCase):
                     make_relative(self.root, '/producer/sdk', {'os': 'Darwin', 'cpu': 'arm64'},
                                   '/usr/bin/install_name_tool', '/usr/bin/codesign')
 
+    def test_make_relative_preserves_owned_stable_install_id(self):
+        lib = self.root/'lib'; lib.mkdir()
+        real = lib/'libexample.1.2.dylib'
+        real.write_bytes(b'\xcf\xfa\xed\xfe' + b'\0'*28)
+        (lib/'libexample.1.dylib').symlink_to(real.name)
+        before = dict(loads=[], install_name='/producer/sdk/lib/libexample.1.dylib', rpaths=[])
+        after = dict(loads=[], install_name='@rpath/libexample.1.dylib', rpaths=[])
+        with patch('emberbsd_sdk.bootstrap_bundle.read_macho_runtime', side_effect=[before, after]), \
+             patch('emberbsd_sdk.bootstrap_bundle.subprocess.run') as run:
+            make_relative(self.root, '/producer/sdk', {'os':'Darwin', 'cpu':'arm64'},
+                          '/usr/bin/install_name_tool', '/usr/bin/codesign')
+        self.assertIn('@rpath/libexample.1.dylib', run.call_args_list[0].args[0])
+
+    def test_make_relative_refuses_foreign_or_dangling_install_id(self):
+        lib = self.root/'lib'; lib.mkdir()
+        real = lib/'libexample.1.2.dylib'
+        real.write_bytes(b'\xcf\xfa\xed\xfe' + b'\0'*28)
+        for identity in ('/foreign/libexample.1.dylib', '/producer/sdk/lib/missing.dylib',
+                         '@rpath/../other.dylib'):
+            with self.subTest(identity=identity), \
+                 patch('emberbsd_sdk.bootstrap_bundle.read_macho_runtime', return_value=dict(
+                     loads=[], install_name=identity, rpaths=[])), \
+                 patch('emberbsd_sdk.bootstrap_bundle.subprocess.run') as run:
+                with self.assertRaises(SDKError):
+                    make_relative(self.root, '/producer/sdk', {'os':'Darwin', 'cpu':'arm64'},
+                                  '/usr/bin/install_name_tool', '/usr/bin/codesign')
+                run.assert_not_called()
+
     def test_fat_macho_image_still_requires_thin_native_runtime(self):
         image = self.root / 'libexample.dylib'
         image.write_bytes(fat_archive(b'\xcf\xfa\xed\xfe' * 2))

@@ -453,8 +453,14 @@ implementation may replace a physical versioned filename when the actual old
 and new payload bindings retain the same SONAME and ELF class, byte order,
 machine, type, OS ABI, ABI version and flags. The retained SONAME must resolve
 to the corresponding implementation. This proves neither complete C ABI nor
-symbol or behavioral compatibility. Objects without SONAME, plugins and opaque,
-unsafe or malformed entries retain the strict provider-path requirement.
+symbol or behavioral compatibility. A native thin Mach-O dylib can likewise
+replace a versioned implementation behind the same owned stable install ID:
+the alias must resolve to the declared implementation, and CPU, subtype,
+file type, platform, minimum OS and compatibility version must match. The new
+current version must not decrease; this is a conservative package policy, not
+a claim about dyld compatibility rules. This check does not prove symbols or
+behavior. Unqualified plugins and opaque, unsafe or malformed entries retain
+the strict provider-path requirement.
 
 The signed catalog pins exact package artifacts, while installed package
 dependencies may allow a newer revision than the artifact selected by that

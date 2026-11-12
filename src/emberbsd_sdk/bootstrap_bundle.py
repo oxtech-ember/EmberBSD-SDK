@@ -236,7 +236,26 @@ def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency
             # Linkers copy this ID into new consumers. A loader-relative ID
             # would then resolve against that consumer (for example bin/),
             # rather than the provider directory supplied by its link RPATH.
-            install_name = '@rpath/' + path.name
+            original_id = image['install_name']
+            if original_id.startswith('@rpath/'):
+                basename = original_id[len('@rpath/'):]
+                if '/' in basename or basename in ('.', '..'):
+                    raise SDKError('native library install ID is not a local basename: ' + str(relative))
+            else:
+                identifier = Path(original_id)
+                if (not identifier.is_absolute() or '..' in identifier.parts or
+                        not identifier.is_relative_to(prefix)):
+                    raise SDKError('native library install ID escapes its producer prefix: ' + str(relative))
+                if identifier.parent != Path(prefix) / relative.parent:
+                    raise SDKError('native library install ID differs from its directory: ' + str(relative))
+                basename = identifier.name
+            alias = path.parent / basename
+            if (not alias.is_file() or not alias.resolve().is_relative_to(root.resolve()) or
+                    not alias.samefile(path)):
+                raise SDKError('native library install ID has no owned binding: ' + str(relative))
+            # Keep a declared stable alias such as libfoo.1.dylib instead of
+            # exposing the versioned implementation filename to new clients.
+            install_name = '@rpath/' + basename
             if image['install_name'] != install_name:
                 options += ['-id', install_name]
         for rpath in image['rpaths']:

@@ -109,7 +109,7 @@ def _inside_prefix(target, original_prefix):
 
 
 def inspect_install_paths(package, config, *, visit=None):
-    """Inspect signed archives before pkg_add; never unpack target files ourselves."""
+    """Inspect before pkg_add; visit payload with its declared logical prefix."""
     prefix, _ = install_paths(config)
     root = prefix.resolve()
     stream, before = open_regular(package)
@@ -195,7 +195,7 @@ def inspect_install_paths(package, config, *, visit=None):
             elif not (member.isfile() or member.isdir()):
                 raise SDKError(f'unsupported special file in SDK package: {name}')
             if visit is not None:
-                visit(member, path, archive)
+                visit(member, path, archive, original_prefix)
         if portable and hooks and not deferred_hooks:
             raise SDKError('prefix-independent package contains installation scripts')
         if relocation is not None and original_prefix is None:

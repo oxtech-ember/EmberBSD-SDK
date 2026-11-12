@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-"""Qualify versioned ELF implementation changes behind a retained SONAME.
+"""Qualify versioned library implementations behind a retained loader identity.
 
-Callers authenticate the archive and hold the selected pkgdb lock. A SONAME is
-the maintainer's ABI contract, not proof that arbitrary code changes preserve
-every C/C++ interface. Unversioned plugins and unknown formats remain subject
+Callers authenticate the archive and hold the selected pkgdb lock. A loader
+identity is the maintainer's ABI contract, not proof that arbitrary code changes
+preserve every C/C++ interface. Unversioned plugins and unknown formats remain subject
 to the exact PROVIDES guard.
 """
 
@@ -19,31 +19,77 @@ import tarfile
 import tempfile
 
 from .elf import read_elf_dynamic
+from .darwin_runtime import read_macho_runtime
 from .errors import SDKError
 from .package_install import _relative, inspect_install_paths, install_paths
 from .paths import open_regular, verify_stable
 
 
-def _identity(path):
+def _identity(path, config, prefix, name):
     stream, before = open_regular(path)
     with stream:
         header = stream.read(64)
+    if header[:4] == b'\xcf\xfa\xed\xfe':
+        host = config.get('host', {})
+        if host.get('os') != 'Darwin':
+            raise SDKError('Mach-O provider requires a Darwin host repository')
+        image = read_macho_runtime(path, {'cpu': host.get('arch')})
+        verify_stable(path, before)
+        install_name, versions = image['install_name'], image['dylib_version']
+        if image['filetype'] != 6 or not install_name or not versions:
+            raise SDKError('provider is not a versioned Mach-O dylib')
+        if install_name.startswith('@rpath/'):
+            basename = install_name.removeprefix('@rpath/')
+            if '/' in basename or basename in ('.', '..'):
+                raise SDKError('provider install ID is not a local basename')
+            stable = PurePosixPath(name).parent / basename
+        else:
+            identifier = PurePosixPath(install_name)
+            if (not isinstance(prefix, str) or not PurePosixPath(prefix).is_absolute() or
+                    not identifier.is_absolute() or '..' in identifier.parts or
+                    not identifier.is_relative_to(prefix)):
+                raise SDKError('provider install ID escapes its declared prefix')
+            stable = identifier.relative_to(prefix)
+            if stable.parent != PurePosixPath(name).parent:
+                raise SDKError('provider install ID differs from its library directory')
+        return dict(kind='macho', stable=stable.as_posix(), current=versions['current'],
+                    abi=(image['cpu'], image['subtype'], image['filetype'],
+                         versions['compatibility'],
+                         tuple(sorted((row['platform'], row['minimum'])
+                                      for row in image['build_versions']))))
     info = read_elf_dynamic(path)
     verify_stable(path, before)
     soname = info['soname']
     if (info['type'] != 3 or not soname or soname in ('.', '..') or
             '/' in soname or any(ord(char) < 32 or ord(char) == 127 for char in soname)):
         raise SDKError('provider has no usable ELF shared-library SONAME')
-    return (info['class'], info['endian'], info['machine'], info['type'],
-            header[7], header[8], struct.unpack_from('<I', header, 48)[0], soname)
+    return dict(kind='elf', stable=(PurePosixPath(name).parent / soname).as_posix(),
+                abi=(info['class'], info['endian'], info['machine'], info['type'],
+                     header[7], header[8], struct.unpack_from('<I', header, 48)[0]))
 
 
-def _implementation(name, soname):
-    return re.fullmatch(re.escape(soname) + r'(?:\.[0-9]+)+', PurePosixPath(name).name) is not None
+def _implementation(name, identity):
+    stable = PurePosixPath(identity['stable']).name
+    if identity['kind'] == 'macho':
+        if not stable.endswith('.dylib'):
+            return False
+        pattern = re.escape(stable[:-6]) + r'(?:\.[0-9]+)+\.dylib'
+    else:
+        pattern = re.escape(stable) + r'(?:\.[0-9]+)+'
+    return re.fullmatch(pattern, PurePosixPath(name).name) is not None
+
+
+def _same_abi(old, new):
+    # Package policy, not a claim about dyld's version enforcement. The
+    # declared ABI and minimum platform stay fixed; current versions may grow.
+    return (old['kind'] == new['kind'] and old['stable'] == new['stable'] and
+            old['abi'] == new['abi'] and
+            (old['kind'] != 'macho' or new['current'] >= old['current']))
 
 
 class _Installed:
-    def __init__(self, prefix):
+    def __init__(self, prefix, logical_prefix):
+        self.prefix = logical_prefix
         self.root = prefix.resolve(strict=True)
         self.bindings = {}
 
@@ -81,8 +127,10 @@ class _Archive:
     def __init__(self, archive_path, config, providers, directory):
         self.members = {}
         self.files = {}
+        self.prefix = None
 
-        def visit(member, path, archive):
+        def visit(member, path, archive, original_prefix):
+            self.prefix = original_prefix
             name = path.as_posix()
             if name in self.members:
                 raise SDKError('duplicate archive path in library provider inspection')
@@ -138,7 +186,7 @@ class _Archive:
 
 
 def providers_preserved(config, archive, old_providers, new_providers, *, installed_is_old=True):
-    """Retain exact providers, or prove the same versioned ELF SONAME binding.
+    """Retain exact providers, or prove a versioned ELF/Mach-O loader binding.
 
 The reverse direction also qualifies retaining a newer installed dependency.
 Missing or unsupported evidence leaves the original strict guard in force.
@@ -150,23 +198,23 @@ Missing or unsupported evidence leaves the original strict guard in force.
         prefix, _ = install_paths(config)
         with ExitStack() as stack:
             directory = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix='ember-package-abi-')))
-            filesystem = _Installed(prefix)
+            filesystem = _Installed(prefix, config['prefix'])
             archived = _Archive(archive, config,
                                 new_providers if installed_is_old else old_providers, directory)
             old, new = (filesystem, archived) if installed_is_old else (archived, filesystem)
             for name in missing:
                 if not old.regular(name):
                     return False
-                identity = _identity(old.file(name))
-                soname = identity[-1]
-                stable = (PurePosixPath(name).parent / soname).as_posix()
-                if (not _implementation(name, soname) or stable not in old_providers or
+                identity = _identity(old.file(name), config, old.prefix, name)
+                stable = identity['stable']
+                if (not _implementation(name, identity) or stable not in old_providers or
                         stable not in new_providers or not old.same(stable, name)):
                     return False
                 replacement = new.resolve(stable)
                 if (replacement not in new_providers or not new.regular(replacement) or
-                        not _implementation(replacement, soname) or
-                        _identity(new.file(stable)) != identity):
+                        not _implementation(replacement, identity) or
+                        not _same_abi(identity, _identity(new.file(stable), config,
+                                                        new.prefix, stable))):
                     return False
             old.verify()
             new.verify()

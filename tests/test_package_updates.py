@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from test_core import dynamic_elf
+from test_darwin_runtime import macho
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
@@ -226,6 +227,93 @@ class PackageUpdateTests(unittest.TestCase):
         lib = self.root / 'lib'; lib.mkdir(exist_ok=True)
         (self.root / implementation).write_bytes(self.elf_image())
         (self.root / stable).symlink_to(old_alias or Path(implementation).name)
+
+    def macho_provider(self, version, *, install_id=None, cpu=0x100000c,
+                       subtype=0, filetype=6, platform_id=1, minimum=0x10000,
+                       current=0x10000, compatibility=0x10000, no_platform=False):
+        stable = 'libexample.1.dylib'
+        identity = install_id or str(self.root / 'lib' / stable)
+        data = bytearray(macho(0x180000000, install_name=identity))
+        struct.pack_into('<III', data, 4, cpu, subtype, filetype)
+        offset = 32
+        while offset < 32 + struct.unpack_from('<I', data, 20)[0]:
+            kind, size = struct.unpack_from('<II', data, offset)
+            if kind == 0x32:
+                if no_platform:
+                    struct.pack_into('<I', data, offset, 0x7f000001)
+                else:
+                    struct.pack_into('<II', data, offset + 8, platform_id, minimum)
+            if kind == 0xd:
+                struct.pack_into('<II', data, offset + 16, current, compatibility)
+            offset += size
+        return bytes(data)
+
+    def macho_case(self, *, old_options=None, new_options=None, alias=None, implementation=None):
+        stable = 'lib/libexample.1.dylib'
+        old = 'lib/libexample.1.0.dylib'
+        new = implementation or 'lib/libexample.1.1.dylib'
+        self.cfg['host'] = {'os': 'Darwin', 'arch': 'arm64', 'abi': 'native', 'runtime': 'native'}
+        self.installed('lib-1', providers=(stable, old), dependents=('consumer-1',))
+        self.installed('consumer-1', depends=('lib>=1',))
+        (self.root/'lib').mkdir(exist_ok=True)
+        (self.root/old).write_bytes(self.macho_provider('0', **(old_options or {})))
+        (self.root/stable).symlink_to(Path(old).name)
+        info = ''.join('PROVIDES='+str(self.root)+'/'+x+'\n' for x in (stable, new))
+        with tarfile.open(self.archive, 'w:gz') as archive:
+            for filename, data in (('+CONTENTS', ('@cwd '+str(self.root)+'\n@name lib-2\n').encode()),
+                                   ('+BUILD_INFO', info.encode()),
+                                   (new, self.macho_provider('1', **(new_options or {})))):
+                entry = tarfile.TarInfo(filename); entry.size = len(data); archive.addfile(entry, io.BytesIO(data))
+            link = tarfile.TarInfo(stable); link.type = tarfile.SYMTYPE
+            link.linkname = alias if alias is not None else Path(new).name
+            archive.addfile(link)
+        with patch('emberbsd_sdk.package_updates._matches', return_value=True):
+            self.check([self.package('lib-2')], {'lib-1', 'consumer-1'})
+
+    def test_macho_retained_install_id_accepts_versioned_implementation(self):
+        self.macho_case(new_options={'current': 0x10001})
+
+    def test_macho_missing_platform_on_both_sides_is_refused(self):
+        with self.assertRaises(SDKError):
+            self.macho_case(old_options={'no_platform': True}, new_options={'no_platform': True})
+
+    def test_macho_rpath_install_id_accepts_stable_alias(self):
+        self.macho_case(old_options={'install_id': '@rpath/libexample.1.dylib'},
+                        new_options={'install_id': '@rpath/libexample.1.dylib', 'current': 0x10001})
+
+    def test_macho_rpath_alias_allows_implementation_in_subdirectory(self):
+        self.macho_case(old_options={'install_id': '@rpath/libexample.1.dylib'},
+                        new_options={'install_id': '@rpath/libexample.1.dylib'},
+                        implementation='lib/private/libexample.1.1.dylib',
+                        alias='private/libexample.1.1.dylib')
+
+    def test_elf_alias_allows_implementation_in_subdirectory(self):
+        self.installed_abi('lib-1', '2')
+        self.installed('consumer-1', depends=('lib>=1',))
+        self.abi_archive(self.archive, 'lib-2', '3',
+                         provider='lib/private/libexample.so.1.3',
+                         alias='private/libexample.so.1.3')
+        with patch('emberbsd_sdk.package_updates._matches', return_value=True):
+            self.check([self.package('lib-2')], {'lib-1', 'consumer-1'})
+
+    def test_macho_incompatible_or_unowned_provider_refused(self):
+        cases = ({'new_options': {'install_id': '/foreign/libexample.1.dylib'}},
+                 {'new_options': {'install_id': '@rpath/other.dylib'}},
+                 {'new_options': {'cpu': 0x1000007}},
+                 {'new_options': {'subtype': 2}},
+                 {'new_options': {'filetype': 2}},
+                 {'new_options': {'platform_id': 2}},
+                 {'new_options': {'minimum': 0x20000}},
+                 {'new_options': {'compatibility': 0x20000}},
+                 {'old_options': {'current': 0x20000}},
+                 {'alias': '../../outside'}, {'alias': 'missing.dylib'})
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temp:
+                self.root = Path(temp); self.database = self.root/'pkgdb'; self.database.mkdir()
+                self.cfg = {'prefix': str(self.root), 'pkgdb': str(self.database)}
+                self.archive = self.root/'replacement.tgz'
+                with self.assertRaises(SDKError):
+                    self.macho_case(**case)
 
     def test_versioned_elf_provider_replacement_accepts_stable_soname(self):
         self.installed_abi('lib-1', '2')
