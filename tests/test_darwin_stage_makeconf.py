@@ -72,6 +72,8 @@ class NativeStageMakeconfTests(unittest.TestCase):
         options['runtime_view'] = str(view)
         output = Path(write_native_stage_makeconf(**options))
         self.assertIn('EMBERBSD_DARWIN_LD64_LLD= ' + str(selected_tool), output.read_text())
+        for variable, role in (('CCPATH', 'cc'), ('CXXPATH', 'cxx'), ('CPPPATH', 'cpp')):
+            self.assertIn(variable+'= '+str(binding/role)+'\n', output.read_text())
         with_rpcgen = options | dict(output=str(root/'staged-rpcgen.mk'),
                                      tools=options['tools'] + ['rpcgen=' + str(selected_tool)])
         self.assertIn('TOOLS_PATH.rpcgen= ' + str(selected_tool),
@@ -152,6 +154,8 @@ class NativeStageMakeconfTests(unittest.TestCase):
         self.assertIn('CWRAPPERS_SRC_DIR= '+str(self.staged/'libexec/cwrappers')+'\n', text)
         self.assertIn('TOOLS_PATH.rpcgen= '+str(self.staged/'bin/rpcgen')+'\n', text)
         self.assertIn('EMBERBSD_NATIVE_STAGE_PYTHON= '+str(self.python)+'\n', text)
+        for variable, role in (('CCPATH', 'cc'), ('CXXPATH', 'cxx'), ('CPPPATH', 'cpp')):
+            self.assertIn(variable+'= '+str(self.record.parent/role)+'\n', text)
         self.assertIn('EMBERBSD_NATIVE_CXX_ABI_NAMESPACE= __ember1\n', text)
         self.assertIn('BUILDLINK_PREFIX.llvm= '+str(self.staged)+'\n', text)
         self.assertEqual(write_native_stage_makeconf(**self.options), str(output))
@@ -206,6 +210,8 @@ class NativeStageMakeconfTests(unittest.TestCase):
         self.assertIn('TOOLS_PATH.rpcgen= '+str(self.prefix/'bin/rpcgen')+'\n', text)
         self.assertIn('.undef EMBERBSD_NATIVE_CXX_ABI_NAMESPACE\n', text)
         self.assertIn('PKG_DBDIR= '+str(self.staged/'pkgdb')+'\n', text)
+        for variable, role in (('CCPATH', 'cc'), ('CXXPATH', 'cxx'), ('CPPPATH', 'cpp')):
+            self.assertIn(variable+'= '+str(record.parent/role)+'\n', text)
         self.assertIn('BUILDLINK_PREFIX.llvm= '+str(self.staged)+'\n', text)
         self.assertEqual(write_native_stage_makeconf(**opts), str(out))
         self.assertEqual(out.read_text(), text)
