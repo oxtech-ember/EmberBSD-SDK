@@ -209,18 +209,38 @@ def _prepare_repository(crypto, spec, ports_root, sources, trust, previous=None,
         if len(candidates) != 1:
             raise SDKError(f'missing or ambiguous graph root: {root}')
         selected.extend(candidates)
-    nodes = runtime_projection(graph, selected, role)
+    projection = runtime_projection(graph, selected, role)
     previous = previous or {}
+    # The signed current artifact owns its existing runtime edges. Source
+    # edges apply only to a new artifact, not an exact reused one. Explicit
+    # roots remain independent even if another root reaches a reused node.
+    def reuses_current(identity, node):
+        old = previous.get(node['root'])
+        if old is None or old['name'].rsplit('-', 1)[-1] != node['version']:
+            return False
+        if identity not in spec['packages']:
+            return True
+        return additions and Path(spec['packages'][identity]).name == old['name'] + '.tgz'
+
+    pending, nodes = list(selected), {}
+    while pending:
+        identity = pending.pop()
+        if identity in nodes:
+            continue
+        node = projection[identity]
+        nodes[identity] = node
+        if reuses_current(identity, node):
+            continue
+        pending.extend(node['dependencies'])
+    nodes = dict(sorted(nodes.items()))
     paths, reused = [], {}
     for identity in nodes:
         old = previous.get(nodes[identity]['root'])
         same_version = old is not None and old['name'].rsplit('-', 1)[-1] == nodes[identity]['version']
-        same_name = same_version and (identity not in spec['packages'] or
-                    Path(spec['packages'][identity]).name == old['name'] + '.tgz')
         if old and not same_version and _matches(crypto,
                 old['name'].rsplit('-', 1)[0] + '>' + nodes[identity]['version'], old['name']):
             raise SDKError('package would downgrade current: ' + nodes[identity]['root'])
-        if identity not in spec['packages'] or (additions and same_name):
+        if identity not in spec['packages'] or reuses_current(identity, nodes[identity]):
             if old is None or old['name'].rsplit('-', 1)[-1] != nodes[identity]['version']:
                 raise SDKError(f'missing runtime binary: {identity}')
             reused[identity] = dict(old, node=nodes[identity], reused=True)

@@ -86,6 +86,73 @@ class BinaryCatalogUpdateTests(BinaryReleaseFixture):
         self.spec.update(release_id='source-graph-changed', created_at=2)
         return release, current
 
+    def test_reused_node_does_not_require_new_source_only_descendant(self):
+        previous, current = self.source_graph_changed_addition()
+        value = graph()
+        value['nodes'].append(dict(id='target:lang/flang', version='1.0',
+            input_sha256='d' * 64, dependencies=[]))
+        next(node for node in value['nodes'] if node['id'] == 'target:net/app')['dependencies'].append(
+            dict(id='target:lang/flang', kind='runtime'))
+        value['nodes'].append(dict(id='target:net/new', version='1.0',
+            input_sha256='c' * 64, dependencies=[dict(id='target:net/app', kind='runtime')]))
+        self.graph_path.write_bytes(json_bytes(value))
+        result = self.compose(current=current, output=self.work / 'pruned')
+        old = next(item for item in previous['artifacts'] if item['path'].endswith('/app-1.0.tgz'))
+        self.assertEqual(next(item for item in result['artifacts'] if item['id'] == old['id']), old)
+        _, catalogs = self.load(self.work / 'pruned')
+        self.assertNotIn('lang/flang', {item['root'] for item in catalogs[0]['packages']})
+
+    def test_additions_same_name_also_prunes_source_only_descendant(self):
+        from emberbsd_sdk.binary_release import compose
+        _, current = self.source_graph_changed_addition()
+        value = graph()
+        value['nodes'].append(dict(id='target:lang/flang', version='1.0', input_sha256='d' * 64, dependencies=[]))
+        next(node for node in value['nodes'] if node['id'] == 'target:net/app')['dependencies'].append(
+            dict(id='target:lang/flang', kind='runtime'))
+        value['nodes'].append(dict(id='target:net/new', version='1.0', input_sha256='c' * 64,
+            dependencies=[dict(id='target:net/app', kind='runtime')]))
+        self.graph_path.write_bytes(json_bytes(value))
+        self.spec['repositories'][0]['packages']['target:net/app'] = str(self.work / 'app-1.0-NetBSD-aarch64/app-1.0.tgz')
+        compose(self.crypto, self.spec, self.ports, self.work / 'addition-pruned',
+                self.leaf, self.ca.certificate, current=current, additions=True)
+
+    def test_reused_boundary_does_not_bypass_downgrade_or_signature(self):
+        _, current = self.source_graph_changed_addition()
+        value = graph()
+        next(node for node in value['nodes'] if node['id'] == 'target:net/app')['version'] = '0.9'
+        value['nodes'].append(dict(id='target:net/new', version='1.0', input_sha256='c' * 64,
+            dependencies=[dict(id='target:net/app', kind='runtime')]))
+        self.graph_path.write_bytes(json_bytes(value))
+        with self.assertRaisesRegex(SDKError, 'downgrade'):
+            self.compose(current=current, output=self.work / 'downgrade')
+        envelope = current / 'release.p7m'
+        envelope.write_bytes(envelope.read_bytes()[:-20] + b'corrupt-signature')
+        with self.assertRaises(SDKError):
+            self.compose(current=current, output=self.work / 'bad-signature')
+
+    def test_explicit_descendant_is_not_pruned(self):
+        _, current = self.source_graph_changed_addition()
+        value = graph()
+        value['nodes'].append(dict(id='target:lang/flang', version='1.0', input_sha256='d' * 64, dependencies=[]))
+        next(node for node in value['nodes'] if node['id'] == 'target:net/app')['dependencies'].append(
+            dict(id='target:lang/flang', kind='runtime'))
+        value['nodes'].append(dict(id='target:net/new', version='1.0', input_sha256='c' * 64,
+            dependencies=[dict(id='target:net/app', kind='runtime')]))
+        self.graph_path.write_bytes(json_bytes(value))
+        self.spec['repositories'][0]['roots'].append('lang/flang')
+        with self.assertRaisesRegex(SDKError, 'missing runtime binary: target:lang/flang'):
+            self.compose(current=current, output=self.work / 'explicit-missing')
+
+    def test_new_node_missing_source_dependency_is_not_pruned(self):
+        _, current = self.source_graph_changed_addition()
+        value = graph()
+        value['nodes'].append(dict(id='target:lang/flang', version='1.0', input_sha256='d' * 64, dependencies=[]))
+        value['nodes'].append(dict(id='target:net/new', version='1.0', input_sha256='c' * 64,
+            dependencies=[dict(id='target:lang/flang', kind='runtime')]))
+        self.graph_path.write_bytes(json_bytes(value))
+        with self.assertRaisesRegex(SDKError, 'missing runtime binary: target:lang/flang'):
+            self.compose(current=current, output=self.work / 'new-missing')
+
     def test_reused_archive_retains_signed_edges_when_source_graph_changes(self):
         previous, current = self.source_graph_changed_addition()
         output = self.work / 'addition'
