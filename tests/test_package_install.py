@@ -43,7 +43,8 @@ class InstallTests(unittest.TestCase):
     def package(self, *, target=False, link=None, commands='', arch='aarch64', requires_self=False, preserve=False,
                 payload='installed data', provides=False, install_script=None, install_script_mode=0o755,
                 package_name='fixture-1.0',
-                payload_path='payload', executable=False, build_version=None, deinstall_script=None):
+                payload_path='payload', executable=False, build_version=None, deinstall_script=None,
+                sizes=None):
         stage = self.work / 'stage'
         stage.mkdir()
         payload_file = stage / payload_path
@@ -64,6 +65,10 @@ class InstallTests(unittest.TestCase):
              f'OPSYS={platform.system()}\nMACHINE_ARCH={_arch(native_cpu())}\nOS_VERSION={platform.release()}\n'))
         unsigned, signed = self.work / 'unsigned.tgz', self.work / (package_name + '.tgz')
         extra = []
+        if sizes is not None:
+            for flag, name, value in (('-s', 'SIZE_PKG', sizes[0]), ('-S', 'SIZE_ALL', sizes[1])):
+                (stage / name).write_text(str(value) + '\n')
+                extra += [flag, stage / name]
         if build_version is not None:
             (stage / 'BUILD_VERSION').write_text(build_version)
             extra += ['-b', stage / 'BUILD_VERSION']
@@ -485,6 +490,30 @@ class InstallTests(unittest.TestCase):
         package = self.package(commands=PORTABLE_PREFIX + '\n', install_script='#!/bin/sh\nexit 0\n')
         with self.assertRaisesRegex(SDKError, 'installation scripts'):
             inspect_install_paths(package, self.cfg)
+
+    @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
+    def test_portable_size_tracks_payload_growth(self):
+        import importlib.util
+        from emberbsd_sdk.binary_release import inspect_package
+        package = self.package(payload='abc', sizes=(3, 103))
+        output = self.work / 'portable-growth.tgz'
+        script = Path(__file__).resolve().parents[1] / 'scripts/package-portable.py'
+        spec = importlib.util.spec_from_file_location('portable_size_test', script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        argv = [str(script), str(package), '--output', str(output), '--host-prefix',
+                os.environ['EMBERBSD_TEST_HOST_PREFIX'], '--dependency-prefix', str(self.work),
+                '--bootstrap-install-name-tool', '/usr/bin/true', '--codesign', '/usr/bin/true',
+                '--relocate-text']
+        def grow(root, *args, **kwargs):
+            (root / 'payload').write_text('abcdefghij')
+        with patch.object(sys, 'argv', argv), patch.object(module, 'make_relative', side_effect=grow):
+            self.assertEqual(module.main(), 0)
+        summary = self.crypto.run_package('pkg_info', ['-X', str(output)]).decode()
+        self.assertIn('SIZE_PKG=10\n', summary)
+        self.assertEqual(inspect_package(output, None, require_native_relocation=True), 10)
+        with tarfile.open(output, 'r:gz') as archive:
+            self.assertEqual(archive.extractfile('+SIZE_ALL').read(), b'110\n')
 
     @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
     def test_signed_deferred_hook_runs_after_relocation_and_recovers(self):

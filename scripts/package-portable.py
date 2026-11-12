@@ -188,6 +188,21 @@ def main():
                     packing.append(line)
             plist = Path(directory) / 'PLIST'
             plist.write_text('\n'.join(packing) + '\n')
+            # Relocation can change payload sizes (notably Mach-O load commands).
+            # Preserve the dependency contribution to SIZE_ALL while replacing
+            # the package's own size with its actual qualified payload size.
+            size_pkg, size_all = database / '+SIZE_PKG', database / '+SIZE_ALL'
+            old_pkg = int(size_pkg.read_text().strip()) if size_pkg.exists() else None
+            old_all = int(size_all.read_text().strip()) if size_all.exists() else None
+            if old_pkg is not None and old_pkg < 0 or old_all is not None and (
+                    old_pkg is None or old_all < old_pkg):
+                raise SDKError('invalid original package sizes')
+            payload_size = sum(path.stat().st_size for path in root.rglob('*')
+                               if not path.is_relative_to(root / 'pkgdb') and
+                               not path.is_symlink() and path.is_file())
+            size_pkg.write_text(str(payload_size) + '\n')
+            if old_all is not None:
+                size_all.write_text(str(old_all - old_pkg + payload_size) + '\n')
             command = ['-F', 'gzip', '-f', plist, '-p', root, '-I', prefix]
             for flag, member in (('-c', '+COMMENT'), ('-d', '+DESC'), ('-B', '+BUILD_INFO'),
                                  ('-b', '+BUILD_VERSION'), ('-s', '+SIZE_PKG'), ('-S', '+SIZE_ALL'),
