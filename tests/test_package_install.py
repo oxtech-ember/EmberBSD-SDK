@@ -491,6 +491,20 @@ class InstallTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'installation scripts'):
             inspect_install_paths(package, self.cfg)
 
+    def test_portable_text_must_be_regular_payload_of_same_archive(self):
+        import io
+        archive_path = self.work / 'claimed.tgz'
+        prefix = str(self.destination)
+        contents = ('@name claimed-1\n@cwd ' + prefix + '\n'
+                    '@comment emberbsd-prefix-relocation-v1\n'
+                    '@comment emberbsd-relocation-prefix=' + prefix + '\n'
+                    '@comment emberbsd-relocation-text=other-owned\nother-owned\n')
+        with tarfile.open(archive_path, 'w:gz') as archive:
+            data = contents.encode(); member = tarfile.TarInfo('+CONTENTS'); member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+        with self.assertRaisesRegex(SDKError, 'regular payload owned by package'):
+            inspect_install_paths(archive_path, self.cfg)
+
     @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
     def test_portable_size_tracks_payload_growth(self):
         import importlib.util

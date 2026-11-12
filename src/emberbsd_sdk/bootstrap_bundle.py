@@ -570,19 +570,69 @@ def client_main(argv=None):
         return 1
 
 
-def prepare(root, archives, crypto, *, host, repository, install_name_tool, codesign, https_ca):
+def prepare(root, archives, crypto, *, trust, host, repository, install_name_tool, codesign, https_ca):
     """Assemble a fresh bundle; keep whole packages and one package database."""
+    # Verify and consume the same private copies throughout all three passes.
+    # Copying before verification also rejects a source changed during copying.
+    root = Path(root)
+    root.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.bootstrap-inputs-', dir=root.parent) as temporary:
+        copies = []
+        for index, archive in enumerate(archives):
+            copy = Path(temporary) / str(index)
+            shutil.copyfile(archive, copy)
+            crypto.verify_package(copy, trust)
+            copies.append(copy)
+        return _prepare_verified(root, copies, crypto, host=host, repository=repository,
+                                 install_name_tool=install_name_tool, codesign=codesign, https_ca=https_ca)
+
+
+def _prepare_verified(root, archives, crypto, *, host, repository, install_name_tool, codesign, https_ca):
     from .binary_release import _matches
     from .client_bundle import package_client
+    from .package_install import inspect_install_paths
+    from . import package_relocation
     root.mkdir(parents=True, exist_ok=False)
-    packages, prefixes = [], set()
+    packages, prefix = [], None
     for archive in archives:
-        package, prefix = unpack_package(archive, root)
+        package, source = unpack_package(archive, root)
         packages.append(package)
-        prefixes.add(prefix)
-    if len(prefixes) != 1:
-        raise SDKError('bootstrap packages must use one producer prefix')
-    prefix = prefixes.pop()
+        if prefix is None:
+            prefix = source
+        if inspect_install_paths(archive, {'prefix': prefix, 'pkgdb': prefix + '/pkgdb'}) is None:
+            raise SDKError('bootstrap package requires a portable declaration: ' + package)
+        database = root / 'pkgdb' / package
+        contents = database / '+CONTENTS'
+        lines = contents.read_text().splitlines()
+        independent = lines.count(package_relocation.INDEPENDENT)
+        markers = lines.count(package_relocation.MARKER)
+        selected = package_relocation.declaration(lines)
+        if independent + markers != 1 or (markers and (selected is None or selected[0] != source)):
+            raise SDKError('bootstrap package requires one matching portable declaration: ' + package)
+        if any((database / member).exists() for member in ('+INSTALL', '+DEINSTALL')) and package_relocation.HOOKS not in lines:
+            raise SDKError('bootstrap package has undeclared hooks: ' + package)
+        if selected:
+            package_relocation.relocate_declared_text(root, selected[1], source, prefix)
+        relocate_build_info(database / '+BUILD_INFO', source.encode(), prefix.encode())
+        if package_relocation.HOOKS in lines:
+            for member in ('+INSTALL', '+DEINSTALL'):
+                hook = database / member
+                if hook.is_symlink():
+                    raise SDKError('bootstrap hook is not a regular file')
+                if hook.exists():
+                    if not hook.is_file() or hook.stat().st_size > 8 * 1024 * 1024:
+                        raise SDKError('invalid bootstrap hook')
+                    _replace_file(hook, relocate_text(hook.read_bytes(), source.encode(), prefix.encode()))
+        for index, line in enumerate(lines):
+            if line.startswith('@cwd '):
+                if line != '@cwd ' + source:
+                    raise SDKError('bootstrap package has an external cwd: ' + package)
+                lines[index] = '@cwd ' + prefix
+            elif line.startswith(package_relocation.SOURCE):
+                lines[index] = package_relocation.SOURCE + prefix
+        _replace_file(contents, ('\n'.join(lines) + '\n').encode())
+    if prefix is None:
+        raise SDKError('bootstrap needs at least one package')
     for name in packages:
         for line in (root / 'pkgdb' / name / '+CONTENTS').read_text().splitlines():
             if line.startswith('@pkgdep ') and not any(_matches(crypto, line[8:], item) for item in packages):

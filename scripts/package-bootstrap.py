@@ -16,6 +16,8 @@ from emberbsd_sdk.release_signing import ReleaseCrypto
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host-prefix', required=True)
+    parser.add_argument('--trust-root', required=True, type=Path,
+                        help='trusted root for every qualified package')
     parser.add_argument('--stage', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--package', type=Path, action='append', required=True)
@@ -37,7 +39,7 @@ def main():
         import platform
         if platform.system() != 'Darwin':
             raise SDKError('bootstrap packaging currently supports Darwin hosts')
-        metadata = prepare(args.stage, args.package, crypto,
+        metadata = prepare(args.stage, args.package, crypto, trust=args.trust_root,
             host=dict(os='Darwin', arch=platform.machine(), abi=args.abi, runtime='libSystem'),
             repository=args.repository, install_name_tool=args.bootstrap_install_name_tool,
             codesign=args.codesign, https_ca=args.https_ca)

@@ -65,6 +65,22 @@ def complete_bootstrap(prefix, database, name):
         complete(prefix, metadata, lines)
 
 
+def relocate_declared_text(prefix, names, original, logical_prefix):
+    """Relocate validated owned text in a verified unpacked package."""
+    prefix = Path(prefix)
+    relocate_text(b'', original.encode(), str(logical_prefix).encode())
+    for name in names:
+        path = prefix / relative_path(name)
+        if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(prefix.resolve()):
+            raise SDKError('package relocation text is not a contained regular file: ' + name)
+        if path.stat().st_size > 8 * 1024 * 1024:
+            raise SDKError('package relocation text exceeds size limit: ' + name)
+        content = path.read_bytes()
+        updated = relocate_text(content, original.encode(), str(logical_prefix).encode())
+        if content != updated:
+            _replace_file(path, updated)
+
+
 def finish(prefix, database, name, *, configure=True, logical_prefix=None):
     """Idempotent: the source-prefix comment changes only after all file edits."""
     prefix, database = Path(prefix), Path(database)
@@ -87,18 +103,7 @@ def finish(prefix, database, name, *, configure=True, logical_prefix=None):
     ready = metadata / READY
     if not ready.is_file() or ready.read_text() != original + '\n':
         raise SDKError('pkg_add did not complete; repair the incomplete package before relocation: ' + metadata.name)
-    # Validate the idempotent token replacement before touching any file.
-    relocate_text(b'', original.encode(), str(logical_prefix).encode())
-    for name in names:
-        path = prefix / relative_path(name)
-        if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(prefix.resolve()):
-            raise SDKError('package relocation text is not a contained regular file: ' + name)
-        if path.stat().st_size > 8 * 1024 * 1024:
-            raise SDKError('package relocation text exceeds size limit: ' + name)
-        content = path.read_bytes()
-        updated = relocate_text(content, original.encode(), str(logical_prefix).encode())
-        if content != updated:
-            _replace_file(path, updated)
+    relocate_declared_text(prefix, names, original, logical_prefix)
     relocate_build_info(metadata / '+BUILD_INFO', original.encode(), str(logical_prefix).encode())
     # Keep the declared sources on retries too: the text may already have been
     # moved before interruption, while its caches still contain producer paths.

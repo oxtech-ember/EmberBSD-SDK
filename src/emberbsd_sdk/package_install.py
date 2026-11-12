@@ -121,6 +121,7 @@ def inspect_install_paths(package, config, *, visit=None):
         hooks = False
         deferred_hooks = False
         links = set()
+        regular_payload = set()
         for member in archive:
             name = member.name.removeprefix('./')
             path = _relative(name)
@@ -194,12 +195,16 @@ def inspect_install_paths(package, config, *, visit=None):
                 links.add(path)
             elif not (member.isfile() or member.isdir()):
                 raise SDKError(f'unsupported special file in SDK package: {name}')
+            if member.isfile():
+                regular_payload.add(name)
             if visit is not None:
                 visit(member, path, archive, original_prefix)
         if portable and hooks and not deferred_hooks:
             raise SDKError('prefix-independent package contains installation scripts')
         if relocation is not None and original_prefix is None:
             raise SDKError('relocatable package has no original prefix')
+        if relocation is not None and not set(relocation[1]).issubset(regular_payload):
+            raise SDKError('package relocation text is not a regular payload owned by package')
     verify_stable(package, before)
     return (package_name, relocation, deferred_hooks) if portable else None
 

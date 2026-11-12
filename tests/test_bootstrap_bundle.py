@@ -15,7 +15,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from emberbsd_sdk.bootstrap_bundle import (MANIFEST, bundle_paths, initialize, make_relative, unpack_package,
+from emberbsd_sdk.bootstrap_bundle import (MANIFEST, bundle_paths, initialize, make_relative, prepare, unpack_package,
                                            relocate_text, text_references, write_archive)
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.jsonio import read_json, write_json
@@ -55,6 +55,81 @@ class BootstrapTests(unittest.TestCase):
                     member.size = len(data)
                     stream.addfile(member, io.BytesIO(data))
         return archive
+
+    def test_prepare_mixed_portable_prefixes_and_refusals(self):
+        def archive(name, prefix, paths, declaration, *, hooks=False):
+            result = self.work / (name + '.tgz')
+            contents = '@name ' + name + '\n@cwd ' + prefix + '\n' + declaration + '\n'
+            contents += ''.join(path + '\n' for path in paths)
+            entries = {'+CONTENTS': contents.encode(), '+BUILD_INFO': ('LOCALBASE=' + prefix + '\n').encode(),
+                       '+BUILD_VERSION': ('historical=' + prefix + '\n').encode(), **paths}
+            if hooks:
+                entries['+INSTALL'] = ('#!/bin/sh\n# ' + prefix + '\n').encode()
+            with tarfile.open(result, 'w:gz') as stream:
+                for path, data in entries.items():
+                    item = tarfile.TarInfo(path); item.mode = 0o755; item.size = len(data)
+                    stream.addfile(item, io.BytesIO(data))
+            return result
+        tools = {name: b'tool' for name in ('bin/python3.15', 'bin/openssl', 'sbin/pkg_add',
+                                            'sbin/pkg_admin', 'sbin/pkg_info')}
+        a = archive('a-1', '/first/sdk', tools, '@comment emberbsd-prefix-independent-v1')
+        decl = ('@comment emberbsd-prefix-relocation-v1\n'
+                '@comment emberbsd-relocation-prefix=/second/sdk\n'
+                '@comment emberbsd-relocation-text=share/value\n'
+                '@comment emberbsd-deferred-hooks-v1')
+        b = archive('b-1', '/second/sdk', {'share/value': b'/second/sdk/value'}, decl, hooks=True)
+        def client(path, **kwargs): Path(path).write_bytes(b'client')
+        stage = self.work / 'assembled'
+        crypto = SimpleNamespace(verify_package=lambda archive, trust: None)
+        with patch('emberbsd_sdk.bootstrap_bundle.make_relative'), \
+             patch('emberbsd_sdk.client_bundle.package_client', side_effect=client):
+            metadata = prepare(stage, [a, b], crypto, trust='test', host={'os':'Darwin','arch':'arm64'},
+                               repository='test', install_name_tool='/usr/bin/true',
+                               codesign='/usr/bin/true', https_ca='ca')
+        self.assertEqual(metadata['prefix'], '/first/sdk')
+        self.assertEqual((stage/'share/value').read_bytes(), b'/first/sdk/value')
+        db = stage/'pkgdb/b-1'
+        self.assertIn('@comment emberbsd-relocation-prefix=/first/sdk', (db/'+CONTENTS').read_text())
+        self.assertIn('/first/sdk', (db/'+INSTALL').read_text())
+        self.assertIn('/second/sdk', (db/'+BUILD_VERSION').read_text())
+        bad = archive('bad-1', '/third/sdk', {'share/bad': b'bad'}, '')
+        with self.assertRaisesRegex(SDKError, 'portable declaration'):
+            prepare(self.work/'bad-stage', [bad], crypto, trust='test', host={'os':'Darwin','arch':'arm64'},
+                    repository='test', install_name_tool='/usr/bin/true', codesign='/usr/bin/true', https_ca='ca')
+        cases = [
+            ('unowned', '@comment emberbsd-prefix-relocation-v1\n'
+             '@comment emberbsd-relocation-prefix=/third/sdk\n'
+             '@comment emberbsd-relocation-text=share/not-owned'),
+            ('external', '@comment emberbsd-prefix-relocation-v1\n'
+             '@comment emberbsd-relocation-prefix=/foreign/sdk\n'
+             '@comment emberbsd-relocation-text=share/bad'),
+            ('command', '@comment emberbsd-prefix-independent-v1\n@exec touch /tmp/unsafe')]
+        for name, declaration in cases:
+            candidate = archive(name + '-1', '/third/sdk', {'share/bad': b'bad'}, declaration)
+            with self.subTest(name=name), self.assertRaises(SDKError):
+                prepare(self.work/(name+'-stage'), [candidate], crypto, trust='test',
+                        host={'os':'Darwin','arch':'arm64'}, repository='test',
+                        install_name_tool='/usr/bin/true', codesign='/usr/bin/true', https_ca='ca')
+        # B may not claim a path actually supplied by A merely by listing it.
+        claim = archive('claim-1', '/third/sdk', {},
+                        '@comment emberbsd-prefix-relocation-v1\n'
+                        '@comment emberbsd-relocation-prefix=/third/sdk\n'
+                        '@comment emberbsd-relocation-text=share/value\nshare/value')
+        with self.assertRaisesRegex(SDKError, 'owned by package'):
+            prepare(self.work/'claim-stage', [a, b, claim], crypto, trust='test',
+                    host={'os':'Darwin','arch':'arm64'}, repository='test',
+                    install_name_tool='/usr/bin/true', codesign='/usr/bin/true', https_ca='ca')
+        # Replacing an external input after verification cannot alter the
+        # private bytes subsequently inspected and unpacked.
+        replacement = archive('swap-1', '/first/sdk', tools,
+                              '@comment emberbsd-prefix-independent-v1')
+        swapping = SimpleNamespace(verify_package=lambda copy, trust: replacement.write_bytes(b'changed'))
+        with patch('emberbsd_sdk.bootstrap_bundle.make_relative'), \
+             patch('emberbsd_sdk.client_bundle.package_client', side_effect=client):
+            result = prepare(self.work/'new-parent'/'nested'/'swap-stage', [replacement], swapping, trust='test',
+                             host={'os':'Darwin','arch':'arm64'}, repository='test',
+                             install_name_tool='/usr/bin/true', codesign='/usr/bin/true', https_ca='ca')
+        self.assertEqual(result['packages'], ['swap-1'])
 
     def test_native_rpath_bare_anchors_and_escapes(self):
         image = self.root / 'bin' / 'example'

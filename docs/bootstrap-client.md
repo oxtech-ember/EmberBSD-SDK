@@ -55,7 +55,11 @@ Coordinated ABI transitions and additional host platforms remain separate work.
 ## Producing the archive
 
 `scripts/package-bootstrap.py --help` accepts complete Ports package archives,
-a selected native prefix and explicit Mach-O editing/ad-hoc signing tools.
+a selected native prefix, trusted release root and explicit Mach-O editing/ad-hoc
+signing tools. Every archive must have a verified signature and the current
+`package-portable.py` qualification. Qualified packages may originate from
+different producer prefixes; the producer normalizes their declared owned text
+and active metadata before bundling, without running hooks or bytecode.
 Use the `sdk-bootstrap` Ports roots with Python's `no-test-modules -x11` options
 and their actual runtime closure. Include the native mksh and bootstrap-mk-files
 providers required by generated package installation scripts. The Mozilla CA
