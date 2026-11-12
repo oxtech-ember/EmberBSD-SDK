@@ -61,10 +61,13 @@ class NativeTargetTests(unittest.TestCase):
         trust = self.root / 'trust'; trust.write_bytes(b'trust')
         package = self.root / 'fixture.tgz'; package.write_bytes(b'fixture')
         prefix = SimpleNamespace(path='/selected/bin', tool=lambda name: '/selected/bin/' + name)
-        installer = PackageInstaller(SimpleNamespace(prefix=prefix), trust)
+        crypto = SimpleNamespace(prefix=prefix, verify_package=Mock())
+        installer = PackageInstaller(crypto, trust)
         with patch('emberbsd_sdk.package_install.inspect_install_paths', return_value=None), \
              patch('emberbsd_sdk.package_install.subprocess.run', return_value=SimpleNamespace(returncode=0, stderr=b'')) as run:
+            installer.check(package, self.cfg)
             installer.install(package, self.cfg, checked=True)
+        crypto.verify_package.assert_called_once_with(package, trust)
         args = run.call_args.args[0]
         self.assertEqual(args[0], '/selected/bin/pkg_add')
         self.assertEqual(args[args.index('-p') + 1], self.cfg['prefix'])
@@ -82,7 +85,8 @@ class NativeTargetTests(unittest.TestCase):
         trust = self.root / 'trust'; trust.write_bytes(b'trust')
         package = self.root / 'fixture.tgz'; package.write_bytes(b'fixture')
         prefix = SimpleNamespace(path='/selected/bin', tool=lambda name: '/selected/bin/' + name)
-        installer = PackageInstaller(SimpleNamespace(prefix=prefix), trust)
+        crypto = SimpleNamespace(prefix=prefix, verify_package=Mock())
+        installer = PackageInstaller(crypto, trust)
 
         cases = (
             ('native-target-root', self.cfg, 0, 'YES'),
@@ -98,7 +102,10 @@ class NativeTargetTests(unittest.TestCase):
                  patch('emberbsd_sdk.package_install.inspect_install_paths', return_value=None), \
                  patch('emberbsd_sdk.package_install.subprocess.run',
                        return_value=SimpleNamespace(returncode=0, stderr=b'')) as run:
+                crypto.verify_package.reset_mock()
+                installer.check(package, config)
                 installer.install(package, config, checked=True)
+                crypto.verify_package.assert_called_once_with(package, trust)
                 environment = run.call_args.kwargs['env']
                 self.assertEqual(environment.get('PKG_CREATE_USERGROUP'), expected)
 
