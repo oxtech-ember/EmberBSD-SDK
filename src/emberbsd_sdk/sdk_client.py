@@ -260,6 +260,46 @@ def _source_config(config, roots):
             raise SDKError(f'Ports source requires an absolute {key}')
 
 
+def plan_source_selection(config, *, sets=(), roots=()):
+    """Plan local Ports inputs without loading a signed release or installing.
+
+    This deliberately does not use run_source: installation destinations and
+    signed-binary-only modes are not conditions on a local dependency query.
+    Ports still owns evaluation, state locking and dependency validation.
+    """
+    if not sets and not roots:
+        print('Nothing selected; no download, install or build requested.')
+        return 0
+    from . import package_selection
+    source = config.get('source')
+    if not isinstance(source, dict):
+        raise SDKError('source-plan requires a configured local Ports source')
+    for key in ('ports_root', 'pkgsrc', 'makeconf', 'state'):
+        if not isinstance(source.get(key), str) or not Path(source[key]).is_absolute():
+            raise SDKError(f'Ports source requires an absolute {key}')
+    native = load_host_prefix(config['host_prefix'], required_roles={'make', 'sh'})
+    values = dict(BMAKE=native.tool('make'), MAKECONF=source['makeconf'],
+                  PKGSRCDIR=source['pkgsrc'])
+    arguments = ['--ports-root', source['ports_root'], 'plan',
+                 '--host-prefix', config['host_prefix'], '--state', source['state']]
+    for name in sets:
+        arguments.extend(('--set', name))
+    for root in roots:
+        arguments.extend(('--package', root))
+    # Never inherit a binary-install selection into this source-only plan.
+    previous = {key: os.environ.get(key) for key in (*values, 'CROSS_BULK_BINARY_INSTALLED')}
+    try:
+        os.environ.update(values)
+        os.environ.pop('CROSS_BULK_BINARY_INSTALLED', None)
+        return package_selection.main(arguments)
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def run_source(config, roots, command, *, binaries=(), controller_mode=None, controller_ready=None):
     """Invoke the existing selector; Ports owns dependency solving and reuse."""
     if not roots:
@@ -873,7 +913,7 @@ def validate_config(value):
 def main(argv=None, *, default_config=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=default_config is None)
-    parser.add_argument('command', choices=('list', 'show', 'plan', 'catalog', 'install', 'installed', 'update', 'auto-update', 'cache-clean'))
+    parser.add_argument('command', choices=('list', 'show', 'plan', 'source-plan', 'catalog', 'install', 'installed', 'update', 'auto-update', 'cache-clean'))
     parser.add_argument('--set', action='append', default=[], dest='sets')
     parser.add_argument('--package', action='append', default=[], dest='roots')
     parser.add_argument('--target', help='also acquire the application sysroot for this target')
@@ -902,6 +942,10 @@ def main(argv=None, *, default_config=None):
             return watch_updates(lambda: main(arguments, default_config=default_config),
                                  3600 if args.interval is None else args.interval)
         config = load_config(args.config) if args.config else validate_config(default_config)
+        if args.command == 'source-plan':
+            if args.target or args.state_dir or args.cache_dir:
+                raise SDKError('source-plan uses configured source.state and target; no binary state/cache/sysroot options')
+            return plan_source_selection(config, sets=args.sets, roots=args.roots)
         config = _read_only_directories(config, args.state_dir, args.cache_dir, args.command)
         state = Path(config['state_dir'])
         state.mkdir(parents=True, exist_ok=True)

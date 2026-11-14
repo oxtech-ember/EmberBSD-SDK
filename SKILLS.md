@@ -56,3 +56,10 @@ metadata, including read-only hooks, supported schemas and exact dependencies wh
 relevant. Test explicit rejection of retired schemas in normal operations. Remove legacy readers retained only to satisfy obsolete tests; update affected consumers and tests with the current contract. Keep state-machine regressions runnable without a production SDK;
 native signing, package lifecycle and target tests remain separate evidence.
 Report executed and skipped checks, including missing integration prerequisites.
+
+Do not raise a package revision for accounting alone (review notes, CI evidence,
+provenance or retries). Follow the [identity boundary](docs/input-keys.md#revision-is-not-bookkeeping).
+For path defects, first diagnose the shared generator and distinguish producer,
+stage, native-prefix and target-sysroot domains. Use the optional
+[cross-root check](docs/package-path-qualification.md), not a blanket recipe
+rewrite or a new release/signature gate on every local iteration.
