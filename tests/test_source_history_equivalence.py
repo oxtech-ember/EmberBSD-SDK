@@ -5,9 +5,12 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 from emberbsd_sdk.errors import CommandError, SDKError
 from emberbsd_sdk.sysroot_builder import SysrootBuilder
