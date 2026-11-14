@@ -32,7 +32,10 @@ def qualify(root, forbidden_prefixes, metadata=(), probe=(), *, timeout=60):
         path = Path(value)
         if not path.is_absolute() or str(path) == '/' or '..' in path.parts:
             raise SDKError('forbidden prefix must be a non-root absolute path')
-        if path == root or path in root.parents or root in path.parents:
+        # Root is canonical already; canonicalize both sides for containment
+        # (notably /var -> /private/var on macOS). Missing old roots are valid.
+        canonical = path.resolve()
+        if canonical == root or canonical in root.parents or root in canonical.parents:
             raise SDKError('qualification and forbidden roots must not overlap')
         prefixes.append(str(path))
     if not prefixes:

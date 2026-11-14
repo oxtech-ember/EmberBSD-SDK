@@ -78,6 +78,23 @@ class PathQualificationTests(unittest.TestCase):
             with self.subTest(prefix=prefix), self.assertRaises(SDKError):
                 qualify(self.new, [prefix])
 
+    def test_alias_overlap_uses_canonical_paths_but_scans_raw_spelling(self):
+        alias = self.base / 'alias'
+        alias.symlink_to(self.base, target_is_directory=True)
+        for prefix in (alias, alias / self.new.name, alias / self.new.name / 'child'):
+            with self.subTest(prefix=prefix), self.assertRaisesRegex(SDKError, 'must not overlap'):
+                qualify(self.new, [prefix])
+        raw = str(alias / self.old.name)
+        metadata = self.new / 'aliased.pc'
+        metadata.write_text('prefix=' + raw)
+        report = qualify(alias / self.new.name, [raw], ['aliased.pc'])
+        self.assertEqual(report['static_check'], 'failed')
+        self.assertEqual(report['forbidden_prefixes'], [raw])
+        self.assertEqual(report['leaks'][0]['forbidden_prefix'], raw)
+        shutil.rmtree(self.old)
+        report = qualify(self.new, [raw], ['aliased.pc'])
+        self.assertEqual(report['static_check'], 'failed')
+
     def test_timeout_kills_probe_descendants(self):
         shutil.rmtree(self.old)
         marker = self.new / 'escaped-child'
