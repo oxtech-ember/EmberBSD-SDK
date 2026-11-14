@@ -8,6 +8,8 @@ notes identify owned lifetimes. p_ustart is wall clock and is not used.
 Signals retain the existing Darwin check-then-kill contract, not pidfd atomicity.
 """
 import ctypes
+from contextlib import ExitStack
+from importlib import resources
 from dataclasses import dataclass
 import errno
 import os
@@ -241,11 +243,13 @@ class NetBSDChild:
         self.returncode = None
         self.reaped = False
         self.released = False
+        self.launcher_resources = ExitStack()
 
     def start(self):
         read, write = os.pipe()
         try:
-            helper = os.path.join(os.path.dirname(__file__), '_netbsd_launcher.py')
+            helper = self.launcher_resources.enter_context(resources.as_file(
+                resources.files(__package__).joinpath('_netbsd_launcher.py')))
             self.process = subprocess.Popen([sys.executable, '-B', '-I', '-S', helper,
                 str(read), *self.argv], pass_fds=(read,), start_new_session=True,
                 **{'stdin': subprocess.DEVNULL, **self.options})
@@ -278,6 +282,9 @@ class NetBSDChild:
                 if self.queue is not None:
                     self.queue.close()
                     self.queue = None
+                self.launcher_resources.close()
+            elif self.process is None:
+                self.launcher_resources.close()
             if isinstance(exc, (SDKError, KeyboardInterrupt, SystemExit)):
                 raise
             raise SDKError(f'NetBSD gated producer launch failed: {exc}') from exc
@@ -327,3 +334,4 @@ class NetBSDChild:
             self.reaped = True
             self.queue.close()
             self.queue = None
+            self.launcher_resources.close()
