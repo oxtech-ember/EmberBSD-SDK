@@ -862,7 +862,24 @@ class SysrootBuilder:
                 old = record['sources'][name]['commit']
                 if not isinstance(old, str) or re.fullmatch('[0-9a-f]{40}', old) is None:
                     raise SDKError('invalid recorded source pin')
-                self.git(self.sources[name]['path'], 'merge-base', '--is-ancestor', old, self.sources[name]['commit'])
+                root = self.sources[name]['path']
+                current = self.sources[name]['commit']
+                try:
+                    self.git(root, 'merge-base', '--is-ancestor', old, current)
+                except CommandError as exc:
+                    # A rebase or cherry-pick can change provenance without
+                    # changing any tracked input. Only the normal non-ancestor
+                    # result permits this fallback; Git errors still fail.
+                    if exc.returncode != 1:
+                        raise
+                    before = self.git(root, 'rev-parse', '--verify', old + '^{tree}')
+                    after = self.git(root, 'rev-parse', '--verify', current + '^{tree}')
+                    if before != after:
+                        raise
+                    # This is history admission only. inspect_context already
+                    # checked compiled signatures/allowed scoped refreshes;
+                    # clean source admission and artifact checks stay intact.
+
         except (KeyError, TypeError) as exc:
             raise SDKError(f'invalid source history: {path}: {exc}') from exc
 
