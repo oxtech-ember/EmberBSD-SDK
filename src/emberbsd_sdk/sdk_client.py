@@ -804,7 +804,7 @@ def _install_source_waves(plan, config, installer, cache, store, refresh_current
     if refresh_current is None or not names or not source:
         return None
     state = Path(source['state'])
-    from .source_wave import SourceWaveLock
+    from .source_wave import SourceWaveLock, drop_resolved_receipts
     # The lock covers the graph read, every channel reread and every controller.
     # The controller writes a private copy and locks only that copy.
     session = SourceWaveLock(state)
@@ -829,13 +829,18 @@ def _install_source_waves(plan, config, installer, cache, store, refresh_current
                 binaries, extra = _adopt_published(config, installer, cache, store, release, catalogs,
                                                    names, order, pending, binaries)
                 reused.extend(extra)
+            scheduled = set(pending)
             _retain_current(config, installer, names, pending)
+            retained = scheduled - pending
+            if retained:
+                resolved = [(root, names.get(root)) for root in retained if names.get(root)]
+                drop_resolved_receipts(state, resolved, planned=names)
             if not pending:
                 break
             ready = _ready_wave(order, deps, pending)
             if not ready:
                 raise SDKError('source graph has no ready package')
-            receipts = session.build(config, ready, binaries)
+            receipts = session.build(config, ready, binaries, planned=names)
             _accept_built_wave(config, installer, names, ready, pending, receipts)
         return reused
     finally:

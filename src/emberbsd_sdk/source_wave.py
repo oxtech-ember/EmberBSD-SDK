@@ -89,9 +89,10 @@ class SourceWaveLock:
             raise SDKError('source wave lock did not start')
         self.pid = ready['pid']
 
-    def build(self, config, ready, binaries):
+    def build(self, config, ready, binaries, planned=None):
         self._send({'op': 'build', 'config': config, 'ready': list(ready),
-                    'binaries': [list(item) for item in binaries]})
+                    'binaries': [list(item) for item in binaries],
+                    'planned': dict(planned or {})})
         return self._result()
 
     def exec_controller(self, argv, env, ready):
@@ -866,6 +867,91 @@ def _new_lines(before, current):
     return [line for line in current.splitlines() if line.strip() and line not in previous]
 
 
+def _row_root(line):
+    parts = line.split()
+    return parts[0] if parts else ''
+
+
+def _is_pkgname(token):
+    """True when the token looks like a PKGNAME (PKGBASE plus a version)."""
+    if not token:
+        return False
+    parts = token.split('-')
+    return any(index and part[:1].isdigit() for index, part in enumerate(parts))
+
+
+def _done_packages(text):
+    resolved = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and _is_pkgname(parts[1]):
+            resolved.append((parts[0], parts[1]))
+    return resolved
+
+
+def _failure_package(line):
+    """Return (root, pkgname-or-None). Reason-only failures have no PKGNAME."""
+    parts = line.split()
+    if not parts:
+        return '', None
+    if len(parts) >= 2 and _is_pkgname(parts[1]):
+        return parts[0], parts[1]
+    return parts[0], None
+
+
+def _packages_by_root(resolved):
+    names = {}
+    for root, pkgname in resolved:
+        if root and pkgname:
+            names.setdefault(root, set()).add(pkgname)
+    return names
+
+
+def _keep_failure(line, packages, planned):
+    """Keep a failed or blocked row unless a matching done or current PKGNAME resolved it.
+
+    Roots are compared in full, including a @native suffix. A done row resolves
+    a failure only when its PKGNAME equals the package named on the failed row,
+    or, for a reason-only row, the currently planned PKGNAME.
+    """
+    root, failed_pkg = _failure_package(line)
+    if not root or root not in packages:
+        return True
+    names = packages[root]
+    if failed_pkg:
+        return failed_pkg not in names
+    planned_name = (planned or {}).get(root)
+    return not (planned_name and planned_name in names)
+
+
+def drop_resolved_receipts(state, resolved, planned=None):
+    """Remove failed and blocked rows superseded by a matching done or current package.
+
+    Source-wave merge only appends new receipt lines. A later success, or a
+    package the client later accepts as already installed, must not leave a
+    matching failed or blocked row in the real state. A native success does
+    not resolve a target failure, and an older done PKGNAME does not suppress
+    a failure for a different planned package.
+    """
+    packages = _packages_by_root(resolved)
+    if not packages:
+        return
+    planned = dict(planned or {})
+    state = Path(state)
+    for name in ('failed', 'blocked'):
+        path = state / name
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise SDKError(f'Ports receipt is not a regular file: {path}')
+        if not path.exists():
+            continue
+        text = _read_text(path)
+        kept = [line for line in text.splitlines() if line.strip() and _keep_failure(line, packages, planned)]
+        new = ''.join(line + '\n' for line in kept)
+        old = text if text.endswith('\n') or text == '' else text + '\n'
+        if new != old:
+            _durable_write(state, name, new.encode())
+
+
 def _private_schedule(real_state, ready):
     private = Path(tempfile.mkdtemp(prefix='ember-wave-'))
     for name in _COPIED:
@@ -880,10 +966,16 @@ def _private_schedule(real_state, ready):
     return private
 
 
-def _merge_receipts(real_state, private, before):
+def _merge_receipts(real_state, private, before, planned=None):
     receipts = {}
+    collected = {}
+    planned = dict(planned or {})
     for name in (*_RECEIPTS, 'progress'):
-        lines = _new_lines(before.get(name, ''), _read_text(private / name))
+        collected[name] = _new_lines(before.get(name, ''), _read_text(private / name))
+    resolved = _done_packages(before.get('done', '')) + _done_packages(_read_text(private / 'done'))
+    packages = _packages_by_root(resolved)
+    for name in ('done', 'skipped', 'progress'):
+        lines = collected[name]
         if lines:
             path = real_state / name
             if path.is_symlink() or (path.exists() and not path.is_file()):
@@ -892,6 +984,16 @@ def _merge_receipts(real_state, private, before):
                 stream.write(''.join(line + '\n' for line in lines))
         if name in _RECEIPTS:
             receipts[name] = [line.split() for line in lines]
+    drop_resolved_receipts(real_state, resolved, planned=planned)
+    for name in ('failed', 'blocked'):
+        lines = [line for line in collected[name] if _keep_failure(line, packages, planned)]
+        if lines:
+            path = real_state / name
+            if path.is_symlink() or (path.exists() and not path.is_file()):
+                raise SDKError(f'Ports receipt is not a regular file: {path}')
+            with path.open('a') as stream:
+                stream.write(''.join(line + '\n' for line in lines))
+        receipts[name] = [line.split() for line in lines]
     return receipts
 
 
@@ -1237,6 +1339,11 @@ def _run_build(message, real_state):
     ready = message.get('ready')
     if not isinstance(ready, list) or any(not isinstance(root, str) for root in ready):
         raise SDKError('source wave has no schedule')
+    planned = message.get('planned') or {}
+    if not isinstance(planned, dict) or any(
+            not isinstance(root, str) or not isinstance(pkgname, str)
+            for root, pkgname in planned.items()):
+        raise SDKError('source wave planned package names are invalid')
     before = {name: _read_text(real_state / name) for name in (*_RECEIPTS, 'progress')}
     private = _private_schedule(real_state, ready)
     lock = real_state / 'build.lock'
@@ -1270,7 +1377,7 @@ def _run_build(message, real_state):
         except Exception as exc:
             run_error = exc
         try:
-            receipts = _merge_receipts(real_state, private, before)
+            receipts = _merge_receipts(real_state, private, before, planned=planned)
             try:
                 _preserve_logs(real_state, private)
             except Exception as exc:
