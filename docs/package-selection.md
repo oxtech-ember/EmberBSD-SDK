@@ -56,3 +56,33 @@ dependencies or objects when a selection is removed.
 The model follows explicit component selection in [rustup profiles](https://rust-lang.github.io/rustup/concepts/profiles.html)
 and root lists with dependency closure in the [FreeBSD Handbook's Poudriere
 package-build guide](https://docs.freebsd.org/en/books/handbook/ports/#ports-poudriere).
+
+## Local source planning without a published release
+
+With an existing SDK client configuration and prepared local Ports inputs:
+
+```sh
+python3 scripts/packages.py --config /absolute/sdk-client.json source-plan \
+  --package devel/example@native
+```
+
+`source-plan` uses `source.ports_root`, `source.pkgsrc`, `source.makeconf`,
+`source.state` and the selected native make/shell. Sets are read from the local
+Ports checkout, not from a release catalog. It delegates to the same Ports
+`selected-order` planner as `packages.py --ports-root … plan`.
+
+This branch does not create a release crypto context, contact the release
+server, load a signed snapshot, download packages or install/build anything.
+No signature, release ID, commit or package revision is required for an edit
+before planning it. A prepared local tree and working native tools are still
+needed. The planner evaluates the selected local make recipes and writes its
+normal dependency-plan state under `source.state`; it is not a sandbox for
+untrusted recipes and is not a completely filesystem-read-only operation.
+
+The result is a **source dependency order**, not a binary availability/reuse
+plan. It does not promise that S3 contains a compatible package. `plan` retains
+its existing binary-first, authenticated release behavior, and `install` and
+`update` still verify external artifacts. `--target`, `--installed`,
+`--state-dir` and `--cache-dir` are not source-plan options; select the target and
+planner state through the source configuration. No automatic qualification,
+signing or publication is introduced into the local edit/plan loop.
