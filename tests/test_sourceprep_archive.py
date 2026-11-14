@@ -88,6 +88,41 @@ class SourceArchiveTests(TemporaryCase):
                 with self.assertRaises(SDKError):
                     self.extract(layout="flat")
 
+    def test_flat_dot_prefix_preserves_archive_boundaries(self):
+        def archive(rows):
+            with tarfile.open(self.archive, 'w') as packed:
+                for name, kind, target in rows:
+                    member = tarfile.TarInfo(name)
+                    if kind in ('link', 'hardlink'):
+                        member.type = tarfile.SYMTYPE if kind == 'link' else tarfile.LNKTYPE
+                        member.linkname = target
+                        packed.addfile(member)
+                    else:
+                        member.size = 1
+                        packed.addfile(member, io.BytesIO(b'x'))
+        archive([('./Ahem.ttf', 'file', None), ('././Other.ttf', 'file', None)])
+        self.extract(layout='flat')
+        self.assertEqual((self.output / 'source/Ahem.ttf').read_bytes(), b'x')
+        self.assertEqual((self.output / 'source/Other.ttf').read_bytes(), b'x')
+        cases = (
+            ([('./../escape', 'file', None)], 'unsafe fixture archive path'),
+            ([('.//absolute', 'file', None)], 'unsafe fixture archive path'),
+            ([('./Ahem.ttf', 'file', None), ('Ahem.ttf', 'file', None)],
+             'duplicate fixture archive member'),
+            ([('./link', 'link', '../escape')], 'escaping fixture archive symlink'),
+            ([('./hardlink', 'hardlink', '../escape')], 'fixture archive contains a link or special file'),
+        )
+        for index, (rows, error) in enumerate(cases):
+            with self.subTest(rows=rows):
+                archive(rows)
+                output = self.root / ('negative-dot-prefix-' + str(index))
+                output.mkdir()
+                with self.assertRaisesRegex(SDKError, error):
+                    extract_archive(self.archive, output, 'source', 'fixture',
+                                    layout='flat', internal_symlinks=True)
+                self.assertFalse((output / 'escape').exists())
+                self.assertFalse((self.root / 'escape').exists())
+
     def test_flat_layout_default_limits_metadata_and_mtime(self):
         with tarfile.open(self.archive, "w") as packed:
             for name, data, mode, mtime in (("C/a.c", b"a", 0o755, 1643857092),

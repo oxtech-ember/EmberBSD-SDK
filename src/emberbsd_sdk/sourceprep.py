@@ -188,6 +188,9 @@ def extract_archive(archive, destination, root_name, label, *, components=None,
             if number > max_members:
                 raise SDKError(f'{label} archive has too many members')
             name = member.name.rstrip('/')
+            # A leading './' is standard tar notation, not a path component.
+            while name.startswith('./'):
+                name = name[2:]
             parts = name.split('/')
             if not safe_name(name) or (layout == 'rooted' and parts[0] != root_name):
                 raise SDKError(f'unsafe {label} archive path')
