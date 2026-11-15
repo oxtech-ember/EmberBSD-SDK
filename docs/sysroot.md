@@ -175,8 +175,10 @@ remain subject to the normal compatibility check.
 
 An identical bootstrap runtime rebuilt against updated base headers can reuse
 objects when its entire recorded payload, modes, links, LLVM source, recipe
-files and target identity are unchanged. Base headers keep their normal OS
-dependency refresh; OS and Ports commit pins may advance. Moving that runtime
+files and target identity are unchanged. Changed base header files and links
+refresh their consumers through the prepared-source dependency planner,
+including dependencies that still name an older base stage. OS and Ports
+commit pins may advance. Moving that runtime
 still refreshes affected header consumers and verifies the selected unwind
 archive against its recorded digest.
 
@@ -184,8 +186,9 @@ A full runtime rebuilt against updated base libraries can also reuse objects
 when its entire recorded payload, modes, links, LLVM source, recipe files and
 target identity are unchanged. Base provenance and the bootstrap manifest pin
 may advance; the bootstrap archive digests and selected unwind binding must
-still match. Base headers and libraries keep their normal OS and prepared-source
-refresh paths. A moved runtime refreshes its header and C++ link consumers.
+still match. Changed base headers use the same dependency refresh; common base
+libraries retain their prepared-source refresh paths. A moved runtime refreshes
+its header and C++ link consumers.
 
 For a Clang runtime update confined to C++ headers and the shared libc++ and
 libc++abi libraries, the same planner refreshes their header and link consumers.

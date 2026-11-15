@@ -121,12 +121,42 @@ class RuntimeRefreshTests(unittest.TestCase):
         base['files']['usr/include/net80211/ieee80211_ioctl.h'] = '8' * 64
         base['symlinks']['usr/include/machine'] = 'aarch64'
         self.assertEqual(runtime_refresh.bootstrap_update(old, new),
-                         {'headers': ('usr/pkg/llvm/include/',), 'linked': ()})
+                         {'headers': ('usr/pkg/llvm/include/', 'usr/include/machine',
+                                      'usr/include/net80211/ieee80211_ioctl.h'), 'linked': ()})
         # A changed foundation is acceptable only after the producer proves
         # that every runtime output is identical, including static archives.
         manifest = new['runtime']['manifest']
         manifest['files'][manifest['artifacts']['builtins']] = '7' * 64
         self.assertIsNone(runtime_refresh.bootstrap_update(old, new))
+
+    def test_changed_foundation_headers_refresh_old_absolute_dependencies(self):
+        old, new, fixture = self.bootstrap_contexts()
+        previous = old['runtime']['manifest']['base']
+        previous['files']['usr/include/net80211/ieee80211_ioctl.h'] = '7' * 64
+        previous['files']['usr/include/obsolete.h'] = '6' * 64
+        previous['symlinks']['usr/include/machine'] = 'old-machine'
+        base = new['runtime']['manifest']['base']
+        base['files']['usr/include/net80211/ieee80211_ioctl.h'] = '8' * 64
+        base['symlinks']['usr/include/machine'] = 'aarch64'
+        update = runtime_refresh.bootstrap_update(old, new)
+        with tempfile.TemporaryDirectory() as temp:
+            root, obj = Path(temp) / 'os', Path(temp) / 'obj'
+            (root / 'share/mk').mkdir(parents=True)
+            (root / 'share/mk/prepared-source-refresh.json').write_text(json.dumps({
+                'version': 1, 'sources': {}, 'header_independent_object_patterns': [],
+                'header_independent_archive_patterns': []}))
+            for name, dep in (('wifi', 'net80211/ieee80211_ioctl.h'),
+                              ('machine', 'machine/param.h'), ('removed', 'obsolete.h'),
+                              ('other', 'stdio.h')):
+                (root / name).mkdir(parents=True)
+                (root / name / 'Makefile').touch()
+                (obj / name).mkdir(parents=True)
+                (obj / name / 'item.o').write_bytes(b'object')
+                (obj / name / 'item.d').write_text(
+                    'item.o: /old/stage/usr/include/' + dep + '\n')
+            self.assertEqual(prepared_refresh.plan(root, obj, set(), extra_headers=update['headers']),
+                             ['machine', 'removed', 'wifi'])
+            self.assertEqual((obj / 'other/item.o').read_bytes(), b'object')
 
     def test_bootstrap_rejects_incompatible_manifest_and_bindings(self):
         old, new, fixture = self.bootstrap_contexts()
@@ -248,12 +278,13 @@ class RuntimeRefreshTests(unittest.TestCase):
         old, new, _ = self.full_contexts()
         with patch('emberbsd_sdk.inventory.snapshot_tree', side_effect=AssertionError('unexpected hash')):
             self.assertEqual(runtime_refresh.unchanged_full_update(old, new), {
-                'headers': ('usr/pkg/llvm/include/', 'usr/include/c++/'),
+                'headers': ('usr/pkg/llvm/include/', 'usr/include/c++/', 'usr/include/zlib.h'),
                 'linked': ('libc++.so', 'libc++abi.so')})
         same = copy.deepcopy(new)
         same['runtime_prefix'] = old['runtime_prefix']
         same['flags'] = copy.deepcopy(old['flags'])
-        self.assertEqual(runtime_refresh.unchanged_full_update(old, same), {'headers': (), 'linked': ()})
+        self.assertEqual(runtime_refresh.unchanged_full_update(old, same),
+                         {'headers': ('usr/include/zlib.h',), 'linked': ()})
         # Changed-runtime acceptance remains stricter than identical output reuse.
         self.assertIsNone(runtime_refresh.cpp_update(old, new))
 
@@ -296,7 +327,8 @@ class RuntimeRefreshTests(unittest.TestCase):
         fake.reuse_signature = fake.reuse_signature.__get__(fake)
         with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan', return_value=[]) as plan:
             self.assertTrue(SysrootBuilder.plan_prepared_refresh(fake, {'signature': old}, '/obj'))
-            self.assertEqual(plan.call_args.kwargs['extra_headers'], ('usr/pkg/llvm/include/', 'usr/include/c++/'))
+            self.assertEqual(plan.call_args.kwargs['extra_headers'],
+                             ('usr/pkg/llvm/include/', 'usr/include/c++/', 'usr/include/zlib.h'))
             new['flags'].append('CFLAGS=-unsafe')
             self.assertFalse(SysrootBuilder.plan_prepared_refresh(fake, {'signature': old}, '/obj'))
             new['flags'].pop()

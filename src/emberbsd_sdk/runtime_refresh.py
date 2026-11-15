@@ -58,6 +58,13 @@ def compatible_recipe_transition(previous, current, changed_paths, *, ports, pyt
     return answer
 
 
+def _changed_base_headers(old, new):
+    """Find changed foundation inputs even in dependencies on an older stage."""
+    names = set(old['files']) | set(new['files']) | set(old['symlinks']) | set(new['symlinks'])
+    return tuple(name for name in sorted(names) if name.startswith('usr/include/') and
+                 any(old[kind].get(name) != new[kind].get(name) for kind in ('files', 'symlinks')))
+
+
 def bootstrap_update(before, after):
     """Rebind an unchanged bootstrap payload, refreshing moved header consumers."""
     try:
@@ -75,7 +82,7 @@ def bootstrap_update(before, after):
             if set(manifest['components']) != {'builtins', 'libunwind-static'}:
                 return None
         # A rebuilt foundation may change while every runtime output stays
-        # identical. OS make owns its base header dependencies; compare the
+        # identical. Refresh changed base header consumers below; compare the
         # runtime ABI, source, recipe files and complete produced payload here.
         def comparable(manifest):
             return {key: ({k: v for k, v in value.items() if k != 'ports_revision'}
@@ -111,7 +118,8 @@ def bootstrap_update(before, after):
             return None
         # Reuse compiled payload; only consumers whose dependency files retain
         # the former absolute include binding need the existing owner refresh.
-        return dict(headers=(new['prefix'] + '/include/',) if moved else (), linked=())
+        headers = (new['prefix'] + '/include/',) if moved else ()
+        return dict(headers=headers + _changed_base_headers(old['base'], new['base']), linked=())
     except (SDKError, KeyError, TypeError, AttributeError, ValueError):
         return None
 
@@ -119,8 +127,9 @@ def bootstrap_update(before, after):
 def unchanged_full_update(before, after):
     """Rebind identical full runtime outputs after rebuilding their foundation.
 
-    The base is a producer input, not an extra runtime payload. Its own headers
-    and libraries are refreshed by OS make and the prepared-source planner.
+    The base is a producer input, not an extra runtime payload. Changed headers
+    use the dependency planner, including references to an older base stage;
+    common library producers retain their prepared-source refresh paths.
     This case requires every runtime output and its ABI/source/recipe identity
     to remain identical; it does not relax the changed-runtime ABI checks.
     """
@@ -161,7 +170,8 @@ def unchanged_full_update(before, after):
                 if [flag for flag in context['flags'] if flag.startswith(binding)] != [binding + routes[role]]:
                     return None
         moved = before['runtime_prefix'] != after['runtime_prefix']
-        return dict(headers=(new['prefix'] + '/include/', 'usr/include/c++/') if moved else (),
+        headers = (new['prefix'] + '/include/', 'usr/include/c++/') if moved else ()
+        return dict(headers=headers + _changed_base_headers(old['base'], new['base']),
                     linked=('libc++.so', 'libc++abi.so') if moved else ())
     except (SDKError, KeyError, TypeError, AttributeError, ValueError):
         return None
