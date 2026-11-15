@@ -53,6 +53,11 @@ orders the selected closure. A build orders and builds it under the controller's
 single state lock. Both reuse compatible state; neither clears shared
 dependencies or objects when a selection is removed.
 
+On `SIGINT`, `SIGTERM` or `SIGHUP`, the frontend forwards only the first signal
+and waits for the controller to drain before removing its temporary roots file.
+It returns `128 + signal number` even when the controller's cleanup exits zero;
+without interruption it preserves the controller's exit status.
+
 The model follows explicit component selection in [rustup profiles](https://rust-lang.github.io/rustup/concepts/profiles.html)
 and root lists with dependency closure in the [FreeBSD Handbook's Poudriere
 package-build guide](https://docs.freebsd.org/en/books/handbook/ports/#ports-poudriere).

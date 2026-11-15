@@ -266,7 +266,7 @@ exit 2
         selector.assert_not_called()
         self.assertFalse(self.calls.exists())
 
-    def test_interrupt_drains_controller_before_removing_roots_file(self):
+    def assert_interrupt_drains_controller(self, controller_status):
         self.cross_bulk.write_text('''#!/bin/sh
 mode=$1 roots=$2 state=$3
 printf '%s\\n' "$mode $roots $state" >> "$CALL_LOG"
@@ -281,12 +281,12 @@ on_term() {
     printf stopped > "$CONTROLLER_STOPPED"
     wait "$worker"
     printf drained > "$CONTROLLER_DRAINED"
-    exit 1
+    exit CANCEL_STATUS
 }
 trap on_term TERM
 printf ready > "$WORKER_STARTED"
 wait "$worker"
-''', encoding='utf-8')
+'''.replace('CANCEL_STATUS', str(controller_status)), encoding='utf-8')
         runner = self.root / 'runner.py'
         runner.write_text(
             "import sys\n"
@@ -327,12 +327,47 @@ wait "$worker"
                 except subprocess.TimeoutExpired:
                     result.kill()
                     result.communicate()
-        self.assertEqual(result.returncode, 1, (stdout, stderr))
+        self.assertEqual(result.returncode, 128 + signal.SIGTERM, (stdout, stderr))
         for marker in ('CONTROLLER_STOPPED', 'WORKER_FINISHED',
                        'ROOTS_PRESENT', 'CONTROLLER_DRAINED'):
             self.assertTrue(Path(self.env[marker]).is_file(), marker)
         self.assertFalse(Path(self.env['WORKER_SIGNALLED']).exists())
         self.assertFalse(roots_path.exists())
+
+    def test_interrupt_drains_controller_before_removing_roots_file(self):
+        self.assert_interrupt_drains_controller(1)
+
+    def test_cancelled_controller_cannot_report_success_after_drain(self):
+        self.assert_interrupt_drains_controller(0)
+
+    def test_first_forwarded_signal_sets_status_for_both_controller_launchers(self):
+        native = SelectedHostPrefix(self.bmake, self.shell)
+        for first in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            for recorded in (False, True):
+                with self.subTest(signal=first, recorded=recorded):
+                    previous = {n: signal.getsignal(n) for n in
+                                (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+                    handlers = dict(previous)
+                    def change(number, handler):
+                        old = handlers[number]
+                        handlers[number] = handler
+                        return old
+                    def wait():
+                        handlers[first](first, None)
+                        handlers[signal.SIGTERM](signal.SIGTERM, None)
+                        return 0
+                    child = mock.Mock()
+                    child.wait.side_effect = wait
+                    with mock.patch.dict(os.environ, self.env, clear=True), \
+                            mock.patch.object(signal, 'signal', side_effect=change), \
+                            mock.patch.object(package_selection.subprocess, 'Popen', return_value=child), \
+                            mock.patch.object(package_selection, 'launch_recorded', return_value=child):
+                        status = package_selection._run_controller(self.ports, self.state,
+                            native, ['cat/app'], 'selected-build', self.env,
+                            controller_ready=(lambda pid: None) if recorded else None)
+                    self.assertEqual(status, 128 + first)
+                    child.send_signal.assert_called_once_with(first)
+                    self.assertEqual(handlers, previous)
 
     def test_unknown_set_and_unsafe_package_root_fail_before_controller(self):
         common = ('--state', os.fspath(self.state), '--host-prefix', os.fspath(self.prefix))

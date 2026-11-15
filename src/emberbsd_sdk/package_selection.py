@@ -286,7 +286,9 @@ def _run_controller(ports_root, state, native, roots, command, build_environment
         finally:
             for number, handler in previous.items():
                 signal.signal(number, handler)
-        return status
+        # Drain first, but do not let a shell's successful cleanup hide the
+        # cancellation requested by our caller.
+        return 128 + forwarded[0] if forwarded else status
     finally:
         roots_path.unlink(missing_ok=True)
 
