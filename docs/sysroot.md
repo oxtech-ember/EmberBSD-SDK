@@ -173,9 +173,12 @@ contract, the SDK can selectively clean the affected objects under the existing
 object-tree lock before recording the new source context. Other input changes
 remain subject to the normal compatibility check.
 
-For an otherwise identical bootstrap runtime, OS and Ports commit pins may
-advance while every recorded base input, recipe file and runtime payload digest
-stays unchanged. Moving that runtime still refreshes affected header consumers.
+An identical bootstrap runtime rebuilt against updated base headers can reuse
+objects when its entire recorded payload, modes, links, LLVM source, recipe
+files and target identity are unchanged. Base headers keep their normal OS
+dependency refresh; OS and Ports commit pins may advance. Moving that runtime
+still refreshes affected header consumers and verifies the selected unwind
+archive against its recorded digest.
 
 A full runtime rebuilt against updated base libraries can also reuse objects
 when its entire recorded payload, modes, links, LLVM source, recipe files and

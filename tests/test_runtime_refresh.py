@@ -114,17 +114,30 @@ class RuntimeRefreshTests(unittest.TestCase):
         Path(old['flags'][-1].split('=', 1)[1]).unlink()
         self.assertIsNone(runtime_refresh.bootstrap_update(old, new))
 
+    def test_bootstrap_rebuilt_from_changed_headers_reuses_identical_outputs(self):
+        old, new, fixture = self.bootstrap_contexts()
+        base = new['runtime']['manifest']['base']
+        base['os_revision'] = '9' * 40
+        base['files']['usr/include/net80211/ieee80211_ioctl.h'] = '8' * 64
+        base['symlinks']['usr/include/machine'] = 'aarch64'
+        self.assertEqual(runtime_refresh.bootstrap_update(old, new),
+                         {'headers': ('usr/pkg/llvm/include/',), 'linked': ()})
+        # A changed foundation is acceptable only after the producer proves
+        # that every runtime output is identical, including static archives.
+        manifest = new['runtime']['manifest']
+        manifest['files'][manifest['artifacts']['builtins']] = '7' * 64
+        self.assertIsNone(runtime_refresh.bootstrap_update(old, new))
+
     def test_bootstrap_rejects_incompatible_manifest_and_bindings(self):
         old, new, fixture = self.bootstrap_contexts()
         cases = []
-        for field in ('source', 'recipe', 'target', 'compiler_family'):
+        for field in ('source', 'recipe', 'base', 'target', 'compiler_family'):
             bad = copy.deepcopy(new)
             bad['runtime']['manifest'][field] = 'changed'
             cases.append((field, bad))
-        for field in ('files', 'base'):
+        for field in ('files',):
             bad = copy.deepcopy(new)
             target = bad['runtime']['manifest'][field]
-            if field == 'base': target = target['files']
             target[next(iter(target))] = '9' * 64
             cases.append((field, bad))
         bad = copy.deepcopy(new)
