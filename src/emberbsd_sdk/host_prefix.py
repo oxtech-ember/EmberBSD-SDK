@@ -12,10 +12,11 @@ from types import MappingProxyType
 from . import process
 from .errors import SDKError
 from .host_identity import native_cpu
-from .native_toolset import _gcc, _native_image, _native_triplet, _require
+from .native_toolset import _flags, _gcc, _native_image, _native_triplet, _require
 from .paths import canonical_existing
 
 HOST_PREFIX_API = 2
+ABI_FLAG_NAMES = ('cppflags', 'cflags', 'cxxflags', 'ldflags')
 _NAMES = {'cc': ('gcc16/bin/gcc', 'bin/gcc-16', 'bin/gcc16', 'bin/gcc'),
           'cxx': ('gcc16/bin/g++', 'bin/g++-16', 'bin/g++16', 'bin/g++'),
           'cpp': ('gcc16/bin/cpp', 'bin/cpp-16', 'bin/cpp16', 'bin/cpp'),
@@ -54,6 +55,41 @@ _CLANG_NAMES = {'cc': ('bin/clang',), 'cxx': ('bin/clang++',),
                 'otool': ('bin/llvm-otool', 'bin/otool'),
                 **{role: ('bin/llvm-' + role,) for role in
                    ('ar', 'ranlib', 'nm', 'strip', 'objcopy', 'objdump', 'readelf')}}
+
+
+def normalize_abi_flags(value=None, *, host=None):
+    """Validate explicit host-only compiler flags as token arrays."""
+    if value is None:
+        value = {name: () for name in ABI_FLAG_NAMES}
+    _require(isinstance(value, dict) and set(value) == set(ABI_FLAG_NAMES),
+             'invalid native ABI flags')
+    result = {}
+    for name in ABI_FLAG_NAMES:
+        words = value[name]
+        _require(isinstance(words, (list, tuple)), 'native ABI flags must be token arrays')
+        checked = []
+        for word in words:
+            _require(isinstance(word, str) and word and
+                     not any(ord(char) < 32 or ord(char) == 127 for char in word),
+                     'invalid native ABI flag token')
+            checked.append(word)
+        result[name] = checked
+    if host is None:
+        return {name: tuple(words) for name, words in result.items()}
+    return _flags(result, host=host)
+
+
+def parse_host_abi_flags(options):
+    """Parse explicit CLI flag strings into the selected host-only tokens."""
+    try:
+        values = {}
+        for name in ABI_FLAG_NAMES:
+            raw = options.get('host-abi-' + name, options.get('host_abi_' + name, ''))
+            values[name] = shlex.split('' if raw is None else raw)
+        flags = normalize_abi_flags(values)
+        return flags if any(flags.values()) else None
+    except ValueError as exc:
+        raise SDKError('invalid native ABI flag quoting') from exc
 
 
 def _compiler(value, host):
@@ -211,7 +247,7 @@ def _member(path, root, host, *, search_path, binary=False, seen=()):
     return path
 
 
-def load_host_prefix(prefix, *, required_roles, host=None, compiler_family='clang'):
+def load_host_prefix(prefix, *, required_roles, host=None, compiler_family='clang', abi_flags=None):
     """Select LLVM or explicit GCC tools. Query drivers; do not compile probes.
 
     The caller builds the prefix from the common Ports recipes. This function
@@ -231,6 +267,7 @@ def load_host_prefix(prefix, *, required_roles, host=None, compiler_family='clan
                          f'build PATH directory escapes host prefix: {directory}')
         selected_host = dict(host or dict(os=platform.system(), cpu=native_cpu()))
         _require(set(selected_host) == {'os', 'cpu'}, 'host requires OS and CPU')
+        flags = normalize_abi_flags(abi_flags, host=selected_host)
         roles = set(required_roles)
         needs_compiler = bool(roles & {'cc', 'cxx', 'cpp'})
         if needs_compiler:
@@ -256,7 +293,6 @@ def load_host_prefix(prefix, *, required_roles, host=None, compiler_family='clan
         search_path = _search_path(root, tools)
         for selected in tools.values():
             _member(selected, root, selected_host, search_path=search_path)
-        flags = {name: () for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}
         if not needs_compiler:
             return HostPrefix(root, MappingProxyType(selected_host), MappingProxyType({}),
                               MappingProxyType(tools), MappingProxyType(flags), MappingProxyType({}))
@@ -321,5 +357,6 @@ def validate_host_prefix(value, *, required_roles):
         _require(os.path.isabs(path) and os.path.normpath(path) == path and
                  os.path.commonpath((path, root)) == root and path != root,
                  'recorded tool escapes host prefix')
-    _require(value['abi_flags'] == {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')},
-             'unexpected host prefix flags')
+    abi_flags = normalize_abi_flags(value['abi_flags'], host=value['host'])
+    if value['version'] == 1:
+        _require(not any(abi_flags.values()), 'unexpected historical host prefix flags')

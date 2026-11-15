@@ -38,7 +38,11 @@ class NativeOSRunnerTests(TemporaryCase):
             routing=self.routing, cwd=self.root, arguments=arguments, **kwargs)
 
     def test_native_abi_flags_use_separate_make_variables(self):
-        flags = native_os_routing.native_host_flags(self.native.as_dict())
+        sdk = '/example/host-sdk'
+        selected = self.fixture.load(('cc', 'cxx', 'cpp', 'sh', 'python'), abi_flags={
+            'cppflags': ['-isysroot', sdk], 'cflags': ['-isysroot', sdk],
+            'cxxflags': ['-isysroot', sdk], 'ldflags': ['-isysroot', sdk]})
+        flags = native_os_routing.native_host_flags(selected.as_dict())
         names = {flag.split('=', 1)[0] for flag in flags}
         self.assertTrue(names <= {
             'EMBER_HOST_ABI_CPPFLAGS', 'EMBER_HOST_ABI_CFLAGS',
@@ -47,8 +51,10 @@ class NativeOSRunnerTests(TemporaryCase):
         self.assertTrue({
             'EMBER_HOST_ABI_CPPFLAGS', 'EMBER_HOST_ABI_CFLAGS',
             'EMBER_HOST_ABI_CXXFLAGS', 'EMBER_HOST_ABI_LDFLAGS'} <= names)
-        env = native_os.native_os_environment(self.native, self.routing)
+        env = native_os.native_os_environment(selected, self.routing)
         self.assertTrue(all(flag.split('=', 1)[0] in env for flag in flags))
+        self.assertEqual(env['EMBER_HOST_ABI_CFLAGS'], '-isysroot ' + sdk)
+        self.assertEqual(env['EMBER_HOST_ABI_LDFLAGS'], '-isysroot ' + sdk)
         self.assertFalse(any(name in env for name in (
             'HOST_CPPFLAGS', 'HOST_CFLAGS', 'HOST_CXXFLAGS', 'HOST_LDFLAGS')))
 
@@ -188,9 +194,13 @@ class NativeOSRunnerTests(TemporaryCase):
 
     def test_loader_uses_all_contract_roles_and_explicit_family(self):
         with patch('emberbsd_sdk.native_os.load_host_prefix', return_value=self.native) as load:
-            native_os.select_native_os_tools('/selected', self.source, compiler_family='gcc')
+            flags = {'cppflags': ('-isysroot', '/example/host-sdk'), 'cflags': (),
+                     'cxxflags': (), 'ldflags': ()}
+            native_os.select_native_os_tools('/selected', self.source, compiler_family='gcc',
+                                             abi_flags=flags)
         self.assertEqual(load.call_args.kwargs['compiler_family'], 'gcc')
         self.assertEqual(set(load.call_args.kwargs['required_roles']), {'cc','cxx','cpp','sh','python'})
+        self.assertEqual(load.call_args.kwargs['abi_flags'], flags)
 
     def test_gnu_loader_requires_all_selected_generators(self):
         with patch('emberbsd_sdk.native_os.load_host_prefix', return_value=self.native) as load:
@@ -224,6 +234,22 @@ class NativeOSRunnerTests(TemporaryCase):
         self.assertTrue(run.call_args.kwargs['build_sh'])
         self.assertTrue(run.call_args.kwargs['append'])
         self.assertEqual(run.call_args.kwargs['arguments'], ['-m','amd64','tools'])
+
+    def test_cli_forwards_explicit_native_abi_flags_and_omissions(self):
+        spec = importlib.util.spec_from_file_location('run_native_os_abi', SDK_SOURCE/'scripts/run-native-os.py')
+        cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
+        args = ['--host-prefix','/selected','--source',str(self.source),
+            '--routing',str(self.routing),'--cwd',str(self.root),'--capture','--',self.native.tool('cpp')]
+        with patch.object(cli.native_os, 'select_native_os_tools', return_value=self.native) as select, \
+                patch.object(cli.native_os, 'run_native_os', return_value=SimpleNamespace(stdout=b'', stderr=b'')):
+            self.assertEqual(cli.main(args), 0)
+            self.assertIsNone(select.call_args.kwargs['abi_flags'])
+            with_flags = args.copy()
+            with_flags[with_flags.index('--'):with_flags.index('--')] = [
+                '--host-abi-cflags', '-isysroot /example/host-sdk']
+            self.assertEqual(cli.main(with_flags), 0)
+            self.assertEqual(select.call_args.kwargs['abi_flags']['cflags'],
+                             ('-isysroot', '/example/host-sdk'))
 
     def test_cli_capture_preserves_stdout_stderr_and_exit_status(self):
         spec = importlib.util.spec_from_file_location('run_native_os_capture', SDK_SOURCE/'scripts/run-native-os.py')

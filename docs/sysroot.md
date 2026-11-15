@@ -220,6 +220,11 @@ target outputs cannot silently bypass a required relink. Fingerprints remain
 in each original record, including records for reused headers.
 Native ABI flags use `EMBER_HOST_ABI_CPPFLAGS`, `EMBER_HOST_ABI_CFLAGS`,
 `EMBER_HOST_ABI_CXXFLAGS`, and `EMBER_HOST_ABI_LDFLAGS`, separate from target flags.
+Pass explicit values with the matching `--host-abi-*` options when the host
+compiler needs an SDK or ABI search path. For example, set all four to
+`-isysroot /path/to/MacOSX.sdk` for a native macOS SDK. These inputs are recorded
+in the selected host prefix and object context; `SDKROOT` is not inherited or
+used as a fallback.
 The build environment uses prefix directories in `PATH`; Git source inspection remains separate.
 Git is selected before narrowing that path. Repeated phase preflight checks use
 the same executable and keep the build environment restricted to the native prefix.

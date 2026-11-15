@@ -22,12 +22,15 @@ def _contract(source):
     return source, contract, digest, roles
 
 
-def select_native_os_tools(host_prefix, source, *, compiler_family='clang', gnu_target=False):
+def select_native_os_tools(host_prefix, source, *, compiler_family='clang', gnu_target=False,
+                           abi_flags=None):
     """Load all roles in the selected OS contract, plus the shared interpreter."""
     _, _, _, roles = _contract(source)
     extra = ({'gmake'} | {role for _, role in native_os_routing.GETTEXT_TARGET_ROLES}) if gnu_target else set()
-    return load_host_prefix(host_prefix, compiler_family=compiler_family,
-                            required_roles=roles | {'python'} | extra)
+    selection = dict(compiler_family=compiler_family, required_roles=roles | {'python'} | extra)
+    if abi_flags is not None:
+        selection['abi_flags'] = abi_flags
+    return load_host_prefix(host_prefix, **selection)
 
 
 def native_os_environment(native, routing, *, environment=None):

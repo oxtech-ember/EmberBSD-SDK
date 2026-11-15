@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from test_core import TemporaryCase, header
 from emberbsd_sdk.errors import SDKError
+from emberbsd_sdk.host_prefix import parse_host_abi_flags
 from emberbsd_sdk.native_toolset import load_host_prefix, validate_selection
 
 
@@ -75,6 +76,28 @@ class HostPrefixTests(TemporaryCase):
         for argv, env in self.fixture.queries:
             self.assertTrue(argv[0].startswith(str(self.fixture.root) + '/'))
             self.assertEqual(env['PATH'], selected.path)
+
+    def test_explicit_host_abi_flags_are_retained_and_bounded(self):
+        sdk = '/example/host-sdk'
+        selected = self.fixture.load(abi_flags={
+            'cppflags': ['-isysroot', sdk],
+            'cflags': ['-isysroot', sdk],
+            'cxxflags': ['-isysroot', sdk],
+            'ldflags': ['-isysroot', sdk],
+        })
+        self.assertEqual(selected.as_dict()['abi_flags'], {
+            name: ['-isysroot', sdk] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')})
+        validate_selection(selected.as_dict(), required_roles=('sh', 'python'))
+        for bad in ('-B/usr/bin', '-fuse-ld=/usr/bin/ld', '@/tmp/flags.rsp'):
+            with self.subTest(flag=bad), self.assertRaises(SDKError):
+                self.fixture.load(abi_flags={
+                    'cppflags': [], 'cflags': [bad], 'cxxflags': [], 'ldflags': []})
+
+    def test_host_abi_cli_parser_accepts_omitted_options_and_tokenizes_explicit_values(self):
+        self.assertIsNone(parse_host_abi_flags({name: None for name in (
+            'host_abi_cppflags', 'host_abi_cflags', 'host_abi_cxxflags', 'host_abi_ldflags')}))
+        parsed = parse_host_abi_flags({'host_abi_cflags': '-isysroot /example/host-sdk'})
+        self.assertEqual(parsed['cflags'], ('-isysroot', '/example/host-sdk'))
 
     def test_public_executable_check_rejects_foreign_and_external_interpreter(self):
         from emberbsd_sdk.host_prefix import validate_host_executable

@@ -20,6 +20,7 @@ from . import API_VERSION, inventory, jsonio, libedit, native_os_routing, native
 from .verification_receipts import RunReceipts
 from .cpu_capacity import resolve_jobs
 from .errors import CommandError, SDKError, ProcessOwnershipError
+from .host_prefix import parse_host_abi_flags
 from .native_os_routing import (gettext_target_host_flags, gnu_target_host_flags,
                                 native_host_flags,
                                 native_path, read_native_os_contract)
@@ -302,8 +303,12 @@ class SysrootBuilder:
             roles |= set(OPENSSH_LOCAL_GENERATOR_ROLES) | {'perl', 'gmake'}
         if self.options.get('gettext-source'):
             roles |= {'gmake', 'pkg-config', 'od', 'msgfmt', 'msgmerge', 'xgettext', 'msginit', 'msgconv', 'msgfilter', 'sed'}
-        return native_toolset.load_host_prefix(self.options['host-prefix'], required_roles=roles | {'python'},
-            compiler_family=self.options.get('host-compiler-family', 'clang'))
+        abi_flags = parse_host_abi_flags(self.options)
+        selection = dict(required_roles=roles | {'python'},
+                         compiler_family=self.options.get('host-compiler-family', 'clang'))
+        if abi_flags is not None:
+            selection['abi_flags'] = abi_flags
+        return native_toolset.load_host_prefix(self.options['host-prefix'], **selection)
 
     def native_identity(self, native):
         # Optional selectors are checked aliases, never alternate providers.

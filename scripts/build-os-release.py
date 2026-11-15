@@ -113,6 +113,9 @@ def main():
         parser.add_argument('--' + name, action=UniqueOption, required=name == 'destination')
     for name in ('host-cc', 'host-cxx', 'python'):
         parser.add_argument('--' + name, action=UniqueOption, help='optional checked alias inside --host-prefix')
+    for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags'):
+        parser.add_argument('--host-abi-' + name, action=UniqueOption,
+                            help='explicit native-only ABI flags for OS host programs')
     parser.add_argument('--compatible-target-tool', action='append', metavar='ROLE:OLD_SHA256:NEW_SHA256',
                         help='one-run reviewed ELF object-tool transition; objcopy or strip only')
     parser.add_argument('--plan', action='store_true', help='inspect inputs and emit commands without creating outputs')

@@ -67,6 +67,9 @@ Sysroot and release builders read the selected OS `tools/native-tools/contract`.
 They load its roles from the prefix and publish the OS command mapping.
 `EMBER_NATIVE_TOOLS` selects that mapping. The OS binds compiler and shell
 variables itself; SDK passes native ABI flags without conflicting overrides.
+Use explicit `--host-abi-*` inputs for required native SDK/header/library paths;
+they are routed only through `EMBER_HOST_ABI_*`, never target compiler flags or
+ambient environment variables.
 `--plan` inspects inputs and lists commands. Removing it runs the producer.
 There is no unconditional native-tool qualification gate.
 

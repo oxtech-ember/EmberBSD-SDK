@@ -526,7 +526,8 @@ class BuilderReleaseTests(TemporaryCase):
             'bundle_root': '/host',
             'tools': {role: '/host/' + role for role in roles},
             'compiler': {'family': 'clang', 'triplet': 'host-triplet'},
-            'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
+            'abi_flags': {'cppflags': [], 'cflags': ['-isysroot', '/example/host-sdk'],
+                          'cxxflags': [], 'ldflags': []}}
         for target in ('amd64', 'aarch64'):
             for gettext in (False, True):
                 with self.subTest(target=target, gettext=gettext):
@@ -535,6 +536,7 @@ class BuilderReleaseTests(TemporaryCase):
                         selected['gettext-source'] = '/prepared/gettext'
                     flags, commands = producer_commands(target, selected, {}, 'a' * 40, 1,
                         '2', '/host/sh', native, 'clang', base_cxx=True)
+                    self.assertIn('EMBER_HOST_ABI_CFLAGS=-isysroot /example/host-sdk', flags)
                     prelude = source_refresh_commands(selected, flags, commands, target, ['lib/libexample'])
                     owner = SimpleNamespace(release_commands=commands, paths=selected, flags=flags)
                     self.assertEqual(prelude[0], ProductionReleaseBuilder.native_makewrapper_command(owner))

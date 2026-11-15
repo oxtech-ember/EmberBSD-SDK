@@ -12,12 +12,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 from emberbsd_sdk import native_os
 from emberbsd_sdk.errors import SDKError
+from emberbsd_sdk.host_prefix import parse_host_abi_flags
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host-prefix', required=True)
     parser.add_argument('--compiler-family', choices=('clang', 'gcc'), default='clang')
+    for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags'):
+        parser.add_argument('--host-abi-' + name, action='store')
     parser.add_argument('--target-tools', help='selected OS TOOLDIR target tool directory for GNU consumers')
     parser.add_argument('--target-libtool', help='selected OS TOOLDIR target libtool')
     for name in ('source','routing','cwd'):
@@ -36,7 +39,8 @@ def main(argv=None):
             raise SDKError('GNU target tools and libtool must be selected together')
         native = native_os.select_native_os_tools(args.host_prefix, args.source,
                                                   compiler_family=args.compiler_family,
-                                                  gnu_target=args.target_tools is not None)
+                                                  gnu_target=args.target_tools is not None,
+                                                  abi_flags=parse_host_abi_flags(vars(args)))
         arguments = args.arguments[1:] if args.arguments[:1] == ['--'] else args.arguments
         result = native_os.run_native_os(native, source=args.source, routing=args.routing,
             cwd=args.cwd, log=args.log, capture=args.capture, append=args.append_log,

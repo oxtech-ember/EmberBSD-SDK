@@ -20,10 +20,11 @@ from .paths import canonical_existing, inside, open_regular, verify_stable
 NATIVE_TOOLSET_API = 1
 
 
-def load_host_prefix(prefix, *, required_roles, host=None, compiler_family='clang'):
+def load_host_prefix(prefix, *, required_roles, host=None, compiler_family='clang', abi_flags=None):
     """Load installed native Ports tools without a descriptor or receipt."""
     from .host_prefix import load_host_prefix as load
-    return load(prefix, required_roles=required_roles, host=host, compiler_family=compiler_family)
+    return load(prefix, required_roles=required_roles, host=host, compiler_family=compiler_family,
+                abi_flags=abi_flags)
 NATIVE_C_PROBE = (b'#include <stdio.h>\n'
                   b'int main(void) { return puts("emberbsd-native-c-v1") < 0; }\n')
 NATIVE_CXX_PROBE = (b'#include <iostream>\n'

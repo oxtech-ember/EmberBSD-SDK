@@ -21,7 +21,7 @@ from test_core import TemporaryCase, SDK_SOURCE, header, archive, git_environmen
 from emberbsd_sdk import inventory, jsonio, native_os_routing, process
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.sysroot_builder import SysrootBuilder as ProductionBuilder
-from emberbsd_sdk.host_prefix import HostPrefix
+from emberbsd_sdk.host_prefix import HostPrefix, parse_host_abi_flags
 from emberbsd_sdk.workspace import create
 from emberbsd_sdk.libedit import prepare_source
 from libedit_fixture import recipe_fixture, installation_source
@@ -46,9 +46,11 @@ def fixture_native_selection(builder):
     for role in ('dirname', 'echo', 'dtc'):
         if f'{role} {role} -' in contract:
             tools[role] = str(prefix / role)
+    abi_flags = parse_host_abi_flags(builder.options) or {
+        name: () for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}
     return HostPrefix(str(prefix), MappingProxyType({'os': 'Darwin', 'cpu': 'arm64'}),
         MappingProxyType({'family': 'gcc', 'version': '16.2.0', 'triplet': 'aarch64-apple-darwin27'}),
-        MappingProxyType(tools), MappingProxyType({name: () for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}), MappingProxyType({}))
+        MappingProxyType(tools), MappingProxyType(abi_flags), MappingProxyType({}))
 
 
 class B(ProductionBuilder):
@@ -991,6 +993,41 @@ class BuilderTests(TemporaryCase):
         legacy['sources']['os']['path'] = '/former/source-checkout'
         legacy['signature']['environment']['EMBER_NATIVE_TOOLS'] = str(Path(builder.paths['tools']) / 'native-routing')
         self.assertTrue(builder.compatible_context(legacy, path))
+
+    def test_host_abi_flags_are_routed_only_to_native_os_build_variables(self):
+        sdk = '/example/host-sdk'
+        builder = B(self.options | {'plan': True,
+            'host-abi-cppflags': '-isysroot ' + sdk,
+            'host-abi-cflags': '-isysroot ' + sdk,
+            'host-abi-cxxflags': '-isysroot ' + sdk,
+            'host-abi-ldflags': '-isysroot ' + sdk})
+        receipt = builder.run()
+        selected = receipt['signature']['native_toolset']['abi_flags']
+        for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags'):
+            self.assertEqual(selected[name], ['-isysroot', sdk])
+            self.assertIn('EMBER_HOST_ABI_' + name.upper() + '=-isysroot ' + sdk,
+                          builder.build_command)
+        target_flags = receipt['signature']['flags']
+        self.assertTrue(all(any(flag.startswith('EMBER_HOST_ABI_' + name.upper() + '=')
+                                 for flag in target_flags)
+                            for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')))
+        self.assertFalse(any(flag.startswith(('CFLAGS=', 'CPPFLAGS=', 'CXXFLAGS=', 'LDFLAGS='))
+                             for flag in target_flags))
+
+    def test_load_native_toolset_forwards_explicit_host_abi_flags(self):
+        options = self.options | {
+            'host-abi-cflags': '-isysroot /example/host-sdk',
+        }
+        builder = B(options)
+        selected = object()
+        with patch('emberbsd_sdk.sysroot_builder.native_os_routing.read_native_os_contract',
+                   return_value=(None, None, frozenset({'cc'}))), \
+             patch('emberbsd_sdk.sysroot_builder.native_toolset.load_host_prefix',
+                   return_value=selected) as load_prefix:
+            self.assertIs(ProductionBuilder.load_native_toolset(builder), selected)
+        self.assertEqual(load_prefix.call_args.kwargs['abi_flags'], {
+            'cppflags': (), 'cflags': ('-isysroot', '/example/host-sdk'),
+            'cxxflags': (), 'ldflags': ()})
 
     def test_v1_native_contract_refuses_reuse_for_saved_and_git_records(self):
         contract = Path(self.options['os']) / 'tools/native-tools/contract'

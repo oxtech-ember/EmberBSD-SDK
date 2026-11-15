@@ -33,6 +33,18 @@ Current roles return a one-element argument tuple.
 `as_dict()` returns ordinary data for plans and existing build records.
 It is not a prerequisite file or a new acceptance record.
 
+`load_host_prefix(..., abi_flags=...)` optionally accepts separate `cppflags`,
+`cflags`, `cxxflags`, and `ldflags` token arrays. The selection validates these
+with the native ABI flag grammar and records them in `abi_flags`. Sysroot and
+release commands expose the same inputs as `--host-abi-cppflags`,
+`--host-abi-cflags`, `--host-abi-cxxflags`, and `--host-abi-ldflags`; each
+argument is parsed as shell-like words. The flags reach OS host programs only
+through `EMBER_HOST_ABI_*`. Ambient `SDKROOT`, `CFLAGS`, `CPPFLAGS`, `CXXFLAGS`,
+and `LDFLAGS` are not imported; explicitly selected values are emitted as
+native ABI variables for OS producers. They do not change target flags. For a macOS SDK, name its path explicitly in the selected
+native flags, for example `--host-abi-cflags '-isysroot /path/to/MacOSX.sdk'`.
+No ambient `SDKROOT` value is read.
+
 When a consumer requests `cc`, `cxx`, or `cpp`, the loader selects the complete compiler group:
 `cc`, `cxx`, `cpp`, `as`, and `ld`. Other roles are selected only when requested.
 A source export can select only `git` and `patch` before a compiler exists.

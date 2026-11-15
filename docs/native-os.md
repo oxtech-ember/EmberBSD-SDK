@@ -17,6 +17,11 @@ only when its contract and complete set of selected symlinks match.
   -V EMBER_COMPILER_FAMILY=clang tools
 ```
 
+When a macOS host tool needs SDK headers or system libraries, pass its explicit
+SDK path through the relevant native-only flags, for example
+`--host-abi-cflags '-isysroot /path/to/MacOSX.sdk'`. The generic command above
+works without host-specific ABI flags on other supported build hosts.
+
 The routing parent must already exist. The caller owns its tools and outputs
 for the command's lifetime. `--compiler-family` selects the host family; target
 family and target inputs remain explicit OS arguments. There is no fallback
@@ -53,7 +58,7 @@ Source checks that must compile native test programs use
 be applied to target OS producers.
 
 Python callers use `emberbsd_sdk.native_os`, `NATIVE_OS_API == 1`:
-`select_native_os_tools(prefix, source, compiler_family=...)`, then
+`select_native_os_tools(prefix, source, compiler_family=..., abi_flags=...)`, then
 `run_native_os(native, source=..., routing=..., cwd=..., arguments=[...],
 log=..., build_sh=True)`. `shell=True`, `capture=True` and `append=True`
 correspond to the command-line modes above; `capture=True` is rejected for
