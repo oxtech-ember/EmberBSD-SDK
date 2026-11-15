@@ -5,6 +5,7 @@
 import hashlib
 import json
 import os
+import stat
 
 from . import inventory, jsonio, llvm_runtime, llvm_stage_inputs, paths, prepared_sources, process, workspace
 from .errors import SDKError
@@ -310,9 +311,19 @@ class LLVMCoordinator:
         the stage never reads, such as usr.bin/config, keeps the stage."""
         if paths.entry(self.stage_root) is None:
             return None
+        paths.real_directory(self.stage_root)
         source = selected.sources['os']
         for name in sorted(os.listdir(self.stage_root)):
-            record = os.path.join(self.stage_root, name, llvm_stage_inputs.RECORD)
+            stage = os.path.join(self.stage_root, name)
+            info = paths.entry(stage)
+            if info is None:
+                continue
+            if stat.S_ISREG(info.st_mode):
+                # Finder metadata and other regular files are not stage sets.
+                continue
+            if not stat.S_ISDIR(info.st_mode):
+                raise SDKError(f'not a real LLVM stage directory: {stage}')
+            record = os.path.join(stage, llvm_stage_inputs.RECORD)
             if paths.entry(record) is None:
                 continue
             record = llvm_stage_inputs.read_record(record)

@@ -1268,6 +1268,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         stages = self.root / 'stages'
         write(stages / 'a-match' / llvm_stage_inputs.RECORD, json.dumps(good))
         write(stages / 'z-other' / llvm_stage_inputs.RECORD, json.dumps(bad))
+        write(stages / '.DS_Store', 'Finder metadata')
         coordinator = LLVMCoordinator.__new__(LLVMCoordinator)
         coordinator.stage_root = str(stages)
         coordinator.options = {'target': 'aarch64'}
@@ -1276,6 +1277,51 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
             'llvm_source_record': llvm_source, 'compiler_record': compiler,
         })()
         self.assertEqual(coordinator.matching_stage(selected), 'a-match')
+
+    def test_matching_stage_rejects_symlinked_stage_entry(self):
+        source = self.root / 'matching-os-symlink'
+        write(source / 'include/a.h', '/* header */\n')
+        git(source, 'init', '-q')
+        commit(source)
+        commit_id = git(source, 'rev-parse', 'HEAD')
+        rows = llvm_stage_inputs.tree_rows(git, str(source), commit_id)
+        directories = ['include']
+        digest = llvm_stage_inputs.inputs_digest(rows, directories)
+        llvm_source = {'tree': 'a' * 64}
+        compiler = {'version': '1'}
+        record = dict(format=llvm_stage_inputs.FORMAT, version=llvm_stage_inputs.VERSION,
+                      target='aarch64', os_commit=commit_id, directories=directories, phases={},
+                      inputs=digest, key=llvm_stage_inputs.stage_key('aarch64', llvm_source, compiler, digest))
+        stages = self.root / 'stages-symlink'
+        write(stages / 'outside' / llvm_stage_inputs.RECORD, json.dumps(record))
+        (stages / 'a-escape').symlink_to(stages / 'outside', target_is_directory=True)
+        coordinator = LLVMCoordinator.__new__(LLVMCoordinator)
+        coordinator.stage_root = str(stages)
+        coordinator.options = {'target': 'aarch64'}
+        selected = type('Selected', (), {
+            'sources': {'os': {'path': str(source), 'commit': commit_id}}, 'git': git,
+            'llvm_source_record': llvm_source, 'compiler_record': compiler,
+        })()
+        with self.assertRaisesRegex(SDKError, 'not a real LLVM stage directory'):
+            coordinator.matching_stage(selected)
+
+    def test_matching_stage_rejects_malformed_real_stage_record(self):
+        source = self.root / 'matching-os-malformed'
+        write(source / 'include/a.h', '/* header */\n')
+        git(source, 'init', '-q')
+        commit(source)
+        commit_id = git(source, 'rev-parse', 'HEAD')
+        stages = self.root / 'stages-malformed'
+        write(stages / 'real-stage' / llvm_stage_inputs.RECORD, '{}')
+        coordinator = LLVMCoordinator.__new__(LLVMCoordinator)
+        coordinator.stage_root = str(stages)
+        coordinator.options = {'target': 'aarch64'}
+        selected = type('Selected', (), {
+            'sources': {'os': {'path': str(source), 'commit': commit_id}}, 'git': git,
+            'llvm_source_record': {'tree': 'a' * 64}, 'compiler_record': {'version': '1'},
+        })()
+        with self.assertRaisesRegex(SDKError, 'invalid LLVM stage input record'):
+            coordinator.matching_stage(selected)
 
     def test_fresh_object_mode_refuses_kept_tools_before_the_first_phase(self):
         headers, _ = self.completed_headers()
