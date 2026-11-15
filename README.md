@@ -8,6 +8,9 @@ Install components by task; compilers and target sysroots are separate additions
 On Linux, follow the [initial native bootstrap](docs/linux-bootstrap.md) when
 the catalog has no compatible host bootstrap or components.
 
+Read the [EmberBSD Developer Guide](https://github.com/oxtech-ember/EmberBSD-Docs/blob/main/modules/sdk.md)
+for the SDK architecture, package selection and its boundaries with the target OS.
+
 ## Prebuild SDK
 
 Prebuild SDK is the shared development-host workspace for compiled objects,

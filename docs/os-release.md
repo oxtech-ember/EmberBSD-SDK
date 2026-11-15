@@ -252,7 +252,7 @@ A person starts publication deliberately and does the release checks.
 prepare it with `--qualification`. Run actual target checks first. The checker
 validates receipt bindings; it cannot establish that claimed execution occurred.
 For amd64, follow the OS
-[VM installation guide](https://github.com/oxtech-ember/EmberBSD/blob/main/doc/guide/amd64-vm-install.md).
+[VM installation guide](https://github.com/oxtech-ember/EmberBSD/blob/main/usr.sbin/sysinst/docs/vm-installation.md).
 The receipt binds `source_commit`, `image_sha256`, `usb_image_sha256` and
 `installed_kernel_sha256`. Its `checks` object must record true for:
 
