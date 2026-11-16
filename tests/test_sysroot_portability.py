@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-"""Sysroot and release builds select the OS reproducible-path mapping."""
+"""Sysroot and release builds select the OS reproducible-path mapping and no lint libraries."""
 
 import unittest
 
@@ -24,6 +24,17 @@ class SysrootPortabilityTests(unittest.TestCase):
             for family in (None, 'gcc', 'clang'):
                 with self.subTest(target=target, family=family):
                     self.assertEqual(selections(flags_for(target, family), 'MKREPRO'), ['MKREPRO=yes'])
+
+    def test_release_profiles_build_no_lint_libraries(self):
+        # The lint pass stops on libraries built from prepared common sources
+        # (libedit: its source directory is selected with -iquote, which the
+        # lint rule does not forward; OpenSSL libcrypto: C11 _Atomic in the
+        # reference counting header), so a release that enables lint
+        # libraries does not complete its library build.
+        for target in ('aarch64', 'amd64'):
+            for family in (None, 'gcc', 'clang'):
+                with self.subTest(target=target, family=family):
+                    self.assertEqual(selections(flags_for(target, family), 'MKLINT'), ['MKLINT=no'])
 
 
 if __name__ == '__main__':

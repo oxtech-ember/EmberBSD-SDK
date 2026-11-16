@@ -178,7 +178,10 @@ files in METALOG. The fixtures verify orchestration only; OS-owner tests cover
 the real installer and sets overlay. Neither schema establishes target
 execution or runtime acceptance.
 
-Both Clang profiles omit native bootstrap compiler commands, X11 and rump.
+Both Clang profiles omit native bootstrap compiler commands, X11, rump and
+lint libraries (`MKLINT=no`). The amd64 profile enabled lint libraries before;
+an amd64 build profile recorded with `MKLINT=yes` no longer verifies. Published
+schema 1 amd64 kits carry no build profile and are unaffected.
 The `aarch64-sysroot` release build can add the X11 sets with `--x11-source`
 (see `native-os-routing.md`); published sysroot manifests still require
 `MKX11=no`.

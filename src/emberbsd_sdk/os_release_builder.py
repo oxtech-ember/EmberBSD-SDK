@@ -64,8 +64,10 @@ def flags_for(target, compiler_family=None, x11=False):
                         MKPIC='yes', MKPICLIB='yes', MKDYNAMICROOT='yes',
                         MKLIBSTDCXX='yes', USE_XZ_SETS='yes')
     if target == 'amd64':
+        # Lint libraries stay off, as in the aarch64 profile: the lint pass
+        # stops on several libraries built from prepared common sources.
         replacements.update(MKKMOD='yes', MKMAN='yes', MKHTML='yes', MKDOC='yes',
-                            MKINFO='yes', MKATF='yes', MKKYUA='yes', MKLINT='yes')
+                            MKINFO='yes', MKATF='yes', MKKYUA='yes')
     if x11:
         require_x11_profile(target, compiler_family)
         replacements['MKX11'] = 'yes'
