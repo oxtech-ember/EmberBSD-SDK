@@ -1,9 +1,13 @@
 # SPDX-License-Identifier: BSD-2-Clause
 """Scoped invalidation of prepared-source object consumers."""
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
@@ -181,6 +185,111 @@ class PreparedRefreshTests(unittest.TestCase):
         self.write_contract()
         self.assertIn("external/cbor", prepared_refresh.plan(
             self.os, self.obj, {"libcbor"}, scan_consumers=False))
+
+    def test_custom_object_dir_map_selects_stale_crunch_source_owner(self):
+        owner = self.obj / 'external/cbor'
+        for child in owner.iterdir():
+            child.unlink()
+        owner.rmdir()
+        old_source = self.os / 'old-prepared/cbor.c'
+        new_source = self.os / 'new-prepared/cbor.c'
+        old_source.parent.mkdir()
+        new_source.parent.mkdir()
+        old_source.write_text('old source\n')
+        new_source.write_text('new source\n')
+        objdir = self.obj / 'crunch/cbor'
+        objdir.mkdir(parents=True)
+        (objdir / '.depend').write_text('cbor.o: {}\n'.format(old_source))
+        output = objdir / 'cbor.o'
+        output.write_text('old source\n')
+
+        selected = prepared_refresh.plan(
+            self.os, self.obj, {'libcbor'}, scan_consumers=False,
+            object_dir_map={'crunch/cbor': 'external/cbor'})
+
+        self.assertEqual(selected, ['crunch/cbor'])
+        self.assertTrue((objdir / '.depend').read_text().endswith(str(old_source) + '\n'))
+
+    def test_custom_object_dir_map_rejects_escaping_and_symlink_outputs(self):
+        with self.assertRaises(SDKError):
+            prepared_refresh.plan(
+                self.os, self.obj, {'libcbor'}, scan_consumers=False,
+                object_dir_map={'../outside': 'external/cbor'})
+
+        outside = Path(self.temp.name) / 'outside'
+        outside.mkdir()
+        (self.obj / 'crunch').symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(SDKError):
+            prepared_refresh.plan(
+                self.os, self.obj, {'libcbor'}, scan_consumers=False,
+                object_dir_map={'crunch/cbor': 'external/cbor'})
+
+    def test_custom_object_dir_refresh_rebuilds_against_new_absolute_dependency(self):
+        bmake = os.environ.get('BMAKE')
+        if not bmake:
+            host_prefix = os.environ.get('EMBER_HOST_PREFIX')
+            if host_prefix:
+                candidate = Path(host_prefix) / 'bin/bmake'
+                if candidate.is_file():
+                    bmake = str(candidate)
+        if not bmake:
+            self.skipTest('selected native bmake is unavailable')
+        bmake = str(Path(bmake).resolve())
+
+        owner = self.obj / 'external/cbor'
+        for child in owner.iterdir():
+            child.unlink()
+        owner.rmdir()
+        old_source = self.os / 'old-prepared/cbor.c'
+        new_source = self.os / 'new-prepared/cbor.c'
+        old_source.parent.mkdir()
+        new_source.parent.mkdir()
+        old_source.write_text('old source\n')
+        new_source.write_text('new source\n')
+
+        crunch = self.obj / 'crunch'
+        objdir = crunch / 'cbor'
+        objdir.mkdir(parents=True)
+        makefile = crunch / 'Makefile'
+        makefile.write_text(
+            '.sinclude "cbor/.depend"\n'
+            '.PHONY: all depend\n'
+            'all: cbor/cbor.o\n'
+            'depend:\n'
+            '\t@mkdir -p cbor; printf \'cbor/cbor.o: %s\\n\' "${SOURCE}" > cbor/.depend\n'
+            'cbor/cbor.o:\n'
+            '\t@mkdir -p cbor; cp "${SOURCE}" $@\n')
+        (objdir / '.depend').write_text('cbor/cbor.o: {}\n'.format(old_source))
+        output = objdir / 'cbor.o'
+        output.write_text('old source\n')
+        now = time.time_ns()
+        os.utime(old_source, ns=(now - 3_000_000_000, now - 3_000_000_000))
+        os.utime(output, ns=(now - 2_000_000_000, now - 2_000_000_000))
+        os.utime(new_source, ns=(now - 1_000_000_000, now - 1_000_000_000))
+
+        def make(*targets):
+            subprocess.run([bmake, '-f', str(makefile), *targets,
+                            'SOURCE=' + str(new_source)], cwd=crunch,
+                           check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        make('all')
+        self.assertEqual(output.read_text(), 'old source\n')
+        identity = output.stat()
+        selected = prepared_refresh.plan(
+            self.os, self.obj, {'libcbor'}, scan_consumers=False,
+            object_dir_map={'crunch/cbor': 'external/cbor'})
+        self.assertEqual(selected, ['crunch/cbor'])
+        shutil.rmtree(self.obj / selected[0])
+
+        make('depend')
+        make('all')
+        self.assertEqual(output.read_text(), 'new source\n')
+        rebuilt = output.stat()
+        self.assertGreater(rebuilt.st_mtime_ns, identity.st_mtime_ns)
+        inode, mtime = rebuilt.st_ino, rebuilt.st_mtime_ns
+        make('all')
+        unchanged = output.stat()
+        self.assertEqual((unchanged.st_ino, unchanged.st_mtime_ns), (inode, mtime))
 
     def test_missing_lint_metadata_is_a_scoped_file_plan(self):
         directory = self.obj / "other/consumer"

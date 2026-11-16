@@ -70,10 +70,36 @@ def plan_native(os_root, objects, names):
 
 def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
          extra_headers=(), extra_linked=(), allowed_source_roots=(), scan_consumers=True,
-         file_outputs=None, native_tool_aliases=None):
+         file_outputs=None, native_tool_aliases=None, object_dir_map=None,
+         extra_independent_patterns=()):
+    """Select affected object owners without mutating the build tree.
+
+    Custom layouts supply object-relative directories mapped to OS-relative
+    Makefile owners. Their producer-owned dispatch/stub outputs may use explicit
+    header-independent patterns; normal dependency and alias checks still apply.
+    """
     root, obj = Path(os_root), Path(objects)
     try:
         root_resolved, obj_resolved = root.resolve(), obj.resolve()
+        mapped = None
+        if object_dir_map is not None:
+            if not isinstance(object_dir_map, dict):
+                raise ValueError('invalid object directory mapping')
+            mapped = {}
+            for directory, owner in object_dir_map.items():
+                relative(directory)
+                relative(owner)
+                source, built = root / owner, obj / directory
+                if (not source.resolve().is_relative_to(root_resolved) or
+                        not (source / 'Makefile').is_file() or
+                        not built.resolve().is_relative_to(obj_resolved) or
+                        built.is_symlink() or
+                        (built.exists() and not built.is_dir())):
+                    raise ValueError('invalid mapped object owner: ' + directory)
+                if any(directory.startswith(other + '/') or
+                       other.startswith(directory + '/') for other in mapped):
+                    raise ValueError('overlapping object directory mappings')
+                mapped[directory] = owner
         source_roots = []
         for source in allowed_source_roots:
             source = Path(source)
@@ -102,6 +128,7 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
                 raise ValueError('invalid nested object owner')
         patterns = [relative(p, pattern=True) for p in contract['header_independent_object_patterns']]
         archive_patterns = [relative(p, pattern=True) for p in contract['header_independent_archive_patterns']]
+        extra_patterns = [relative(p, pattern=True) for p in extra_independent_patterns]
         dirs = set()
         headers = {relative(p) for p in extra_headers}
         linked = {relative(p) for p in extra_linked}
@@ -122,8 +149,13 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
             dirs.update(relative(p) for p in entry['producer_dirs'] + entry['consumer_dirs'])
             headers.update(relative(p) for p in entry['header_prefixes'])
             linked.update(relative(p) for p in entry['linked_names'])
+        if mapped is not None:
+            dirs = {directory for directory, owner in mapped.items()
+                    if any(owner == producer or owner.startswith(producer + '/')
+                           for producer in dirs)}
+            recursive = set()
         nested_prune = {}
-        for subdir, owner in nested.items():
+        for subdir, owner in (() if mapped is not None else nested.items()):
             if owner not in dirs:
                 continue
             source, built = root / owner, obj / owner
@@ -175,6 +207,10 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
                             magic = stream.read(8)
                         if magic.startswith(b'\x7fELF') or magic in (b'!<arch>\n', b'!<thin>\n'):
                             raise ValueError('binary alias outside object tree ' + str(path))
+                relpath = PurePosixPath(rel)
+                if any(len(relpath.parts) == len(PurePosixPath(p).parts) and
+                       relpath.match(p) for p in extra_patterns):
+                    continue
                 if name.endswith('.a') and not path.is_symlink():
                     relpath = PurePosixPath(rel)
                     independent = any(len(relpath.parts) == len(PurePosixPath(p).parts) and relpath.match(p) for p in archive_patterns)
@@ -212,7 +248,15 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
         missing = []
         for name in sorted(dirs):
             relative(name)
-            source, built = root / name, obj / name
+            owner = name
+            if mapped is not None:
+                owners = [directory for directory in mapped
+                          if name == directory or name.startswith(directory + '/')]
+                if len(owners) != 1:
+                    raise ValueError('missing mapped object owner: ' + name)
+                name = owners[0]
+                owner = mapped[name]
+            source, built = root / owner, obj / name
             if not source.resolve().is_relative_to(root.resolve()) or not built.resolve().is_relative_to(obj.resolve()):
                 raise ValueError('refresh path escapes its root')
             if not (source / 'Makefile').is_file():
