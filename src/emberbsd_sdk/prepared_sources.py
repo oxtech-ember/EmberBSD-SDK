@@ -404,6 +404,21 @@ def bmake_query(make, os_root, flags, *, env):
     return query
 
 
+def os_query(native, rows, os_root, *, objects, tools, machine, arch, timestamp, traversals, flags, env):
+    """Return the bmake query of an OS build that uses the host prefix NATIVE.
+
+    ROWS are the rows of the OS native-tool contract. A tools build also needs
+    the host commands that the tools makefiles take by name."""
+    common = ['MAKECONF=/dev/null', '_SRC_TOP_=', 'NETBSDSRCDIR=' + os_root,
+              'NETBSDOBJDIR=' + objects, 'MACHINE=' + machine, 'MACHINE_ARCH=' + arch,
+              'USETOOLS=yes', 'TOOLDIR=' + tools, 'MKREPRO_TIMESTAMP=' + str(timestamp)]
+    common += ['TOOL_SED=' + native.tool(role) for _, role, binding in rows if binding == 'SED']
+    if any(start == 'tools' for start, _ in traversals):
+        common += [binding + '=' + native.tool(role) for _, role, binding in rows
+                   if binding in ('HOST_YACC', 'HOST_MV_CP', 'HOST_MV_RM')]
+    return bmake_query(native.tool('make'), os_root, common + list(flags), env=env)
+
+
 def required_sources(os_root, query, traversals, *, jobs=None):
     """Map each EMBER_*_SOURCE that TRAVERSALS reach to the first directory needing it."""
     jobs = resolve_jobs(jobs)

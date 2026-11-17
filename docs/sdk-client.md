@@ -69,6 +69,9 @@ python3 scripts/packages.py --config /work/client.json update
 python3 scripts/packages.py --config /work/client.json cache-clean
 ```
 
+`profile-plan --profile FILE` prints the build plan of a [build profile](build-profile.md).
+It reads the optional `build` section of the configuration and installs nothing.
+
 `catalog` prints every verified package in the configured repositories. It does
 not install. `desktop_metadata` is false: the signed record is PKGPATH,
 PKGNAME and artifact size. `catalog_role` is `library` for library categories

@@ -1448,17 +1448,11 @@ class SysrootBuilder:
         root = self.paths['os']
         env = dict(self.environment)
         env.pop('EMBER_NATIVE_TOOLS', None)
-        common = ['MAKECONF=/dev/null', '_SRC_TOP_=', 'NETBSDSRCDIR=' + root,
-                  'NETBSDOBJDIR=' + self.paths['objects'],
-                  'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
-                  'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
-                  'MKREPRO_TIMESTAMP=' + str(self.source_timestamp())]
         _, rows, _ = read_native_os_contract(self.native_contract, sha256=self.native_contract_sha256)
-        common += ['TOOL_SED=' + self.native.tool(role) for _, role, binding in rows if binding == 'SED']
-        if any(start == 'tools' for start, _ in traversals):
-            common += [binding + '=' + self.native.tool(role) for _, role, binding in rows
-                       if binding in ('HOST_YACC', 'HOST_MV_CP', 'HOST_MV_RM')]
-        query = prepared_sources.bmake_query(self.native.tool('make'), root, common + list(flags), env=env)
+        query = prepared_sources.os_query(
+            self.native, rows, root, objects=self.paths['objects'], tools=self.paths['tools'],
+            machine=self.target['machine'], arch=self.target['arch'], timestamp=self.source_timestamp(),
+            traversals=traversals, flags=flags, env=env)
         needed = prepared_sources.required_sources(root, query, traversals,
                                                    jobs=max(1, min(8, int(self.options['jobs']))))
         missing = prepared_sources.missing_sources(needed, self.paths)

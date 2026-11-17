@@ -884,6 +884,27 @@ def include_sysroot(plan, release, config, cache, target):
     return plan
 
 
+def plan_profile(config, profile_path):
+    """Print the build plan of a profile. Build, download and install nothing."""
+    from . import build_profile
+    build, source = config.get('build'), config.get('source')
+    if not isinstance(build, dict) or set(build) != {'os_source', 'host_bfd_config'}:
+        raise SDKError('profile-plan needs build.os_source and build.host_bfd_config')
+    if not isinstance(source, dict) or not isinstance(source.get('ports_root'), str):
+        raise SDKError('profile-plan needs the Ports checkout in source.ports_root')
+    for key, value in (*build.items(), ('ports_root', source['ports_root'])):
+        if not isinstance(value, str) or not Path(value).is_absolute():
+            raise SDKError(f'profile-plan needs an absolute {key}')
+    plan = build_profile.make_plan(
+        build_profile.load_profile(profile_path), os_root=build['os_source'],
+        ports_root=source['ports_root'], sdk_root=str(Path(__file__).resolve().parents[2]),
+        host_prefix=config['host_prefix'], host_bfd_config=build['host_bfd_config'],
+        state=os.path.join(config['state_dir'], 'build'))
+    sys.stdout.buffer.write(json_bytes(plan))
+    print('Plan: ' + build_profile.summary(plan), file=sys.stderr)
+    return 0
+
+
 def load_config(path):
     return validate_config(read_json(path))
 
@@ -918,7 +939,8 @@ def validate_config(value):
 def main(argv=None, *, default_config=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=default_config is None)
-    parser.add_argument('command', choices=('list', 'show', 'plan', 'source-plan', 'catalog', 'install', 'installed', 'update', 'auto-update', 'cache-clean'))
+    parser.add_argument('command', choices=('list', 'show', 'plan', 'source-plan', 'profile-plan', 'catalog', 'install', 'installed', 'update', 'auto-update', 'cache-clean'))
+    parser.add_argument('--profile', type=Path, help='build profile for profile-plan')
     parser.add_argument('--set', action='append', default=[], dest='sets')
     parser.add_argument('--package', action='append', default=[], dest='roots')
     parser.add_argument('--target', help='also acquire the application sysroot for this target')
@@ -946,7 +968,13 @@ def main(argv=None, *, default_config=None):
                 arguments.extend(('--package', root))
             return watch_updates(lambda: main(arguments, default_config=default_config),
                                  3600 if args.interval is None else args.interval)
+        if (args.profile is not None) != (args.command == 'profile-plan'):
+            raise SDKError('profile-plan requires --profile; other commands do not accept it')
         config = load_config(args.config) if args.config else validate_config(default_config)
+        if args.command == 'profile-plan':
+            if args.sets or args.roots or args.target or args.installed or args.state_dir or args.cache_dir:
+                raise SDKError('profile-plan takes its selection from --profile')
+            return plan_profile(config, args.profile)
         if args.command == 'source-plan':
             if args.target or args.state_dir or args.cache_dir:
                 raise SDKError('source-plan uses configured source.state and target; no binary state/cache/sysroot options')
