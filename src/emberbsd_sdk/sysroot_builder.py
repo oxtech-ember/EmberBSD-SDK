@@ -24,6 +24,7 @@ from .host_prefix import parse_host_abi_flags
 from .native_os_routing import (gettext_target_host_flags, gnu_target_host_flags,
                                 native_host_flags,
                                 native_path, read_native_os_contract)
+from .native_runtime_install import NativeRuntimeInstaller
 from .targets import TARGETS, target_definition
 
 NATIVE_ALIASES = (('host-cc', 'cc'), ('host-cxx', 'cxx'), ('python', 'python'))
@@ -2041,9 +2042,11 @@ class SysrootBuilder:
             if row['kind'] == 'directory':
                 os.chmod(path, row['mode'])
             elif row['kind'] == 'link' and stat.S_IMODE(os.lstat(path).st_mode) != row['mode']:
-                if not hasattr(os, 'lchmod'):
+                # Native install records the target mode in METALOG for the set writer.
+                if hasattr(os, 'lchmod'):
+                    os.lchmod(path, row['mode'])
+                elif not isinstance(installer, NativeRuntimeInstaller):
                     raise SDKError('this host cannot preserve the audited symbolic-link mode')
-                os.lchmod(path, row['mode'])
         os.chmod(destination, self.runtime_record['root_mode'])
         # The preflight record identifies the runtime by its input key. The
         # copy and the runtime stage are not read or hashed again.

@@ -218,7 +218,7 @@ consumers use the [shared compiler commands](application-toolchain.md).
 ## Native base installation and set lists
 
 `SysrootBuilder.copy_runtime(destination=..., installer=...)` uses the same
-verified inventory and final byte/mode checks as an ordinary sysroot copy.
+verified runtime inventory as an ordinary sysroot copy.
 The optional destination must be inside the producer's owned output. Base
 aliases use the same installer through
 `llvm_runtime_install.install_base_aliases(root, record, installer=...)`.
@@ -231,6 +231,8 @@ run)` supplies the three operations `directory(path, mode)`,
 `run(argv)` executes it in that native environment and reports failures. The
 adapter requires the existing distribution `METALOG`, uses native `-U/-M/-D/-N`
 metadata handling and literal `-l s` links, and preserves existing directories.
+On hosts without `lchmod`, the native set writer uses each symbolic link's
+recorded `METALOG` mode when it creates the archive.
 It does not select tools again for each file or implement an mtree serializer.
 
 `llvm_runtime_sets.prepare_sets_overlay(source_lists, destination, record)`

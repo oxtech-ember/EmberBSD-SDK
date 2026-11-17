@@ -1700,6 +1700,46 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
             builder.copy_runtime(destination=outside)
         self.assertEqual(list(outside.iterdir()), [])
 
+    def test_release_metalog_preserves_link_mode_without_host_lchmod(self):
+        from types import SimpleNamespace
+        from emberbsd_sdk import sysroot_builder
+        from emberbsd_sdk.native_runtime_install import NativeRuntimeInstaller
+
+        builder, _ = self.builder()
+        builder.options['base-cxx'] = False
+        builder.preflight()
+        root = Path(builder.paths['destination'])
+        native = root / 'release'
+        native.mkdir(parents=True)
+        (native / 'METALOG').touch()
+        (Path(builder.paths['os']) / 'etc').mkdir(exist_ok=True)
+        rows = builder.runtime_record['inventory']
+        link = next(name for name, row in rows.items() if row['kind'] == 'link')
+        rows[link]['mode'] = 0o640
+        commands = []
+
+        def install(argv):
+            commands.append(argv)
+            if '-d' in argv:
+                os.mkdir(argv[-1])
+            elif '-l' in argv:
+                os.symlink(argv[-2], argv[-1])
+            else:
+                shutil.copyfile(argv[-2], argv[-1])
+
+        installer = NativeRuntimeInstaller(native, {'install': sys.executable},
+                                          builder.paths['os'], install)
+        host = SimpleNamespace(**{k: v for k, v in vars(os).items() if k != 'lchmod'})
+        with patch.object(sysroot_builder, 'os', host):
+            builder.copy_runtime(destination=native, installer=installer)
+            with self.assertRaisesRegex(SDKError, 'symbolic-link mode'):
+                builder.copy_runtime()
+        dst = native / 'usr/pkg/llvm' / link
+        self.assertEqual(os.readlink(dst), rows[link]['target'])
+        command = next(argv for argv in commands if argv[-1] == str(dst))
+        self.assertEqual(command[command.index('-M') + 1], str(native / 'METALOG'))
+        self.assertEqual(command[command.index('-m') + 1], '0640')
+
     def test_runtime_of_another_llvm_version_fails_before_outputs(self):
         builder, runtime = self.builder()
         runtime.record['llvm_version'] = '22.1.0'; runtime.save()
