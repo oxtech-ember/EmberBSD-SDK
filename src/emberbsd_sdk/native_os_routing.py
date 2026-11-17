@@ -10,7 +10,6 @@ import shutil
 import tempfile
 
 from .errors import SDKError
-from .native_toolset import NativeToolset
 from .host_prefix import HostPrefix
 from .paths import (canonical_existing, entry, open_regular, path_string,
                     real_directory, reject_overlap, verify_stable)
@@ -140,8 +139,8 @@ def publish_native_os_routing(toolset, *, contract_path, contract_sha256,
     The caller selects a host prefix, owns the output parent, and keeps the
     selected tools unchanged until every consumer has drained.
     """
-    if not isinstance(toolset, (HostPrefix, NativeToolset)):
-        raise SDKError('OS routing requires a selected host prefix or historical NativeToolset')
+    if not isinstance(toolset, HostPrefix):
+        raise SDKError('OS routing requires a selected host prefix')
     data, rows, _ = read_native_os_contract(contract_path, sha256=contract_sha256)
     destination = os.fspath(destination)
     if not isinstance(destination, str) or not _SAFE_PATH.fullmatch(destination):
@@ -174,6 +173,4 @@ def publish_native_os_routing(toolset, *, contract_path, contract_sha256,
             shutil.rmtree(stage)
     result = dict(format='emberbsd-native-os-routing', version=NATIVE_OS_ROUTING_API,
                   directory=destination, contract_sha256=contract_sha256, members=members)
-    if isinstance(toolset, NativeToolset):
-        result.update(native_toolset_sha256=toolset.descriptor_sha256, production_build_admitted=False)
     return result

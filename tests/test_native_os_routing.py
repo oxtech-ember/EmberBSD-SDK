@@ -14,7 +14,7 @@ from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk import native_os_routing
 from emberbsd_sdk.native_os_routing import (publish_native_os_routing,
                                             read_native_os_contract)
-from emberbsd_sdk.native_toolset import NativeToolset
+from emberbsd_sdk.host_prefix import HostPrefix
 
 
 CONTRACT = (b'EmberBSD-native-tools 2\n'
@@ -52,9 +52,8 @@ class NativeOSRoutingTests(unittest.TestCase):
         alias = self.bundle / 'selected-cc'
         alias.symlink_to('cc')
         tools['cc'] = str(alias)
-        # Only the emitter is under test. This fixture does not claim that its
-        # synthetic executables passed load_native_toolset qualification.
-        self.toolset = NativeToolset('a' * 64, {}, str(self.bundle), {}, {}, tools, {})
+        # Only the emitter is under test. The synthetic members never run.
+        self.toolset = HostPrefix(str(self.bundle), {}, {}, tools, {}, {})
 
     def publish(self, **overrides):
         args = dict(contract_path=str(self.contract), contract_sha256=self.sha,
@@ -70,8 +69,7 @@ class NativeOSRoutingTests(unittest.TestCase):
         self.assertEqual(os.readlink(output / 'cc'), self.toolset.tool('cc'))
         self.assertEqual(set(p.name for p in output.iterdir()),
                          {'contract', 'cc', 'cmp', 'make', 'readlink', 'sh'})
-        self.assertFalse(result['production_build_admitted'])
-        self.assertEqual(result['native_toolset_sha256'], 'a' * 64)
+        self.assertEqual(result['members']['cc'], self.toolset.tool('cc'))
 
     def test_existing_destination_is_preserved(self):
         output = self.root / 'routing'

@@ -23,11 +23,7 @@ def hash_file(path, algorithm='sha256'):
         if stable_identity(os.fstat(handle.fileno())) != stable_identity(before):
             raise SDKError(f'file changed during inspection: {path}')
     verify_stable(path, before)
-    result = digest.hexdigest()
-    if algorithm == 'sha256':
-        from .bootstrap_history_context import observe_file
-        observe_file(path, result)
-    return result
+    return digest.hexdigest()
 
 
 def sha256_file(path):
@@ -48,66 +44,13 @@ def snapshot_tree(root, machine=None, exclude=(), digests=None, digest_provider=
     exclude = tuple(exclude)
     if digests is not None and digest_provider is not None:
         raise SDKError('digests and digest_provider are mutually exclusive')
-    rows = _snapshot_tree(root, machine, exclude, installed_links=False,
+    return _snapshot_tree(root, machine, exclude, installed_links=False,
                           digests=digests, digest_provider=digest_provider)
-    from .bootstrap_history_context import observe_tree
-    observe_tree(root, machine, exclude, rows)
-    return rows
 
 
 def snapshot_installed_tree(root, exclude=()):
     """Inspect existing files. Preserve link text without reading its destination."""
     return _snapshot_tree(root, None, exclude, installed_links=True)
-
-
-def transfer_inventory_equal(source, target):
-    """Compare transported trees, ignoring only the nonportable symlink mode.
-
-    POSIX does not provide a portable way to set a symlink's mode. Preserve
-    exact paths, node kinds, link targets, regular-file bytes and modes, and
-    directory modes across a transfer.
-    """
-    if not isinstance(source, dict) or not isinstance(target, dict) or set(source) != set(target):
-        return False
-    parts = ('kind', 'mode')
-    for path in source:
-        if not isinstance(path, str) or not path or path.startswith('/') or \
-                any(part in ('', '.', '..') for part in path.split('/')) or \
-                any(ord(char) < 32 or ord(char) == 127 for char in path):
-            return False
-        try:
-            path.encode('utf-8', 'strict')
-        except UnicodeError:
-            return False
-        left, right = source[path], target[path]
-        if not isinstance(left, dict) or not isinstance(right, dict):
-            return False
-        if left.get('kind') not in ('directory', 'file', 'link') or \
-                left.get('kind') != right.get('kind'):
-            return False
-        kind = left['kind']
-        fields = {'directory': set(parts), 'file': set(parts) | {'size', 'sha256'},
-                  'link': set(parts) | {'target'}}[kind]
-        if set(left) != fields or set(right) != fields:
-            return False
-        for row in (left, right):
-            mode = row['mode']
-            if type(mode) is not int or not 0 <= mode <= 0o777:
-                return False
-        if kind == 'directory':
-            if left['mode'] != right['mode']:
-                return False
-        elif kind == 'file':
-            for row in (left, right):
-                if type(row['size']) is not int or row['size'] < 0 or \
-                        not isinstance(row['sha256'], str) or \
-                        re.fullmatch('[0-9a-f]{64}', row['sha256']) is None:
-                    return False
-            if left != right:
-                return False
-        elif not isinstance(left['target'], str) or left['target'] != right['target']:
-            return False
-    return True
 
 
 def _snapshot_tree(root, machine, exclude, *, installed_links, digests=None,

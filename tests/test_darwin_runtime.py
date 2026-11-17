@@ -233,9 +233,6 @@ class DarwinRuntimeTests(unittest.TestCase):
         validate_darwin_runtime_closure(closure, f.descriptor, **f.options)
         with self.assertRaisesRegex(SDKError, 'differs from current bytes'):
             validate_darwin_runtime_closure(closure, f.descriptor)
-        from emberbsd_sdk.bootstrap_seed import _dynamic_closure
-        with self.assertRaisesRegex(SDKError, 'differs from current bytes'):
-            _dynamic_closure(closure, f.descriptor)
         self.assertEqual(f.capture(), before)
         self.assertNotIn('scope', before)
         self.assertNotIn('output_runtime', before)

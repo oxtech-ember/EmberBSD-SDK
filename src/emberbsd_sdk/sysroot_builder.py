@@ -26,8 +26,6 @@ from .native_os_routing import (gettext_target_host_flags, gnu_target_host_flags
                                 native_path, read_native_os_contract)
 from .targets import TARGETS, target_definition
 
-NATIVE_INPUTS = ('native-toolset', 'native-toolset-sha256',
-                 'native-producer-receipt', 'native-producer-receipt-sha256')
 NATIVE_ALIASES = (('host-cc', 'cc'), ('host-cxx', 'cxx'), ('python', 'python'))
 OPENSSH_LOCAL_GENERATOR_ROLES = ('autoconf', 'autom4te', 'gm4')
 
@@ -115,10 +113,7 @@ def check_native_command_identity(signature, shell):
             raise SDKError('Missing native compiler identity')
         for name, role in (('cc', 'cc'), ('c++', 'cxx')):
             record = signature['host_tools'][name]
-            prefix = native['format'] == 'emberbsd-host-prefix'
-            if (record['origin'] != ('host-prefix' if prefix else 'accepted-native-toolset')
-                    or (not prefix and (record['descriptor_sha256'] != native['descriptor_sha256'] or
-                        not re.fullmatch('[0-9a-f]{64}', record['sha256'])))
+            if (record['origin'] != 'host-prefix'
                     or record['version'] != native['compiler']['version']
                     or record.get('gcc_version', record['version']) != native['compiler']['version']
                     or record.get('compiler_family', 'gcc') != native['compiler']['family']
@@ -140,22 +135,12 @@ def validate_native_binding(signature, selected_paths, shell=None):
         native = signature['native_toolset']
         check_native_command_identity(signature, shell or native['tools']['sh'])
         inputs = signature['native_inputs']
-        prefix = native['format'] == 'emberbsd-host-prefix'
-        native_inputs = ('host-prefix',) if prefix else NATIVE_INPUTS
-        if set(inputs) != set(native_inputs) | {name for name, _ in NATIVE_ALIASES}:
+        if set(inputs) != {'host-prefix'} | {name for name, _ in NATIVE_ALIASES}:
             raise SDKError('Incomplete native input identity')
-        if prefix:
-            if inputs['host-prefix'] != native['bundle_root'] or selected_paths['host-prefix'] != native['bundle_root']:
-                raise SDKError('Producer paths differ from host prefix')
-            if signature['environment'].get('EMBER_NATIVE_TOOLS') != selected_paths['native-routing']:
-                raise SDKError('Producer native routing differs from selection')
-        elif (inputs['native-toolset-sha256'] != native['descriptor_sha256'] or
-                {key: inputs['native-producer-receipt' + suffix] for key, suffix in (('path', ''), ('sha256', '-sha256'))}
-                != native['producer_receipt']):
-            raise SDKError('Mixed native input pins')
-        for name in (() if prefix else ('native-toolset', 'native-producer-receipt')):
-            if selected_paths[name] != inputs[name] or not os.path.isabs(inputs[name]):
-                raise SDKError('Producer paths differ from native inputs')
+        if inputs['host-prefix'] != native['bundle_root'] or selected_paths['host-prefix'] != native['bundle_root']:
+            raise SDKError('Producer paths differ from host prefix')
+        if signature['environment'].get('EMBER_NATIVE_TOOLS') != selected_paths['native-routing']:
+            raise SDKError('Producer native routing differs from selection')
         for option, role in NATIVE_ALIASES:
             if selected_paths[option] != native['tools'][role] or not os.path.isabs(inputs[option]):
                 raise SDKError('Producer paths differ from native selection')
@@ -163,9 +148,8 @@ def validate_native_binding(signature, selected_paths, shell=None):
             record = signature['host_tools'][name]
             if record['alias'] != inputs[option] or not os.path.isabs(record['path']):
                 raise SDKError('Mixed checked native alias')
-        expected = ([] if prefix else ['HOST_CC=' + native['tools']['cc'], 'HOST_CXX=' + native['tools']['cxx']])
-        current_flags = expected + native_host_flags(native)
-        if prefix and any(flag.split('=', 1)[0] in ('HOST_CC', 'HOST_CXX', 'HOST_SH') for flag in signature['flags']):
+        current_flags = native_host_flags(native)
+        if any(flag.split('=', 1)[0] in ('HOST_CC', 'HOST_CXX', 'HOST_SH') for flag in signature['flags']):
             raise SDKError('Producer overrides OS native routing')
         def flags_match(expected_flags, forbidden_names):
             for flag in expected_flags:

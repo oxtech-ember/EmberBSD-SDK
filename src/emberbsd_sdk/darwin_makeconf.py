@@ -5,19 +5,18 @@
 import json
 import os
 from pathlib import Path
+import platform
 import plistlib
 import re
 import shlex
 import shutil
 import tempfile
 
-from .bootstrap_make import _safe_path
 from .cpu_capacity import resolve_jobs
-from .bootstrap_producer import _current_host_facts, _word
 from . import process
 from .errors import SDKError
 from .host_prefix import _member
-from .native_toolset import _require
+from .native_toolset import _absolute, _require
 from .paths import canonical_existing, canonical_new, regular_file
 from .publication import publish_directory_noreplace
 
@@ -31,6 +30,38 @@ MACHO = {'MACHO_OD': 'od', 'MACHO_LIPO': 'lipo', 'MACHO_OTOOL': 'otool'}
 REQUIRED = frozenset((*BOUND, *LLVM.values(), *MACHO.values(), 'pkg_info', 'pkg_admin', 'pkg_add', 'pkg_create'))
 ROLE = re.compile(r'[a-z][a-z0-9_.+-]*\Z')
 NATIVE_STAGE_MAKECONF_API = 1
+
+
+def _safe_path(path):
+    path = _absolute(path)
+    _require(re.fullmatch(r'[A-Za-z0-9_./+@%=-]+', path),
+             'make configuration requires an ASCII path without make metacharacters')
+    return path
+
+
+def _word(value):
+    _require(isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_./+@%=:,\-]+', value),
+             'make input contains unsupported make or shell syntax')
+    return value
+
+
+def _current_host_facts():
+    # Read the OS service data. Do not discover or execute a host utility.
+    with open('/System/Library/CoreServices/SystemVersion.plist', 'rb') as handle:
+        product = plistlib.load(handle)['ProductVersion']
+    parts = product.split('.')
+    _require(1 <= len(parts) <= 3 and all(part.isdigit() and int(part) < 100 for part in parts),
+             'unsupported macOS product version')
+    version = [int(part) for part in parts] + [0] * (3 - len(parts))
+    return dict(os=platform.system(), cpu={'arm64': 'aarch64'}.get(platform.machine(), platform.machine()),
+                kernel_version=platform.release(), product_version=product,
+                pkgsrc_opsys_version=str(version[0] * 10000 + version[1] * 100 + version[2]))
+
+
+def _linker_launcher(python, lock_root, context):
+    launcher = _path(Path(__file__).resolve().parents[2] / 'scripts/link-launcher.py', existing=True)
+    regular_file(launcher)
+    return [python, launcher, '--lock-root', lock_root, '--context', context, '--']
 
 
 def write_native_stage_makeconf(*, base, output, stage_root, prefix, object_root,
@@ -357,19 +388,15 @@ def write_makeconf(*, pkgsrc, output, prefix, work_root, distfiles, packages, pk
         regular_file(os.path.join(source, 'src/emberbsd_sdk/__init__.py'))
         variables['EMBERBSD_SDK_SOURCE'] = source
     if all(link_inputs):
-        from .bootstrap_recipe import recipe_cmake_linker_launcher, recipe_linker_launcher
         link_python = _safe_path(os.fspath(link_python))
         _require(os.path.normpath(link_python) == link_python, 'use a normalized link Python path')
-        launcher = _path(Path(__file__).resolve().parents[2] / 'scripts/link-launcher.py', existing=True)
-        regular_file(launcher)
-        # Reuse the existing SDK service and both native argument encodings.
-        link = dict(link_control={'python': {'path': link_python}, 'launcher': {'path': launcher}},
-                    resources={'lock_root': _path(lock_root, directory=True, existing=True),
-                               'heavy_link_context': _path(heavy_link_context)})
-        variables['EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER'] = recipe_cmake_linker_launcher(link)
-        variables['EMBERBSD_DARWIN_LINKER_LAUNCHER'] = recipe_linker_launcher(link)
+        # Give make and CMake the same service in their native argument encodings.
+        words = _linker_launcher(link_python, _path(lock_root, directory=True, existing=True),
+                                 _path(heavy_link_context))
+        variables['EMBERBSD_DARWIN_CMAKE_LINKER_LAUNCHER'] = ';'.join(words)
+        variables['EMBERBSD_DARWIN_LINKER_LAUNCHER'] = shlex.join(words)
         if compiler_family == 'gcc':
-            variables['EMBERBSD_GCC16_LINKER_LAUNCHER'] = recipe_linker_launcher(link)
+            variables['EMBERBSD_GCC16_LINKER_LAUNCHER'] = shlex.join(words)
     variables['MACHO_USE_LOAD_COMMANDS'] = 'yes'
     variables.update({variable: tools[role] for variable, role in MACHO.items()})
     for role, command in commands.items():

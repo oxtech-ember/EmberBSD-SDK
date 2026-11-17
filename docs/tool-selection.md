@@ -87,8 +87,6 @@ Replay the corpus with the selected production compiler and runtime.
 
 Checksums for downloaded archives, packages, and distributed outputs remain useful.
 Removing native admission receipts does not remove content integrity checks.
-Legacy bootstrap admission interfaces are retained only for historical data.
-They are not part of the normal `host-pkg-llvm` workflow.
 
 ## Migration boundary
 
