@@ -1,0 +1,149 @@
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 EmberBSD contributors.
+"""profile-build: Ninja runs the nodes of a build plan that are not ready."""
+
+import io
+import json
+import os
+from pathlib import Path
+import shutil
+import sys
+import unittest
+from contextlib import redirect_stderr
+
+from test_build_profile import PROFILE, ProfileFixture, git
+from emberbsd_sdk import profile_build
+
+NINJA = shutil.which('ninja')
+
+# A Ports source producer: copy the archive into the new output tree.
+PRODUCER = '''import os, sys
+arguments = sys.argv[1:]
+value = lambda name: arguments[arguments.index(name) + 1]
+os.makedirs(value('--output'))
+open(os.path.join(value('--output'), 'emberbsd-prepared-source.json'), 'w').write(open(value('--archive')).read())
+open(os.environ['TEST_LOG'], 'a').write('prepare ' + os.path.basename(value('--archive')) + '\\n')
+'''
+# ember/build-kernel.sh: record the selected sources, then write the outputs.
+KERNEL = '''set -eu
+out=$1; config=$2
+echo "kernel $config byacc=$EMBER_BYACC_SOURCE llvm=$EMBER_LLVM_SOURCE jobs=$NETBSD2_JOBS" >> LOG
+# The builder runs in a clean environment; a file selects the failure.
+[ ! -e LOG.fail ] || exit 1
+: > "$out/netbsd-$config"; : > "$out/netbsd-$config.img"
+'''
+
+
+@unittest.skipUnless(NINJA, 'Ninja is not installed')
+class ProfileBuildTests(ProfileFixture):
+    def setUp(self):
+        super().setUp()
+        for path, text in (('scripts/source-inputs/byacc/source.py', "PACKAGE = 'devel/byacc'\n" + PRODUCER),
+                           ('scripts/source-inputs/heimdal/source.py', "PACKAGE = 'security/heimdal'\n" + PRODUCER)):
+            self.write('ports/' + path, text)
+        git(self.ports, 'commit', '-q', '-am', 'producers')
+        self.log = self.root / 'log'
+        self.write('os/ember/build-kernel.sh', KERNEL.replace('LOG', str(self.log)))
+        git(self.os, 'add', '-A')
+        git(self.os, 'commit', '-q', '-m', 'kernel builder')
+        prefix = Path(self.native.bundle_root)
+        (prefix / 'bin/mksh').symlink_to(shutil.which('sh'))
+        self.write('prefix/bin/gpatch', '#!/bin/sh\n', 0o755)
+        for name in ('byacc-1.tgz', 'heimdal-7.tar.gz'):
+            self.write('distfiles/' + name, name)
+        self.llvm = self.write('llvm/llvm-source.json', '{}').parent
+        self.work = self.root / 'work'
+        self.config = dict(host_prefix=str(prefix), os_source=str(self.os), ports_root=str(self.ports),
+                           sdk_root=str(self.sdk), host_bfd_config=str(self.bfd), distfiles=str(self.root / 'distfiles'),
+                           selected_sources={'EMBER_LLVM_SOURCE': str(self.llvm)}, jobs=3)
+        runner = self.write('runner.py', '\n'.join([
+            'import json, sys', f'sys.path.insert(0, {str(Path(profile_build.__file__).parents[1])!r})',
+            'from emberbsd_sdk import profile_build',
+            'arguments = sys.argv[1:]',
+            f'config = json.load(open({str(self.root / "config.json")!r}))',
+            'sys.exit(profile_build.run_node(sys.argv[1], arguments[arguments.index("--node") + 1],',
+            '                                arguments[arguments.index("--key") + 1], config))', '']))
+        self.write('config.json', json.dumps(self.config))
+        self.command = [sys.executable, '-B', str(runner), str(self.work)]
+        os.environ['TEST_LOG'] = str(self.log)
+        self.addCleanup(os.environ.pop, 'TEST_LOG', None)
+
+    def build(self):
+        plan = self.plan(state=self.work, distfiles=self.config['distfiles'],
+                         selected_sources=self.config['selected_sources'])
+        self.log.write_text('')
+        with redirect_stderr(io.StringIO()):
+            status = profile_build.build(plan, work=self.work, command=self.command, ninja=NINJA, jobs=2)
+        return status, plan, self.log.read_text().splitlines()
+
+    def test_build_runs_once_then_only_what_changed(self):
+        status, plan, log = self.build()
+        self.assertEqual(status, 0)
+        prepared = self.work / 'sources'
+        self.assertEqual(sorted(line for line in log if line.startswith('prepare')),
+                         ['prepare byacc-1.tgz', 'prepare heimdal-7.tar.gz'])
+        kernel = [line for line in log if line.startswith('kernel')]
+        self.assertEqual(len(kernel), 1)
+        self.assertIn(f'byacc={prepared}/EMBER_BYACC_SOURCE-', kernel[0])
+        self.assertIn(f'llvm={self.llvm} jobs=3', kernel[0])
+        self.assertTrue((self.work / 'kernels/netbsd-EMBER64.img').is_file())
+        # Nothing changed: the plan is ready and Ninja does not run.
+        status, plan, log = self.build()
+        self.assertEqual((status, log), (0, []))
+        self.assertEqual({node['decision']['action'] for node in plan['nodes']}, {'ready'})
+        # A new byacc recipe prepares byacc again and rebuilds the kernel, not Heimdal.
+        self.write('ports/pkgsrc/devel/byacc/Makefile', 'DISTNAME= byacc-2\n')
+        git(self.ports, 'commit', '-q', '-am', 'byacc 2')
+        status, plan, log = self.build()
+        self.assertEqual(status, 0)
+        self.assertEqual([line.split()[0:2] for line in log], [['prepare', 'byacc-1.tgz'], ['kernel', 'EMBER64']])
+
+    def test_local_changes_run_the_kernel_on_each_build(self):
+        self.write('os/sys/arch/evbarm/conf/EMBER64', 'include "arch/evbarm/conf/std"\n# local\n')
+        for _ in range(2):
+            status, _, log = self.build()
+            self.assertEqual(status, 0)
+            self.assertEqual(sum(line.startswith('kernel') for line in log), 1)
+
+    def test_failed_producer_leaves_no_record_and_is_planned_again(self):
+        failure = self.write('log.fail', '')
+        status, _, _ = self.build()
+        self.assertNotEqual(status, 0)
+        failure.unlink()
+        status, plan, log = self.build()
+        self.assertEqual(status, 0)
+        actions = {node['id']: node['decision']['action'] for node in plan['nodes']}
+        self.assertEqual(actions['os:kernel:EMBER64'], 'build')
+        self.assertEqual(actions['source:EMBER_BYACC_SOURCE'], 'ready')
+        self.assertFalse(any(line.startswith('prepare') for line in log))
+
+    def test_download_stops_before_ninja(self):
+        (self.root / 'distfiles/heimdal-7.tar.gz').unlink()
+        with self.assertRaisesRegex(Exception, 'source:EMBER_HEIMDAL_SOURCE: download first'):
+            self.build()
+
+
+    def test_failed_rebuild_does_not_revive_the_old_result(self):
+        self.assertEqual(self.build()[0], 0)
+        profile = dict(PROFILE, os=dict(PROFILE['os'], buildinfo='EmberBSD:test-2'))
+        failure = self.write('log.fail', '')
+        # The builder removes the old outputs, then fails.
+        self.write('os/ember/build-kernel.sh', KERNEL.replace('LOG', str(self.log)).replace(
+            'set -eu\n', 'set -eu\nrm -f "$1/netbsd-$2" "$1/netbsd-$2.img"\n'))
+        git(self.os, 'commit', '-q', '-am', 'builder removes outputs first')
+        plan = self.plan(profile, state=self.work, distfiles=self.config['distfiles'],
+                         selected_sources=self.config['selected_sources'])
+        with redirect_stderr(io.StringIO()):
+            self.assertNotEqual(profile_build.build(plan, work=self.work, command=self.command, ninja=NINJA, jobs=2), 0)
+        failure.unlink()
+        status, plan, log = self.build()
+        self.assertEqual(status, 0)
+        self.assertEqual(sum(line.startswith('kernel') for line in log), 1)
+
+    def test_paths_with_spaces_and_dollars_reach_the_runner(self):
+        plan = self.plan(distfiles=self.config['distfiles'], selected_sources=self.config['selected_sources'])
+        text = profile_build.ninja_file(plan, command=['/a b/python', '$HOME'])
+        self.assertIn("command = '/a b/python' '$$HOME' --node $id --key $key", text)
+
+if __name__ == '__main__':
+    unittest.main()

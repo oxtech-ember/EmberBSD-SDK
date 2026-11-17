@@ -884,25 +884,74 @@ def include_sysroot(plan, release, config, cache, target):
     return plan
 
 
+BUILD_REQUIRED = {'os_source', 'host_bfd_config'}
+BUILD_OPTIONAL = {'work', 'distfiles', 'sources'}
+
+
+def build_options(config):
+    """Return the checked build section of CONFIG with the Ports and SDK checkouts."""
+    build, source = config.get('build'), config.get('source')
+    if not isinstance(build, dict) or not BUILD_REQUIRED <= set(build) <= BUILD_REQUIRED | BUILD_OPTIONAL:
+        raise SDKError('the build section needs os_source and host_bfd_config, '
+                       'and accepts work, distfiles and sources')
+    if not isinstance(source, dict) or not isinstance(source.get('ports_root'), str):
+        raise SDKError('builds need the Ports checkout in source.ports_root')
+    sources = build.get('sources', {})
+    if not isinstance(sources, dict):
+        raise SDKError('build.sources maps EMBER_*_SOURCE to prepared trees')
+    paths = [(key, value) for key, value in build.items() if key != 'sources']
+    paths += [('ports_root', source['ports_root'])] + [(f'sources.{key}', value) for key, value in sources.items()]
+    for key, value in paths:
+        if not isinstance(value, str) or not Path(value).is_absolute():
+            raise SDKError(f'build needs an absolute {key}')
+    return dict(build, ports_root=source['ports_root'], selected_sources=dict(sources),
+                sdk_root=str(Path(__file__).resolve().parents[2]), host_prefix=config['host_prefix'])
+
+
+def make_profile_plan(config, profile_path):
+    from . import build_profile
+    options = build_options(config)
+    return options, build_profile.make_plan(
+        build_profile.load_profile(profile_path), os_root=options['os_source'],
+        ports_root=options['ports_root'], sdk_root=options['sdk_root'], host_prefix=options['host_prefix'],
+        host_bfd_config=options['host_bfd_config'],
+        state=options.get('work', os.path.join(config['state_dir'], 'build')),
+        distfiles=options.get('distfiles'), selected_sources=options['selected_sources'])
+
+
 def plan_profile(config, profile_path):
     """Print the build plan of a profile. Build, download and install nothing."""
     from . import build_profile
-    build, source = config.get('build'), config.get('source')
-    if not isinstance(build, dict) or set(build) != {'os_source', 'host_bfd_config'}:
-        raise SDKError('profile-plan needs build.os_source and build.host_bfd_config')
-    if not isinstance(source, dict) or not isinstance(source.get('ports_root'), str):
-        raise SDKError('profile-plan needs the Ports checkout in source.ports_root')
-    for key, value in (*build.items(), ('ports_root', source['ports_root'])):
-        if not isinstance(value, str) or not Path(value).is_absolute():
-            raise SDKError(f'profile-plan needs an absolute {key}')
-    plan = build_profile.make_plan(
-        build_profile.load_profile(profile_path), os_root=build['os_source'],
-        ports_root=source['ports_root'], sdk_root=str(Path(__file__).resolve().parents[2]),
-        host_prefix=config['host_prefix'], host_bfd_config=build['host_bfd_config'],
-        state=os.path.join(config['state_dir'], 'build'))
+    _, plan = make_profile_plan(config, profile_path)
     sys.stdout.buffer.write(json_bytes(plan))
     print('Plan: ' + build_profile.summary(plan), file=sys.stderr)
     return 0
+
+
+def build_profile_command(config, config_path, profile_path, *, explain=False):
+    """Plan the profile, then let Ninja run the nodes that are not ready."""
+    from . import build_profile, profile_build
+    from .cpu_capacity import resolve_jobs
+    if config_path is None:
+        raise SDKError('profile-build needs an explicit --config for its Ninja edges')
+    options, plan = make_profile_plan(config, profile_path)
+    if not options.get('work') or not options.get('distfiles'):
+        raise SDKError('profile-build needs build.work and build.distfiles')
+    print('Plan: ' + build_profile.summary(plan), file=sys.stderr)
+    command = [sys.executable, '-B', str(Path(__file__).resolve().parents[2] / 'scripts/packages.py'),
+               '--config', str(Path(config_path).resolve()), 'profile-node']
+    return profile_build.build(plan, work=options['work'], command=command,
+                               ninja=os.path.join(config['host_prefix'], 'bin/ninja'),
+                               jobs=resolve_jobs(None), explain=explain)
+
+
+def run_profile_node(config, node, key):
+    from . import profile_build
+    from .cpu_capacity import resolve_jobs
+    options = build_options(config)
+    if not options.get('work') or not options.get('distfiles'):
+        raise SDKError('profile-node needs build.work and build.distfiles')
+    return profile_build.run_node(options['work'], node, key, dict(options, jobs=resolve_jobs(None)))
 
 
 def load_config(path):
@@ -939,8 +988,13 @@ def validate_config(value):
 def main(argv=None, *, default_config=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=default_config is None)
-    parser.add_argument('command', choices=('list', 'show', 'plan', 'source-plan', 'profile-plan', 'catalog', 'install', 'installed', 'update', 'auto-update', 'cache-clean'))
-    parser.add_argument('--profile', type=Path, help='build profile for profile-plan')
+    parser.add_argument('command', choices=('list', 'show', 'plan', 'source-plan', 'profile-plan', 'profile-build',
+                                            'profile-node', 'catalog', 'install', 'installed', 'update',
+                                            'auto-update', 'cache-clean'))
+    parser.add_argument('--profile', type=Path, help='build profile for profile-plan and profile-build')
+    parser.add_argument('--explain', action='store_true', help='profile-build: let Ninja explain each rebuild')
+    parser.add_argument('--node', help=argparse.SUPPRESS)
+    parser.add_argument('--key', help=argparse.SUPPRESS)
     parser.add_argument('--set', action='append', default=[], dest='sets')
     parser.add_argument('--package', action='append', default=[], dest='roots')
     parser.add_argument('--target', help='also acquire the application sysroot for this target')
@@ -968,13 +1022,22 @@ def main(argv=None, *, default_config=None):
                 arguments.extend(('--package', root))
             return watch_updates(lambda: main(arguments, default_config=default_config),
                                  3600 if args.interval is None else args.interval)
-        if (args.profile is not None) != (args.command == 'profile-plan'):
-            raise SDKError('profile-plan requires --profile; other commands do not accept it')
+        profiled = args.command in ('profile-plan', 'profile-build')
+        if (args.profile is not None) != profiled:
+            raise SDKError(f'{args.command} does not accept --profile' if not profiled
+                           else f'{args.command} requires --profile')
+        if (args.explain and args.command != 'profile-build') or \
+                ((args.node is not None or args.key is not None) != (args.command == 'profile-node')):
+            raise SDKError('--explain belongs to profile-build; --node and --key to profile-node')
         config = load_config(args.config) if args.config else validate_config(default_config)
-        if args.command == 'profile-plan':
+        if profiled or args.command == 'profile-node':
             if args.sets or args.roots or args.target or args.installed or args.state_dir or args.cache_dir:
-                raise SDKError('profile-plan takes its selection from --profile')
-            return plan_profile(config, args.profile)
+                raise SDKError(f'{args.command} takes its selection from --profile')
+            if args.command == 'profile-plan':
+                return plan_profile(config, args.profile)
+            if args.command == 'profile-build':
+                return build_profile_command(config, args.config, args.profile, explain=args.explain)
+            return run_profile_node(config, args.node, args.key)
         if args.command == 'source-plan':
             if args.target or args.state_dir or args.cache_dir:
                 raise SDKError('source-plan uses configured source.state and target; no binary state/cache/sysroot options')

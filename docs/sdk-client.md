@@ -69,7 +69,8 @@ python3 scripts/packages.py --config /work/client.json update
 python3 scripts/packages.py --config /work/client.json cache-clean
 ```
 
-`profile-plan --profile FILE` prints the build plan of a [build profile](build-profile.md).
+`profile-plan --profile FILE` prints the build plan of a [build profile](build-profile.md);
+`profile-build --profile FILE` builds it.
 It reads the optional `build` section of the configuration and installs nothing.
 
 `catalog` prints every verified package in the configured repositories. It does

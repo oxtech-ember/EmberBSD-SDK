@@ -40,7 +40,9 @@ def git(root, *arguments):
                             GIT_AUTHOR_DATE='1700000000 +0000', GIT_COMMITTER_DATE='1700000000 +0000'))
 
 
-class BuildProfileTests(TemporaryCase):
+class ProfileFixture(TemporaryCase):
+    """OS, Ports and SDK checkouts and a host prefix for build plans."""
+
     def setUp(self):
         super().setUp()
         table = ' \\\n    '.join(f'{name} /usr/src/external/x' for name in SOURCES)
@@ -61,7 +63,11 @@ class BuildProfileTests(TemporaryCase):
             'pkgsrc/devel/byacc/Makefile': 'DISTNAME= byacc\n',
             'pkgsrc/security/heimdal/Makefile': 'DISTNAME= heimdal\n',
             'pkgsrc/lang/compiler-rt/Makefile': 'DISTNAME= compiler-rt\n',
-            'pkgsrc/devel/editline/Makefile': 'DISTNAME= editline\n'})
+            'pkgsrc/devel/editline/Makefile': 'DISTNAME= editline\n',
+            **{f'pkgsrc/{package}/distinfo': f'BLAKE2s ({name}) = 00\nSize ({name}) = 1 bytes\n'
+                                             f'SHA1 (patch-a) = 00\n'
+               for package, name in (('devel/byacc', 'byacc-1.tgz'), ('security/heimdal', 'heimdal-7.tar.gz'),
+                                     ('lang/compiler-rt', 'llvm-project-23.src.tar.xz'))}})
         self.sdk = self.repository('sdk', {'scripts/prepare-libedit.py': 'pass\n'})
         prefix = self.root / 'prefix'
         for name in ('bin/clang', 'bin/bmake', 'bin/ld.lld'):
@@ -109,6 +115,8 @@ class BuildProfileTests(TemporaryCase):
     def nodes(self, plan):
         return {node['id']: node for node in plan['nodes']}
 
+
+class BuildProfileTests(ProfileFixture):
     def test_kernel_profile_plans_tools_sources_and_kernel_in_order(self):
         plan = self.plan()
         nodes = self.nodes(plan)
@@ -180,11 +188,18 @@ class BuildProfileTests(TemporaryCase):
     def test_recorded_result_with_the_same_key_is_ready(self):
         key = self.nodes(self.plan())['source:EMBER_LLVM_SOURCE']['input_key']
         state = self.root / 'state'
-        self.write('state/results/source_EMBER_LLVM_SOURCE.json', json.dumps({'input_key': key}))
-        self.write('state/results/os_tools.json', json.dumps({'input_key': '0' * 64}))
+        output = self.write('state/llvm/llvm-source.json', '{}').parent
+        record = self.write('state/results/source_EMBER_LLVM_SOURCE.json', json.dumps(
+            {'input_key': key, 'outputs': {'EMBER_LLVM_SOURCE': str(output)}}))
+        self.write('state/results/os_tools.json', json.dumps({'input_key': '0' * 64, 'outputs': {}}))
         nodes = self.nodes(self.plan(state=state))
         self.assertEqual(nodes['source:EMBER_LLVM_SOURCE']['decision']['action'], 'ready')
         self.assertEqual(nodes['os:tools']['decision']['action'], 'build')
+        # A record whose outputs are gone is not a result.
+        (output / 'llvm-source.json').unlink()
+        output.rmdir()
+        self.assertEqual(self.nodes(self.plan(state=state))['source:EMBER_LLVM_SOURCE']['decision']['action'], 'build')
+        self.assertTrue(record.is_file())
 
     def test_sets_walk_the_release_tree_and_share_the_tools(self):
         profile = copy.deepcopy(PROFILE)
@@ -252,6 +267,33 @@ class BuildProfileTests(TemporaryCase):
                           ['profile-plan', '--profile', str(profile), '--package', 'net/x@native']):
             with self.subTest(arguments=arguments), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(main(['--config', str(path), *arguments]), 1)
+
+    def test_missing_distfile_is_a_download_and_selected_source_is_ready(self):
+        self.write('distfiles/byacc-1.tgz', 'archive')
+        llvm = self.write('llvm/llvm-source.json', '{"format": "emberbsd-llvm-source"}').parent
+        nodes = self.nodes(self.plan(distfiles=self.root / 'distfiles',
+                                     selected_sources={'EMBER_LLVM_SOURCE': llvm}))
+        self.assertEqual(nodes['source:EMBER_BYACC_SOURCE']['decision']['action'], 'build')
+        self.assertEqual(nodes['source:EMBER_BYACC_SOURCE']['identity']['archive'], 'byacc-1.tgz')
+        self.assertEqual(nodes['source:EMBER_HEIMDAL_SOURCE']['decision'], dict(
+            action='download', why='heimdal-7.tar.gz is not in the distfiles directory'))
+        self.assertEqual(nodes['source:EMBER_LLVM_SOURCE']['decision'], dict(
+            action='ready', why='selected in the configuration'))
+        # Another selected tree is another input.
+        before = nodes['os:kernel:EMBER64']['input_key']
+        self.write('llvm/llvm-source.json', '{"format": "emberbsd-llvm-source", "version": 2}')
+        after = self.nodes(self.plan(distfiles=self.root / 'distfiles',
+                                     selected_sources={'EMBER_LLVM_SOURCE': llvm}))['os:kernel:EMBER64']['input_key']
+        self.assertNotEqual(before, after)
+
+    def test_ports_submodule_must_be_checked_out(self):
+        upstream = self.repository('upstream', {'mk/bsd.prefs.mk': '# pkgsrc\n'})
+        git(self.ports, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', str(upstream), 'upstream/pkgsrc')
+        git(self.ports, 'commit', '-q', '-m', 'pkgsrc')
+        self.assertEqual(self.nodes(self.plan())['source:EMBER_BYACC_SOURCE']['decision']['action'], 'build')
+        git(self.ports, 'submodule', 'deinit', '-q', '-f', 'upstream/pkgsrc')
+        with self.assertRaisesRegex(SDKError, 'initialize submodule upstream/pkgsrc'):
+            self.plan()
 
 if __name__ == '__main__':
     unittest.main()

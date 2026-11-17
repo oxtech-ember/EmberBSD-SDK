@@ -120,6 +120,12 @@ def checkout(root):
         if entry[0] in 'RC' and entries:
             # A rename or copy also changes its source path, the next entry.
             dirty.add(entries.pop(0))
+    # git status does not report a submodule without a checkout.
+    for line in _git(root, 'submodule', 'status').splitlines():
+        state, path = line[:1], line[1:].split()[1]
+        _require(state != '-', f'{root}: initialize submodule {path} at its recorded commit')
+        if state in '+U':
+            dirty.add(path)
     return dict(root=root, commit=_git(root, 'rev-parse', 'HEAD'), tree=_git(root, 'rev-parse', 'HEAD^{tree}'),
                 time=int(_git(root, 'log', '-1', '--format=%ct', 'HEAD')), dirty=sorted(dirty))
 
@@ -203,18 +209,46 @@ def result_path(state, node_id):
 
 
 def _record(state, node_id, key):
+    """Return the record of NODE_ID if it has KEY and its outputs exist."""
     if state is None or not result_path(state, node_id).is_file():
         return None
     record = read_json(result_path(state, node_id))
-    return record if isinstance(record, dict) and record.get('input_key') == key else None
+    if not isinstance(record, dict) or record.get('input_key') != key or not isinstance(record.get('outputs'), dict):
+        return None
+    return record if all(os.path.exists(path) for path in record['outputs'].values()) else None
+
+
+def distfile(ports_root, package):
+    """Return the one distfile that the distinfo of PACKAGE names."""
+    try:
+        text = Path(ports_root, 'pkgsrc', package, 'distinfo').read_text(encoding='utf-8')
+    except OSError as exc:
+        raise SDKError(f'pkgsrc/{package} has no distinfo') from exc
+    names = {match.group(1) for match in re.finditer(r'^(?:SHA512|BLAKE2s|Size) \(([^)]+)\)', text, re.M)
+             if not match.group(1).startswith('patch-')}
+    _require(len(names) == 1 and '/' not in next(iter(names)),
+             f'pkgsrc/{package} must name one distfile, not: ' + ' '.join(sorted(names)))
+    return names.pop()
+
+
+def source_manifest(root):
+    """Return the manifest that identifies a prepared source tree."""
+    for name in ('emberbsd-prepared-source.json', 'llvm-source.json'):
+        if Path(root, name).is_file():
+            return Path(root, name)
+    raise SDKError(f'{root} is not a prepared source: it has no manifest')
 
 
 def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_config, state=None,
-              required_sources=None, native=None, jobs=None):
+              distfiles=None, selected_sources=None, required_sources=None, native=None, jobs=None):
     """Return the build-graph-v2 plan of PROFILE. Build and write nothing.
 
-    REQUIRED_SOURCES(traversals, flags) -> {VARIABLE: directory} can replace
-    the bmake guard walk; NATIVE can replace the loaded host prefix."""
+    SELECTED_SOURCES maps EMBER_*_SOURCE to a prepared tree that the
+    configuration selects; the plan does not prepare it. A source without
+    its distfile in DISTFILES is a download. REQUIRED_SOURCES(traversals,
+    flags) -> {VARIABLE: directory} can replace the bmake guard walk;
+    NATIVE can replace the loaded host prefix."""
+    selected_sources = dict(selected_sources or {})
     from .native_os_routing import parse_native_os_contract
     profile = validate_profile(profile)
     target = target_definition(profile['platform']['target'])
@@ -223,13 +257,14 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
     found = {'os': checkout(os_root), 'ports': checkout(ports_root)}
 
     def checkouts(name):
-        # Read the SDK checkout only for an SDK producer: an installed SDK has no Git.
         if name not in found:
             found[name] = checkout(sdk_root)
         return found[name]
 
     os_identity = found['os']
     shared = read_shared_sources(os_identity['root'])
+    _require(set(selected_sources) <= set(shared['sources']),
+             'build.sources names unknown sources: ' + ' '.join(sorted(set(selected_sources) - set(shared['sources']))))
     try:
         _, rows, roles = parse_native_os_contract(Path(os_identity['root'], NATIVE_CONTRACT).read_bytes())
     except OSError as exc:
@@ -251,7 +286,7 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
 
     nodes = {}
 
-    def add(node_id, kind, identity, inputs, dependencies, outputs, reason):
+    def add(node_id, kind, identity, inputs, dependencies, outputs, reason, ready=None, fetch=None):
         if node_id in nodes:
             nodes[node_id]['reasons'].append(reason)
             return node_id
@@ -259,15 +294,19 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
         changed = [item for item in sorted(dependencies) if nodes[item]['input_key'] is None]
         key = None
         if dirty:
-            # A local edit has no reusable identity. Stage 3 records no result for it.
+            # A local edit has no reusable identity; its record never makes it ready.
             decision = dict(action='build', why='changed worktree inputs: ' + ', '.join(dirty))
         elif changed:
             decision = dict(action='build', why='changed dependencies: ' + ', '.join(changed))
         else:
             key = _key(dict(id=node_id, identity=identity, inputs=inputs,
                             dependencies={item: nodes[item]['input_key'] for item in sorted(dependencies)}))
-            if _record(state, node_id, key) is not None:
+            if ready is not None:
+                decision = dict(action='ready', why=ready)
+            elif _record(state, node_id, key) is not None:
                 decision = dict(action='ready', why='recorded result has this input key')
+            elif fetch is not None:
+                decision = dict(action='download', why=fetch)
             elif kind == 'runtime':
                 decision = dict(action='ready', why='installed outside the build plan')
             else:
@@ -299,12 +338,24 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
 
     def source(variable, reason):
         entry = shared['sources'][variable]
-        return add('source:' + variable, 'source', dict(variable=variable, package=entry['package'],
-                                                       producer=entry['producer']),
-                   dict(git=_producer(entry, checkouts)), [], [variable], reason)
+        identity = dict(variable=variable, package=entry['package'], producer=entry['producer'])
+        if variable in selected_sources:
+            manifest = source_manifest(selected_sources[variable])
+            return add('source:' + variable, 'source', identity,
+                       dict(manifest_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest()), [], [variable],
+                       reason, ready='selected in the configuration')
+        archive = distfile(found['ports']['root'], entry['package'])
+        missing = distfiles is not None and not Path(distfiles, archive).is_file()
+        return add('source:' + variable, 'source', dict(identity, archive=archive),
+                   dict(git=_producer(entry, checkouts)), [], [variable], reason,
+                   fetch=f'{archive} is not in the distfiles directory' if missing else None)
 
+    # OS builders run the native runner of this SDK.
+    sdk_identity = checkouts('sdk')
     os_inputs = dict(git=[dict(repository='os', path='.', object=os_identity['tree'],
-                               dirty=bool(os_identity['dirty']))],
+                               dirty=bool(os_identity['dirty'])),
+                          dict(repository='sdk', path='.', object=sdk_identity['tree'],
+                               dirty=bool(sdk_identity['dirty']))],
                      target=dict(name=profile['platform']['target'], **target),
                      mk=profile['os']['mk'], repro_timestamp=os_identity['time'])
     release_inputs = dict(os_inputs, buildinfo=profile['os']['buildinfo'])
