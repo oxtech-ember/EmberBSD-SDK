@@ -69,6 +69,19 @@ def require_posix():
         raise SDKError('producer operations require a qualified POSIX session backend')
 
 
+def _exited_child(pid):
+    """Return True if PID is an exited child of this process that is not reaped.
+
+    WNOWAIT keeps the exit status for the owner of the child.
+    """
+    if not hasattr(os, 'waitid'):
+        return False
+    try:
+        return os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+    except OSError:
+        return False
+
+
 def _empty_snapshot_timeout(value):
     if type(value) not in (int, float) or not 0 < value <= sys.float_info.max:
         raise SDKError('empty snapshot timeout must be finite and positive')
@@ -240,6 +253,13 @@ class SessionInspector:
             except OSError as exc:
                 raise SDKError(f'cannot inspect session identity for PID {pid}: {exc}') from exc
             after = birth_of(pid)
+            if pid == sid and b'Z' in state and _exited_child(pid):
+                # The leader exited, but this process did not wait for it.
+                # getsid() can fail for this zombie. The session is not empty.
+                # The Popen of the leader reaps it. Then the next scan does
+                # not show it.
+                members.add(pid)
+                continue
             if actual == sid:
                 members.add(pid)
             if before is not None and before == after and actual is not None:

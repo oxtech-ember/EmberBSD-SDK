@@ -129,6 +129,29 @@ class SnapshotTests(TemporaryCase):
     def test_changed_birth_around_getsid_is_uncertain(self):
         self.assertEqual(self.scan({10: (20, 501, b'R')}, {10: [100, 101]}, {10: 7}), (set(), True))
 
+    def test_unreaped_leader_of_this_process_is_a_member(self):
+        for state in (b'Z', b'Z+'):
+            with self.subTest(state=state), patch.object(process, '_exited_child', return_value=True):
+                self.assertEqual(self.scan({42: (20, 501, state)}, {42: None}, {}), ({42}, False))
+
+    def test_zombie_leader_without_waitable_status_stays_uncertain(self):
+        with patch.object(process, '_exited_child', return_value=False):
+            self.assertEqual(self.scan({42: (20, 501, b'Z')}, {42: None}, {}), (set(), True))
+
+    def test_zombie_child_that_is_not_the_leader_stays_uncertain(self):
+        with patch.object(process, '_exited_child', return_value=True):
+            self.assertEqual(self.scan({10: (20, 501, b'Z')}, {10: None}, {}), (set(), True))
+
+    def test_exited_child_check_keeps_the_exit_status(self):
+        child = subprocess.Popen([sys.executable, '-c', 'raise SystemExit(3)'])
+        deadline = time.monotonic() + 10
+        while not process._exited_child(child.pid):
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(.01)
+        self.assertTrue(process._exited_child(child.pid))
+        self.assertEqual(child.wait(), 3)
+        self.assertFalse(process._exited_child(child.pid))
+
     def test_stable_member_is_owned(self):
         self.assertEqual(self.scan({10: (42, 501, b'R')}, {10: 100}, {10: 42}), ({10}, False))
 
