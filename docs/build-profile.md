@@ -127,8 +127,21 @@ python3 scripts/packages.py --config /work/client.json profile-build --profile /
 ```
 
 The command writes the plan and `build.ninja` into `work` and runs Ninja from
-the host prefix with the job budget of `resolve_jobs`. When all nodes are
-ready, Ninja does not run. `--explain` passes `-d explain` to Ninja.
+the host prefix. When all nodes are ready, Ninja does not run. `--explain`
+passes `-d explain` to Ninja.
+
+The job budget of `resolve_jobs` is one GNU make jobserver: a FIFO
+`work/.jobserver` with one token for each job after the first. The command
+needs Ninja 1.13 or later, which takes its jobs from the jobserver through
+`MAKEFLAGS` when no `-j` is given; it stops on older Ninja. The budget
+replaces the `MAKEFLAGS` of an outer make, so a `profile-build` under make has
+its own budget. Each edge holds one job. An OS stage runs bmake, which has its
+own job pool, so it takes the free tokens before `build.sh` starts, passes one
+job per slot as `NETBSD2_JOBS`, and gives the tokens back when it stops. It
+takes them once: a stage that starts while other edges hold tokens keeps fewer
+jobs. A source producer is one job and gets no `MAKEFLAGS`; an edge that runs
+GNU make with this `MAKEFLAGS` needs GNU make 4.4 or later. A job that stops on
+SIGKILL loses its tokens for the rest of the run; each run makes a new FIFO.
 
 Each node that is not ready is one Ninja edge. Its command runs the internal
 `profile-node` command with the node ID and its input key, so a changed key
@@ -148,5 +161,6 @@ nodes keep them ready.
 - `os:kernel:<config>` runs `ember/build-kernel.sh WORK/kernels CONFIG` with
   the selected host prefix, target toolchain, Binutils, prepared sources,
   `MKREPRO_TIMESTAMP` and `BUILDINFO` of the plan. OS stages share one Ninja
-  pool of depth 1; `build.sh` runs its own jobs.
+  pool of depth 1; `build.sh` runs the jobs that the stage took from the
+  jobserver.
 

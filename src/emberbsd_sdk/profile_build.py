@@ -22,7 +22,7 @@ import shutil
 import subprocess
 import sys
 
-from . import build_profile, process
+from . import build_profile, jobserver, process
 from .errors import SDKError
 from .jsonio import read_json, write_json
 
@@ -140,10 +140,12 @@ def run_node(work, node_id, key, config):
             shutil.rmtree(output)
         output.parent.mkdir(parents=True, exist_ok=True)
         producer = Path(config['ports_root'], path, 'source.py')
+        # A producer is one job; it does not take part in the jobserver.
+        env = {name: value for name, value in os.environ.items() if name not in ('MAKEFLAGS', 'MFLAGS')}
         _run([sys.executable, '-B', str(producer), '--sdk-source', config['sdk_root'],
                      '--git', shutil.which('git') or 'git', 'prepare',
                      '--archive', str(Path(config['distfiles'], identity['archive'])),
-                     '--patch', os.path.join(prefix, 'bin/gpatch'), '--output', str(output)])
+                     '--patch', os.path.join(prefix, 'bin/gpatch'), '--output', str(output)], env=env)
         _write_record(work, node, {identity['variable']: str(output)})
     elif node_id == 'os:tools':
         # build.sh of each consumer builds or reuses the tools in its object tree.
@@ -158,8 +160,7 @@ def run_node(work, node_id, key, config):
                    EMBER_COMPILER_FAMILY=plan['profile']['platform']['compiler']['target'],
                    EMBER_BUILD_MODE='cross', EMBER_EXTERNAL_TOOLCHAIN=prefix,
                    EMBER_HOST_BFD_CONFIG=config['host_bfd_config'],
-                   MKREPRO_TIMESTAMP=str(node['inputs']['repro_timestamp']),
-                   NETBSD2_JOBS=str(config['jobs']))
+                   MKREPRO_TIMESTAMP=str(node['inputs']['repro_timestamp']))
         if plan['profile']['os']['buildinfo']:
             env['BUILDINFO'] = plan['profile']['os']['buildinfo']
         sources = [item for item in nodes['os:tools']['dependencies'] + node['dependencies']
@@ -168,12 +169,27 @@ def run_node(work, node_id, key, config):
             variable = item.split(':', 1)[1]
             env[variable] = _source_path(work, config, variable)
         out.mkdir(parents=True, exist_ok=True)
-        _run([os.path.join(prefix, 'bin/mksh'), os.path.join(config['os_source'], KERNEL_BUILDER),
-                     str(out), config_name], env=env)
+        # bmake has its own job pool: take the free jobserver tokens for it.
+        with jobserver.slots(os.environ.get('MAKEFLAGS'), config['jobs']) as jobs:
+            env['NETBSD2_JOBS'] = str(jobs)
+            _run([os.path.join(prefix, 'bin/mksh'), os.path.join(config['os_source'], KERNEL_BUILDER),
+                  str(out), config_name], env=env)
         _write_record(work, node, {name: str(out / name) for name in node['outputs']})
     else:
         raise SDKError(f'{node_id}: {runnable(node)}')
     return 0
+
+
+NINJA_MINIMUM = (1, 13)
+
+
+def ninja_version(ninja):
+    try:
+        text = subprocess.run([ninja, '--version'], capture_output=True, text=True, check=True,
+                              timeout=60).stdout
+        return tuple(int(part) for part in re.match(r'(\d+)\.(\d+)', text).groups())
+    except (OSError, subprocess.SubprocessError, AttributeError) as exc:
+        raise SDKError(f'cannot read the version of {ninja}') from exc
 
 
 def build(plan, *, work, command, ninja, jobs, explain=False):
@@ -192,7 +208,16 @@ def build(plan, *, work, command, ninja, jobs, explain=False):
             return 0
         text = ninja_file(plan, command=command)
         _require(os.access(ninja, os.X_OK), f'install ninja in the host prefix: {ninja} is missing')
+        # Ninja 1.13 and later take their jobs from the jobserver when no -j
+        # option is given. Older Ninja would add its own -j budget.
+        _require(ninja_version(ninja) >= NINJA_MINIMUM,
+                 f'{ninja} is older than Ninja 1.13; install ninja in the host prefix again')
         write_json(work / PLAN_FILE, plan, exclusive=False)
         (work / NINJA_FILE).write_text(text + '\n', encoding='utf-8')
-        argv = [ninja, '-C', str(work), '-j', str(jobs)] + (['-d', 'explain'] if explain else [])
-        return subprocess.run(argv, check=False).returncode
+        argv = [ninja, '-C', str(work)] + (['-d', 'explain'] if explain else [])
+        # The budget replaces the MAKEFLAGS of an outer make: this build has
+        # its own jobserver.
+        with jobserver.serve(work / '.jobserver', jobs) as makeflags:
+            env = dict(os.environ, MAKEFLAGS=makeflags)
+            env.pop('MFLAGS', None)
+            return subprocess.run(argv, env=env, check=False).returncode

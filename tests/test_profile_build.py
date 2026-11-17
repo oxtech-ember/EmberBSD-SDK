@@ -15,11 +15,14 @@ from test_build_profile import PROFILE, ProfileFixture, git
 from emberbsd_sdk import profile_build
 
 NINJA = shutil.which('ninja')
+NEW_NINJA = bool(NINJA) and profile_build.ninja_version(NINJA) >= profile_build.NINJA_MINIMUM
 
 # A Ports source producer: copy the archive into the new output tree.
 PRODUCER = '''import os, sys
 arguments = sys.argv[1:]
 value = lambda name: arguments[arguments.index(name) + 1]
+# A producer is one job and does not see the jobserver.
+assert 'MAKEFLAGS' not in os.environ, os.environ['MAKEFLAGS']
 os.makedirs(value('--output'))
 open(os.path.join(value('--output'), 'emberbsd-prepared-source.json'), 'w').write(open(value('--archive')).read())
 open(os.environ['TEST_LOG'], 'a').write('prepare ' + os.path.basename(value('--archive')) + '\\n')
@@ -34,7 +37,46 @@ echo "kernel $config byacc=$EMBER_BYACC_SOURCE llvm=$EMBER_LLVM_SOURCE jobs=$NET
 '''
 
 
-@unittest.skipUnless(NINJA, 'Ninja is not installed')
+# Ninja: record the arguments and the free jobserver tokens.
+FAKE_NINJA = '''import os, re, sys
+if sys.argv[1:] == ['--version']:
+    print(os.environ['FAKE_VERSION'])
+    sys.exit(0)
+path = re.search(r'--jobserver-auth=fifo:(\\S+)', os.environ['MAKEFLAGS']).group(1)
+descriptor = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+tokens = os.read(descriptor, 64)
+os.write(descriptor, tokens)
+open(os.environ['FAKE_LOG'], 'w').write(' '.join(sys.argv[1:]) + ' tokens=%d' % len(tokens))
+'''
+
+
+class NinjaClientTests(ProfileFixture):
+    def run_ninja(self, version):
+        ninja = self.write('fake-ninja', f'#!{sys.executable}\n' + FAKE_NINJA, 0o755)
+        log = self.root / 'ninja.log'
+        os.environ.update(FAKE_VERSION=version, FAKE_LOG=str(log))
+        self.addCleanup(os.environ.pop, 'FAKE_VERSION', None)
+        self.addCleanup(os.environ.pop, 'FAKE_LOG', None)
+        self.write('distfiles/byacc-1.tgz', '')
+        self.write('distfiles/heimdal-7.tar.gz', '')
+        llvm = self.write('llvm/llvm-source.json', '{}').parent
+        plan = self.plan(distfiles=str(self.root / 'distfiles'), selected_sources={'EMBER_LLVM_SOURCE': str(llvm)})
+        status = profile_build.build(plan, work=self.root / 'work', command=['runner'], ninja=str(ninja), jobs=4)
+        return status, log.read_text()
+
+    def test_ninja_takes_the_budget_from_the_jobserver(self):
+        status, log = self.run_ninja('1.13.2')
+        self.assertEqual(status, 0)
+        # No -j: a -j option would turn the jobserver off.
+        self.assertEqual(log, f'-C {self.root / "work"} tokens=3')
+        self.assertFalse((self.root / 'work/.jobserver').exists())
+
+    def test_older_ninja_is_refused(self):
+        with self.assertRaisesRegex(Exception, 'older than Ninja 1.13'):
+            self.run_ninja('1.11.1')
+
+
+@unittest.skipUnless(NEW_NINJA, 'Ninja 1.13 or later is not installed')
 class ProfileBuildTests(ProfileFixture):
     def setUp(self):
         super().setUp()
@@ -85,7 +127,8 @@ class ProfileBuildTests(ProfileFixture):
         kernel = [line for line in log if line.startswith('kernel')]
         self.assertEqual(len(kernel), 1)
         self.assertIn(f'byacc={prepared}/EMBER_BYACC_SOURCE-', kernel[0])
-        self.assertIn(f'llvm={self.llvm} jobs=3', kernel[0])
+        # The kernel runs alone: it gets its own slot and the one free token.
+        self.assertIn(f'llvm={self.llvm} jobs=2', kernel[0])
         self.assertTrue((self.work / 'kernels/netbsd-EMBER64.img').is_file())
         # Nothing changed: the plan is ready and Ninja does not run.
         status, plan, log = self.build()
