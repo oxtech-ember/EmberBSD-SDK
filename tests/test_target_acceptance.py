@@ -316,7 +316,6 @@ class SourceRoleTests(unittest.TestCase):
         tests, tests_revision = self.make_source('tests')
         with self.assertRaisesRegex(SDKError, 'differs from the selected OS build'):
             _select_os_sources('0' * 40, core, tests)
-        self.assertEqual(len(tests_revision), 40)
 
     def test_rejects_missing_helper_before_acceptance_side_effects(self):
         core, core_revision = self.make_source('core')

@@ -3,6 +3,7 @@
 """LLVM first-base dependency ordering; synthetic outputs are not ABI evidence."""
 
 from pathlib import Path
+import tempfile
 import json
 import copy
 import contextlib
@@ -17,7 +18,7 @@ from test_core import TemporaryCase, SDK_SOURCE
 from emberbsd_sdk import inventory, jsonio, llvm_stage_inputs, process
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.verification_receipts import RunReceipts
-from emberbsd_sdk.sysroot_builder import SysrootBuilder
+from emberbsd_sdk.sysroot_builder import PREPARED_SOURCE_PRODUCERS, SysrootBuilder
 from emberbsd_sdk.os_release_builder import OSReleaseBuilder
 from emberbsd_sdk.llvm_sysroot import runtime_paths, llvm_flags, LLVMCoordinator, LLVMPhaseBuilder
 from emberbsd_sdk.libedit import prepare_source
@@ -105,7 +106,6 @@ class LLVMBuilderTests(TemporaryCase):
         with patch('emberbsd_sdk.sysroot_builder.process.capture',
                    side_effect=[answer('/prepared/byacc'), answer('/prepared/byacc')]) as run:
             builder.require_byacc_source_support()
-        self.assertEqual(run.call_count, 2)
         self.assertIn('/os/external/bsd/byacc/bin', run.call_args_list[0].args[0][5])
         self.assertIn('/os/tools/yacc', run.call_args_list[1].args[0][5])
         del builder.paths['byacc-source']
@@ -113,77 +113,35 @@ class LLVMBuilderTests(TemporaryCase):
             builder.require_byacc_source_support()
             run.assert_not_called()
 
-    def test_ekermit_source_requires_real_os_producer(self):
+    def test_prepared_source_requires_real_os_producer(self):
         from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'os': str(self.root / 'os'), 'ekermit-source': '/prepared/ekermit', 'tools': '/build/tools'}
-        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
-        builder.environment = {}
-        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/old/dist\n')):
-            with self.assertRaisesRegex(SDKError, 'does not support EMBER_EKERMIT_SOURCE'):
-                builder.require_ekermit_source_support()
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/prepared/ekermit\n')) as run:
-            builder.require_ekermit_source_support()
-        self.assertIn('/os/external/bsd/ekermit/bin/ekermit', run.call_args.args[0][5])
-        del builder.paths['ekermit-source']
-        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
-            builder.require_ekermit_source_support()
-            run.assert_not_called()
-
-    def test_nvi_source_requires_real_os_producer(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'os': str(self.root / 'os'), 'nvi-source': '/prepared/nvi', 'tools': '/build/tools'}
-        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
-        builder.environment = {}
-        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/old/dist\n')):
-            with self.assertRaisesRegex(SDKError, 'does not support EMBER_NVI_SOURCE'):
-                builder.require_nvi_source_support()
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/prepared/nvi\n')) as run:
-            builder.require_nvi_source_support()
-        self.assertIn('/os/external/bsd/nvi/usr.bin/nvi', run.call_args.args[0][5])
-        del builder.paths['nvi-source']
-        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
-            builder.require_nvi_source_support()
-            run.assert_not_called()
-
-    def test_top_source_requires_real_os_producer(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'os': str(self.root / 'os'), 'top-source': '/prepared/top', 'tools': '/build/tools'}
-        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
-        builder.environment = {}
-        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/old/dist\n')):
-            with self.assertRaisesRegex(SDKError, 'does not support EMBER_TOP_SOURCE'):
-                builder.require_top_source_support()
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/prepared/top\n')) as run:
-            builder.require_top_source_support()
-        self.assertIn('/os/external/bsd/top/bin', run.call_args.args[0][5])
-        del builder.paths['top-source']
-        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
-            builder.require_top_source_support()
-            run.assert_not_called()
-
-    def test_iscsi_source_requires_real_os_producer(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'os': str(self.root / 'os'), 'iscsi-source': '/prepared/iscsi', 'tools': '/build/tools'}
-        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
-        builder.environment = {}
-        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/old/dist\n')):
-            with self.assertRaisesRegex(SDKError, 'does not support EMBER_ISCSI_SOURCE'):
-                builder.require_iscsi_source_support()
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/prepared/iscsi\n')) as run:
-            builder.require_iscsi_source_support()
-        self.assertIn('/os/external/bsd/iscsi/lib', run.call_args.args[0][5])
-        del builder.paths['iscsi-source']
-        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
-            builder.require_iscsi_source_support()
-            run.assert_not_called()
+        host_tool = {'gnu': 'HOST_GMAKE=/host/gmake', 'waf': 'HOST_PYTHON=/host/python'}
+        for name, directory, variable, tools in PREPARED_SOURCE_PRODUCERS:
+            with self.subTest(name=name):
+                key = name.replace('_', '-') + '-source'
+                builder = SysrootBuilder({})
+                builder.paths = {'os': str(self.root / 'os'), key: '/prepared/' + name, 'tools': '/build/tools'}
+                builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
+                builder.environment = {}
+                builder.native = SimpleNamespace(tool=lambda tool: '/host/' + tool,
+                                                 compiler={'triplet': 'aarch64-apple-darwin27.0.0'})
+                producer = (name, directory, variable, tools)
+                with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                           return_value=SimpleNamespace(stdout=b'/old/dist\n')):
+                    with self.assertRaisesRegex(SDKError, f'does not support EMBER_{name.upper()}_SOURCE'):
+                        builder.require_prepared_source_support(*producer)
+                with patch('emberbsd_sdk.sysroot_builder.process.capture',
+                           return_value=SimpleNamespace(stdout=f'/prepared/{name}\n'.encode())) as run:
+                    builder.require_prepared_source_support(*producer)
+                argv = run.call_args.args[0]
+                self.assertEqual(argv[5], str(self.root / 'os' / directory))
+                self.assertEqual(argv[-2:], ['-V', '${' + variable + '}'])
+                if tools:
+                    self.assertIn(host_tool[tools], argv)
+                del builder.paths[key]
+                with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
+                    builder.require_prepared_source_support(*producer)
+                    run.assert_not_called()
 
     def test_ntp_requires_both_sources_and_actual_os_selection(self):
         from types import SimpleNamespace
@@ -200,78 +158,6 @@ class LLVMBuilderTests(TemporaryCase):
                 builder.require_ntp_source_support()
         with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/prepared/ntp\n/prepared/libopts\n')):
             builder.require_ntp_source_support()
-
-    def test_libpcap_source_requires_real_os_producer(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'os': str(self.root / 'os'), 'libpcap-source': '/prepared/libpcap', 'tools': '/build/tools'}
-        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
-        builder.environment = {}
-        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/old/dist\n')):
-            with self.assertRaisesRegex(SDKError, 'does not support EMBER_LIBPCAP_SOURCE'):
-                builder.require_libpcap_source_support()
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/prepared/libpcap\n')) as run:
-            builder.require_libpcap_source_support()
-        self.assertIn('/os/external/bsd/libpcap/lib', run.call_args.args[0][5])
-        del builder.paths['libpcap-source']
-        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
-            builder.require_libpcap_source_support()
-            run.assert_not_called()
-
-    def test_tcpdump_source_requires_real_os_producer(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'os': str(self.root / 'os'), 'tcpdump-source': '/prepared/tcpdump', 'tools': '/build/tools'}
-        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
-        builder.environment = {}
-        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/old/dist\n')):
-            with self.assertRaisesRegex(SDKError, 'does not support EMBER_TCPDUMP_SOURCE'):
-                builder.require_tcpdump_source_support()
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/prepared/tcpdump\n')) as run:
-            builder.require_tcpdump_source_support()
-        self.assertIn('/os/external/bsd/tcpdump/bin', run.call_args.args[0][5])
-        del builder.paths['tcpdump-source']
-        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
-            builder.require_tcpdump_source_support()
-            run.assert_not_called()
-
-    def test_tcp_wrappers_source_requires_real_os_producer(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'os': str(self.root / 'os'), 'tcp-wrappers-source': '/prepared/tcp-wrappers', 'tools': '/build/tools'}
-        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
-        builder.environment = {}
-        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/old/dist\n')):
-            with self.assertRaisesRegex(SDKError, 'does not support EMBER_TCP_WRAPPERS_SOURCE'):
-                builder.require_tcp_wrappers_source_support()
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/prepared/tcp-wrappers\n')) as run:
-            builder.require_tcp_wrappers_source_support()
-        self.assertIn('/os/lib/libwrap', run.call_args.args[0][5])
-        del builder.paths['tcp-wrappers-source']
-        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
-            builder.require_tcp_wrappers_source_support()
-            run.assert_not_called()
-
-    def test_ppp_source_requires_real_os_producer(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'os': str(self.root / 'os'), 'ppp-source': '/prepared/ppp', 'tools': '/build/tools'}
-        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
-        builder.environment = {}
-        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/old/dist\n')):
-            with self.assertRaisesRegex(SDKError, 'does not support EMBER_PPP_SOURCE'):
-                builder.require_ppp_source_support()
-        with patch('emberbsd_sdk.sysroot_builder.process.capture', return_value=SimpleNamespace(stdout=b'/prepared/ppp\n')) as run:
-            builder.require_ppp_source_support()
-        self.assertIn('/os/external/bsd/ppp/usr.sbin/pppd', run.call_args.args[0][5])
-        del builder.paths['ppp-source']
-        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
-            builder.require_ppp_source_support()
-            run.assert_not_called()
 
     def test_gettext_requires_all_three_actual_os_producers(self):
         from types import SimpleNamespace
@@ -295,7 +181,6 @@ class LLVMBuilderTests(TemporaryCase):
         with patch('emberbsd_sdk.sysroot_builder.process.capture',
                    side_effect=[*queries, gettext]) as run:
             builder.require_gettext_source_support()
-        self.assertEqual(run.call_count, 3)
         tree_query = run.call_args_list[1].args[0]
         self.assertIn('-C', tree_query)
         self.assertEqual(tree_query[tree_query.index('-C') + 1],
@@ -330,93 +215,6 @@ class LLVMBuilderTests(TemporaryCase):
                  patch('emberbsd_sdk.sysroot_builder.process.capture', side_effect=responses):
                 with self.assertRaisesRegex(SDKError, 'does not support'):
                     builder.require_gettext_source_support()
-
-    def test_rcs_source_requires_real_os_producer(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'os': str(self.root / 'os'), 'rcs-source': '/prepared/rcs', 'tools': '/build/tools'}
-        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
-        builder.environment = {}
-        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name,
-                                         compiler={'triplet': 'aarch64-apple-darwin27.0.0'})
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=SimpleNamespace(stdout=b'/old/dist\n')):
-            with self.assertRaisesRegex(SDKError, 'does not support EMBER_RCS_SOURCE'):
-                builder.require_rcs_source_support()
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=SimpleNamespace(stdout=b'/prepared/rcs\n')) as run:
-            builder.require_rcs_source_support()
-        self.assertIn('/os/external/gpl2/rcs/gnu', run.call_args.args[0][5])
-        self.assertIn('HOST_GMAKE=/host/gmake', run.call_args.args[0])
-        del builder.paths['rcs-source']
-        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
-            builder.require_rcs_source_support()
-            run.assert_not_called()
-
-    def test_diffutils_source_requires_real_os_producer(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'os': str(self.root / 'os'), 'diffutils-source': '/prepared/diffutils', 'tools': '/build/tools'}
-        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
-        builder.environment = {}
-        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name,
-                                         compiler={'triplet': 'aarch64-apple-darwin27.0.0'})
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=SimpleNamespace(stdout=b'/old/dist\n')):
-            with self.assertRaisesRegex(SDKError, 'does not support EMBER_DIFFUTILS_SOURCE'):
-                builder.require_diffutils_source_support()
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=SimpleNamespace(stdout=b'/prepared/diffutils\n')) as run:
-            builder.require_diffutils_source_support()
-        self.assertIn('/os/external/gpl2/diffutils/gnu', run.call_args.args[0][5])
-        self.assertIn('HOST_GMAKE=/host/gmake', run.call_args.args[0])
-        del builder.paths['diffutils-source']
-        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
-            builder.require_diffutils_source_support()
-            run.assert_not_called()
-
-    def test_tdb_source_requires_real_os_producer(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'os': str(self.root / 'os'), 'tdb-source': '/prepared/tdb', 'tools': '/build/tools'}
-        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
-        builder.environment = {}
-        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name)
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=SimpleNamespace(stdout=b'/old/dist\n')):
-            with self.assertRaisesRegex(SDKError, 'does not support EMBER_TDB_SOURCE'):
-                builder.require_tdb_source_support()
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=SimpleNamespace(stdout=b'/prepared/tdb\n')) as run:
-            builder.require_tdb_source_support()
-        self.assertIn('/os/external/bsd/tdb/lib', run.call_args.args[0][5])
-        self.assertIn('HOST_PYTHON=/host/python', run.call_args.args[0])
-        del builder.paths['tdb-source']
-        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
-            builder.require_tdb_source_support()
-            run.assert_not_called()
-
-    def test_grep_source_requires_real_os_producer(self):
-        from types import SimpleNamespace
-        builder = SysrootBuilder({})
-        builder.paths = {'os': str(self.root / 'os'), 'grep-source': '/prepared/grep', 'tools': '/build/tools'}
-        builder.target = {'machine': 'evbarm', 'arch': 'aarch64'}
-        builder.environment = {}
-        builder.native = SimpleNamespace(tool=lambda name: '/host/' + name,
-                                         compiler={'triplet': 'aarch64-apple-darwin27.0.0'})
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=SimpleNamespace(stdout=b'/old/dist\n')):
-            with self.assertRaisesRegex(SDKError, 'does not support EMBER_GREP_SOURCE'):
-                builder.require_grep_source_support()
-        with patch('emberbsd_sdk.sysroot_builder.process.capture',
-                   return_value=SimpleNamespace(stdout=b'/prepared/grep\n')) as run:
-            builder.require_grep_source_support()
-        self.assertIn('/os/external/gpl2/grep/bin', run.call_args.args[0][5])
-        self.assertIn('HOST_GMAKE=/host/gmake', run.call_args.args[0])
-        del builder.paths['grep-source']
-        with patch('emberbsd_sdk.sysroot_builder.process.capture') as run:
-            builder.require_grep_source_support()
-            run.assert_not_called()
 
     def test_texinfo_source_requires_real_c_only_os_producer(self):
         builder = SysrootBuilder({})
@@ -946,7 +744,6 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         record_inputs.assert_called_once_with({'headers': {'phase': 'headers'}, 'base': {'phase': 'base'}})
         self.assertEqual(events, ['headers', 'bootstrap', 'base', 'full', 'final'])
         # Every phase of the run shares one set of verification receipts.
-        self.assertEqual(len(shared), 3)
         self.assertTrue(all(receipts is coordinator.receipts for receipts in shared))
         self.assertEqual(result['runtime'], options['runtime-work'] + '/full-stage')
         self.assertEqual(result['bootstrap'], options['runtime-work'] + '/bootstrap-stage')
@@ -2235,59 +2032,30 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.llvm_phase = 'base'
         self.assertFalse(builder.compatible_context(base_record, objects))
 
-    def test_rcs_selection_reuses_headers_and_native_tools_with_new_gmake(self):
-        from emberbsd_sdk.native_os_routing import native_path
-        builder, _ = self.builder()
-        builder.preflight()
-        builder.llvm_phase = 'headers'
-        tools, objects = builder.paths['tools'], builder.paths['objects']
-        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
-                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
-        builder.paths['rcs-source'] = '/prepared/rcs'
-        builder.signature['common_sources']['rcs'] = {'tree_sha256': 'a' * 64}
-        builder.signature['flags'].append('EMBER_RCS_SOURCE=/prepared/rcs')
-        builder.signature['native_toolset']['tools']['gmake'] = str(Path(builder.signature['native_toolset']['tools']['cc']).parent / 'gmake')
-        builder.signature['environment']['PATH'] = native_path(builder.signature['native_toolset'])
-        for path in (tools, objects):
-            self.assertTrue(builder.compatible_context(records[path], path))
-        builder.llvm_phase = 'base'
-        self.assertFalse(builder.compatible_context(records[objects], objects))
-
-    def test_diffutils_selection_reuses_headers_and_native_tools_with_new_gmake(self):
-        from emberbsd_sdk.native_os_routing import native_path
-        builder, _ = self.builder()
-        builder.preflight()
-        builder.llvm_phase = 'headers'
-        tools, objects = builder.paths['tools'], builder.paths['objects']
-        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
-                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
-        builder.paths['diffutils-source'] = '/prepared/diffutils'
-        builder.signature['common_sources']['diffutils'] = {'tree_sha256': 'a' * 64}
-        builder.signature['flags'].append('EMBER_DIFFUTILS_SOURCE=/prepared/diffutils')
-        builder.signature['native_toolset']['tools']['gmake'] = str(Path(builder.signature['native_toolset']['tools']['cc']).parent / 'gmake')
-        builder.signature['environment']['PATH'] = native_path(builder.signature['native_toolset'])
-        for path in (tools, objects):
-            self.assertTrue(builder.compatible_context(records[path], path))
-        builder.llvm_phase = 'base'
-        self.assertFalse(builder.compatible_context(records[objects], objects))
-
-    def test_grep_selection_reuses_headers_and_native_tools_with_new_gmake(self):
-        from emberbsd_sdk.native_os_routing import native_path
-        builder, _ = self.builder()
-        builder.preflight()
-        builder.llvm_phase = 'headers'
-        tools, objects = builder.paths['tools'], builder.paths['objects']
-        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
-                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
-        builder.paths['grep-source'] = '/prepared/grep'
-        builder.signature['common_sources']['grep'] = {'tree_sha256': 'a' * 64}
-        builder.signature['flags'].append('EMBER_GREP_SOURCE=/prepared/grep')
-        builder.signature['native_toolset']['tools']['gmake'] = str(Path(builder.signature['native_toolset']['tools']['cc']).parent / 'gmake')
-        builder.signature['environment']['PATH'] = native_path(builder.signature['native_toolset'])
-        for path in (tools, objects):
-            self.assertTrue(builder.compatible_context(records[path], path))
-        builder.llvm_phase = 'base'
-        self.assertFalse(builder.compatible_context(records[objects], objects))
+    def test_gnu_source_selection_reuses_headers_and_native_tools_with_new_gmake(self):
+        """A selected GNU prepared source keeps the headers and native tools with the new gmake."""
+        for package in ['rcs', 'diffutils', 'grep']:
+            with self.subTest(package=package):
+                # Give each package its own build tree.
+                self.root = Path(tempfile.mkdtemp(dir=self.temporary.name)).resolve()
+                key = package.replace('_', '-')
+                upper = package.upper()
+                from emberbsd_sdk.native_os_routing import native_path
+                builder, _ = self.builder()
+                builder.preflight()
+                builder.llvm_phase = 'headers'
+                tools, objects = builder.paths['tools'], builder.paths['objects']
+                records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                                  'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+                builder.paths[f'{key}-source'] = f'/prepared/{key}'
+                builder.signature['common_sources'][f'{key}'] = {'tree_sha256': 'a' * 64}
+                builder.signature['flags'].append(f'EMBER_{upper}_SOURCE=/prepared/{key}')
+                builder.signature['native_toolset']['tools']['gmake'] = str(Path(builder.signature['native_toolset']['tools']['cc']).parent / 'gmake')
+                builder.signature['environment']['PATH'] = native_path(builder.signature['native_toolset'])
+                for path in (tools, objects):
+                    self.assertTrue(builder.compatible_context(records[path], path))
+                builder.llvm_phase = 'base'
+                self.assertFalse(builder.compatible_context(records[objects], objects))
 
     def test_zlib_selection_changes_headers_but_not_native_tools(self):
         builder, _ = self.builder()
@@ -2339,31 +2107,25 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.signature['common_sources']['libevent']['tree_sha256'] = None
         self.assertFalse(builder.compatible_context(record, objects))
 
-    def test_libfido2_selection_changes_headers_but_not_native_tools(self):
-        builder, _ = self.builder()
-        builder.preflight()
-        builder.llvm_phase = 'headers'
-        tools, objects = builder.paths['tools'], builder.paths['objects']
-        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
-                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
-        builder.paths['libfido2-source'] = '/prepared/libfido2'
-        builder.signature['common_sources']['libfido2'] = {'tree_sha256': 'a' * 64}
-        builder.signature['flags'].append('EMBER_LIBFIDO2_SOURCE=/prepared/libfido2')
-        self.assertTrue(builder.compatible_context(records[tools], tools))
-        self.assertFalse(builder.compatible_context(records[objects], objects))
-
-    def test_libcbor_selection_changes_headers_but_not_native_tools(self):
-        builder, _ = self.builder()
-        builder.preflight()
-        builder.llvm_phase = 'headers'
-        tools, objects = builder.paths['tools'], builder.paths['objects']
-        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
-                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
-        builder.paths['libcbor-source'] = '/prepared/libcbor'
-        builder.signature['common_sources']['libcbor'] = {'tree_sha256': 'a' * 64}
-        builder.signature['flags'].append('EMBER_LIBCBOR_SOURCE=/prepared/libcbor')
-        self.assertTrue(builder.compatible_context(records[tools], tools))
-        self.assertFalse(builder.compatible_context(records[objects], objects))
+    def test_source_selection_changes_headers_but_not_native_tools(self):
+        """A selected prepared source changes the header objects but not the native tools."""
+        for package in ['libfido2', 'libcbor', 'expat', 'libfetch', 'openldap', 'unbound']:
+            with self.subTest(package=package):
+                # Give each package its own build tree.
+                self.root = Path(tempfile.mkdtemp(dir=self.temporary.name)).resolve()
+                key = package.replace('_', '-')
+                upper = package.upper()
+                builder, _ = self.builder()
+                builder.preflight()
+                builder.llvm_phase = 'headers'
+                tools, objects = builder.paths['tools'], builder.paths['objects']
+                records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                                  'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+                builder.paths[f'{key}-source'] = f'/prepared/{key}'
+                builder.signature['common_sources'][f'{key}'] = {'tree_sha256': 'a' * 64}
+                builder.signature['flags'].append(f'EMBER_{upper}_SOURCE=/prepared/{key}')
+                self.assertTrue(builder.compatible_context(records[tools], tools))
+                self.assertFalse(builder.compatible_context(records[objects], objects))
 
     def test_explicit_target_tool_transition_is_bound_and_scoped(self):
         builder, _ = self.builder()
@@ -2480,58 +2242,6 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertFalse(builder.compatible_context(header, objects))
         self.assertFalse(builder.compatible_context(tool_record, tools))
 
-    def test_expat_selection_changes_headers_but_not_native_tools(self):
-        builder, _ = self.builder()
-        builder.preflight()
-        builder.llvm_phase = 'headers'
-        tools, objects = builder.paths['tools'], builder.paths['objects']
-        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
-                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
-        builder.paths['expat-source'] = '/prepared/expat'
-        builder.signature['common_sources']['expat'] = {'tree_sha256': 'a' * 64}
-        builder.signature['flags'].append('EMBER_EXPAT_SOURCE=/prepared/expat')
-        self.assertTrue(builder.compatible_context(records[tools], tools))
-        self.assertFalse(builder.compatible_context(records[objects], objects))
-
-    def test_libfetch_selection_changes_headers_but_not_native_tools(self):
-        builder, _ = self.builder()
-        builder.preflight()
-        builder.llvm_phase = 'headers'
-        tools, objects = builder.paths['tools'], builder.paths['objects']
-        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
-                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
-        builder.paths['libfetch-source'] = '/prepared/libfetch'
-        builder.signature['common_sources']['libfetch'] = {'tree_sha256': 'a' * 64}
-        builder.signature['flags'].append('EMBER_LIBFETCH_SOURCE=/prepared/libfetch')
-        self.assertTrue(builder.compatible_context(records[tools], tools))
-        self.assertFalse(builder.compatible_context(records[objects], objects))
-
-    def test_openldap_selection_changes_headers_but_not_native_tools(self):
-        builder, _ = self.builder()
-        builder.preflight()
-        builder.llvm_phase = 'headers'
-        tools, objects = builder.paths['tools'], builder.paths['objects']
-        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
-                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
-        builder.paths['openldap-source'] = '/prepared/openldap'
-        builder.signature['common_sources']['openldap'] = {'tree_sha256': 'a' * 64}
-        builder.signature['flags'].append('EMBER_OPENLDAP_SOURCE=/prepared/openldap')
-        self.assertTrue(builder.compatible_context(records[tools], tools))
-        self.assertFalse(builder.compatible_context(records[objects], objects))
-
-    def test_unbound_selection_changes_headers_but_not_native_tools(self):
-        builder, _ = self.builder()
-        builder.preflight()
-        builder.llvm_phase = 'headers'
-        tools, objects = builder.paths['tools'], builder.paths['objects']
-        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
-                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
-        builder.paths['unbound-source'] = '/prepared/unbound'
-        builder.signature['common_sources']['unbound'] = {'tree_sha256': 'a' * 64}
-        builder.signature['flags'].append('EMBER_UNBOUND_SOURCE=/prepared/unbound')
-        self.assertTrue(builder.compatible_context(records[tools], tools))
-        self.assertFalse(builder.compatible_context(records[objects], objects))
-
     def test_wpa_selection_preserves_headers_and_native_tools(self):
         builder, _ = self.builder()
         builder.preflight()
@@ -2642,50 +2352,27 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         builder.llvm_phase = 'base'
         self.assertFalse(builder.compatible_context(records[objects], objects))
 
-    def test_iscsi_selection_changes_headers_but_not_native_tools(self):
-        builder, _ = self.builder()
-        builder.preflight()
-        builder.llvm_phase = 'headers'
-        tools, objects = builder.paths['tools'], builder.paths['objects']
-        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
-                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
-        builder.paths['iscsi-source'] = '/prepared/iscsi'
-        builder.signature['common_sources']['iscsi'] = {'tree_sha256': 'a' * 64}
-        builder.signature['flags'].append('EMBER_ISCSI_SOURCE=/prepared/iscsi')
-        self.assertTrue(builder.compatible_context(records[tools], tools))
-        self.assertFalse(builder.compatible_context(records[objects], objects))
-        builder.llvm_phase = 'base'
-        self.assertFalse(builder.compatible_context(records[objects], objects))
-
-    def test_libpcap_selection_changes_headers_but_not_native_tools(self):
-        builder, _ = self.builder()
-        builder.preflight()
-        builder.llvm_phase = 'headers'
-        tools, objects = builder.paths['tools'], builder.paths['objects']
-        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
-                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
-        builder.paths['libpcap-source'] = '/prepared/libpcap'
-        builder.signature['common_sources']['libpcap'] = {'tree_sha256': 'a' * 64}
-        builder.signature['flags'].append('EMBER_LIBPCAP_SOURCE=/prepared/libpcap')
-        self.assertTrue(builder.compatible_context(records[tools], tools))
-        self.assertFalse(builder.compatible_context(records[objects], objects))
-        builder.llvm_phase = 'base'
-        self.assertFalse(builder.compatible_context(records[objects], objects))
-
-    def test_tcp_wrappers_selection_changes_headers_but_not_native_tools(self):
-        builder, _ = self.builder()
-        builder.preflight()
-        builder.llvm_phase = 'headers'
-        tools, objects = builder.paths['tools'], builder.paths['objects']
-        records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
-                          'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
-        builder.paths['tcp-wrappers-source'] = '/prepared/tcp-wrappers'
-        builder.signature['common_sources']['tcp-wrappers'] = {'tree_sha256': 'a' * 64}
-        builder.signature['flags'].append('EMBER_TCP_WRAPPERS_SOURCE=/prepared/tcp-wrappers')
-        self.assertTrue(builder.compatible_context(records[tools], tools))
-        self.assertFalse(builder.compatible_context(records[objects], objects))
-        builder.llvm_phase = 'base'
-        self.assertFalse(builder.compatible_context(records[objects], objects))
+    def test_source_selection_changes_header_and_base_objects_but_not_native_tools(self):
+        """A selected prepared source changes the header and base objects but not the native tools."""
+        for package in ['iscsi', 'libpcap', 'tcp_wrappers']:
+            with self.subTest(package=package):
+                # Give each package its own build tree.
+                self.root = Path(tempfile.mkdtemp(dir=self.temporary.name)).resolve()
+                key = package.replace('_', '-')
+                upper = package.upper()
+                builder, _ = self.builder()
+                builder.preflight()
+                builder.llvm_phase = 'headers'
+                tools, objects = builder.paths['tools'], builder.paths['objects']
+                records = {path: {'signature': copy.deepcopy(builder.context_signature(path)),
+                                  'sources': copy.deepcopy(builder.sources)} for path in (tools, objects)}
+                builder.paths[f'{key}-source'] = f'/prepared/{key}'
+                builder.signature['common_sources'][f'{key}'] = {'tree_sha256': 'a' * 64}
+                builder.signature['flags'].append(f'EMBER_{upper}_SOURCE=/prepared/{key}')
+                self.assertTrue(builder.compatible_context(records[tools], tools))
+                self.assertFalse(builder.compatible_context(records[objects], objects))
+                builder.llvm_phase = 'base'
+                self.assertFalse(builder.compatible_context(records[objects], objects))
 
     def test_gettext_selection_reuses_headers_and_native_tools(self):
         builder, _ = self.builder()

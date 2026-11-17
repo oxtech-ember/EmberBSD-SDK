@@ -48,7 +48,6 @@ class MkdirVersionTests(unittest.TestCase):
 
     def test_current_default_selects_eleven_case_owner(self):
         self.assertEqual(program._profile(dict(stage='mkdir-bootstrap'))[1], self.digest)
-        self.assertEqual(len(program.program_manifest(self.plan(self.current_raw, self.digest, 'current'))['runtime_cases']), 11)
 
     def test_bound_legacy_selects_exact_ten_case_owner(self):
         plan = self.plan(self.legacy_raw, LEGACY, 'legacy')

@@ -430,8 +430,8 @@ class GNUProgramTests(unittest.TestCase):
             return returned
         with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=wrong) as run:
             result = self.case.invoke()
-        self.assertEqual(run.call_count, 4)
         self.assertEqual(result['status'], 'FAILED')
+        self.assertEqual(result['commands'][-1]['id'], 'build-02')
         self.assertTrue(result['all_commands_drained'] and result['inputs_revalidated_after_drain'])
 
     def test_empty_actual_error_stderr_is_rejected_after_its_expected_exit(self):

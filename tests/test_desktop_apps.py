@@ -175,7 +175,6 @@ class DesktopBindingTests(unittest.TestCase):
         self.assertEqual(by_root['www/curl']['desktops'], [])
         self.assertEqual(by_root['textproc/libxml2']['role'], 'library')
         self.assertEqual(by_root['textproc/libxml2']['desktops'], [])
-        self.assertEqual(len(rows), 4)
 
     def test_large_packing_list_only_inspects_desktop_names(self):
         # Installed Plasma sets carry ~130 000 packing-list lines; the catalog

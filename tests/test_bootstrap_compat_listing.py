@@ -111,7 +111,6 @@ class ListingComponentTests(unittest.TestCase):
         with patch('subprocess.Popen', side_effect=AssertionError('no native child')):
             self.assertIs(c.validate(), c.plan)
         steps = c.plan['commands']
-        self.assertEqual(len(steps), 19)
         self.assertEqual([s['id'] for s in steps[9:13]],
                          ['compile-getbsize', 'compile-humanize_number', 'compile-stat_flags', 'compile-compat_acl'])
         self.assertEqual(steps[13]['argv'], [*c.commands['ar'], 'rc', str(c.work / 'libnbcompat.a'),

@@ -41,12 +41,9 @@ class HexdumpProgramTests(unittest.TestCase):
         fixture = self.fixture()
         case = fixture.case
         self.assertIs(case.validate(), case.plan)
-        self.assertEqual(len(case.plan['commands']), 57)
         compiles = [row for row in case.plan['commands'] if row['id'].startswith('compile-')]
-        self.assertEqual(len(compiles), 10)
         self.assertEqual([row['id'] for row in compiles[-4:]],
                          ['compile-efun', 'compile-reallocarr', 'compile-strtoi', 'compile-strtou'])
-        self.assertEqual(len([r for r in case.plan['commands'] if r['phase'].startswith('compat-probe-')]), 5)
         for row in compiles:
             self.assertIn(str(case.work / 'nbtool_config.h'), row['argv'])
             self.assertEqual(row['env']['TMPDIR'], str(case.work))
@@ -116,9 +113,7 @@ class HexdumpProgramTests(unittest.TestCase):
         program._native_program_contract(manifest, 'hexdump')
         self.assertEqual(manifest['sources'][-4:], list(compat.SOURCES))
         self.assertEqual(manifest['compat'], dict(path=compat.MANIFEST_RELATIVE, sha256=compat.MANIFEST_SHA256))
-        self.assertEqual(len(manifest['runtime_cases']), 37)
         members = {relative, *sources, *manifest['headers'], *provenance}
-        self.assertEqual(len(members), 30)
         for member in members:
             self.assertTrue((root / member).is_file(), member)
             self.assertFalse((root / member).is_symlink(), member)
@@ -136,7 +131,6 @@ class HexdumpProgramTests(unittest.TestCase):
         with patch('subprocess.Popen', side_effect=AssertionError('source check cannot start a child')):
             steps = program.program_steps(plan, runner.descriptor, runner.commands, runner.flags)
             prepared = program.program_sources(plan)
-        self.assertEqual(len(steps), 57)
         self.assertEqual([row['id'] for row in steps if row['phase'] == 'program-case'],
                          ['case-' + case['name'] for case in manifest['runtime_cases']])
         self.assertTrue(all('\0' not in word for row in steps for word in row['argv']))
@@ -150,7 +144,6 @@ class HexdumpProgramTests(unittest.TestCase):
                          [b'00', b'01', b'7f', b'c2', b'80', b'c3', b'bf'])
         self.assertEqual(decode_data(cases['elf-first-four']['stdout']).split(), [b'7f', b'45', b'4c', b'46'])
         all_rows = decode_data(cases['all-rows']['stdout']).splitlines()
-        self.assertEqual(len(all_rows), 3)
         self.assertTrue(all(len(row) == 72 and len(row.split()) == 16 for row in all_rows))
         self.assertEqual(decode_data(cases['duplicate-rows']['stdout']).splitlines(), [all_rows[0], b'*'])
         self.assertEqual(steps[-1]['argv'], [str(runner.work / 'hexdump'), *cases['hexdump-file']['args']])

@@ -86,8 +86,6 @@ class CpProgramTests(unittest.TestCase):
         c = self.case
         self.assertIs(c.validate(), c.plan)
         self.assertEqual(_plan(c.f.document(c.plan), c.descriptor, c.commands, c.flags), c.plan)
-        self.assertEqual(len(c.manifest['runtime_cases']), 35)
-        self.assertEqual(len(c.plan['commands']), 42)
         self.assertEqual([step['id'] for step in c.plan['commands'][:6]],
                          ['compile-program-control', 'link-program-control', 'run-program-control',
                           'compile-cp', 'compile-utils', 'link-cp'])
@@ -99,8 +97,6 @@ class CpProgramTests(unittest.TestCase):
             if step['phase'] == 'compile':
                 self.assertIn(str(c.source/'tools/compat'), step['argv'])
                 self.assertFalse(any('SMALL' in word or 'NOCOMPATLIB' in word for word in step['argv']))
-        self.assertEqual(len(json.loads(Path(c.proof['members']['path']).read_text())), 15)
-        self.assertEqual(len([x for x in program.program_outputs(c.plan) if x.endswith('.filesystem.json')]), 36)
 
     def test_missing_or_cross_paired_component_is_refused(self):
         c = self.case

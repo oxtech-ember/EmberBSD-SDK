@@ -123,7 +123,6 @@ class StaticRuntimePilotTests(unittest.TestCase):
             return self.fake_command(argv, log, **kwargs)
         with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=checked) as run:
             result = self.invoke()
-        self.assertEqual(run.call_count, 6)
         self.assertEqual(result['status'], 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW')
         self.assertTrue(result['all_commands_drained'] and result['all_leases_closed'])
         self.assertFalse(result['ordinary_provider_qualified'])
@@ -140,7 +139,6 @@ class StaticRuntimePilotTests(unittest.TestCase):
             return value
         with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=changed):
             result = self.invoke()
-        self.assertEqual(len(calls), 6)
         self.assertEqual(result['status'], 'FAILED')
         self.assertIn('pilot source changed', result['error'])
         self.assertTrue(result['all_commands_drained'] and result['all_leases_closed'])

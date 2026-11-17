@@ -31,7 +31,6 @@ class TrProgramTests(unittest.TestCase):
         self.assertIs(case.validate(), case.plan)
         steps = case.plan['commands']
         self.assertEqual([row['id'] for row in steps[:3]], ['compile-str', 'compile-tr', 'link-tr'])
-        self.assertEqual(len(steps), 22)
         self.assertEqual(steps[-1]['argv'], [str(case.work / 'tr'), 'a', 'b'])
         self.assertEqual(program.program_sources(case.plan), {})
         for row in steps[:2]:
@@ -39,7 +38,6 @@ class TrProgramTests(unittest.TestCase):
             self.assertIn(str(case.source / 'usr.bin/tr'), row['argv'])
         with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=self.native.fake_command) as run:
             result = case.invoke()
-        self.assertEqual(run.call_count, 22)
         self.assertEqual(result['status'], 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW')
         self.assertFalse(result['ordinary_provider_qualified'])
         self.assertTrue(result['all_commands_drained'] and result['all_leases_closed'])

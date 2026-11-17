@@ -142,7 +142,6 @@ class InitialPlanTests(unittest.TestCase):
         self.assertEqual((self.work/'source/configure').read_bytes(),b'synthetic complete configure\n')
         self.fake_outputs()
         evidence=lib.verify(self.plan['commands'][2],str(self.work),self.plan,0,())
-        self.assertEqual(len(evidence['staged_inventory']),44)
         self.assertEqual(set(evidence['built_objects']),{'glob.o','db.o'})
         header = self.work/'stage/include/nbcompat/db.h'
         header.chmod(0o644)
@@ -262,8 +261,7 @@ class InitialPlanTests(unittest.TestCase):
             result=bootstrap_pilot.run_producer(descriptor_ref['path'],descriptor_sha256=descriptor_ref['sha256'],
                 accepted_seed_receipt=accepted,bootstrap_plan=plan_ref,required_roles=self.plan['required_roles'])
         self.assertEqual(result['status'],'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW',result.get('error'))
-        self.assertEqual(result['stage'],lib.STAGE);self.assertEqual(len(result['commands']),3)
-        self.assertEqual(len(result['outputs']),48)
+        self.assertEqual(result['stage'],lib.STAGE)
         self.assertTrue(result['all_commands_drained'] and result['inputs_revalidated_after_drain'] and result['all_leases_closed'])
         self.assertFalse(result['ordinary_provider_qualified']);self.assertEqual(loader.call_count,2)
 

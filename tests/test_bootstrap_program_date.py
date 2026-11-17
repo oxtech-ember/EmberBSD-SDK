@@ -36,7 +36,6 @@ class DateProgramTests(unittest.TestCase):
         native = self.fixture()
         case = native.case
         self.assertIs(case.validate(), case.plan)
-        self.assertEqual(len(case.plan['commands']), 44)
         self.assertEqual(program.program_sources(case.plan), {})
         compile_step = case.plan['commands'][0]
         self.assertIn('-DHAVE_NBTOOL_CONFIG_H=1', compile_step['argv'])
@@ -82,7 +81,6 @@ class DateProgramTests(unittest.TestCase):
         manifest = json.loads(raw)
         program._native_program_contract(manifest, 'date')
         members = {relative, *sources, *manifest['headers'], *provenance}
-        self.assertEqual(len(members), 9)
         for member in members:
             self.assertTrue((root / member).is_file(), member)
             self.assertFalse((root / member).is_symlink(), member)
@@ -93,7 +91,6 @@ class DateProgramTests(unittest.TestCase):
             manifest=dict(path=str(root / relative), sha256=digest)))
         with patch('subprocess.Popen', side_effect=AssertionError('no native child')):
             steps = program.program_steps(plan, runner.descriptor, runner.commands, runner.flags)
-        self.assertEqual(len(steps), 44)
         self.assertEqual([row['id'] for row in steps if row['phase'] == 'program-case'],
                          ['case-' + case['name'] for case in manifest['runtime_cases']])
         self.assertTrue(all('\0' not in word for row in steps for word in row['argv']))

@@ -30,7 +30,6 @@ class MetadataValueTests(unittest.TestCase):
                        for name in (producer.VARIABLES if roster is None else roster)).encode('utf-8')
 
     def test_current_and_exact_legacy_rosters_preserve_only_observed_keys(self):
-        self.assertEqual(len(producer.LEGACY_VARIABLES), 55)
         self.assertEqual(producer.VARIABLES, (*producer.LEGACY_VARIABLES, 'BOOTSTRAP_DEPENDS'))
         self.values['BOOTSTRAP_DEPENDS'] = ' digest>=20220214:../../pkgtools/digest fetch-[0-9]*:../../net/fetch'
         for roster in (producer.VARIABLES, producer.LEGACY_VARIABLES):

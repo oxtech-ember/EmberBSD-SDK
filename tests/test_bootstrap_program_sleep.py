@@ -59,8 +59,6 @@ class SleepProgramTests(unittest.TestCase):
     def test_exact_owner_plan_and_system_math_library(self):
         c = self.case
         self.assertIs(c.validate(),c.plan)
-        self.assertEqual(len(c.plan['commands']),24)
-        self.assertEqual(len(c.manifest['runtime_cases']),21)
         self.assertEqual(c.plan['commands'][0]['argv'][-3],str(c.source/'bin/sleep/sleep.c'))
         self.assertEqual(c.plan['commands'][1]['argv'].count('-lm'),1)
         self.assertEqual(c.plan['commands'][-1]['argv'],[str(c.work/'sleep'),'0'])

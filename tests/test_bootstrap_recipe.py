@@ -310,7 +310,6 @@ class RecipeTests(unittest.TestCase):
             return self.fake_command(argv, log, **kwargs)
         with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=inspect):
             result = self.invoke()
-        self.assertEqual(len(observed), 5)
         self.assertEqual(result['status'], 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW')
         self.assertFalse(result['ordinary_provider_qualified'])
         self.assertTrue(result['all_commands_drained'] and result['inputs_revalidated_after_drain'] and

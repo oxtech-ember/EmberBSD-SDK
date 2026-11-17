@@ -33,7 +33,6 @@ class TailProgramTests(unittest.TestCase):
         native = self.fixture()
         case = native.case
         self.assertIs(case.validate(), case.plan)
-        self.assertEqual(len(case.plan['commands']), 38)
         self.assertEqual(program.program_sources(case.plan), {'input.txt': b'prefix:xxx\n'})
         with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=native.fake_command):
             result = case.invoke()

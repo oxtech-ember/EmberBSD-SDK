@@ -83,6 +83,25 @@ def _match_clang_resource_binding(old, new):
         return
 
 
+# Each row is a prepared source that one OS producer reports in one make
+# variable. The fields are the name, the producer directory, the make
+# variable and the host tool set (None, 'gnu' or 'waf').
+PREPARED_SOURCE_PRODUCERS = (
+    ('rcs', 'external/gpl2/rcs/gnu', 'GNU_SOURCE', 'gnu'),
+    ('diffutils', 'external/gpl2/diffutils/gnu', 'GNU_SOURCE', 'gnu'),
+    ('tdb', 'external/bsd/tdb/lib', 'WAF_SOURCE', 'waf'),
+    ('grep', 'external/gpl2/grep/bin', 'GNU_SOURCE', 'gnu'),
+    ('ekermit', 'external/bsd/ekermit/bin/ekermit', 'EKERMITDIST', None),
+    ('nvi', 'external/bsd/nvi/usr.bin/nvi', 'DIST', None),
+    ('top', 'external/bsd/top/bin', 'TOPDIR', None),
+    ('iscsi', 'external/bsd/iscsi/lib', 'ISCSIDIST', None),
+    ('libpcap', 'external/bsd/libpcap/lib', 'SRCDIR', None),
+    ('tcpdump', 'external/bsd/tcpdump/bin', 'SRCDIR', None),
+    ('tcp_wrappers', 'lib/libwrap', 'TCPWRAPPERS_SRCDIR', None),
+    ('ppp', 'external/bsd/ppp/usr.sbin/pppd', 'DIST', None),
+)
+
+
 class BuildInterrupted(KeyboardInterrupt):
     pass
 
@@ -1277,6 +1296,33 @@ class SysrootBuilder:
             module_hashes[module.name] = digest
         return dict(path=python, sha256=inventory.sha256_file(self.executable(python)), version=result['version'], api_version=API_VERSION, modules=module_hashes)
 
+    def require_prepared_source_support(self, name, directory, variable, tools):
+        """Require that the selected OS producer uses the selected prepared source."""
+        key = name.replace('_', '-') + '-source'
+        if key not in self.paths:
+            return
+        root = self.paths['os']
+        env = dict(self.environment)
+        env.pop('EMBER_NATIVE_TOOLS', None)
+        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
+                   '-C', os.path.join(root, directory), 'MAKECONF=/dev/null', '_SRC_TOP_=',
+                   'NETBSDSRCDIR=' + root, 'MACHINE=' + self.target['machine'],
+                   'MACHINE_ARCH=' + self.target['arch'], 'USETOOLS=yes',
+                   'TOOLDIR=' + self.paths['tools'],
+                   f'EMBER_{name.upper()}_SOURCE=' + self.paths[key]]
+        if tools == 'gnu':
+            command += ['HOST_GMAKE=' + self.native.tool('gmake'), 'HOST_SH=' + self.native.tool('sh'),
+                        'EMBER_HOST_GNU_TRIPLE=' + self.native.compiler['triplet']]
+        elif tools == 'waf':
+            command += ['HOST_PYTHON=' + self.native.tool('python'), 'HOST_SH=' + self.native.tool('sh')]
+        command += ['-V', '${' + variable + '}']
+        try:
+            selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
+        except (SDKError, UnicodeError) as exc:
+            raise SDKError(f'selected OS cannot resolve the {name} producer') from exc
+        if selected != self.paths[key]:
+            raise SDKError(f'selected OS does not support EMBER_{name.upper()}_SOURCE')
+
     def require_byacc_source_support(self):
         if 'byacc-source' not in self.paths:
             return
@@ -1333,96 +1379,6 @@ class SysrootBuilder:
                 any(path not in output[4] for path in ('tools/gnulib/lib', 'tools/info'))):
             raise SDKError('selected OS does not support EMBER_TEXINFO_SOURCE in C-only mode')
 
-    def require_rcs_source_support(self):
-        if 'rcs-source' not in self.paths:
-            return
-        root = self.paths['os']
-        env = dict(self.environment)
-        env.pop('EMBER_NATIVE_TOOLS', None)
-        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
-                   '-C', os.path.join(root, 'external/gpl2/rcs/gnu'), 'MAKECONF=/dev/null', '_SRC_TOP_=',
-                   'NETBSDSRCDIR=' + root, 'MACHINE=' + self.target['machine'],
-                   'MACHINE_ARCH=' + self.target['arch'], 'USETOOLS=yes',
-                   'TOOLDIR=' + self.paths['tools'],
-                   'EMBER_RCS_SOURCE=' + self.paths['rcs-source'],
-                   'HOST_GMAKE=' + self.native.tool('gmake'),
-                   'HOST_SH=' + self.native.tool('sh'),
-                   'EMBER_HOST_GNU_TRIPLE=' + self.native.compiler['triplet'],
-                   '-V', '${GNU_SOURCE}']
-        try:
-            selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
-        except (SDKError, UnicodeError) as exc:
-            raise SDKError('selected OS cannot resolve the RCS producer') from exc
-        if selected != self.paths['rcs-source']:
-            raise SDKError('selected OS does not support EMBER_RCS_SOURCE')
-
-    def require_diffutils_source_support(self):
-        if 'diffutils-source' not in self.paths:
-            return
-        root = self.paths['os']
-        env = dict(self.environment)
-        env.pop('EMBER_NATIVE_TOOLS', None)
-        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
-                   '-C', os.path.join(root, 'external/gpl2/diffutils/gnu'), 'MAKECONF=/dev/null', '_SRC_TOP_=',
-                   'NETBSDSRCDIR=' + root, 'MACHINE=' + self.target['machine'],
-                   'MACHINE_ARCH=' + self.target['arch'], 'USETOOLS=yes',
-                   'TOOLDIR=' + self.paths['tools'],
-                   'EMBER_DIFFUTILS_SOURCE=' + self.paths['diffutils-source'],
-                   'HOST_GMAKE=' + self.native.tool('gmake'),
-                   'HOST_SH=' + self.native.tool('sh'),
-                   'EMBER_HOST_GNU_TRIPLE=' + self.native.compiler['triplet'],
-                   '-V', '${GNU_SOURCE}']
-        try:
-            selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
-        except (SDKError, UnicodeError) as exc:
-            raise SDKError('selected OS cannot resolve the DIFFUTILS producer') from exc
-        if selected != self.paths['diffutils-source']:
-            raise SDKError('selected OS does not support EMBER_DIFFUTILS_SOURCE')
-
-    def require_tdb_source_support(self):
-        if 'tdb-source' not in self.paths:
-            return
-        root = self.paths['os']
-        env = dict(self.environment)
-        env.pop('EMBER_NATIVE_TOOLS', None)
-        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
-                   '-C', os.path.join(root, 'external/bsd/tdb/lib'), 'MAKECONF=/dev/null', '_SRC_TOP_=',
-                   'NETBSDSRCDIR=' + root, 'MACHINE=' + self.target['machine'],
-                   'MACHINE_ARCH=' + self.target['arch'], 'USETOOLS=yes',
-                   'TOOLDIR=' + self.paths['tools'],
-                   'EMBER_TDB_SOURCE=' + self.paths['tdb-source'],
-                   'HOST_PYTHON=' + self.native.tool('python'),
-                   'HOST_SH=' + self.native.tool('sh'), '-V', '${WAF_SOURCE}']
-        try:
-            selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
-        except (SDKError, UnicodeError) as exc:
-            raise SDKError('selected OS cannot resolve the TDB producer') from exc
-        if selected != self.paths['tdb-source']:
-            raise SDKError('selected OS does not support EMBER_TDB_SOURCE')
-
-    def require_grep_source_support(self):
-        if 'grep-source' not in self.paths:
-            return
-        root = self.paths['os']
-        env = dict(self.environment)
-        env.pop('EMBER_NATIVE_TOOLS', None)
-        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
-                   '-C', os.path.join(root, 'external/gpl2/grep/bin'), 'MAKECONF=/dev/null', '_SRC_TOP_=',
-                   'NETBSDSRCDIR=' + root, 'MACHINE=' + self.target['machine'],
-                   'MACHINE_ARCH=' + self.target['arch'], 'USETOOLS=yes',
-                   'TOOLDIR=' + self.paths['tools'],
-                   'EMBER_GREP_SOURCE=' + self.paths['grep-source'],
-                   'HOST_GMAKE=' + self.native.tool('gmake'),
-                   'HOST_SH=' + self.native.tool('sh'),
-                   'EMBER_HOST_GNU_TRIPLE=' + self.native.compiler['triplet'],
-                   '-V', '${GNU_SOURCE}']
-        try:
-            selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
-        except (SDKError, UnicodeError) as exc:
-            raise SDKError('selected OS cannot resolve the GREP producer') from exc
-        if selected != self.paths['grep-source']:
-            raise SDKError('selected OS does not support EMBER_GREP_SOURCE')
-
     def require_gettext_source_support(self):
         if 'gettext-source' not in self.paths:
             return
@@ -1463,82 +1419,6 @@ class SysrootBuilder:
                 'PKG_CONFIG=' + self.native.tool('pkg-config') not in output[1]):
             raise SDKError('selected OS does not support the common gettext, libxml2, and tree-sitter producers')
 
-    def require_ekermit_source_support(self):
-        if 'ekermit-source' not in self.paths:
-            return
-        root = self.paths['os']
-        env = dict(self.environment)
-        env.pop('EMBER_NATIVE_TOOLS', None)
-        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
-                   '-C', os.path.join(root, 'external/bsd/ekermit/bin/ekermit'),
-                   'MAKECONF=/dev/null', '_SRC_TOP_=', 'NETBSDSRCDIR=' + root,
-                   'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
-                   'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
-                   'EMBER_EKERMIT_SOURCE=' + self.paths['ekermit-source'], '-V', '${EKERMITDIST}']
-        try:
-            selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
-        except (SDKError, UnicodeError) as exc:
-            raise SDKError('selected OS cannot resolve the E-Kermit producer') from exc
-        if selected != self.paths['ekermit-source']:
-            raise SDKError('selected OS does not support EMBER_EKERMIT_SOURCE')
-
-    def require_nvi_source_support(self):
-        if 'nvi-source' not in self.paths:
-            return
-        root = self.paths['os']
-        env = dict(self.environment)
-        env.pop('EMBER_NATIVE_TOOLS', None)
-        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
-                   '-C', os.path.join(root, 'external/bsd/nvi/usr.bin/nvi'),
-                   'MAKECONF=/dev/null', '_SRC_TOP_=', 'NETBSDSRCDIR=' + root,
-                   'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
-                   'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
-                   'EMBER_NVI_SOURCE=' + self.paths['nvi-source'], '-V', '${DIST}']
-        try:
-            selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
-        except (SDKError, UnicodeError) as exc:
-            raise SDKError('selected OS cannot resolve the nvi producer') from exc
-        if selected != self.paths['nvi-source']:
-            raise SDKError('selected OS does not support EMBER_NVI_SOURCE')
-
-    def require_top_source_support(self):
-        if 'top-source' not in self.paths:
-            return
-        root = self.paths['os']
-        env = dict(self.environment)
-        env.pop('EMBER_NATIVE_TOOLS', None)
-        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
-                   '-C', os.path.join(root, 'external/bsd/top/bin'),
-                   'MAKECONF=/dev/null', '_SRC_TOP_=', 'NETBSDSRCDIR=' + root,
-                   'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
-                   'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
-                   'EMBER_TOP_SOURCE=' + self.paths['top-source'], '-V', '${TOPDIR}']
-        try:
-            selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
-        except (SDKError, UnicodeError) as exc:
-            raise SDKError('selected OS cannot resolve the top producer') from exc
-        if selected != self.paths['top-source']:
-            raise SDKError('selected OS does not support EMBER_TOP_SOURCE')
-
-    def require_iscsi_source_support(self):
-        if 'iscsi-source' not in self.paths:
-            return
-        root = self.paths['os']
-        env = dict(self.environment)
-        env.pop('EMBER_NATIVE_TOOLS', None)
-        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
-                   '-C', os.path.join(root, 'external/bsd/iscsi/lib'),
-                   'MAKECONF=/dev/null', '_SRC_TOP_=', 'NETBSDSRCDIR=' + root,
-                   'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
-                   'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
-                   'EMBER_ISCSI_SOURCE=' + self.paths['iscsi-source'], '-V', '${ISCSIDIST}']
-        try:
-            selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
-        except (SDKError, UnicodeError) as exc:
-            raise SDKError('selected OS cannot resolve the iSCSI producer') from exc
-        if selected != self.paths['iscsi-source']:
-            raise SDKError('selected OS does not support EMBER_ISCSI_SOURCE')
-
     def require_ntp_source_support(self):
         selected = ('ntp-source' in self.paths, 'libopts-source' in self.paths)
         if selected == (False, False):
@@ -1562,82 +1442,6 @@ class SysrootBuilder:
             raise SDKError('selected OS cannot resolve the NTP producer') from exc
         if found != [self.paths['ntp-source'], self.paths['libopts-source']]:
             raise SDKError('selected OS does not support common NTP and libopts sources')
-
-    def require_libpcap_source_support(self):
-        if 'libpcap-source' not in self.paths:
-            return
-        root = self.paths['os']
-        env = dict(self.environment)
-        env.pop('EMBER_NATIVE_TOOLS', None)
-        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
-                   '-C', os.path.join(root, 'external/bsd/libpcap/lib'),
-                   'MAKECONF=/dev/null', '_SRC_TOP_=', 'NETBSDSRCDIR=' + root,
-                   'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
-                   'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
-                   'EMBER_LIBPCAP_SOURCE=' + self.paths['libpcap-source'], '-V', '${SRCDIR}']
-        try:
-            selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
-        except (SDKError, UnicodeError) as exc:
-            raise SDKError('selected OS cannot resolve the libpcap producer') from exc
-        if selected != self.paths['libpcap-source']:
-            raise SDKError('selected OS does not support EMBER_LIBPCAP_SOURCE')
-
-    def require_tcpdump_source_support(self):
-        if 'tcpdump-source' not in self.paths:
-            return
-        root = self.paths['os']
-        env = dict(self.environment)
-        env.pop('EMBER_NATIVE_TOOLS', None)
-        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
-                   '-C', os.path.join(root, 'external/bsd/tcpdump/bin'),
-                   'MAKECONF=/dev/null', '_SRC_TOP_=', 'NETBSDSRCDIR=' + root,
-                   'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
-                   'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
-                   'EMBER_TCPDUMP_SOURCE=' + self.paths['tcpdump-source'], '-V', '${SRCDIR}']
-        try:
-            selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
-        except (SDKError, UnicodeError) as exc:
-            raise SDKError('selected OS cannot resolve the tcpdump producer') from exc
-        if selected != self.paths['tcpdump-source']:
-            raise SDKError('selected OS does not support EMBER_TCPDUMP_SOURCE')
-
-    def require_tcp_wrappers_source_support(self):
-        if 'tcp-wrappers-source' not in self.paths:
-            return
-        root = self.paths['os']
-        env = dict(self.environment)
-        env.pop('EMBER_NATIVE_TOOLS', None)
-        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
-                   '-C', os.path.join(root, 'lib/libwrap'),
-                   'MAKECONF=/dev/null', '_SRC_TOP_=', 'NETBSDSRCDIR=' + root,
-                   'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
-                   'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
-                   'EMBER_TCP_WRAPPERS_SOURCE=' + self.paths['tcp-wrappers-source'], '-V', '${TCPWRAPPERS_SRCDIR}']
-        try:
-            selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
-        except (SDKError, UnicodeError) as exc:
-            raise SDKError('selected OS cannot resolve the TCP wrappers producer') from exc
-        if selected != self.paths['tcp-wrappers-source']:
-            raise SDKError('selected OS does not support EMBER_TCP_WRAPPERS_SOURCE')
-
-    def require_ppp_source_support(self):
-        if 'ppp-source' not in self.paths:
-            return
-        root = self.paths['os']
-        env = dict(self.environment)
-        env.pop('EMBER_NATIVE_TOOLS', None)
-        command = [self.native.tool('make'), '-r', '-m', os.path.join(root, 'share/mk'),
-                   '-C', os.path.join(root, 'external/bsd/ppp/usr.sbin/pppd'),
-                   'MAKECONF=/dev/null', '_SRC_TOP_=', 'NETBSDSRCDIR=' + root,
-                   'MACHINE=' + self.target['machine'], 'MACHINE_ARCH=' + self.target['arch'],
-                   'USETOOLS=yes', 'TOOLDIR=' + self.paths['tools'],
-                   'EMBER_PPP_SOURCE=' + self.paths['ppp-source'], '-V', '${DIST}']
-        try:
-            selected = process.capture(command, env=env).stdout.decode('utf-8').strip()
-        except (SDKError, UnicodeError) as exc:
-            raise SDKError('selected OS cannot resolve the ppp producer') from exc
-        if selected != self.paths['ppp-source']:
-            raise SDKError('selected OS does not support EMBER_PPP_SOURCE')
 
     @classmethod
     def prepared_source_profile(cls, options):
@@ -1793,20 +1597,10 @@ class SysrootBuilder:
         self.sources = {name: self.source(self.paths[name], name) for name in ('os', 'ports')}
         self.require_byacc_source_support()
         self.require_texinfo_source_support()
-        self.require_rcs_source_support()
-        self.require_diffutils_source_support()
-        self.require_grep_source_support()
-        self.require_tdb_source_support()
-        self.require_ekermit_source_support()
-        self.require_nvi_source_support()
-        self.require_top_source_support()
-        self.require_iscsi_source_support()
         self.require_ntp_source_support()
-        self.require_libpcap_source_support()
-        self.require_tcpdump_source_support()
-        self.require_tcp_wrappers_source_support()
-        self.require_ppp_source_support()
         self.require_gettext_source_support()
+        for producer in PREPARED_SOURCE_PRODUCERS:
+            self.require_prepared_source_support(*producer)
         self.sources['sdk'] = self.source(self.paths['sdk-source'], 'sdk')
         self.libedit_record = libedit.validate_source(self.paths['libedit-source'], ports_source=self.sources['ports'], content=False)
         self.common_source_records = (self.verify_common_sources()

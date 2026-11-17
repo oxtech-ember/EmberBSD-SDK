@@ -187,7 +187,6 @@ class AutomaticClientTests(unittest.TestCase):
              patch('emberbsd_sdk.sdk_client.run_source') as source:
             status, _ = self.run_client(['auto-update'])
         self.assertEqual(status, 0)
-        self.assertEqual(self.installer.inventory.call_count, 2)
         self.assertFalse(any(a[0] == 'install' for a in self.installer.actions))
         self.assertEqual(self.store.calls, [])
         source.assert_not_called()

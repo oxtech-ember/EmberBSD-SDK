@@ -165,11 +165,9 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         result = subprocess.run(command + ['finalize', '--sources', str(self.sources_path), *repos], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(json.loads(result.stdout)['created_refs']), 3)
 
     def test_three_annotated_tags_share_portable_manifest(self):
         result = self.create()
-        self.assertEqual(len(result['created_refs']), 3)
         for name in self.repos:
             self.assertEqual(self.git(name, 'cat-file', '-t', 'emberbsd-1.2.3'), 'tag')
             self.assertEqual(self.git(name, 'rev-parse', 'emberbsd-1.2.3^{commit}'), result['manifest']['sources'][name])

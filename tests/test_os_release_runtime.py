@@ -19,71 +19,49 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
         self.assertNotIn('identity', result['common_sources']['gettext'])
         self.assertEqual(result['flags'], [])
 
-    def test_optional_rcs_source_reaches_release_and_set_checks(self):
-        paths = {name: '/sdk/' + name for name in (
-            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
-            'libedit-source', 'rcs-source', 'objects', 'tools', 'destination', 'os')}
-        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
-                     'bundle_root': '/host',
-                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++', 'gmake': '/host/gmake'},
-                     'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
-                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
-        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
-                            '/host/sh', compiler_family='clang', base_cxx=True,
-                            install_base_cxx=True, native_selection=selection)
-        for flag in ('EMBER_RCS_SOURCE=/sdk/rcs-source', 'HOST_GMAKE=/host/gmake',
-                     'EMBER_HOST_GNU_TRIPLE=aarch64-apple-darwin27.0.0'):
-            self.assertIn(flag, flags)
-            for command in commands:
-                self.assertIn(flag, command)
+    def test_optional_gnu_sources_reach_release_and_set_checks(self):
+        """Each optional GNU prepared source reaches the release flags and each producer command."""
+        for package in ['rcs', 'diffutils', 'grep']:
+            with self.subTest(package=package):
+                key = package.replace('_', '-')
+                upper = package.upper()
+                paths = {name: '/sdk/' + name for name in (
+                    'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
+                    'libedit-source', f'{key}-source', 'objects', 'tools', 'destination', 'os')}
+                selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                             'bundle_root': '/host',
+                             'tools': {'cc': '/host/clang', 'cxx': '/host/clang++', 'gmake': '/host/gmake'},
+                             'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
+                             'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
+                flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
+                                    '/host/sh', compiler_family='clang', base_cxx=True,
+                                    install_base_cxx=True, native_selection=selection)
+                for flag in (f'EMBER_{upper}_SOURCE=/sdk/{key}-source', 'HOST_GMAKE=/host/gmake',
+                             'EMBER_HOST_GNU_TRIPLE=aarch64-apple-darwin27.0.0'):
+                    self.assertIn(flag, flags)
+                    for command in commands:
+                        self.assertIn(flag, command)
 
-    def test_optional_ekermit_source_reaches_release_and_set_checks(self):
-        paths = {name: '/sdk/' + name for name in (
-            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
-            'libedit-source', 'ekermit-source', 'objects', 'tools', 'destination', 'os')}
-        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
-                     'bundle_root': '/host',
-                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
-                     'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
-                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
-        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
-                            '/host/sh', compiler_family='clang', base_cxx=True,
-                            install_base_cxx=True, native_selection=selection)
-        self.assertIn('EMBER_EKERMIT_SOURCE=/sdk/ekermit-source', flags)
-        for command in commands:
-            self.assertIn('EMBER_EKERMIT_SOURCE=/sdk/ekermit-source', command)
-
-    def test_optional_nvi_source_reaches_release_and_set_checks(self):
-        paths = {name: '/sdk/' + name for name in (
-            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
-            'libedit-source', 'nvi-source', 'objects', 'tools', 'destination', 'os')}
-        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
-                     'bundle_root': '/host',
-                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
-                     'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
-                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
-        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
-                            '/host/sh', compiler_family='clang', base_cxx=True,
-                            install_base_cxx=True, native_selection=selection)
-        self.assertIn('EMBER_NVI_SOURCE=/sdk/nvi-source', flags)
-        for command in commands:
-            self.assertIn('EMBER_NVI_SOURCE=/sdk/nvi-source', command)
-
-    def test_optional_top_source_reaches_release_and_set_checks(self):
-        paths = {name: '/sdk/' + name for name in (
-            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
-            'libedit-source', 'top-source', 'objects', 'tools', 'destination', 'os')}
-        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
-                     'bundle_root': '/host',
-                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
-                     'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
-                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
-        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
-                            '/host/sh', compiler_family='clang', base_cxx=True,
-                            install_base_cxx=True, native_selection=selection)
-        self.assertIn('EMBER_TOP_SOURCE=/sdk/top-source', flags)
-        for command in commands:
-            self.assertIn('EMBER_TOP_SOURCE=/sdk/top-source', command)
+    def test_optional_sources_reach_release_and_set_checks(self):
+        """Each optional prepared source reaches the release flags and each producer command."""
+        for package in ['ekermit', 'nvi', 'top', 'libpcap', 'tcpdump', 'tcp_wrappers', 'ppp']:
+            with self.subTest(package=package):
+                key = package.replace('_', '-')
+                upper = package.upper()
+                paths = {name: '/sdk/' + name for name in (
+                    'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
+                    'libedit-source', f'{key}-source', 'objects', 'tools', 'destination', 'os')}
+                selection = {'format': 'emberbsd-host-prefix', 'version': 2,
+                             'bundle_root': '/host',
+                             'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
+                             'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
+                             'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
+                flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
+                                    '/host/sh', compiler_family='clang', base_cxx=True,
+                                    install_base_cxx=True, native_selection=selection)
+                self.assertIn(f'EMBER_{upper}_SOURCE=/sdk/{key}-source', flags)
+                for command in commands:
+                    self.assertIn(f'EMBER_{upper}_SOURCE=/sdk/{key}-source', command)
 
     def test_ntp_sources_reach_release_and_set_checks(self):
         paths = {name: '/sdk/' + name for name in (
@@ -101,88 +79,6 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
         for command in commands:
             self.assertIn('EMBER_ISCSI_SOURCE=/sdk/iscsi-source', command)
         for flag in ('EMBER_NTP_SOURCE=/sdk/ntp-source', 'EMBER_LIBOPTS_SOURCE=/sdk/libopts-source'):
-            self.assertIn(flag, flags)
-            for command in commands:
-                self.assertIn(flag, command)
-
-    def test_optional_libpcap_source_reaches_release_and_set_checks(self):
-        paths = {name: '/sdk/' + name for name in (
-            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
-            'libedit-source', 'libpcap-source', 'objects', 'tools', 'destination', 'os')}
-        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
-                     'bundle_root': '/host',
-                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
-                     'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
-                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
-        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
-                            '/host/sh', compiler_family='clang', base_cxx=True,
-                            install_base_cxx=True, native_selection=selection)
-        self.assertIn('EMBER_LIBPCAP_SOURCE=/sdk/libpcap-source', flags)
-        for command in commands:
-            self.assertIn('EMBER_LIBPCAP_SOURCE=/sdk/libpcap-source', command)
-
-    def test_optional_tcpdump_source_reaches_release_and_set_checks(self):
-        paths = {name: '/sdk/' + name for name in (
-            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
-            'libedit-source', 'tcpdump-source', 'objects', 'tools', 'destination', 'os')}
-        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
-                     'bundle_root': '/host',
-                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
-                     'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
-                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
-        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
-                            '/host/sh', compiler_family='clang', base_cxx=True,
-                            install_base_cxx=True, native_selection=selection)
-        self.assertIn('EMBER_TCPDUMP_SOURCE=/sdk/tcpdump-source', flags)
-        for command in commands:
-            self.assertIn('EMBER_TCPDUMP_SOURCE=/sdk/tcpdump-source', command)
-
-    def test_optional_tcp_wrappers_source_reaches_release_and_set_checks(self):
-        paths = {name: '/sdk/' + name for name in (
-            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
-            'libedit-source', 'tcp-wrappers-source', 'objects', 'tools', 'destination', 'os')}
-        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
-                     'bundle_root': '/host',
-                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
-                     'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
-                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
-        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
-                            '/host/sh', compiler_family='clang', base_cxx=True,
-                            install_base_cxx=True, native_selection=selection)
-        self.assertIn('EMBER_TCP_WRAPPERS_SOURCE=/sdk/tcp-wrappers-source', flags)
-        for command in commands:
-            self.assertIn('EMBER_TCP_WRAPPERS_SOURCE=/sdk/tcp-wrappers-source', command)
-
-    def test_optional_ppp_source_reaches_release_and_set_checks(self):
-        paths = {name: '/sdk/' + name for name in (
-            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
-            'libedit-source', 'ppp-source', 'objects', 'tools', 'destination', 'os')}
-        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
-                     'bundle_root': '/host',
-                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++'},
-                     'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
-                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
-        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
-                            '/host/sh', compiler_family='clang', base_cxx=True,
-                            install_base_cxx=True, native_selection=selection)
-        self.assertIn('EMBER_PPP_SOURCE=/sdk/ppp-source', flags)
-        for command in commands:
-            self.assertIn('EMBER_PPP_SOURCE=/sdk/ppp-source', command)
-
-    def test_optional_diffutils_source_reaches_release_and_set_checks(self):
-        paths = {name: '/sdk/' + name for name in (
-            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
-            'libedit-source', 'diffutils-source', 'objects', 'tools', 'destination', 'os')}
-        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
-                     'bundle_root': '/host',
-                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++', 'gmake': '/host/gmake'},
-                     'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
-                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
-        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
-                            '/host/sh', compiler_family='clang', base_cxx=True,
-                            install_base_cxx=True, native_selection=selection)
-        for flag in ('EMBER_DIFFUTILS_SOURCE=/sdk/diffutils-source', 'HOST_GMAKE=/host/gmake',
-                     'EMBER_HOST_GNU_TRIPLE=aarch64-apple-darwin27.0.0'):
             self.assertIn(flag, flags)
             for command in commands:
                 self.assertIn(flag, command)
@@ -342,24 +238,6 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             for command in commands:
                 if command[0] != paths['python']:
                     self.assertIn(flag, command)
-
-    def test_optional_grep_source_reaches_release_and_set_checks(self):
-        paths = {name: '/sdk/' + name for name in (
-            'compiler', 'runtime-prefix', 'llvm-source', 'llvm-unwind', 'llvm-resource',
-            'libedit-source', 'grep-source', 'objects', 'tools', 'destination', 'os')}
-        selection = {'format': 'emberbsd-host-prefix', 'version': 2,
-                     'bundle_root': '/host',
-                     'tools': {'cc': '/host/clang', 'cxx': '/host/clang++', 'gmake': '/host/gmake'},
-                     'compiler': {'family': 'clang', 'triplet': 'aarch64-apple-darwin27.0.0'},
-                     'abi_flags': {name: [] for name in ('cppflags', 'cflags', 'cxxflags', 'ldflags')}}
-        flags, commands = producer_commands('aarch64', paths, {}, 'a' * 40, 1, '2',
-                            '/host/sh', compiler_family='clang', base_cxx=True,
-                            install_base_cxx=True, native_selection=selection)
-        for flag in ('EMBER_GREP_SOURCE=/sdk/grep-source', 'HOST_GMAKE=/host/gmake',
-                     'EMBER_HOST_GNU_TRIPLE=aarch64-apple-darwin27.0.0'):
-            self.assertIn(flag, flags)
-            for command in commands:
-                self.assertIn(flag, command)
 
     def test_optional_texinfo_source_reaches_release_commands(self):
         paths = {name: '/sdk/' + name for name in (

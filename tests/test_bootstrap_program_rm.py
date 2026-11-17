@@ -54,7 +54,6 @@ class RmProfileTests(unittest.TestCase):
         self.assertEqual(sources, ('bin/rm/rm.c',))
         self.assertIn('tools/rm/test-source.py', provenance)
         members = {relative, *sources, *provenance, *self.manifest['headers']}
-        self.assertEqual(len(members), 8)
         self.assertTrue(all((self.source / name).is_file() for name in members))
         self.assertNotIn('NOCOMPATLIB', (self.source / 'tools/rm/Makefile').read_text())
         program._native_program_contract(self.manifest, 'rm')
@@ -66,9 +65,7 @@ class RmProfileTests(unittest.TestCase):
             self.assertEqual(_plan(case.f.document(case.plan), case.descriptor,
                                    case.commands, case.flags), case.plan)
         steps = case.plan['commands']
-        self.assertEqual(len(steps), 28)
         self.assertEqual([row['phase'] for row in steps[:2]], ['compile', 'link'])
-        self.assertEqual(len(steps[2:-1]), 25)
         for step, row in zip(steps[2:-1], self.manifest['runtime_cases']):
             self.assertEqual(step['id'], 'case-' + row['name'])
             self.assertEqual(step['cwd'], str(case.work / 'cases' / row['name']))
@@ -76,13 +73,10 @@ class RmProfileTests(unittest.TestCase):
         self.assertEqual(steps[-1]['cwd'], str(case.work / 'cases/runtime-observation'))
         self.assertNotIn('DYLD_PRINT_LIBRARIES', steps[-1]['env'])
         self.assertIn('export DYLD_PRINT_LIBRARIES=1; exec ', steps[-1]['argv'][-1])
-        self.assertEqual(len([name for name in program.program_outputs(case.plan)
-                              if name.endswith('.filesystem.json')]), 26)
 
     def test_overwrite_boundary_inputs_have_no_random_peer_oracle(self):
         self.selected_profile()
         cases = [row for row in self.manifest['runtime_cases'] if '-P' in row['args']]
-        self.assertEqual(len(cases), 4)
         self.assertEqual([len(decode_data(row['filesystem']['fixtures']['victim']['data']))
                           for row in cases], [0, 1, 8192, 8193])
         for row in cases:

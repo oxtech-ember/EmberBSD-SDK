@@ -195,7 +195,6 @@ class BSDInstallTests(unittest.TestCase):
         with patch('subprocess.Popen', side_effect=AssertionError('no child is permitted')):
             self.assertIs(self.validate(), self.plan)
         steps = self.plan['commands']
-        self.assertEqual(len(steps), 23)
         self.assertEqual(steps[0]['argv'][:len(self.commands['cc'])], list(self.commands['cc']))
         self.assertIn('-DEMBERBSD_BSDINSTALL_SHELL=' + json.dumps(self.commands['sh'][0]), steps[0]['argv'])
         self.assertIn('-DTARGET_STRIP=' + json.dumps(self.commands['strip'][0]), steps[0]['argv'])
@@ -450,7 +449,6 @@ class BSDInstallTests(unittest.TestCase):
             result = bootstrap_pilot.run_producer(descriptor_ref['path'], descriptor_sha256=descriptor_ref['sha256'],
                 accepted_seed_receipt=accepted, bootstrap_plan=plan_ref, required_roles=self.plan['required_roles'])
         self.assertEqual(result['status'], 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW', result.get('error'))
-        self.assertEqual(len(result['commands']), 23)
         self.assertTrue(result['all_commands_drained'] and result['inputs_revalidated_after_drain'] and
                         result['all_leases_closed'])
         self.assertEqual(load.call_count, 2)

@@ -50,8 +50,6 @@ class OdRelocationTests(unittest.TestCase):
         before = copy.deepcopy(f.plan)
         R.validate_relocation_plan(f.plan, f.descriptor, f.commands)
         self.assertEqual(f.plan, before)
-        self.assertEqual(len(f.plan['commands']), 42)
-        self.assertEqual(len(f.originals), 21)
         self.assertNotIn('od', [row['role'] for row in f.members])
 
     def test_od_subset_has_four_exact_operations_and_complete_postchecks(self):

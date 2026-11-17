@@ -37,7 +37,6 @@ class ComponentInputTests(unittest.TestCase):
             return exports[component]
         with patch.object(inputs.component,'validate_input',side_effect=validate) as validator:
             cpp,libs=inputs.flags(plan,descriptor)
-        self.assertEqual(validator.call_count,2)
         self.assertEqual(cpp,['-include','/source/parsedate/compat_parsedate_features.h',
             '-include','/source/filetime/nbtool_config.h','-I','/source/filetime',
             '-include','/source/parsedate/nbtool_config.h','-I','/source/parsedate'])

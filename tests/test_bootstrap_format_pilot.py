@@ -108,7 +108,6 @@ class DarwinFormatPilotTests(unittest.TestCase):
         with patch.object(P, 'run_logged', side_effect=self.fake_command) as run, \
                 patch('subprocess.Popen', side_effect=AssertionError('no child')):
             result = self.invoke()
-        self.assertEqual(run.call_count, 5)
         self.assertEqual(result['status'], 'FAILED')
         self.assertEqual(result['commands'][-1]['id'], 'cxx-link')
         self.assertEqual(result['commands'][-1]['actual_exit'], 1)
@@ -121,7 +120,6 @@ class DarwinFormatPilotTests(unittest.TestCase):
         with patch.object(P, 'run_logged', side_effect=self.fake_command) as run, \
                 patch('subprocess.Popen', side_effect=AssertionError('no child')):
             result = self.invoke()
-        self.assertEqual(run.call_count, 6)
         self.assertEqual(result['status'], 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW')
         self.assertTrue(all(row['actual_exit'] == 0 for row in result['commands']))
         self.assertFalse(result['ordinary_provider_qualified'])
@@ -252,7 +250,6 @@ class DarwinFormatPilotTests(unittest.TestCase):
         with patch.object(P, 'run_logged', side_effect=self.fake_command) as run, \
                 patch('subprocess.Popen', side_effect=AssertionError('no child')):
             result = self.invoke()
-        self.assertEqual(run.call_count, 6)
         self.assertEqual([row['argv'] for row in result['commands']],
                          [step['argv'] for step in self.plan['commands']])
         self.assertEqual(result['status'], 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW')

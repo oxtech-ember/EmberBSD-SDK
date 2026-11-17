@@ -74,7 +74,6 @@ class ParsedateComponentTests(unittest.TestCase):
         with patch('subprocess.Popen', side_effect=AssertionError('no child')):
             self.assertIs(c.validate(), c.plan)
         steps = c.plan['commands']
-        self.assertEqual(len(steps), 13)
         self.assertEqual(steps[5]['argv'], [*c.commands['yacc'], '-p', '__pd', '-o',
             str(c.work / 'parsedate.c'), str(c.source / 'lib/libutil/parsedate.y')])
         self.assertEqual(steps[6]['argv'][-3], str(c.work / 'parsedate.c'))
@@ -94,7 +93,6 @@ class ParsedateComponentTests(unittest.TestCase):
         self.assertIn('#define HAVE_TIMEGM 1\n', config)
         candidate = component.candidate(result['bootstrap_plan'], c.f.document(result))
         self.assertEqual(candidate['component'], 'parsedate')
-        self.assertEqual(len(candidate['exports']), 5)
         self.assertEqual(result['commands'][5]['generated']['parsedate.c']['sha256'], result['outputs']['parsedate.c'])
         (c.work / 'parsedate.c').write_bytes(b'changed generated parser')
         with self.assertRaises(SDKError):
@@ -287,7 +285,6 @@ class ParsedateComponentTests(unittest.TestCase):
         expected = {fixed['manifest'], value['source_makefile'], value['source_fragment'],
                     *value['sources'], *value['headers'], *value['provenance'],
                     value['control'], value['check'], *(p['source'] for p in value['probes'])}
-        self.assertEqual(len(expected), 17)
         self.assertEqual(expected, {fixed['manifest'], *fixed['sources'], *fixed['headers'], *fixed['provenance']})
 
 

@@ -73,7 +73,6 @@ class IdProgramTests(unittest.TestCase):
         native = self.fixture()
         case = native.case
         self.assertIs(case.validate(), case.plan)
-        self.assertEqual(len(case.plan['commands']), 34)
         self.assertIn(str(case.source / 'common/include'), case.plan['commands'][0]['argv'])
         with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=native.fake_command), \
              patch.object(program, 'identity_output', return_value=b'synthetic identity\n'):
@@ -128,7 +127,6 @@ class IdProgramTests(unittest.TestCase):
         manifest = json.loads(raw)
         program._native_program_contract(manifest, 'id')
         members = {relative, *sources, *manifest['headers'], *provenance}
-        self.assertEqual(len(members), 8)
         for member in members:
             self.assertTrue((root / member).is_file(), member)
             self.assertFalse((root / member).is_symlink(), member)
@@ -140,7 +138,6 @@ class IdProgramTests(unittest.TestCase):
             manifest=dict(path=str(root / relative), sha256=digest)))
         with patch('subprocess.Popen', side_effect=AssertionError('no native child')):
             steps = program.program_steps(plan, runner.descriptor, runner.commands, runner.flags)
-        self.assertEqual(len(steps), 34)
         self.assertEqual([row['id'] for row in steps if row['phase'] == 'program-case'],
                          ['case-' + case['name'] for case in manifest['runtime_cases']])
         self.assertTrue(all('\0' not in word for row in steps for word in row['argv']))

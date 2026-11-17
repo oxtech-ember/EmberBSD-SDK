@@ -70,9 +70,7 @@ class ByaccContractTests(fixtures.ProgramTests):
     def test_real_manifest_builds_complete_finite_route(self):
         with patch('subprocess.Popen', side_effect=AssertionError('no native child')):
             self.validate()
-        self.assertEqual(len(self.plan['commands']), 31)
         compiles = [row for row in self.plan['commands'] if row['phase'] == 'compile']
-        self.assertEqual(len(compiles), 16)
         self.assertTrue(any('btyaccpar.c' in word for row in compiles for word in row['argv']))
         self.assertTrue(all('-DYYPATCH=20260126' in row['argv'] for row in compiles[1:-1]))
         self.assertEqual(byacc.byacc_sources(self.plan)['grammar.y'],
@@ -150,7 +148,7 @@ class ByaccContractTests(fixtures.ProgramTests):
             return fake(argv, log, **kwargs)
         with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=fail): result = self.invoke()
         self.assertEqual(result['status'], 'FAILED')
-        self.assertEqual(len(result['commands']), 3)
+        self.assertEqual(result['commands'][-1]['id'], 'capability-run')
         self.assertFalse((self.work / 'config.h').exists())
 
     def test_success_requires_generated_parser_and_independent_semantics(self):

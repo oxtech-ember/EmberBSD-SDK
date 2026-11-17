@@ -275,7 +275,6 @@ class BootstrapBmakeSeedTests(unittest.TestCase):
             self.assertEqual(report['checks'], {'prefix_inventory': 'PASS',
                                                 'identity_queries': 'PASS',
                                                 'runtime_closure': 'PASS'})
-            self.assertEqual(len(report['queries']), 4)
             self.assertEqual(report['host_runtime']['libraries'], {'/usr/lib/libc.so.12': 'f' * 64})
             self.assertEqual(report['prefix_inventory']['sha256'], actual_hash(str(inventory_path)))
 

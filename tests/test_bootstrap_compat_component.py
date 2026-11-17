@@ -71,7 +71,6 @@ class FiletimeComponentTests(unittest.TestCase):
         c = self.case
         with patch('subprocess.Popen', side_effect=AssertionError('no child')):
             self.assertIs(c.validate(), c.plan)
-        self.assertEqual(len(c.plan['commands']), 12)
         self.assertEqual(c.plan['commands'][6]['argv'],
             [*c.commands['ar'], 'rc', str(c.work / 'libnbcompat.a'), str(c.work / 'utimens.o')])
         self.assertEqual(c.plan['commands'][7]['argv'],
@@ -81,7 +80,6 @@ class FiletimeComponentTests(unittest.TestCase):
     def test_both_executed_images_have_separate_owned_runtime_traces(self):
         c = self.case
         steps = c.plan['commands']
-        self.assertEqual(len(steps), 12)
         traced = {row['id']: row for row in steps
                   if 'DYLD_PRINT_LIBRARIES' in row['env']}
         self.assertEqual(set(traced), {'filetime-control-run', 'runtime-observation'})

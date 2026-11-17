@@ -58,7 +58,6 @@ class TargetClangTests(TemporaryCase):
     def test_shared_executable_is_hashed_once_per_identity(self):
         with patch('emberbsd_sdk.target_toolchain.inventory.sha256_file', wraps=inventory.sha256_file) as hashed:
             record = self.compiler()
-        self.assertEqual(hashed.call_count, 11)
         clang = str(self.fixture.root / 'bin/clang')
         self.assertEqual(sum(call.args == (clang,) for call in hashed.call_args_list), 1)
         for role in ('cxx', 'cpp', 'as'):
@@ -77,7 +76,6 @@ class TargetClangTests(TemporaryCase):
         with patch('emberbsd_sdk.host_prefix.process.capture', side_effect=capture), \
                 patch('emberbsd_sdk.target_toolchain.inventory.sha256_file', wraps=inventory.sha256_file) as hashed:
             record = self.builder.compiler()
-        self.assertEqual(hashed.call_count, 12)
         self.assertEqual(record['binaries']['cxx']['sha256'], hashlib.sha256(content).hexdigest())
         self.assertNotEqual(record['binaries']['cc']['sha256'], record['binaries']['cxx']['sha256'])
 

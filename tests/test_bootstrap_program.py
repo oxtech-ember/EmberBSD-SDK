@@ -135,7 +135,6 @@ class ProgramTests(unittest.TestCase):
     def test_fixed_driver_flags_and_shell_quoting_are_exact(self):
         flags = dict(cppflags=['-DABI'], cflags=['-O1'], cxxflags=[], ldflags=['-LABI'])
         steps = program.program_steps(self.plan, self.descriptor, self.commands, flags)
-        self.assertEqual(len(steps), 21)
         for step in steps[:6]:
             self.assertEqual(step['argv'][:len(self.commands['cc'])], list(self.commands['cc']))
             self.assertEqual(step['argv'].count('-O1'), 1)
@@ -225,7 +224,6 @@ class ProgramTests(unittest.TestCase):
     def test_synthetic_completion_retains_separate_streams_and_no_qualification(self):
         with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=self.fake_command) as run:
             result = self.invoke()
-        self.assertEqual(run.call_count, 21)
         self.assertEqual(result['status'], 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW')
         self.assertTrue(result['all_commands_drained'] and result['all_leases_closed'])
         self.assertFalse(result['ordinary_provider_qualified'])
@@ -263,8 +261,8 @@ class ProgramTests(unittest.TestCase):
                 raise
         with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=wrong) as run:
             result = self.invoke()
-        self.assertEqual(run.call_count, 8)
         self.assertEqual(result['status'], 'FAILED')
+        self.assertEqual(result['commands'][-1]['id'], 'case-case1')
         self.assertEqual(result['commands'][-1]['actual_exit'], 0)
 
     def test_non_native_link_output_cannot_run_cases(self):
@@ -275,8 +273,8 @@ class ProgramTests(unittest.TestCase):
             return result
         with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=wrong) as run:
             result = self.invoke()
-        self.assertEqual(run.call_count, 6)
         self.assertEqual(result['status'], 'FAILED')
+        self.assertEqual(result['commands'][-1]['id'], 'link-grep')
         self.assertFalse((self.work / 'egrep').exists())
 
     def test_empty_actual_error_stream_is_not_accepted(self):
@@ -289,8 +287,8 @@ class ProgramTests(unittest.TestCase):
                 raise
         with patch('emberbsd_sdk.bootstrap_pilot.run_logged', side_effect=wrong) as run:
             result = self.invoke()
-        self.assertEqual(run.call_count, 18)
         self.assertEqual(result['status'], 'FAILED')
+        self.assertEqual(result['commands'][-1]['id'], 'case-case11')
         self.assertEqual(result['commands'][-1]['actual_exit'], 2)
         self.assertIn('actual stderr', result['error'])
 

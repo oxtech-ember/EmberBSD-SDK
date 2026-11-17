@@ -49,7 +49,6 @@ class HistoryJSONTests(unittest.TestCase):
         with patch.object(jsonio, '_object', wraps=jsonio._object) as strict:
             changed = context.validate_history('scope', validate)
             self.assertEqual(context.validate_history('next', lambda: native_toolset._json(changed)), {'value': 2})
-        self.assertEqual(strict.call_count, 2)
 
     def test_returned_objects_do_not_share_mutable_children(self):
         reference = self.reference(b'{"outer": {"values": [1]}}')

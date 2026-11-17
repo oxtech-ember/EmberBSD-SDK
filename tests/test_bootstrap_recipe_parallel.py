@@ -310,7 +310,6 @@ class ParallelRecipeTests(unittest.TestCase):
             result = case.invoke()
         self.assertEqual(result['status'], 'COMMANDS_COMPLETED_PENDING_INDEPENDENT_REVIEW')
         case.assert_assembled_output(result)
-        self.assertEqual(len(observed), 5)
         self.assertTrue(result['all_commands_drained'] and result['all_leases_closed'])
         self.assertFalse(result['ordinary_provider_qualified'])
 

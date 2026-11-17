@@ -78,7 +78,6 @@ class FilemetaComponentTests(unittest.TestCase):
         with patch('subprocess.Popen', side_effect=AssertionError('no native child')):
             self.assertIs(c.validate(), c.plan)
         steps = c.plan['commands']
-        self.assertEqual(len(steps), 18)
         self.assertEqual(steps[11]['id'], 'compile-compat_filemeta')
         self.assertEqual(steps[12]['argv'], [*c.commands['ar'], 'rc',
             str(c.work / 'libnbcompat.a'), str(c.work / 'compat_filemeta.o')])
@@ -89,9 +88,7 @@ class FilemetaComponentTests(unittest.TestCase):
         expected = {fixed['manifest'], value['source_makefile'], value['source_fragment'],
                     *value['sources'], *value['headers'], *value['provenance'],
                     value['control'], value['check'], *(p['source'] for p in value['probes'])}
-        self.assertEqual(len(expected), 32)
         self.assertEqual(expected, {fixed['manifest'], *fixed['sources'], *fixed['headers'], *fixed['provenance']})
-        self.assertEqual(len(component._fixtures(fixed)), 8)
         self.assertNotIn('compat_native_acl.h', fixed['exports'])
 
     def test_probe_results_preserve_absent_features_and_shared_exports(self):

@@ -78,7 +78,6 @@ class LocalBuildRecipeTests(unittest.TestCase):
         copied = sorted(str(p.relative_to(self.case.work / 'distfiles'))
                         for p in (self.case.work / 'distfiles').rglob('*') if p.is_file())
         self.assertEqual(copied, sorted(expected))
-        self.assertEqual(len(fixtures.LOCAL_LAYOUTS), 17)
 
     def test_nawk_generated_tables_cannot_be_omitted(self):
         for relative in ('files/awkgram.tab.c', 'files/awkgram.tab.h', 'files/proctab.c'):

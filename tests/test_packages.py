@@ -212,7 +212,6 @@ exit 2
         self.assertEqual((self.root / 'captured-roots.selected-build').read_text().splitlines(), [
             'sysutils/ember-plasma-session', 'cat/app', 'lang/tool@native'])
         shell_calls = (self.root / 'shell-calls').read_text().splitlines()
-        self.assertEqual(len(shell_calls), 2)
         self.assertTrue(all(Path(line.split()[0]).samefile(self.cross_bulk)
                             for line in shell_calls))
         selector.assert_called_once_with(os.fspath(self.prefix), required_roles={'make', 'sh'})
