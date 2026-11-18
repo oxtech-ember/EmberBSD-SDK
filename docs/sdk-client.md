@@ -209,6 +209,10 @@ and the release size and SHA256. There is no generation counter and no saved
 channel state. A changed authenticated pointer is adopted in the same process.
 Packages that have not started, whose PKGNAME and runtime closure match the
 Ports graph exactly, are installed from that pointer instead of compiled.
+The client follows build dependencies from the requested source roots until it
+reaches an installed or selected binary package. That package brings its signed
+runtime dependencies. Its build tools enter the schedule only if another source
+consumer needs them or the user requests them directly.
 The running install is not restarted because the pointer changed. `plan`
 remains the snapshot from when it ran.
 

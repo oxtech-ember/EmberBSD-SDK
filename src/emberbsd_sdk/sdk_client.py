@@ -373,6 +373,20 @@ def build_missing(config, roots, binaries=()):
         run_source(config, roots, 'build', binaries=binaries)
 
 
+def _required_source_inputs(roots, dependencies, supplied):
+    """Follow Ports build edges only through nodes whose build is still required."""
+    needed = set()
+    todo = list(roots)
+    while todo:
+        root = todo.pop()
+        if root in needed:
+            continue
+        needed.add(root)
+        if root not in supplied:
+            todo.extend(dependencies.get(root, ()))
+    return needed
+
+
 def include_source_dependencies(plan, release, catalogs, config, installer, cache):
     """Read the owner's resolved graph once, selecting exact available binaries."""
     if not plan['build_roots'] or not config.get('source'):
@@ -409,6 +423,13 @@ def include_source_dependencies(plan, release, catalogs, config, installer, cach
         closure = select_packages(release, selected, roots=[root])['packages']
         if all(names.get(records[p['id']]['root']) == records[p['id']]['pkgname'] for p in closure):
             candidates.append(root)
+    graph = _read_source_graph(path.parent)
+    if graph and set(graph[0]) == names.keys() and build_roots <= names.keys():
+        installed = {role: _installed_names(config, installer, role) for role in ('host', 'target')}
+        supplied = {root for root, name in names.items() if
+                    _installed_is_current(installer, name, installed['host' if root.endswith('@native') else 'target'])}
+        needed = _required_source_inputs(build_roots, graph[1], supplied.union(candidates))
+        candidates = [root for root in candidates if root in needed]
     result = installation_plan(release, catalogs, config, installer, cache,
                                roots=[r for r in plan['roots'] if r not in build_roots] + candidates)
     result['roots'] = plan['roots']
@@ -666,7 +687,8 @@ def _replacement_is_upgrade(installer, graph_name, installed):
     return bool(siblings) and all(not _matches(crypto, pattern, name) for name in siblings)
 
 
-def _adopt_published(config, installer, cache, store, release, catalogs, names, order, pending, binaries):
+def _adopt_published(config, installer, cache, store, release, catalogs, names, order, pending, binaries,
+                     *, roots, dependencies):
     """Download exact not-yet-started packages, including an older installed package.
 
     A newer installed package stays on the source wave. An installer that cannot
@@ -689,6 +711,9 @@ def _adopt_published(config, installer, cache, store, release, catalogs, names, 
             if not _replacement_is_upgrade(installer, names[root], _installed_names(config, installer, role)):
                 continue
         candidates.append(root)
+    supplied = set(order).difference(pending).union(candidates)
+    needed = _required_source_inputs(roots, dependencies, supplied)
+    candidates = [root for root in candidates if root in needed]
     if not candidates:
         return binaries, []
     merged = installation_plan(release, catalogs, config, installer, cache, roots=candidates)
@@ -816,10 +841,18 @@ def _install_source_waves(plan, config, installer, cache, store, refresh_current
         if any(root not in order for root in plan['build_roots']):
             return None
         handled = {package['root'] for package in plan['packages']}
-        pending = {root for root in order if root not in handled}
+        nodes = set(order)
+        pending = (nodes - handled) & _required_source_inputs(plan['build_roots'], deps, handled)
         reused, seen = [], accepted_channel
         while pending:
             snapshot = _refresh_channel(refresh_current)
+            scheduled = set(pending)
+            _retain_current(config, installer, names, pending)
+            retained = scheduled - pending
+            if retained:
+                resolved = [(root, names[root]) for root in retained]
+                drop_resolved_receipts(state, resolved, planned=names)
+                pending.intersection_update(_required_source_inputs(plan['build_roots'], deps, nodes - pending))
             if snapshot is not None:
                 release, catalogs, identity = snapshot
                 if seen != identity:
@@ -827,14 +860,10 @@ def _install_source_waves(plan, config, installer, cache, store, refresh_current
                         print('Current changed; checking for published packages.', file=sys.stderr)
                     seen = identity
                 binaries, extra = _adopt_published(config, installer, cache, store, release, catalogs,
-                                                   names, order, pending, binaries)
+                                                   names, order, pending, binaries,
+                                                   roots=plan['build_roots'], dependencies=deps)
                 reused.extend(extra)
-            scheduled = set(pending)
-            _retain_current(config, installer, names, pending)
-            retained = scheduled - pending
-            if retained:
-                resolved = [(root, names.get(root)) for root in retained if names.get(root)]
-                drop_resolved_receipts(state, resolved, planned=names)
+                pending.intersection_update(_required_source_inputs(plan['build_roots'], deps, nodes - pending))
             if not pending:
                 break
             ready = _ready_wave(order, deps, pending)

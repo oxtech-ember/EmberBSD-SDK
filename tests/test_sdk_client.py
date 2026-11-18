@@ -469,6 +469,23 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result['build_roots'], ['devel/missing@native'])
         self.assertEqual(result['roots'], ['devel/missing@native'])
 
+    def test_source_plan_omits_the_binary_providers_build_tool(self):
+        tool, provider, app = 'devel/tool@native', 'devel/lib@native', 'net/app@native'
+        order = [tool, provider, app]
+        self._source()
+        self._graph(order, [(tool, provider), (provider, app)], dict(zip(order, ['tool-1', 'lib-1', 'app-1'])))
+        release, catalogs = self._channel([('tool', tool, 'tool-1', []), ('lib', provider, 'lib-1', [])])
+        plan = installation_plan(release, catalogs, self.cfg, self.installer, self.cache, roots=[app])
+        with patch('emberbsd_sdk.sdk_client.run_source'):
+            result = include_source_dependencies(plan, release, catalogs, self.cfg, self.installer, self.cache)
+        self.assertEqual([row['root'] for row in result['packages']], [provider])
+        self.assertEqual(result['build_roots'], [app])
+        explicit = installation_plan(release, catalogs, self.cfg, self.installer, self.cache, roots=[tool, app])
+        with patch('emberbsd_sdk.sdk_client.run_source'):
+            result = include_source_dependencies(explicit, release, catalogs, self.cfg, self.installer, self.cache)
+        self.assertEqual({row['root'] for row in result['packages']}, {provider, tool})
+        self.assertEqual(result['roots'], [tool, app])
+
     def test_source_dependency_version_mismatch_remains_for_ports(self):
         self.cfg['source'] = {name: str(self.root / name) for name in ('ports_root', 'pkgsrc', 'makeconf', 'state')}
         (self.root / 'ports_root/profiles/package-sets').mkdir(parents=True)
@@ -523,14 +540,15 @@ class ClientTests(unittest.TestCase):
         catalogs = [dict(repository='native', sets={}, packages=entries)]
         return release, catalogs
 
-    def _waves(self, order, edges, names, refresh, *, installed=(), accepted='same', build=None):
+    def _waves(self, order, edges, names, refresh, *, installed=(), accepted='same', build=None, roots=None):
         self._source()
         state = self._graph(order, edges, names)
         original_order = (state / 'order').read_bytes()
         original_edges = (state / 'edges').read_bytes()
         order_inode = (state / 'order').stat().st_ino
         self.installer.present.update(installed)
-        plan = dict(roots=list(order), build_roots=list(order), packages=[], source_packages=dict(names),
+        requested = list(order if roots is None else roots)
+        plan = dict(roots=requested, build_roots=requested, packages=[], source_packages=dict(names),
                     download_size=0, unpacked_size=0)
         call_log = self.root / 'wave-calls.jsonl'
         call_log.unlink(missing_ok=True)
@@ -601,6 +619,26 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(self.store.calls, [])
         self.assertNotIn('Current changed', errors)
         self.assertNotIn('installing them instead of building', errors)
+
+    def test_binary_provider_omits_its_build_tool_but_preserves_direct_inputs(self):
+        tool, provider, app = 'devel/tool@native', 'devel/lib@native', 'net/app@native'
+        roots = [tool, provider, app]
+        names = dict(zip(roots, ['tool-1', 'lib-1', 'app-1']))
+        graph = [(tool, provider), (provider, app)]
+        channel = (*self._channel([('lib', provider, 'lib-1', [])]), 'published')
+        calls, _ = self._waves(roots, graph, names, lambda: channel, roots=[app])
+        self.assertEqual([call[0] for call in calls], [[app]])
+        self.assertEqual([call[1] for call in self.store.calls], ['current/host/darwin-arm64/lib-1.tgz'])
+
+    def test_installed_provider_tool_is_built_when_another_source_consumer_needs_it(self):
+        tool, provider, first, second = ('devel/tool@native', 'devel/lib@native',
+                                         'net/first@native', 'net/second@native')
+        order = [tool, provider, first, second]
+        edges = [(tool, provider), (provider, first), (tool, second)]
+        names = dict(zip(order, ['tool-1', 'lib-1', 'first-1', 'second-1']))
+        calls, _ = self._waves(order, edges, names, lambda: (*self._channel([]), 'same'),
+                               roots=[first, second], installed=['lib-1'])
+        self.assertEqual([call[0] for call in calls], [[tool, first], [second]])
 
     def test_expired_current_is_not_adopted_and_the_build_continues(self):
         lib, app = 'devel/lib@native', 'net/app@native'
