@@ -91,6 +91,8 @@ def gettext_libtool_command(paths, git, target, jobs, compiler_family, host_fami
                '--host-compiler-family', host_family]
     if 'pkgsrc-export' in paths:
         command += ['--pkgsrc-export', paths['pkgsrc-export']]
+    if 'native-makeconf' in paths:
+        command += ['--native-makeconf', paths['native-makeconf']]
     if 'distdir' in paths:
         command += ['--distdir', paths['distdir']]
     if compiler_family == 'clang' and 'llvm-runtime-stage' in paths:
@@ -593,6 +595,13 @@ class OSReleaseBuilder(SysrootBuilder):
         fingerprint = record.get('fingerprint') if isinstance(record, dict) else None
         check(full_hash(fingerprint), 'invalid pkgsrc export fingerprint')
         self.paths['pkgsrc-export'] = os.path.join(self.paths['sdk'], 'stages', 'pkgsrc-export', fingerprint)
+        # pkg_admin knows only the database path of the place where the host
+        # prefix was built. The mk.conf of the prefix names the database at
+        # its current place, also after the prefix moved. The receipt keeps
+        # this choice, so a recorded profile replays without this host.
+        makeconf = os.path.join(self.paths['host-prefix'], 'etc/mk.conf')
+        if os.path.isfile(makeconf):
+            self.paths['native-makeconf'] = os.path.realpath(makeconf)
 
     def prepare_pkgsrc_export(self):
         # A separate step before the first OS build command: it never runs

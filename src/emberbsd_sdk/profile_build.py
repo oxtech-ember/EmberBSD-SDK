@@ -14,6 +14,7 @@ incremental builder of its owner then skips unchanged work.
 """
 
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -33,6 +34,8 @@ PLAN_FILE = 'plan.json'
 KERNEL_BUILDER = 'ember/build-kernel.sh'
 # The Prebuild SDK workspace of profile-build, inside its work directory.
 WORKSPACE = 'sdk'
+# The host and target tools that the OS objects of a release depend on.
+RUNTIME_NODES = ('runtime:host-prefix', 'runtime:target-toolchain', 'runtime:host-binutils')
 
 
 def _require(condition, message):
@@ -56,8 +59,10 @@ def runnable(node):
         repository, path = producer.split(':', 1)
         if not (repository == 'ports' and path.startswith('scripts/source-inputs/')) and producer != build_profile.LIBEDIT:
             return f'select the prepared tree in build.sources; {producer} has no common producer interface'
-    elif node['kind'] == 'os-stage' and node['identity'].get('stage') not in ('tools', 'kernel'):
-        return 'profile-build builds tools and kernels now; sets follow'
+    elif node['kind'] == 'os-stage' and node['identity'].get('stage') not in ('tools', 'kernel', 'sets'):
+        return f'profile-build cannot build the OS stage {node["identity"].get("stage")}'
+    elif node['identity'].get('stage') == 'sets' and node['input_key'] is None:
+        return 'commit the OS, Ports and SDK changes first: the OS release builder needs clean checkouts'
     return None
 
 
@@ -165,7 +170,7 @@ def run_node(work, node_id, key, config):
         _write_record(work, node, {identity['variable']: str(output)})
     elif node['kind'] == 'export':
         # The export stage keeps one export per fingerprint in the workspace.
-        root = Path(work, WORKSPACE, 'stages', 'pkgsrc-export')
+        root = Path(_workspace(work, plan), 'stages', 'pkgsrc-export')
         root.mkdir(parents=True, exist_ok=True)
         data = subprocess.run([sys.executable, '-B', os.path.join(config['ports_root'], build_profile.EXPORT_TOOL),
                                'prepare', str(root), '--sdk-source', config['sdk_root'], '--git', git,
@@ -207,9 +212,74 @@ def run_node(work, node_id, key, config):
             _run([os.path.join(prefix, 'bin/mksh'), os.path.join(config['os_source'], KERNEL_BUILDER),
                   str(out), config_name], env=env)
         _write_record(work, node, {name: str(out / name) for name in node['outputs']})
+    elif node['identity'].get('stage') == 'sets':
+        _write_record(work, node, _release(work, node, nodes, plan, config, prefix))
     else:
         raise SDKError(f'{node_id}: {runnable(node)}')
     return 0
+
+
+def _workspace(work, plan, create=False):
+    """Return the Prebuild SDK workspace of WORK. CREATE makes it for the profile target."""
+    from . import workspace
+    root, target = Path(work, WORKSPACE), plan['profile']['platform']['target']
+    if create and not root.exists():
+        workspace.create(str(root), target=target)
+    try:
+        layout = workspace.inspect_layout(str(root))
+        workspace.require_target(layout, target)
+    except SDKError as exc:
+        raise SDKError(f'{root} is not a Prebuild SDK workspace for {target} ({exc}); remove it') from exc
+    return layout['canonical_root']
+
+
+def _release(work, node, nodes, plan, config, prefix):
+    """Build the sets of NODE with the OS release builder; return the set files."""
+    from .os_release_builder import OSReleaseBuilder
+    from .sysroot_builder import SOURCE_OPTIONS
+
+    class Release(OSReleaseBuilder):
+        # A development build restarts the SDK-named LLVM stages that an
+        # interrupted run left, as build-sysroot.py does.
+        RESUMES_FAILED_STAGES = True
+
+    _require(runnable(node) is None, f'{node["id"]}: {runnable(node)}')
+    root = _workspace(work, plan)
+    platform = plan['profile']['platform']
+    destination = Path(root, 'stages', f'os-sets-{node["input_key"][:16]}')
+    if destination.exists():
+        # A failed or interrupted release leaves no record; start again.
+        shutil.rmtree(destination)
+    # A new workspace has no stages directory yet.
+    destination.parent.mkdir(exist_ok=True)
+    # build.sh -u reuses objects, tools and LLVM phase objects only for the
+    # same host and target tools; other tools get other directories.
+    tools_key = hashlib.sha256(' '.join(nodes[item]['input_key'] for item in RUNTIME_NODES).encode()).hexdigest()[:16]
+    options = {'sdk': root, 'os': config['os_source'], 'ports': config['ports_root'], 'compiler': prefix,
+               'sdk-source': config['sdk_root'], 'host-prefix': prefix,
+               'host-binutils': os.path.dirname(config['host_bfd_config']),
+               'runtime-work': os.path.join(root, 'obj', 'llvm-runtime'), 'destination': str(destination),
+               'objects': os.path.join(root, 'obj', f'os-{tools_key}'),
+               'tools': os.path.join(root, 'obj', f'tools-{tools_key}'),
+               'llvm-objects': os.path.join(root, 'obj', f'llvm-{tools_key}'),
+               'distdir': config['distfiles'], 'target': platform['target'],
+               'compiler-family': platform['compiler']['target'],
+               'host-compiler-family': platform['compiler']['host']}
+    sources = [item for item in nodes['os:tools']['dependencies'] + node['dependencies'] if item.startswith('source:')]
+    for item in sorted(set(sources)):
+        variable = item.split(':', 1)[1]
+        # EMBER_TCP_WRAPPERS_SOURCE is the builder option tcp-wrappers-source.
+        name = variable.removeprefix('EMBER_').lower().replace('_', '-')
+        _require(name in (*SOURCE_OPTIONS, 'llvm-source', 'libedit-source'),
+                 f'{node["id"]}: the OS release builder does not read {variable}')
+        options[name] = _source_path(work, config, variable)
+    # bmake has its own job pool: take the free jobserver tokens for it.
+    with jobserver.slots(os.environ.get('MAKEFLAGS'), config['jobs']) as jobs:
+        options['jobs'] = jobs
+        Release(options).run()
+    sets = sorted(destination.glob('release/*/binary/sets'))
+    _require(len(sets) == 1, f'{node["id"]}: the OS release has no binary/sets directory')
+    return {name: str(sets[0] / name) for name in node['outputs']}
 
 
 NINJA_MINIMUM = (1, 13)
@@ -244,6 +314,9 @@ def build(plan, *, work, command, ninja, jobs, explain=False):
         # option is given. Older Ninja would add its own -j budget.
         _require(ninja_version(ninja) >= NINJA_MINIMUM,
                  f'{ninja} is older than Ninja 1.13; install ninja in the host prefix again')
+        if any(node['kind'] == 'export' or node['identity'].get('stage') == 'sets'
+               for node in plan['nodes'] if node['decision']['action'] != 'ready'):
+            _workspace(work, plan, create=True)
         write_json(work / PLAN_FILE, plan, exclusive=False)
         (work / NINJA_FILE).write_text(text + '\n', encoding='utf-8')
         argv = [ninja, '-C', str(work)] + (['-d', 'explain'] if explain else [])

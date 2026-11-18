@@ -129,6 +129,18 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
         command = gettext_libtool_command(paths, '/usr/bin/git', 'aarch64', '2', 'clang', 'clang')
         self.assertEqual(command[command.index('--distdir') + 1], paths['distdir'])
 
+    def test_gettext_libtool_finds_the_database_of_a_moved_host_prefix(self):
+        from emberbsd_sdk.os_release_builder import gettext_libtool_command
+        paths = {name: '/sdk/' + name for name in (
+            'python', 'ports', 'sdk-source', 'host-prefix', 'compiler', 'tools', 'destination', 'objects')}
+        paths['pkgsrc-export'] = '/sdk/stages/pkgsrc-export/' + 'f' * 64
+        command = gettext_libtool_command(paths, '/usr/bin/git', 'aarch64', '2', 'clang', 'clang')
+        self.assertNotIn('--native-makeconf', command)
+        # The recorded paths select the mk.conf; the command reads no host file.
+        paths['native-makeconf'] = '/sdk/host-prefix/etc/mk.conf'
+        command = gettext_libtool_command(paths, '/usr/bin/git', 'aarch64', '2', 'clang', 'clang')
+        self.assertEqual(command[command.index('--native-makeconf') + 1], paths['native-makeconf'])
+
     def test_pkgsrc_export_stage_is_selected_and_prepared_before_the_os_build(self):
         import json, os, tempfile
         from pathlib import Path
@@ -143,7 +155,8 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
             builder = OSReleaseBuilder.__new__(OSReleaseBuilder)
             builder.paths = {'ports': str(root / 'ports'), 'sdk': str(root / 'sdk'), 'python': '/host/python',
                              'git': '/host/git', 'sdk-source': '/source/sdk', 'gettext-source': '/sdk/gettext',
-                             'destination': str(root / 'destination'), 'os': '/os'}
+                             'destination': str(root / 'destination'), 'os': '/os',
+                             'host-prefix': str(root / 'host')}
             builder.native = mock.Mock(bundle_root='/host')
             builder.receipt = {}
             builder.sources = {'os': {'commit': 'a' * 40}}
@@ -161,6 +174,12 @@ class ReleaseRuntimeSequenceTests(unittest.TestCase):
                 (root / 'ports/scripts/pkgsrc-export-stage.py').write_text('')
                 builder.select_pkgsrc_export()
                 self.assertEqual(builder.paths['pkgsrc-export'], stage)
+                self.assertNotIn('native-makeconf', builder.paths)
+                # The mk.conf of a moved host prefix names its package database.
+                (root / 'host/etc').mkdir(parents=True)
+                (root / 'host/etc/mk.conf').write_text('PKG_DBDIR= ' + str(root / 'host/pkgdb') + '\n')
+                builder.select_pkgsrc_export()
+                self.assertEqual(builder.paths['native-makeconf'], os.path.realpath(root / 'host/etc/mk.conf'))
                 self.assertEqual(calls[-1], ('/host/python', '-B', str(root / 'ports/scripts/pkgsrc-export-stage.py'),
                                              'fingerprint', '--sdk-source', '/source/sdk',
                                              '--git', '/host/git', '--patch', '/host/bin/gpatch'))

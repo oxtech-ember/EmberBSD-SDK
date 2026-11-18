@@ -256,13 +256,25 @@ class BuildProfileTests(ProfileFixture):
 
     def test_sets_walk_the_release_tree_and_share_the_tools(self):
         profile = copy.deepcopy(PROFILE)
-        profile['os']['sets'] = ['base', 'etc']
+        profile['os']['sets'] = ['base', 'comp', 'etc']
         nodes = self.nodes(self.plan(profile))
-        self.assertEqual(nodes['os:sets']['outputs'], ['base.tar.xz', 'etc.tar.xz'])
+        self.assertEqual(nodes['os:sets']['outputs'], ['base.tar.xz', 'comp.tar.xz', 'etc.tar.xz'])
         self.assertIn('os:tools', nodes['os:sets']['dependencies'])
         self.assertEqual(sorted(nodes['os:tools']['reasons']),
                          ['needed by os:kernel:EMBER64', 'needed by os:sets'])
         self.assertIn(prepared_sources.RELEASE_TRAVERSALS, self.walks)
+
+    def test_sets_are_the_release_sets_without_profile_flags(self):
+        # The OS release builder makes base, comp and etc together and sets
+        # its MK* flags and BUILDINFO itself.
+        for change, message in (
+                (dict(sets=['base', 'etc']), 'os.sets must be base, comp, etc'),
+                (dict(sets=['base', 'comp', 'etc'], buildinfo='EmberBSD:test-1'), 'os.mk or os.buildinfo'),
+                (dict(sets=['base', 'comp', 'etc'], mk={'MKLINT': 'no'}), 'os.mk or os.buildinfo')):
+            profile = copy.deepcopy(PROFILE)
+            profile['os'].update(change)
+            with self.subTest(change=change), self.assertRaisesRegex(SDKError, message):
+                self.plan(profile)
 
     def test_profile_refuses_paths_versions_and_ports_roots(self):
         for change, message in (

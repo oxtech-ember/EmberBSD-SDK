@@ -5,8 +5,8 @@ profile and prints the build plan. It does not build, download, install or
 write build results. `profile-build` plans the profile and lets Ninja run the
 nodes that are not ready. This is stages 2 and 3 of the
 [build graph](https://github.com/oxtech-ember/ember-wiki/blob/main/docs/strategy/sborochnyj-graf.md):
-`profile-build` builds prepared sources, the tools and kernels now; sysroots
-and sets follow, Ports nodes come in stage 4.
+`profile-build` builds prepared sources, the tools, kernels and the release
+sets now; sysroots follow, Ports nodes come in stage 4.
 
 ## Profile
 
@@ -27,7 +27,12 @@ come from the client configuration.
   `platform.compiler` selects the `host` and `target` families, `clang` or
   `gcc`. `platform.board` is an optional board name.
 - `os.kernels` names kernel configurations of the target machine. `os.sets`
-  names installation sets. `os.mk` maps `MK*` options to `yes` or `no`.
+  names installation sets: the OS release builder makes `base`, `comp` and
+  `etc` together, so the plan accepts exactly these three, for the aarch64
+  target with Clang (the `aarch64-sysroot` release). With sets, the plan
+  refuses `os.mk` and `os.buildinfo` for now: the release builder sets its
+  `MK*` flags and `BUILDINFO` (from the OS commit) itself.
+  `os.mk` maps `MK*` options to `yes` or `no`.
   `os.buildinfo` is the release metadata that the kernel records (`BUILDINFO`).
   Select at least one kernel or set.
 - `ports` accepts `sets` and `packages` but refuses roots until stage 4. Plan
@@ -179,4 +184,25 @@ nodes keep them ready.
   `MKREPRO_TIMESTAMP` and `BUILDINFO` of the plan. OS stages share one Ninja
   pool of depth 1; `build.sh` runs the jobs that the stage took from the
   jobserver.
+- `os:sets` runs the OS release builder (`OSReleaseBuilder`, the code of
+  `build-os-release.py`) in the Prebuild SDK workspace `work/sdk`, which
+  `profile-build` makes for the profile target before Ninja runs. It gives
+  the builder the prepared sources of the plan, the host prefix as compiler
+  and native tools, the Binutils directory of `host_bfd_config`,
+  `work/sdk/obj/llvm-runtime` for the LLVM runtime and `build.distfiles`.
+  The objects and tools of `build.sh -u` are `work/sdk/obj/os-<tools>`,
+  `work/sdk/obj/tools-<tools>` and the LLVM phase objects
+  `work/sdk/obj/llvm-<tools>`, named by the keys of the host prefix, target
+  toolchain and Binutils, so other tools get new directories. A development
+  build continues the LLVM stages that an interrupted run left. The release
+  goes to `work/sdk/stages/os-sets-<key>`, and the record names its set files.
+  The builder needs clean OS, Ports and SDK checkouts, so `profile-build`
+  refuses a sets node with local changes. The builder refuses objects of an
+  OS commit that is not a descendant of the last one; remove
+  `work/sdk/obj/os-<tools>`, `tools-<tools>` and `llvm-<tools>` then. Earlier releases stay in `stages`.
+
+  The key of `os:sets` also binds the Ports tree, which has the producers
+  that the builder runs, and the OS commit, which the builder writes into
+  `BUILDINFO`. The plan walks the release tree with the final `MKCXX=yes` and
+  `MKLIBCXX=yes` of the Clang release and always needs `EMBER_LLVM_SOURCE`.
 

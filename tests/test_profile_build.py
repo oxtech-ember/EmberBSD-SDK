@@ -2,6 +2,7 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """profile-build: Ninja runs the nodes of a build plan that are not ready."""
 
+import copy
 import io
 import json
 import os
@@ -10,9 +11,11 @@ import shutil
 import sys
 import unittest
 from contextlib import redirect_stderr
+from unittest import mock
 
 from test_build_profile import PROFILE, ProfileFixture, git
 from emberbsd_sdk import profile_build
+from emberbsd_sdk.jsonio import write_json
 
 NINJA = shutil.which('ninja')
 NEW_NINJA = bool(NINJA) and profile_build.ninja_version(NINJA) >= profile_build.NINJA_MINIMUM
@@ -51,6 +54,80 @@ tokens = os.read(descriptor, 64)
 os.write(descriptor, tokens)
 open(os.environ['FAKE_LOG'], 'w').write(' '.join(sys.argv[1:]) + ' tokens=%d' % len(tokens))
 '''
+
+
+class ReleaseNodeTests(ProfileFixture):
+    """The os:sets edge runs the OS release builder; a stub stands for it."""
+
+    def setUp(self):
+        super().setUp()
+        self.work = self.root / 'work'
+        llvm = self.write('llvm/llvm-source.json', '{}').parent
+        self.config = dict(host_prefix=str(self.native.bundle_root), os_source=str(self.os),
+                           ports_root=str(self.ports), sdk_root=str(self.sdk), host_bfd_config=str(self.bfd),
+                           distfiles=str(self.root / 'distfiles'),
+                           selected_sources={'EMBER_LLVM_SOURCE': str(llvm)}, jobs=3)
+        profile = copy.deepcopy(PROFILE)
+        profile['os']['sets'] = ['base', 'comp', 'etc']
+        self.plan_data = self.plan(profile, state=self.work, selected_sources=self.config['selected_sources'])
+        self.nodes = {node['id']: node for node in self.plan_data['nodes']}
+        self.work.mkdir()
+        write_json(self.work / profile_build.PLAN_FILE, self.plan_data, exclusive=False)
+        for variable in ('EMBER_BYACC_SOURCE', 'EMBER_HEIMDAL_SOURCE'):
+            tree = self.write(f'sources/{variable}/emberbsd-prepared-source.json', '{}').parent
+            profile_build._write_record(self.work, self.nodes['source:' + variable], {variable: str(tree)})
+        profile_build._workspace(self.work, self.plan_data, create=True)
+        self.calls = []
+
+    def run_sets(self):
+        calls = self.calls
+
+        class Builder:
+            RESUMES_FAILED_STAGES = False
+
+            def __init__(self, options):
+                self.options = options
+
+            def run(self):
+                calls.append((dict(self.options), type(self).RESUMES_FAILED_STAGES))
+                sets = Path(self.options['destination'], 'release/evbarm-aarch64/binary/sets')
+                sets.mkdir(parents=True)
+                for name in ('base', 'comp', 'etc'):
+                    (sets / f'{name}.tar.xz').write_text(name)
+
+        with mock.patch('emberbsd_sdk.os_release_builder.OSReleaseBuilder', Builder):
+            profile_build.run_node(self.work, 'os:sets', self.nodes['os:sets']['input_key'], self.config)
+
+    def test_sets_run_the_release_builder_with_the_plan_inputs(self):
+        self.run_sets()
+        options, resume = self.calls[0]
+        workspace = os.path.realpath(self.work / 'sdk')
+        self.assertTrue(resume)
+        self.assertEqual(options['sdk'], workspace)
+        self.assertEqual((options['os'], options['target'], options['compiler-family']), (str(self.os), 'aarch64', 'clang'))
+        self.assertEqual(options['llvm-source'], self.config['selected_sources']['EMBER_LLVM_SOURCE'])
+        self.assertEqual(options['byacc-source'], str(self.root / 'sources/EMBER_BYACC_SOURCE'))
+        self.assertEqual(options['host-binutils'], str(self.bfd.parent))
+        self.assertIsInstance(options['jobs'], int)
+        # The objects and tools of build.sh -u belong to the host and target tools.
+        self.assertTrue(options['objects'].startswith(workspace + '/obj/os-'))
+        self.assertEqual(Path(options['llvm-objects']).name.removeprefix('llvm-'),
+                         Path(options['objects']).name.removeprefix('os-'))
+        self.assertTrue(options['destination'].startswith(workspace + '/stages/os-sets-'))
+        record = json.loads((self.work / profile_build.record_name('os:sets')).read_text())
+        self.assertEqual(sorted(record['outputs']), ['base.tar.xz', 'comp.tar.xz', 'etc.tar.xz'])
+        self.assertTrue(all(Path(path).is_file() for path in record['outputs'].values()))
+
+    def test_a_new_run_starts_the_release_again(self):
+        self.run_sets()
+        destination = Path(self.calls[0][0]['destination'])
+        (destination / 'left-over').write_text('x')
+        self.run_sets()
+        self.assertFalse((destination / 'left-over').exists())
+
+    def test_sets_with_local_changes_are_refused(self):
+        node = dict(self.nodes['os:sets'], input_key=None)
+        self.assertIn('commit the OS, Ports and SDK changes', profile_build.runnable(node))
 
 
 class NinjaClientTests(ProfileFixture):

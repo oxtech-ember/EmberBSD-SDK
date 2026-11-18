@@ -340,7 +340,7 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
                     [], [], 'profile platform.compiler.target')
     bfd = Path(host_bfd_config)
     record = bfd.with_name('inputs.txt')
-    _require(bfd.is_absolute() and bfd.is_file() and record.is_file(),
+    _require(bfd.is_absolute() and bfd.name == 'host-bfd.mk' and bfd.is_file() and record.is_file(),
              'select the host-bfd.mk of the common Binutils build, next to its inputs.txt')
     binutils = add('runtime:host-binutils', 'runtime', dict(producer='common Ports Binutils'),
                    dict(inputs_sha256=hashlib.sha256(record.read_bytes()).hexdigest()), [], [],
@@ -421,11 +421,25 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
               kernel_sources(shared, config), [f'netbsd-{config}', f'netbsd-{config}.img'],
               'profile os.kernels', release_inputs)
     if profile['os']['sets']:
-        from .os_release_builder import flags_for
-        flags = [flag for flag in flags_for(profile['platform']['target'], compiler['target'])
-                 if flag.split('=', 1)[0] not in profile['os']['mk']] + mk
+        from .os_release_builder import flags_for, release_sets
+        names = sorted(name.removesuffix('.tar.xz') for name in release_sets())
+        _require(profile['platform']['target'] == 'aarch64' and compiler['target'] == 'clang',
+                 'profile os.sets needs the aarch64 target and Clang: the plan uses the aarch64-sysroot release')
+        _require(sorted(profile['os']['sets']) == names,
+                 'profile os.sets must be ' + ', '.join(names) + ': the OS release builder makes them together')
+        _require(not profile['os']['mk'] and not profile['os']['buildinfo'],
+                 'profile os.sets does not accept os.mk or os.buildinfo yet: '
+                 'the OS release builder sets its MK* flags and BUILDINFO itself')
+        # The final release build adds the libc++ of the LLVM runtime to the base.
+        flags = [flag for flag in flags_for('aarch64', 'clang') if not flag.startswith(('MKCXX=', 'MKLIBCXX='))]
+        flags += ['MKCXX=yes', 'MKLIBCXX=yes']
+        # The release builder also reads the Ports producers and names the OS commit.
+        ports_identity = checkouts('ports')
+        sets_inputs = dict(release_inputs, os_commit=os_identity['commit'], git=release_inputs['git'] + [
+            dict(repository='ports', path='.', object=ports_identity['tree'], dirty=bool(ports_identity['dirty']))])
         stage('os:sets', dict(stage='sets', sets=profile['os']['sets']), prepared_sources.RELEASE_TRAVERSALS,
-              flags, [], [name + '.tar.xz' for name in profile['os']['sets']], 'profile os.sets', release_inputs)
+              flags, ['EMBER_LLVM_SOURCE'], [name + '.tar.xz' for name in profile['os']['sets']],
+              'profile os.sets', sets_inputs)
 
     order, waves, done = sorted(nodes), [], set()
     while len(done) < len(order):
