@@ -15,6 +15,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 import tempfile
 
@@ -30,8 +31,17 @@ SHARED_TOOL = 'ember/tools/shared-sources.py'
 NATIVE_CONTRACT = 'tools/native-tools/contract'
 COMPILERS = ('clang', 'gcc')
 # The Ports source producers share these helpers.
-PORTS_PRODUCER_HELPERS = ('scripts/source-inputs/common', 'scripts/prepared_receipt.py',
+PORTS_PRODUCER_HELPERS = ('scripts/source-inputs/common', 'scripts/prepared_receipt.py', 'scripts/source_distdir.py',
                           'scripts/pkgsrc-source-identity.py', 'pkgsrc/lang/llvm/files/sdk_source.py')
+# Ports producers with the common interface; they use the shared export.
+COMMON_PRODUCERS = 'ports:scripts/source-inputs/'
+# The SDK prepares libedit with this module, not through the script.
+LIBEDIT = 'sdk:scripts/prepare-libedit.py'
+LIBEDIT_MODULE = 'src/emberbsd_sdk/libedit.py'
+# Ports tools: the current recipe of a source, and the shared pkgsrc export.
+RECIPE_TOOL = 'scripts/prepared-source-current.py'
+EXPORT_TOOL = 'scripts/pkgsrc-export-stage.py'
+EXPORT_NODE = 'ports:pkgsrc-export'
 # The make flags of the tools build in ember/build-kernel.sh, which builds them
 # with the target compiler of the host prefix.
 KERNEL_TOOLS_FLAGS = ('TOOLCHAIN_MISSING=yes', 'MKCROSSGDB=no')
@@ -154,7 +164,7 @@ def kernel_sources(document, config):
 
 
 def _producer(entry, checkouts):
-    """Return the Git objects that identify a source producer and its recipe."""
+    """Return the Git objects that identify a source producer."""
     repository, path = entry['producer'].split(':', 1)
     owner = checkouts(repository)
     ports = checkouts('ports')
@@ -165,7 +175,9 @@ def _producer(entry, checkouts):
                  for match in pattern.finditer(script.read_text(encoding='utf-8'))]
         if named and entry['package'] not in named:
             raise SDKError(f'{entry["producer"]} prepares {named[0]}, not {entry["package"]}')
-    objects = [_tree(owner, path, repository), _tree(ports, 'pkgsrc/' + entry['package'], 'ports')]
+    objects = [_tree(owner, path, repository)]
+    if entry['producer'] == LIBEDIT:
+        objects.append(_tree(owner, LIBEDIT_MODULE, repository))
     if repository == 'ports':
         objects += [_tree(ports, helper, 'ports') for helper in PORTS_PRODUCER_HELPERS
                     if Path(ports['root'], helper).exists()]
@@ -218,17 +230,17 @@ def _record(state, node_id, key):
     return record if all(os.path.exists(path) for path in record['outputs'].values()) else None
 
 
-def distfile(ports_root, package):
-    """Return the one distfile that the distinfo of PACKAGE names."""
+def ports_tool(ports_root, sdk_root, prefix, script, *arguments):
+    """Run a Ports tool that reads Git objects and prints one JSON document."""
+    git = shutil.which('git')
+    _require(git is not None, 'install Git on the host')
+    command = [sys.executable, '-B', os.path.join(ports_root, script), *arguments, '--sdk-source', sdk_root,
+               '--git', git, '--patch', os.path.join(prefix, 'bin/gpatch')]
     try:
-        text = Path(ports_root, 'pkgsrc', package, 'distinfo').read_text(encoding='utf-8')
-    except OSError as exc:
-        raise SDKError(f'pkgsrc/{package} has no distinfo') from exc
-    names = {match.group(1) for match in re.finditer(r'^(?:SHA512|BLAKE2s|Size) \(([^)]+)\)', text, re.M)
-             if not match.group(1).startswith('patch-')}
-    _require(len(names) == 1 and '/' not in next(iter(names)),
-             f'pkgsrc/{package} must name one distfile, not: ' + ' '.join(sorted(names)))
-    return names.pop()
+        return loads_json(process.capture(command, env=process.sanitized_environment()).stdout)
+    except CommandError as exc:
+        message = exc.stderr.decode('utf-8', 'replace').strip().splitlines()
+        raise SDKError(f'{script}: ' + (message[-1] if message else 'failed')) from exc
 
 
 def source_manifest(root):
@@ -240,12 +252,12 @@ def source_manifest(root):
 
 
 def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_config, state=None,
-              distfiles=None, selected_sources=None, required_sources=None, native=None, jobs=None):
+              selected_sources=None, required_sources=None, native=None, jobs=None):
     """Return the build-graph-v2 plan of PROFILE. Build and write nothing.
 
     SELECTED_SOURCES maps EMBER_*_SOURCE to a prepared tree that the
-    configuration selects; the plan does not prepare it. A source without
-    its distfile in DISTFILES is a download. REQUIRED_SOURCES(traversals,
+    configuration selects; the plan does not prepare it. Ports names the
+    current recipe and the distfiles of each source. REQUIRED_SOURCES(traversals,
     flags) -> {VARIABLE: directory} can replace the bmake guard walk;
     NATIVE can replace the loaded host prefix."""
     selected_sources = dict(selected_sources or {})
@@ -286,7 +298,7 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
 
     nodes = {}
 
-    def add(node_id, kind, identity, inputs, dependencies, outputs, reason, ready=None, fetch=None):
+    def add(node_id, kind, identity, inputs, dependencies, outputs, reason, ready=None):
         if node_id in nodes:
             nodes[node_id]['reasons'].append(reason)
             return node_id
@@ -305,8 +317,6 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
                 decision = dict(action='ready', why=ready)
             elif _record(state, node_id, key) is not None:
                 decision = dict(action='ready', why='recorded result has this input key')
-            elif fetch is not None:
-                decision = dict(action='download', why=fetch)
             elif kind == 'runtime':
                 decision = dict(action='ready', why='installed outside the build plan')
             else:
@@ -336,6 +346,28 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
                    dict(inputs_sha256=hashlib.sha256(record.read_bytes()).hexdigest()), [], [],
                    'needed by os:tools (EMBER_HOST_BFD_CONFIG)')
 
+    recipes, export = {}, []
+
+    def describe(names):
+        # One Ports call reads the current recipes of a stage.
+        packages = sorted({shared['sources'][name]['package'] for name in names
+                           if name not in selected_sources} - set(recipes))
+        if packages:
+            recipes.update(ports_tool(found['ports']['root'], checkouts('sdk')['root'], prefix, RECIPE_TOOL,
+                                      *[word for package in packages for word in ('--describe', package)]))
+
+    def pkgsrc_export(reason):
+        # One shared pkgsrc export for all Ports producers, keyed by the Git
+        # fingerprint of its inputs.
+        if not export:
+            fingerprint = ports_tool(found['ports']['root'], checkouts('sdk')['root'], prefix, EXPORT_TOOL,
+                                     'fingerprint').get('fingerprint')
+            _require(isinstance(fingerprint, str) and re.fullmatch(r'[0-9a-f]{64}', fingerprint),
+                     f'{EXPORT_TOOL} printed no fingerprint')
+            export.append(fingerprint)
+        return add(EXPORT_NODE, 'export', dict(producer='ports:' + EXPORT_TOOL), dict(fingerprint=export[0]),
+                   [], ['pkgsrc-export'], reason)
+
     def source(variable, reason):
         entry = shared['sources'][variable]
         identity = dict(variable=variable, package=entry['package'], producer=entry['producer'])
@@ -344,11 +376,14 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
             return add('source:' + variable, 'source', identity,
                        dict(manifest_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest()), [], [variable],
                        reason, ready='selected in the configuration')
-        archive = distfile(found['ports']['root'], entry['package'])
-        missing = distfiles is not None and not Path(distfiles, archive).is_file()
-        return add('source:' + variable, 'source', dict(identity, archive=archive),
-                   dict(git=_producer(entry, checkouts)), [], [variable], reason,
-                   fetch=f'{archive} is not in the distfiles directory' if missing else None)
+        recipe = recipes[entry['package']]
+        dependencies = ([pkgsrc_export('needed by source:' + variable)]
+                        if entry['producer'].startswith(COMMON_PRODUCERS) else [])
+        # The producer selects its archives in the distfiles directory and
+        # names a missing one; the plan does not.
+        return add('source:' + variable, 'source', dict(identity, distfiles=recipe['distfiles']),
+                   dict(recipe=recipe['effective'], git=_producer(entry, checkouts)), dependencies, [variable],
+                   reason)
 
     # OS builders run the native runner of this SDK.
     sdk_identity = checkouts('sdk')
@@ -366,6 +401,7 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
         _require(set(names) <= set(shared['sources']),
                  'OS needs a source that ember/shared-sources.json does not name: ' +
                  ' '.join(sorted(set(names) - set(shared['sources']))))
+        describe(names)
         dependencies = [host, toolchain] + [
             source(name, f'needed by {node_id}' + (f' ({needed[name]})' if name in needed else ''))
             for name in names]

@@ -31,6 +31,35 @@ SOURCES = {
     'EMBER_LLVM_SOURCE': {'package': 'lang/compiler-rt', 'producer': 'ports:pkgsrc/lang/compiler-rt/files/source.py'},
 }
 
+# Ports tools of the plan. The fixture recipe identity is the hash of the
+# recipe files; the export fingerprint is the hash of pkgsrc/export.conf.
+RECIPE_TOOL = '''import hashlib, json, os, re, sys
+ports = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+arguments = sys.argv[1:]
+result = {}
+for index, word in enumerate(arguments):
+    if word != '--describe':
+        continue
+    package = arguments[index + 1]
+    data = b''
+    for name in ('Makefile', 'distinfo'):
+        path = os.path.join(ports, 'pkgsrc', package, name)
+        data += open(path, 'rb').read() if os.path.isfile(path) else b''
+    names = re.findall(r'^SHA512 [(]([^)]+)[)]', data.decode(), re.M)
+    result[package] = dict(package=package, effective=dict(sha256=hashlib.sha256(data).hexdigest()),
+                           distfiles=sorted(set(names)))
+print(json.dumps(result))
+'''
+EXPORT_TOOL = '''import hashlib, json, os, sys
+ports = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+fingerprint = hashlib.sha256(open(os.path.join(ports, 'pkgsrc/export.conf'), 'rb').read()).hexdigest()
+if sys.argv[1] == 'prepare':
+    directory = os.path.join(sys.argv[2], fingerprint)
+    os.makedirs(directory, exist_ok=True)
+    print(json.dumps(dict(directory=directory, fingerprint=fingerprint)))
+else:
+    print(json.dumps(dict(fingerprint=fingerprint)))
+'''
 
 
 def git(root, *arguments):
@@ -64,7 +93,10 @@ class ProfileFixture(TemporaryCase):
             'pkgsrc/security/heimdal/Makefile': 'DISTNAME= heimdal\n',
             'pkgsrc/lang/compiler-rt/Makefile': 'DISTNAME= compiler-rt\n',
             'pkgsrc/devel/editline/Makefile': 'DISTNAME= editline\n',
-            **{f'pkgsrc/{package}/distinfo': f'BLAKE2s ({name}) = 00\nSize ({name}) = 1 bytes\n'
+            'pkgsrc/export.conf': 'export 1\n',
+            'scripts/prepared-source-current.py': RECIPE_TOOL,
+            'scripts/pkgsrc-export-stage.py': EXPORT_TOOL,
+            **{f'pkgsrc/{package}/distinfo': f'SHA512 ({name}) = 00\nSize ({name}) = 1 bytes\n'
                                              f'SHA1 (patch-a) = 00\n'
                for package, name in (('devel/byacc', 'byacc-1.tgz'), ('security/heimdal', 'heimdal-7.tar.gz'),
                                      ('lang/compiler-rt', 'llvm-project-23.src.tar.xz'))}})
@@ -103,8 +135,8 @@ class ProfileFixture(TemporaryCase):
 
     def required_sources(self, traversals, flags):
         self.walks.append(traversals)
-        return {'EMBER_BYACC_SOURCE': 'tools/yacc', 'EMBER_HEIMDAL_SOURCE': 'tools/asn1_compile'} \
-            if traversals and traversals[0][0] == 'tools' else {}
+        return {'EMBER_BYACC_SOURCE': 'tools/yacc', 'EMBER_HEIMDAL_SOURCE': 'tools/asn1_compile',
+                **getattr(self, 'tools_sources', {})} if traversals and traversals[0][0] == 'tools' else {}
 
     def plan(self, profile=PROFILE, **options):
         return build_profile.make_plan(
@@ -122,7 +154,11 @@ class BuildProfileTests(ProfileFixture):
         nodes = self.nodes(plan)
         self.assertEqual(set(nodes), {
             'runtime:host-prefix', 'runtime:target-toolchain', 'runtime:host-binutils', 'source:EMBER_BYACC_SOURCE',
-            'source:EMBER_HEIMDAL_SOURCE', 'source:EMBER_LLVM_SOURCE', 'os:tools', 'os:kernel:EMBER64'})
+            'source:EMBER_HEIMDAL_SOURCE', 'source:EMBER_LLVM_SOURCE', 'os:tools', 'os:kernel:EMBER64',
+            'ports:pkgsrc-export'})
+        # The Ports producers share one pkgsrc export.
+        self.assertEqual(nodes['source:EMBER_BYACC_SOURCE']['dependencies'], ['ports:pkgsrc-export'])
+        self.assertEqual(nodes['source:EMBER_BYACC_SOURCE']['identity']['distfiles'], ['byacc-1.tgz'])
         kernel = nodes['os:kernel:EMBER64']
         self.assertEqual(kernel['dependencies'], ['os:tools', 'runtime:host-prefix', 'runtime:target-toolchain',
                                                   'source:EMBER_LLVM_SOURCE'])
@@ -134,7 +170,8 @@ class BuildProfileTests(ProfileFixture):
         self.assertEqual({node['id']: node['decision']['action'] for node in plan['nodes']}, {
             'runtime:host-prefix': 'ready', 'runtime:target-toolchain': 'ready', 'runtime:host-binutils': 'ready',
             'source:EMBER_BYACC_SOURCE': 'build', 'source:EMBER_HEIMDAL_SOURCE': 'build',
-            'source:EMBER_LLVM_SOURCE': 'build', 'os:tools': 'build', 'os:kernel:EMBER64': 'build'})
+            'source:EMBER_LLVM_SOURCE': 'build', 'os:tools': 'build', 'os:kernel:EMBER64': 'build',
+            'ports:pkgsrc-export': 'build'})
         position = {node_id: index for index, wave in enumerate(plan['waves']) for node_id in wave}
         for node in plan['nodes']:
             for dependency in node['dependencies']:
@@ -158,6 +195,22 @@ class BuildProfileTests(ProfileFixture):
         after = self.nodes(self.plan())
         changed = {node_id for node_id in before if before[node_id]['input_key'] != after[node_id]['input_key']}
         self.assertEqual(changed, {'source:EMBER_BYACC_SOURCE', 'os:tools', 'os:kernel:EMBER64'})
+
+    def test_new_export_inputs_rekey_every_ports_source(self):
+        before = self.nodes(self.plan())
+        self.write('ports/pkgsrc/export.conf', 'export 2\n')
+        git(self.ports, 'commit', '-q', '-am', 'export 2')
+        after = self.nodes(self.plan())
+        changed = {node_id for node_id in before if before[node_id]['input_key'] != after[node_id]['input_key']}
+        # The LLVM producer does not use the shared export.
+        self.assertEqual(changed, {'ports:pkgsrc-export', 'source:EMBER_BYACC_SOURCE', 'source:EMBER_HEIMDAL_SOURCE',
+                                   'os:tools', 'os:kernel:EMBER64'})
+
+    def test_refusal_of_a_ports_tool_stops_the_plan(self):
+        self.write('ports/scripts/prepared-source-current.py', 'import sys\nsys.exit("recipe of x is unknown")\n')
+        git(self.ports, 'commit', '-q', '-am', 'broken tool')
+        with self.assertRaisesRegex(SDKError, 'prepared-source-current.py: recipe of x is unknown'):
+            self.plan()
 
     def test_buildinfo_rekeys_the_kernel_but_not_the_tools(self):
         before = self.nodes(self.plan())
@@ -268,23 +321,29 @@ class BuildProfileTests(ProfileFixture):
             with self.subTest(arguments=arguments), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(main(['--config', str(path), *arguments]), 1)
 
-    def test_missing_distfile_is_a_download_and_selected_source_is_ready(self):
-        self.write('distfiles/byacc-1.tgz', 'archive')
+    def test_selected_source_is_ready_and_its_manifest_is_an_input(self):
         llvm = self.write('llvm/llvm-source.json', '{"format": "emberbsd-llvm-source"}').parent
-        nodes = self.nodes(self.plan(distfiles=self.root / 'distfiles',
-                                     selected_sources={'EMBER_LLVM_SOURCE': llvm}))
-        self.assertEqual(nodes['source:EMBER_BYACC_SOURCE']['decision']['action'], 'build')
-        self.assertEqual(nodes['source:EMBER_BYACC_SOURCE']['identity']['archive'], 'byacc-1.tgz')
-        self.assertEqual(nodes['source:EMBER_HEIMDAL_SOURCE']['decision'], dict(
-            action='download', why='heimdal-7.tar.gz is not in the distfiles directory'))
+        nodes = self.nodes(self.plan(selected_sources={'EMBER_LLVM_SOURCE': llvm}))
         self.assertEqual(nodes['source:EMBER_LLVM_SOURCE']['decision'], dict(
             action='ready', why='selected in the configuration'))
         # Another selected tree is another input.
         before = nodes['os:kernel:EMBER64']['input_key']
         self.write('llvm/llvm-source.json', '{"format": "emberbsd-llvm-source", "version": 2}')
-        after = self.nodes(self.plan(distfiles=self.root / 'distfiles',
-                                     selected_sources={'EMBER_LLVM_SOURCE': llvm}))['os:kernel:EMBER64']['input_key']
+        after = self.nodes(self.plan(selected_sources={'EMBER_LLVM_SOURCE': llvm}))['os:kernel:EMBER64']['input_key']
         self.assertNotEqual(before, after)
+
+    def test_libedit_binds_the_sdk_module_that_prepares_it(self):
+        self.tools_sources = {'EMBER_LIBEDIT_SOURCE': 'lib/libedit'}
+        self.write('sdk/src/emberbsd_sdk/libedit.py', '# libedit 1\n')
+        git(self.sdk, 'add', '-A')
+        git(self.sdk, 'commit', '-q', '-m', 'libedit 1')
+        libedit = self.nodes(self.plan())['source:EMBER_LIBEDIT_SOURCE']
+        # The SDK producer uses no pkgsrc export; its recipe has no distfile here.
+        self.assertEqual(libedit['dependencies'], [])
+        self.assertEqual(libedit['identity']['distfiles'], [])
+        self.write('sdk/src/emberbsd_sdk/libedit.py', '# libedit 2\n')
+        git(self.sdk, 'commit', '-q', '-am', 'libedit 2')
+        self.assertNotEqual(self.nodes(self.plan())['source:EMBER_LIBEDIT_SOURCE']['input_key'], libedit['input_key'])
 
     def test_ports_submodule_must_be_checked_out(self):
         upstream = self.repository('upstream', {'mk/bsd.prefs.mk': '# pkgsrc\n'})

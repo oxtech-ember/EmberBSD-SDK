@@ -17,15 +17,18 @@ from emberbsd_sdk import profile_build
 NINJA = shutil.which('ninja')
 NEW_NINJA = bool(NINJA) and profile_build.ninja_version(NINJA) >= profile_build.NINJA_MINIMUM
 
-# A Ports source producer: copy the archive into the new output tree.
+# A Ports source producer with the common interface: find the archive of
+# the recipe in --distdir and copy it into the new output tree.
 PRODUCER = '''import os, sys
 arguments = sys.argv[1:]
 value = lambda name: arguments[arguments.index(name) + 1]
 # A producer is one job and does not see the jobserver.
 assert 'MAKEFLAGS' not in os.environ, os.environ['MAKEFLAGS']
+assert arguments[4] == 'prepare' and os.path.isdir(value('--pkgsrc-export'))
+archive = [name for name in os.listdir(value('--distdir')) if name.startswith(PACKAGE.split('/')[1])][0]
 os.makedirs(value('--output'))
-open(os.path.join(value('--output'), 'emberbsd-prepared-source.json'), 'w').write(open(value('--archive')).read())
-open(os.environ['TEST_LOG'], 'a').write('prepare ' + os.path.basename(value('--archive')) + '\\n')
+open(os.path.join(value('--output'), 'emberbsd-prepared-source.json'), 'w').write(archive)
+open(os.environ['TEST_LOG'], 'a').write('prepare ' + archive + '\\n')
 '''
 # ember/build-kernel.sh: record the selected sources, then write the outputs.
 KERNEL = '''set -eu
@@ -60,7 +63,7 @@ class NinjaClientTests(ProfileFixture):
         self.write('distfiles/byacc-1.tgz', '')
         self.write('distfiles/heimdal-7.tar.gz', '')
         llvm = self.write('llvm/llvm-source.json', '{}').parent
-        plan = self.plan(distfiles=str(self.root / 'distfiles'), selected_sources={'EMBER_LLVM_SOURCE': str(llvm)})
+        plan = self.plan(selected_sources={'EMBER_LLVM_SOURCE': str(llvm)})
         status = profile_build.build(plan, work=self.root / 'work', command=['runner'], ninja=str(ninja), jobs=4)
         return status, log.read_text()
 
@@ -111,7 +114,7 @@ class ProfileBuildTests(ProfileFixture):
         self.addCleanup(os.environ.pop, 'TEST_LOG', None)
 
     def build(self):
-        plan = self.plan(state=self.work, distfiles=self.config['distfiles'],
+        plan = self.plan(state=self.work,
                          selected_sources=self.config['selected_sources'])
         self.log.write_text('')
         with redirect_stderr(io.StringIO()):
@@ -160,11 +163,13 @@ class ProfileBuildTests(ProfileFixture):
         self.assertEqual(actions['source:EMBER_BYACC_SOURCE'], 'ready')
         self.assertFalse(any(line.startswith('prepare') for line in log))
 
-    def test_download_stops_before_ninja(self):
+    def test_missing_distfile_fails_its_source_and_stops_the_consumers(self):
         (self.root / 'distfiles/heimdal-7.tar.gz').unlink()
-        with self.assertRaisesRegex(Exception, 'source:EMBER_HEIMDAL_SOURCE: download first'):
-            self.build()
-
+        status, _, log = self.build()
+        self.assertNotEqual(status, 0)
+        # The producer of Heimdal fails; the kernel does not start.
+        self.assertFalse(any(line.startswith('kernel') for line in log))
+        self.assertFalse((self.work / profile_build.record_name('source:EMBER_HEIMDAL_SOURCE')).exists())
 
     def test_failed_rebuild_does_not_revive_the_old_result(self):
         self.assertEqual(self.build()[0], 0)
@@ -174,7 +179,7 @@ class ProfileBuildTests(ProfileFixture):
         self.write('os/ember/build-kernel.sh', KERNEL.replace('LOG', str(self.log)).replace(
             'set -eu\n', 'set -eu\nrm -f "$1/netbsd-$2" "$1/netbsd-$2.img"\n'))
         git(self.os, 'commit', '-q', '-am', 'builder removes outputs first')
-        plan = self.plan(profile, state=self.work, distfiles=self.config['distfiles'],
+        plan = self.plan(profile, state=self.work,
                          selected_sources=self.config['selected_sources'])
         with redirect_stderr(io.StringIO()):
             self.assertNotEqual(profile_build.build(plan, work=self.work, command=self.command, ninja=NINJA, jobs=2), 0)
@@ -184,7 +189,7 @@ class ProfileBuildTests(ProfileFixture):
         self.assertEqual(sum(line.startswith('kernel') for line in log), 1)
 
     def test_paths_with_spaces_and_dollars_reach_the_runner(self):
-        plan = self.plan(distfiles=self.config['distfiles'], selected_sources=self.config['selected_sources'])
+        plan = self.plan(selected_sources=self.config['selected_sources'])
         text = profile_build.ninja_file(plan, command=['/a b/python', '$HOME'])
         self.assertIn("command = '/a b/python' '$$HOME' --node $id --key $key", text)
 

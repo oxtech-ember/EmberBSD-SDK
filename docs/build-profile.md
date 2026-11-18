@@ -71,7 +71,7 @@ commit, tree and changed paths of each checkout (`os`, `ports`, `sdk`), the
 
 | Field | Value |
 | --- | --- |
-| `id`, `kind`, `identity` | What the node is: `runtime`, `source` or `os-stage` |
+| `id`, `kind`, `identity` | What the node is: `runtime`, `source`, `export` or `os-stage` |
 | `inputs` | The [input key](input-keys.md) parts: Git trees, target, compiler, `MK*` options, `MKREPRO_TIMESTAMP`, release metadata |
 | `input_key` | SHA256 of the node identity, its inputs and the keys of its dependencies |
 | `dependencies` | Node IDs that this node needs |
@@ -97,9 +97,20 @@ The plan has these nodes:
   `ember/shared-sources.json` names its Ports package and producer. The plan
   reads it through the OS tool `ember/tools/shared-sources.py describe`, which
   refuses names that differ from the source table of `share/mk/bsd.sys.mk`.
-  The plan refuses a producer that names another `PACKAGE`. The key binds the
-  Git trees of the producer, of `pkgsrc/<package>` and of the shared Ports
-  producer helpers.
+  The plan refuses a producer that names another `PACKAGE`. Ports names the
+  current recipe: `scripts/prepared-source-current.py --describe <package>`
+  prints the effective recipe identity (overlay or `upstream/pkgsrc`, with
+  the Ports patches), for most owners the one that a prepared receipt records, and the distfiles of
+  the effective `distinfo`. The key binds that identity and the Git trees of
+  the producer and of the shared Ports producer helpers; the libedit key also
+  binds `src/emberbsd_sdk/libedit.py`, which prepares it. A source of a
+  producer under `scripts/source-inputs/` also needs `ports:pkgsrc-export`.
+- `ports:pkgsrc-export`: one shared pkgsrc export for the Ports producers,
+  keyed by the Git fingerprint that `scripts/pkgsrc-export-stage.py
+  fingerprint` prints. The stage refuses uncommitted, untracked and ignored
+  files in its inputs, and so does the plan: a local edit below `pkgsrc/`
+  stops the plan, also for a source that does not use the edited recipe.
+  Commit such edits first.
 - `os:tools`, `os:kernel:<config>` and `os:sets`: OS stages, keyed by the OS
   and SDK Git trees, target, make flags, `MK*` options and `MKREPRO_TIMESTAMP`
   (the commit time). Kernels and sets also bind `os.buildinfo`.
@@ -118,7 +129,8 @@ result has its input key. Stage 3 records results in
 the `input_key`; a matching record makes the node `ready`. Runtime nodes are
 `ready`: the plan does not install them. Downloads from signed
 `current` exist only for packages; OS stages and sources have no download
-decision yet.
+decision. The plan does not fetch distfiles: fetch them with pkgsrc
+(`bmake fetch`) into `build.distfiles`.
 
 ## Build the profile
 
@@ -152,10 +164,14 @@ outputs only after its producer succeeds. A failed or interrupted build keeps
 no record, and the next `profile-build` runs that node again. Records of other
 nodes keep them ready.
 
-- A source node runs `prepare` of its Ports producer
-  (`scripts/source-inputs/<name>/source.py`) with the recipe distfile and
-  `gpatch` of the host prefix. The output directory name contains the input
-  key. A missing distfile stops the build before Ninja runs.
+- `ports:pkgsrc-export` runs `scripts/pkgsrc-export-stage.py prepare` into
+  `work/sdk/stages/pkgsrc-export`.
+- A source node runs its producer with the common interface of
+  `scripts/source-inputs`: `prepare --distdir DISTFILES --pkgsrc-export STAGE`
+  with `gpatch` of the host prefix; a recipe without distfiles gets no
+  `--distdir`. The producer selects its archives and names a missing one.
+  The SDK prepares libedit itself. The output directory name contains the
+  input key.
 - `os:tools` has no command of its own: `build.sh` of each consumer builds
   or reuses the tools.
 - `os:kernel:<config>` runs `ember/build-kernel.sh WORK/kernels CONFIG` with

@@ -14,6 +14,7 @@ incremental builder of its owner then skips unchanged work.
 """
 
 import fcntl
+import json
 import os
 from pathlib import Path
 import re
@@ -30,6 +31,8 @@ NINJA_FILE = 'build.ninja'
 PLAN_FILE = 'plan.json'
 # The OS producers. The tools build runs inside its consumer.
 KERNEL_BUILDER = 'ember/build-kernel.sh'
+# The Prebuild SDK workspace of profile-build, inside its work directory.
+WORKSPACE = 'sdk'
 
 
 def _require(condition, message):
@@ -49,9 +52,10 @@ def record_name(node_id):
 def runnable(node):
     """Return why profile-build cannot run NODE, or None."""
     if node['kind'] == 'source':
-        repository, path = node['identity']['producer'].split(':', 1)
-        if repository != 'ports' or not path.startswith('scripts/source-inputs/'):
-            return f'select the prepared tree in build.sources; profile-build cannot run {repository}:{path} yet'
+        producer = node['identity']['producer']
+        repository, path = producer.split(':', 1)
+        if not (repository == 'ports' and path.startswith('scripts/source-inputs/')) and producer != build_profile.LIBEDIT:
+            return f'select the prepared tree in build.sources; {producer} has no common producer interface'
     elif node['kind'] == 'os-stage' and node['identity'].get('stage') not in ('tools', 'kernel'):
         return 'profile-build builds tools and kernels now; sets follow'
     return None
@@ -125,28 +129,56 @@ def run_node(work, node_id, key, config):
     _require(node_id in nodes, f'the plan has no node {node_id}')
     node = nodes[node_id]
     _require((node['input_key'] or 'changed') == key, f'{node_id}: the plan changed; run profile-build again')
-    prefix = config['host_prefix']
+    # The plan keys the export with the gpatch of the resolved host prefix.
+    prefix = os.path.realpath(config['host_prefix'])
     # A producer can remove the outputs of an earlier result, so that result is
     # no longer valid. Remove its record before the producer starts.
     Path(work, record_name(node_id)).unlink(missing_ok=True)
+    gpatch = os.path.join(prefix, 'bin/gpatch')
+    git = shutil.which('git')
+    _require(git is not None and os.path.isabs(git), 'install Git on the host')
     if node['kind'] == 'source':
         identity = node['identity']
         _require(runnable(node) is None and re.fullmatch(r'EMBER_[A-Z0-9_]+_SOURCE', identity['variable']),
                  f'{node_id}: {runnable(node)}')
-        path = identity['producer'].split(':', 1)[1]
         output = Path(work, 'sources', f'{identity["variable"]}-{(node["input_key"] or "changed")[:16]}')
         if output.exists():
             # A failed or interrupted preparation leaves no record; start again.
             shutil.rmtree(output)
         output.parent.mkdir(parents=True, exist_ok=True)
-        producer = Path(config['ports_root'], path, 'source.py')
-        # A producer is one job; it does not take part in the jobserver.
-        env = {name: value for name, value in os.environ.items() if name not in ('MAKEFLAGS', 'MFLAGS')}
-        _run([sys.executable, '-B', str(producer), '--sdk-source', config['sdk_root'],
-                     '--git', shutil.which('git') or 'git', 'prepare',
-                     '--archive', str(Path(config['distfiles'], identity['archive'])),
-                     '--patch', os.path.join(prefix, 'bin/gpatch'), '--output', str(output)], env=env)
+        if identity['producer'] == build_profile.LIBEDIT:
+            from .libedit import prepare_source
+            _require(len(identity['distfiles']) == 1, f'{node_id}: the libedit recipe must name one distfile')
+            prepare_source(config['ports_root'], os.path.join(config['distfiles'], identity['distfiles'][0]),
+                           str(output), patch_tool=gpatch)
+        else:
+            path = Path(config['ports_root'], identity['producer'].split(':', 1)[1])
+            export = _record(work, build_profile.EXPORT_NODE)['outputs']['pkgsrc-export']
+            argv = [sys.executable, '-B', str(path / 'source.py' if path.is_dir() else path),
+                    '--sdk-source', config['sdk_root'], '--git', git, 'prepare', '--output', str(output),
+                    '--patch', gpatch, '--pkgsrc-export', export, '--export-patch', gpatch]
+            if identity['distfiles']:
+                argv += ['--distdir', config['distfiles']]
+            # A producer is one job; it does not take part in the jobserver.
+            env = {name: value for name, value in os.environ.items() if name not in ('MAKEFLAGS', 'MFLAGS')}
+            _run(argv, env=env)
         _write_record(work, node, {identity['variable']: str(output)})
+    elif node['kind'] == 'export':
+        # The export stage keeps one export per fingerprint in the workspace.
+        root = Path(work, WORKSPACE, 'stages', 'pkgsrc-export')
+        root.mkdir(parents=True, exist_ok=True)
+        data = subprocess.run([sys.executable, '-B', os.path.join(config['ports_root'], build_profile.EXPORT_TOOL),
+                               'prepare', str(root), '--sdk-source', config['sdk_root'], '--git', git,
+                               '--patch', gpatch], stdout=subprocess.PIPE, check=False,
+                              env=process.sanitized_environment())
+        _require(data.returncode == 0, 'producer failed: ' + build_profile.EXPORT_TOOL)
+        try:
+            result = json.loads(data.stdout)
+        except ValueError as exc:
+            raise SDKError(f'{build_profile.EXPORT_TOOL} printed no JSON result') from exc
+        _require(result.get('fingerprint') == node['inputs']['fingerprint'],
+                 f'{node_id}: the Ports export inputs changed; run profile-build again')
+        _write_record(work, node, {'pkgsrc-export': result['directory']})
     elif node_id == 'os:tools':
         # build.sh of each consumer builds or reuses the tools in its object tree.
         _write_record(work, node, {})

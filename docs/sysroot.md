@@ -106,7 +106,7 @@ For OS builds using common zlib, prepare the Ports `devel/zlib` source and pass
 `--zlib-source`; the SDK forwards `EMBER_ZLIB_SOURCE`, including during header
 installation.
 
-Prepare libarchive with the Ports `scripts/libarchive-source.py prepare` command
+Prepare libarchive with the Ports `scripts/source-inputs/libarchive/source.py prepare` command
 and libevent with `scripts/source-inputs/libevent/source.py prepare`; both use
 the selected SDK source and canonical Ports export. Pass the resulting trees
 as `--libarchive-source` and `--libevent-source` for the base build. The
