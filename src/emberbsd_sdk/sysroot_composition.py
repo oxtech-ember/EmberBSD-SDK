@@ -75,7 +75,6 @@ def compose(kit, output, *, manifest_sha256, runtime_stage, ports_source, target
     transfer._digest(sdk_revision, 40)
     output = transfer._new_path(output)
     kit, revision, sets, old_runtime = release_inputs(kit, manifest_sha256, target)
-    stage = Path(transfer._directory(runtime_stage))
     extractor = Path(ports_source) / 'profiles/common-build-tools/cross/sysroot_archive.py'
     spec = importlib.util.spec_from_file_location('emberbsd_ports_sysroot_archive', extractor)
     module = importlib.util.module_from_spec(spec)
@@ -83,8 +82,15 @@ def compose(kit, output, *, manifest_sha256, runtime_stage, ports_source, target
     with tempfile.TemporaryDirectory(prefix='.sysroot-compose-', dir=Path(output).parent) as temporary:
         base, tree = Path(temporary) / 'base', Path(temporary) / 'sysroot'
         module.extract([kit / name for name in sets], base)
-        runtime = llvm_runtime.validate_stage(stage, target=target,
-            required_components=llvm_runtime.FULL_COMPONENTS, base=base)
+        if runtime_stage is None:
+            stage = base
+            runtime = llvm_runtime.validate_install(base, old_runtime, target=target)
+            runtime_digest = hashlib.sha256(jsonio.json_bytes(runtime)).hexdigest()
+        else:
+            stage = Path(transfer._directory(runtime_stage))
+            runtime = llvm_runtime.validate_stage(stage, target=target,
+                required_components=llvm_runtime.FULL_COMPONENTS, base=base)
+            runtime_digest = inventory.sha256_file(stage / 'runtime.json')
         if runtime['base']['os_revision'] != revision or runtime['llvm_version'] != compiler['version']:
             raise SDKError('runtime differs from release base or selected compiler')
         _copy_base(base, tree, old_runtime)
@@ -96,7 +102,7 @@ def compose(kit, output, *, manifest_sha256, runtime_stage, ports_source, target
         origin = dict(format='emberbsd-sysroot-composition', version=1, target=target, sources=sources,
             base=dict(manifest_sha256=manifest_sha256, sets=sets),
             extractor_sha256=inventory.sha256_file(extractor), compiler=compact_compiler,
-            runtime_sha256=inventory.sha256_file(stage / 'runtime.json'),
+            runtime_sha256=runtime_digest,
             execution_acceptance='not-assessed')
         origin_path = tree / 'usr/share/emberbsd/sysroot-origin.json'
         origin_path.parent.mkdir(parents=True, exist_ok=True)

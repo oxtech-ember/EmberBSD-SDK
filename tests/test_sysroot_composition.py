@@ -63,10 +63,26 @@ class SysrootCompositionTests(LLVMRuntimeFixture):
         (self.prefix / 'include/c++/v1/vector').write_text('// new C++ runtime\n')
         self.save()
 
-    def compose(self):
+    def compose(self, *, embedded=False):
         return composition.compose(self.kit, self.root / 'bundle', manifest_sha256=self.pin,
-            runtime_stage=self.stage, ports_source=self.ports, target='aarch64',
+            runtime_stage=None if embedded else self.stage, ports_source=self.ports, target='aarch64',
             compiler=self.compiler, sdk_revision='a' * 40)
+
+    def test_embedded_runtime_uses_pinned_payload(self):
+        # The final C headers may differ from the runtime producer's bootstrap headers.
+        (self.base / 'usr/include/stdio.h').write_text('// final release header\n')
+        result = self.compose(embedded=True)
+        destination = self.root / 'installed'
+        sysroot_transfer.import_sysroot(self.root / 'bundle', destination, target='aarch64',
+                                       manifest_sha256=result['manifest_sha256'])
+        self.assertEqual((destination / 'usr/include/c++/vector').read_bytes(),
+                         (self.base / 'usr/include/c++/vector').read_bytes())
+        application_toolchain.load_clang_runtime(destination, target='aarch64')
+
+    def test_changed_embedded_runtime_is_refused(self):
+        (self.base / 'usr/pkg/llvm/include/c++/v1/vector').write_bytes(b'changed')
+        with self.assertRaisesRegex(SDKError, 'installed inventory changed'):
+            self.compose(embedded=True)
 
     def test_composed_bundle_keeps_base_and_new_runtime_with_truthful_origin(self):
         result = self.compose()

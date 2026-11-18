@@ -17,8 +17,9 @@ from emberbsd_sdk.targets import target_definition
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('release-kit', 'output', 'manifest-sha256', 'runtime-stage', 'ports-source', 'host-prefix', 'target', 'git'):
+    for name in ('release-kit', 'output', 'manifest-sha256', 'ports-source', 'host-prefix', 'target', 'git'):
         parser.add_argument('--' + name, required=True)
+    parser.add_argument('--runtime-stage', help='replace the runtime supplied in the pinned release sets')
     args = parser.parse_args()
     try:
         native = load_host_prefix(args.host_prefix, required_roles=('python',))
