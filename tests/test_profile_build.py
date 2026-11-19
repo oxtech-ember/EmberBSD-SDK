@@ -73,8 +73,10 @@ class ReleaseNodeTests(ProfileFixture):
         self.nodes = {node['id']: node for node in self.plan_data['nodes']}
         self.work.mkdir()
         write_json(self.work / profile_build.PLAN_FILE, self.plan_data, exclusive=False)
-        for variable in ('EMBER_BYACC_SOURCE', 'EMBER_HEIMDAL_SOURCE'):
-            tree = self.write(f'sources/{variable}/emberbsd-prepared-source.json', '{}').parent
+        for variable, manifest in (('EMBER_BYACC_SOURCE', 'emberbsd-prepared-source.json'),
+                                   ('EMBER_HEIMDAL_SOURCE', 'emberbsd-prepared-source.json'),
+                                   ('EMBER_LIBEDIT_SOURCE', 'libedit-source.json')):
+            tree = self.write(f'sources/{variable}/{manifest}', '{}').parent
             profile_build._write_record(self.work, self.nodes['source:' + variable], {variable: str(tree)})
         profile_build._workspace(self.work, self.plan_data, create=True)
         self.calls = []
@@ -117,6 +119,28 @@ class ReleaseNodeTests(ProfileFixture):
         record = json.loads((self.work / profile_build.record_name('os:sets')).read_text())
         self.assertEqual(sorted(record['outputs']), ['base.tar.xz', 'comp.tar.xz', 'etc.tar.xz'])
         self.assertTrue(all(Path(path).is_file() for path in record['outputs'].values()))
+
+    def test_other_sources_select_new_objects_and_stages(self):
+        # The builder compares source paths and manifests, so another path or
+        # another manifest needs new directories for every reused build state.
+        self.run_sets()
+        before = self.calls[-1][0]
+        self.assertEqual(Path(before['llvm-stage-root']).name, 'llvm-' + Path(before['objects']).name.removeprefix('os-'))
+        self.run_sets()
+        self.assertEqual(self.calls[-1][0]['objects'], before['objects'])
+        tree = self.root / 'sources/EMBER_BYACC_SOURCE'
+        moved = self.root / 'moved/EMBER_BYACC_SOURCE'
+        moved.parent.mkdir()
+        tree.rename(moved)
+        profile_build._write_record(self.work, self.nodes['source:EMBER_BYACC_SOURCE'], {'EMBER_BYACC_SOURCE': str(moved)})
+        self.run_sets()
+        after_move = self.calls[-1][0]
+        (moved / 'emberbsd-prepared-source.json').write_text('{"tree_sha256": "%s"}' % ('1' * 64))
+        self.run_sets()
+        after_edit = self.calls[-1][0]
+        for name in ('objects', 'tools', 'llvm-objects', 'runtime-work', 'llvm-stage-root'):
+            self.assertNotIn(after_move[name], (before[name], after_edit[name]), name)
+            self.assertNotEqual(after_edit[name], before[name], name)
 
     def test_a_new_run_starts_the_release_again(self):
         self.run_sets()

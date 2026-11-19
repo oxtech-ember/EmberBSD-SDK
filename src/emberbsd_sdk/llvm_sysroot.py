@@ -197,8 +197,11 @@ class LLVMCoordinator:
         # inputs, so an OS change selects a new stage instead of refusing the old one.
         self.keyed = 'llvm-stages' not in self.options
         stem = 'llvm-c-foundation-' if self.options.get('c-foundation') else 'llvm-bootstrap-'
-        self.stage_root = self.options.get('llvm-stages', os.path.join(self.options['sdk'], 'stages',
-                                      stem + self.options['target']))
+        # llvm-stage-root moves the keyed stages into another directory below
+        # SDK/stages; they stay keyed and can restart.
+        self.stage_root = self.options.get('llvm-stages', os.path.join(
+            self.options.get('llvm-stage-root', os.path.join(self.options['sdk'], 'stages')),
+            stem + self.options['target']))
         self.runtime_root = self.work
         self.stage_inputs = None
         # Set by prepare(): whether this run found the tools directory new.

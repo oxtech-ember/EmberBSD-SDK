@@ -79,7 +79,8 @@ class ProfileFixture(TemporaryCase):
             'share/mk/bsd.sys.mk': f'.for _var _path in {table} \\\n    EXTERNAL_TOOLCHAIN /usr/toolchain\n.if 1\n.endif\n',
             'ember/shared-sources.json': json.dumps({
                 'schema': 'emberbsd.os-shared-sources.v1', 'sources': SOURCES,
-                'kernel': {'default': ['EMBER_LLVM_SOURCE'], 'configs': {}}}),
+                'kernel': {'default': ['EMBER_LLVM_SOURCE'], 'configs': {}},
+                'release': {'select': ['EMBER_LIBEDIT_SOURCE', 'EMBER_LLVM_SOURCE']}}),
             'sys/arch/evbarm/conf/EMBER64': 'include "arch/evbarm/conf/std"\n',
             'tools/native-tools/contract': 'EmberBSD-native-tools 2\ncmp cmp -\nreadlink readlink -\n'
                                            'make make -\nsh sh -\n',
@@ -100,7 +101,8 @@ class ProfileFixture(TemporaryCase):
                                              f'SHA1 (patch-a) = 00\n'
                for package, name in (('devel/byacc', 'byacc-1.tgz'), ('security/heimdal', 'heimdal-7.tar.gz'),
                                      ('lang/compiler-rt', 'llvm-project-23.src.tar.xz'))}})
-        self.sdk = self.repository('sdk', {'scripts/prepare-libedit.py': 'pass\n'})
+        self.sdk = self.repository('sdk', {'scripts/prepare-libedit.py': 'pass\n',
+                                           'src/emberbsd_sdk/libedit.py': '# libedit 0\n'})
         prefix = self.root / 'prefix'
         for name in ('bin/clang', 'bin/bmake', 'bin/ld.lld'):
             self.write('prefix/' + name, '#!/bin/sh\n', 0o755)
@@ -263,6 +265,19 @@ class BuildProfileTests(ProfileFixture):
         self.assertEqual(sorted(nodes['os:tools']['reasons']),
                          ['needed by os:kernel:EMBER64', 'needed by os:sets'])
         self.assertIn(prepared_sources.RELEASE_TRAVERSALS, self.walks)
+
+    def test_sets_select_the_release_sources_that_the_os_names(self):
+        profile = copy.deepcopy(PROFILE)
+        profile['os']['sets'] = ['base', 'comp', 'etc']
+        sets = self.nodes(self.plan(profile))['os:sets']
+        self.assertIn('source:EMBER_LIBEDIT_SOURCE', sets['dependencies'])
+        self.assertIn('source:EMBER_LLVM_SOURCE', sets['dependencies'])
+        document = json.loads((self.os / 'ember/shared-sources.json').read_text())
+        document['release']['select'] = ['EMBER_LLVM_SOURCE']
+        self.write('os/ember/shared-sources.json', json.dumps(document))
+        git(self.os, 'commit', '-q', '-am', 'release selects LLVM only')
+        sets = self.nodes(self.plan(profile))['os:sets']
+        self.assertNotIn('source:EMBER_LIBEDIT_SOURCE', sets['dependencies'])
 
     def test_sets_are_the_release_sets_without_profile_flags(self):
         # The OS release builder makes base, comp and etc together and sets

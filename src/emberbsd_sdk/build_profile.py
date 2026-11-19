@@ -433,12 +433,16 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
         # The final release build adds the libc++ of the LLVM runtime to the base.
         flags = [flag for flag in flags_for('aarch64', 'clang') if not flag.startswith(('MKCXX=', 'MKLIBCXX='))]
         flags += ['MKCXX=yes', 'MKLIBCXX=yes']
+        _require('release' in shared, 'profile os.sets needs an OS whose ember/shared-sources.json '
+                 'names release.select; update the OS')
+        # The OS names the sources that a release selects although no make guard
+        # requires them (release.select of ember/shared-sources.json).
         # The release builder also reads the Ports producers and names the OS commit.
         ports_identity = checkouts('ports')
         sets_inputs = dict(release_inputs, os_commit=os_identity['commit'], git=release_inputs['git'] + [
             dict(repository='ports', path='.', object=ports_identity['tree'], dirty=bool(ports_identity['dirty']))])
         stage('os:sets', dict(stage='sets', sets=profile['os']['sets']), prepared_sources.RELEASE_TRAVERSALS,
-              flags, ['EMBER_LLVM_SOURCE'], [name + '.tar.xz' for name in profile['os']['sets']],
+              flags, shared['release']['select'], [name + '.tar.xz' for name in profile['os']['sets']],
               'profile os.sets', sets_inputs)
 
     order, waves, done = sorted(nodes), [], set()

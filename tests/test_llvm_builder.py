@@ -982,6 +982,11 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         third = headers_stage()
         self.assertEqual(third.stage_root, second.stage_root)
         self.assertEqual(len(built), 2)
+        # llvm-stage-root moves the keyed stages: they stay keyed.
+        moved = LLVMCoordinator(options | {'llvm-stage-root': str(Path(options['sdk']) / 'stages/llvm-ctx')}, SysrootBuilder)
+        self.assertTrue(moved.keyed)
+        self.assertEqual(moved.resume, SysrootBuilder.RESUMES_FAILED_STAGES)
+        self.assertEqual(Path(moved.stage_root), Path(options['sdk']) / 'stages/llvm-ctx/llvm-bootstrap-aarch64')
         # An explicitly selected stage directory keeps its exact path.
         explicit = LLVMCoordinator(options | {'llvm-stages': str(root / 'chosen')}, SysrootBuilder)
         self.assertEqual(explicit.stage_options('headers')['destination'], str(root / 'chosen/headers'))

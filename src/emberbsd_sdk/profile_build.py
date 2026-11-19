@@ -233,6 +233,20 @@ def _workspace(work, plan, create=False):
     return layout['canonical_root']
 
 
+def _source_option(variable):
+    """Return the builder option of VARIABLE: EMBER_TCP_WRAPPERS_SOURCE is tcp-wrappers-source."""
+    return variable.removeprefix('EMBER_').lower().replace('_', '-')
+
+
+def _source_content(path):
+    """Return the sha256 of the manifest at the root of a prepared source tree."""
+    for name in ('emberbsd-prepared-source.json', 'libedit-source.json', 'llvm-source.json'):
+        manifest = Path(path, name)
+        if manifest.is_file():
+            return hashlib.sha256(manifest.read_bytes()).hexdigest()
+    raise SDKError(f'{path} has no prepared source manifest')
+
+
 def _release(work, node, nodes, plan, config, prefix):
     """Build the sets of NODE with the OS release builder; return the set files."""
     from .os_release_builder import OSReleaseBuilder
@@ -252,27 +266,35 @@ def _release(work, node, nodes, plan, config, prefix):
         shutil.rmtree(destination)
     # A new workspace has no stages directory yet.
     destination.parent.mkdir(exist_ok=True)
-    # build.sh -u reuses objects, tools and LLVM phase objects only for the
-    # same host and target tools; other tools get other directories.
-    tools_key = hashlib.sha256(' '.join(nodes[item]['input_key'] for item in RUNTIME_NODES).encode()).hexdigest()[:16]
+    sources = {}
+    for item in sorted(set(nodes['os:tools']['dependencies'] + node['dependencies'])):
+        if item.startswith('source:'):
+            variable = item.split(':', 1)[1]
+            # EMBER_TCP_WRAPPERS_SOURCE is the builder option tcp-wrappers-source.
+            _require(_source_option(variable) in (*SOURCE_OPTIONS, 'llvm-source', 'libedit-source'),
+                     f'{node["id"]}: the OS release builder does not read {variable}')
+            sources[variable] = _source_path(work, config, variable)
+    # The builder reuses objects, tools, LLVM stages and the LLVM runtime only
+    # for the same host and target tools and the same prepared sources: it
+    # compares their paths and whole manifests. Other inputs get other
+    # directories.
+    material = [nodes[item]['input_key'] for item in RUNTIME_NODES]
+    material += [f'{variable}={path}={_source_content(path)}' for variable, path in sorted(sources.items())]
+    tools_key = hashlib.sha256('\n'.join(material).encode()).hexdigest()[:16]
     options = {'sdk': root, 'os': config['os_source'], 'ports': config['ports_root'], 'compiler': prefix,
                'sdk-source': config['sdk_root'], 'host-prefix': prefix,
                'host-binutils': os.path.dirname(config['host_bfd_config']),
-               'runtime-work': os.path.join(root, 'obj', 'llvm-runtime'), 'destination': str(destination),
+               'runtime-work': os.path.join(root, 'obj', f'llvm-runtime-{tools_key}'),
+               'llvm-stage-root': os.path.join(root, 'stages', f'llvm-{tools_key}'),
+               'destination': str(destination),
                'objects': os.path.join(root, 'obj', f'os-{tools_key}'),
                'tools': os.path.join(root, 'obj', f'tools-{tools_key}'),
                'llvm-objects': os.path.join(root, 'obj', f'llvm-{tools_key}'),
                'distdir': config['distfiles'], 'target': platform['target'],
                'compiler-family': platform['compiler']['target'],
                'host-compiler-family': platform['compiler']['host']}
-    sources = [item for item in nodes['os:tools']['dependencies'] + node['dependencies'] if item.startswith('source:')]
-    for item in sorted(set(sources)):
-        variable = item.split(':', 1)[1]
-        # EMBER_TCP_WRAPPERS_SOURCE is the builder option tcp-wrappers-source.
-        name = variable.removeprefix('EMBER_').lower().replace('_', '-')
-        _require(name in (*SOURCE_OPTIONS, 'llvm-source', 'libedit-source'),
-                 f'{node["id"]}: the OS release builder does not read {variable}')
-        options[name] = _source_path(work, config, variable)
+    for variable, path in sources.items():
+        options[_source_option(variable)] = path
     # bmake has its own job pool: take the free jobserver tokens for it.
     with jobserver.slots(os.environ.get('MAKEFLAGS'), config['jobs']) as jobs:
         options['jobs'] = jobs

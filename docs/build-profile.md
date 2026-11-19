@@ -188,21 +188,30 @@ nodes keep them ready.
   `build-os-release.py`) in the Prebuild SDK workspace `work/sdk`, which
   `profile-build` makes for the profile target before Ninja runs. It gives
   the builder the prepared sources of the plan, the host prefix as compiler
-  and native tools, the Binutils directory of `host_bfd_config`,
-  `work/sdk/obj/llvm-runtime` for the LLVM runtime and `build.distfiles`.
-  The objects and tools of `build.sh -u` are `work/sdk/obj/os-<tools>`,
-  `work/sdk/obj/tools-<tools>` and the LLVM phase objects
-  `work/sdk/obj/llvm-<tools>`, named by the keys of the host prefix, target
-  toolchain and Binutils, so other tools get new directories. A development
+  and native tools, the Binutils directory of `host_bfd_config` and
+  `build.distfiles`. The builder reuses its build state only for the same
+  tools and prepared sources, so the state directories are named by one
+  context key `<ctx>`: the keys of the host prefix, target toolchain and
+  Binutils, and the path and manifest of each prepared source, which the
+  builder compares. These are the objects and
+  tools of `build.sh -u` (`work/sdk/obj/os-<ctx>`, `tools-<ctx>`), the LLVM
+  phase objects (`llvm-<ctx>`), the LLVM runtime (`llvm-runtime-<ctx>`) and
+  the keyed LLVM stages (`work/sdk/stages/llvm-<ctx>`). A changed source tree
+  builds the OS again in new directories. A development
   build continues the LLVM stages that an interrupted run left. The release
   goes to `work/sdk/stages/os-sets-<key>`, and the record names its set files.
   The builder needs clean OS, Ports and SDK checkouts, so `profile-build`
   refuses a sets node with local changes. The builder refuses objects of an
   OS commit that is not a descendant of the last one; remove
-  `work/sdk/obj/os-<tools>`, `tools-<tools>` and `llvm-<tools>` then. Earlier releases stay in `stages`.
+  `work/sdk/obj/os-<ctx>`, `tools-<ctx>` and `llvm-<ctx>` then. Earlier
+  releases and build states stay in `obj` and `stages`.
 
   The key of `os:sets` also binds the Ports tree, which has the producers
   that the builder runs, and the OS commit, which the builder writes into
   `BUILDINFO`. The plan walks the release tree with the final `MKCXX=yes` and
-  `MKLIBCXX=yes` of the Clang release and always needs `EMBER_LLVM_SOURCE`.
+  `MKLIBCXX=yes` of the Clang release. It also selects the sources that
+  `release.select` of `ember/shared-sources.json` names although no make guard
+  requires them: LLVM, and the OpenSSL of Ports, for which the other Ports
+  sources of the release are made. A sets plan needs an OS whose list has
+  `release.select`.
 
