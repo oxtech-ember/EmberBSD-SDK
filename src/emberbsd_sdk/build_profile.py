@@ -556,12 +556,11 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
                    dict(inputs_sha256=hashlib.sha256(record.read_bytes()).hexdigest()), [], [],
                    'needed by os:tools (EMBER_HOST_BFD_CONFIG)')
 
-    # OS builders run the native runner of this SDK.
-    sdk_identity = planner.checkouts('sdk')
+    # OS builders run the native runner and the builders of this SDK: its code
+    # is an input, its documents and tests are not.
     os_inputs = dict(git=[dict(repository='os', path='.', object=os_identity['tree'],
                                dirty=bool(os_identity['dirty'])),
-                          dict(repository='sdk', path='.', object=sdk_identity['tree'],
-                               dirty=bool(sdk_identity['dirty']))],
+                          _tree(planner.checkouts('sdk'), 'src', 'sdk')],
                      target=dict(name=profile['platform']['target'], **target),
                      mk=profile['os']['mk'], repro_timestamp=os_identity['time'])
     release_inputs = dict(os_inputs, buildinfo=profile['os']['buildinfo'])

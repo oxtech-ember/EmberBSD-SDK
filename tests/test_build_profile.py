@@ -380,6 +380,18 @@ class BuildProfileTests(ProfileFixture):
         git(self.ports, 'submodule', 'deinit', '-q', '-f', 'upstream/pkgsrc')
         with self.assertRaisesRegex(SDKError, 'initialize submodule upstream/pkgsrc'):
             self.plan()
+    def test_sdk_documents_are_not_an_input_of_the_os_stages(self):
+        before = self.nodes(self.plan())
+        self.write('sdk/docs/notes.md', 'notes\n')
+        git(self.sdk, 'add', '-A')
+        git(self.sdk, 'commit', '-q', '-m', 'notes')
+        after = self.nodes(self.plan())
+        self.assertEqual(after['os:kernel:EMBER64']['input_key'], before['os:kernel:EMBER64']['input_key'])
+        self.write('sdk/src/emberbsd_sdk/runner.py', '# runner\n')
+        git(self.sdk, 'add', '-A')
+        git(self.sdk, 'commit', '-q', '-m', 'runner')
+        self.assertNotEqual(self.nodes(self.plan())['os:kernel:EMBER64']['input_key'],
+                            before['os:kernel:EMBER64']['input_key'])
 
 
 class PlanCacheTests(ProfileFixture):

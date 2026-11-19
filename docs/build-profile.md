@@ -130,7 +130,8 @@ The plan has these nodes:
   stops the plan, also for a source that does not use the edited recipe.
   Commit such edits first.
 - `os:tools`, `os:kernel:<config>` and `os:sets`: OS stages, keyed by the OS
-  and SDK Git trees, target, make flags, `MK*` options and `MKREPRO_TIMESTAMP`
+  Git tree, the SDK `src` tree (the runner and builders; not the documents and
+  tests), target, make flags, `MK*` options and `MKREPRO_TIMESTAMP`
   (the commit time). Kernels and sets also bind `os.buildinfo`.
 
 The OS supplies the dependency facts; the plan does not list them a second
