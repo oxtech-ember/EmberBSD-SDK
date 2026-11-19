@@ -56,9 +56,10 @@ def check_x11_pin(os_root, record):
           'Prepared X11 source differs from the OS x11Source pin')
 
 
-def flags_for(target, compiler_family=None, x11=False):
+def flags_for(target, compiler_family=None, x11=False, mk=()):
     # OS make owns the toolchain and staged runtime integration. HAVE_GCC stays
     # an upstream source selector; it must not be set to 16 for an external GCC.
+    # MK lists MK*=yes|no values that replace the values of the release profile.
     common = list(SysrootBuilder.FLAGS)
     replacements = dict(MKFIRMWARE='yes', MKLINKLIB='yes', MKSTATICLIB='yes',
                         MKPIC='yes', MKPICLIB='yes', MKDYNAMICROOT='yes',
@@ -74,7 +75,12 @@ def flags_for(target, compiler_family=None, x11=False):
     common = [v for v in common if v.split('=', 1)[0] not in replacements]
     if compiler_family == 'clang':
         replacements.pop('MKLIBSTDCXX')
-    return common + [f'{k}={v}' for k, v in replacements.items()]
+    flags = common + [f'{k}={v}' for k, v in replacements.items()]
+    for value in mk:
+        name, _, setting = value.partition('=')
+        check(re.fullmatch(r'MK[A-Z0-9_]+', name) and setting in ('yes', 'no'), f'invalid OS make option {value}')
+        flags = [flag for flag in flags if flag.split('=', 1)[0] != name] + [value]
+    return flags
 
 
 def gettext_libtool_command(paths, git, target, jobs, compiler_family, host_family):
@@ -103,7 +109,7 @@ def gettext_libtool_command(paths, git, target, jobs, compiler_family, host_fami
 
 
 def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_selection=None,
-                      compiler_family=None, base_cxx=False, install_base_cxx=None, boot_sets=True):
+                      compiler_family=None, base_cxx=False, install_base_cxx=None, boot_sets=True, mk=()):
     if type(base_cxx) is not bool:
         raise SDKError('base C++ selection must be boolean')
     if base_cxx and compiler_family != 'clang':
@@ -119,7 +125,7 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
     runtime_flags = [f'EXTERNAL_TOOLCHAIN={paths["compiler"]}',
                      f'EMBER_EXTERNAL_GCC_RUNTIME={paths["runtime-prefix"]}']
     x11 = 'x11-source' in paths
-    common = flags_for(target, compiler_family, x11)
+    common = flags_for(target, compiler_family, x11, mk)
     if compiler_family == 'clang':
         from .llvm_sysroot import llvm_flags
         runtime_flags = llvm_flags(paths, phase='final', base_cxx=base_cxx)
@@ -227,8 +233,12 @@ def producer_commands(target, paths, host, sha, timestamp, jobs, shell, native_s
     return flags, commands
 
 
-def validate_profile(profile, sha, target):
-    """Validate current and historical profiles without reading mutable tool paths."""
+def validate_profile(profile, sha, target, *, make_options=False):
+    """Validate current and historical profiles without reading mutable tool paths.
+
+    Only the builder of a profile build accepts its own MAKE_OPTIONS (the
+    profile os.mk options): a release, its checks and target acceptance use
+    the release profile options."""
     check(type(profile['schema']) is int and profile['schema'] in GCC_SCHEMAS + CLANG_SCHEMAS and profile['status'] == 'built', 'Incomplete release build profile')
     explicit_native = profile['schema'] >= 3
     check(profile['source_commit'] == sha and full_hash(sha, 40), 'Build receipt belongs to another source')
@@ -246,6 +256,11 @@ def validate_profile(profile, sha, target):
     check(set(receipt['sources']) == {'os', 'ports', 'sdk'} and receipt['sources']['os']['commit'] == sha and
           all(full_hash(v['commit'], 40) for v in receipt['sources'].values()), 'Mixed source receipts')
     signature = receipt['signature']
+    os_mk = signature.get('os_mk')
+    check(os_mk is None or (make_options and isinstance(os_mk, list) and os_mk and
+                            all(isinstance(value, str) and re.fullmatch(r'MK[A-Z0-9_]+=(yes|no)', value)
+                                for value in os_mk)),
+          'The build has profile make options; only its profile build accepts it')
     check(signature['product_version'] == version, 'Mixed source product version')
     libedit.validate_identity(signature['libedit'])
     installed = receipt['libedit_installation']
@@ -344,7 +359,8 @@ def validate_profile(profile, sha, target):
     flags, commands = producer_commands(target, paths, signature['host_tools'], sha, profile['source_timestamp'], profile['jobs'], profile['shell'], native,
                                        signature.get('compiler_family'), base_cxx=base_cxx,
                                        install_base_cxx=profile['schema'] in BASE_CXX_SCHEMAS,
-                                       boot_sets=target == 'aarch64' and profile_boot_sets(profile))
+                                       boot_sets=target == 'aarch64' and profile_boot_sets(profile),
+                                       mk=signature.get('os_mk', ()))
     check(signature['flags'] == flags and profile['commands'] == commands, 'Build command does not select the exact required profile')
     preparation = source_refresh_commands(paths, flags, commands, target,
                                          receipt.get('prepared_source_refresh', []))
@@ -393,7 +409,7 @@ def source_refresh_commands(paths, flags, commands, target, directories):
     return result
 
 
-def make_release_profile(receipt, timestamp, jobs, shell, commands, source_tree):
+def make_release_profile(receipt, timestamp, jobs, shell, commands, source_tree, *, make_options=False):
     target = receipt['signature']['release_profile']
     sha = receipt['sources']['os']['commit']
     profile = dict(schema=receipt['version'], status='built',
@@ -403,7 +419,7 @@ def make_release_profile(receipt, timestamp, jobs, shell, commands, source_tree)
                    source_tree=source_tree, architecture=target,
                    machine=target_definition(target)['machine'], jobs=jobs, shell=shell,
                    commands=commands, output_sha256=receipt['outputs'], sdk_receipt=receipt)
-    validate_profile(profile, sha, target)
+    validate_profile(profile, sha, target, make_options=make_options)
     return profile
 
 
@@ -515,15 +531,16 @@ class OSReleaseBuilder(SysrootBuilder):
         # before this run's first phase.
         self.tools_new_in_run = False
         target = options.get('target')
-        self.FLAGS = flags_for(target, options.get('compiler-family', 'clang'), bool(options.get('x11-source')))
+        self.FLAGS = flags_for(target, options.get('compiler-family', 'clang'), bool(options.get('x11-source')),
+                               options.get('mk', ()))
         super().__init__(options, receipts=receipts)
 
     @classmethod
     def prepared_source_profile(cls, options):
         # build.sh release: includes, libraries and the whole tree.
         from .prepared_sources import RELEASE_TRAVERSALS
-        return (flags_for(options.get('target'), options.get('compiler-family', 'clang'), bool(options.get('x11-source'))),
-                RELEASE_TRAVERSALS)
+        return (flags_for(options.get('target'), options.get('compiler-family', 'clang'), bool(options.get('x11-source')),
+                          options.get('mk', ())), RELEASE_TRAVERSALS)
 
     def reuse_signature(self, signature):
         # The same profile, toolchain and configuration at another OS commit
@@ -561,8 +578,11 @@ class OSReleaseBuilder(SysrootBuilder):
         self.signature['product_version'] = self.product_version
         self.flags, self.release_commands = producer_commands(self.options['target'], self.paths, self.host_tools,
             self.sources['os']['commit'], self.timestamp, self.options['jobs'], self.shell, self.native_selection,
-            self.compiler_family(), base_cxx=self.options.get('base-cxx', False))
+            self.compiler_family(), base_cxx=self.options.get('base-cxx', False), mk=self.options.get('mk', ()))
         self.signature['flags'] = self.flags
+        if self.options.get('mk'):
+            # The receipt check makes the same commands with these options.
+            self.signature['os_mk'] = list(self.options['mk'])
         self.signature['release_profile'] = self.options['target']
 
     def native_makewrapper_command(self):
@@ -690,6 +710,7 @@ class OSReleaseBuilder(SysrootBuilder):
             return receipt
         output = Path(self.paths['destination'])
         profile = make_release_profile(receipt, self.timestamp, self.options['jobs'], self.shell,
-                                       self.release_commands, self.source_tree)
+                                       self.release_commands, self.source_tree,
+                                       make_options=bool(self.options.get('mk')))
         publish_release_profile(output, profile)
         return receipt

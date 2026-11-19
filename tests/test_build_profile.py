@@ -279,17 +279,24 @@ class BuildProfileTests(ProfileFixture):
         sets = self.nodes(self.plan(profile))['os:sets']
         self.assertNotIn('source:EMBER_LIBEDIT_SOURCE', sets['dependencies'])
 
-    def test_sets_are_the_release_sets_without_profile_flags(self):
-        # The OS release builder makes base, comp and etc together and sets
-        # its MK* flags and BUILDINFO itself.
+    def test_sets_are_the_release_sets_without_buildinfo_and_cxx_options(self):
+        # The OS release builder makes base, comp and etc together, sets
+        # BUILDINFO itself and has the C++ runtime of LLVM.
         for change, message in (
                 (dict(sets=['base', 'etc']), 'os.sets must be base, comp, etc'),
-                (dict(sets=['base', 'comp', 'etc'], buildinfo='EmberBSD:test-1'), 'os.mk or os.buildinfo'),
-                (dict(sets=['base', 'comp', 'etc'], mk={'MKLINT': 'no'}), 'os.mk or os.buildinfo')):
+                (dict(sets=['base', 'comp', 'etc'], buildinfo='EmberBSD:test-1'), 'os.buildinfo'),
+                (dict(sets=['base', 'comp', 'etc'], mk={'MKCXX': 'no', 'MKX11': 'yes'}), 'accept MKCXX, MKX11:')):
             profile = copy.deepcopy(PROFILE)
             profile['os'].update(change)
             with self.subTest(change=change), self.assertRaisesRegex(SDKError, message):
                 self.plan(profile)
+
+    def test_profile_make_options_replace_the_release_options_of_the_sets(self):
+        profile = copy.deepcopy(PROFILE)
+        profile['os'].update(sets=['base', 'comp', 'etc'], mk={'MKNTP': 'no', 'MKLINT': 'yes'})
+        flags = self.nodes(self.plan(profile))['os:sets']['inputs']['flags']
+        self.assertIn('MKNTP=no', flags)
+        self.assertEqual([flag for flag in flags if flag.startswith('MKLINT=')], ['MKLINT=yes'])
 
     def test_profile_refuses_paths_versions_and_ports_roots(self):
         for change, message in (
@@ -380,6 +387,7 @@ class BuildProfileTests(ProfileFixture):
         git(self.ports, 'submodule', 'deinit', '-q', '-f', 'upstream/pkgsrc')
         with self.assertRaisesRegex(SDKError, 'initialize submodule upstream/pkgsrc'):
             self.plan()
+
     def test_sdk_documents_are_not_an_input_of_the_os_stages(self):
         before = self.nodes(self.plan())
         self.write('sdk/docs/notes.md', 'notes\n')

@@ -556,10 +556,11 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
                    dict(inputs_sha256=hashlib.sha256(record.read_bytes()).hexdigest()), [], [],
                    'needed by os:tools (EMBER_HOST_BFD_CONFIG)')
 
-    # OS builders run the native runner and the builders of this SDK: its code
-    # is an input, its documents and tests are not.
+    # OS builders run the native runner scripts and the builders of this SDK:
+    # its code is an input, its documents and tests are not.
     os_inputs = dict(git=[dict(repository='os', path='.', object=os_identity['tree'],
                                dirty=bool(os_identity['dirty'])),
+                          _tree(planner.checkouts('sdk'), 'scripts', 'sdk'),
                           _tree(planner.checkouts('sdk'), 'src', 'sdk')],
                      target=dict(name=profile['platform']['target'], **target),
                      mk=profile['os']['mk'], repro_timestamp=os_identity['time'])
@@ -592,11 +593,13 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
                  'profile os.sets needs the aarch64 target and Clang: the plan uses the aarch64-sysroot release')
         _require(sorted(profile['os']['sets']) == names,
                  'profile os.sets must be ' + ', '.join(names) + ': the OS release builder makes them together')
-        _require(not profile['os']['mk'] and not profile['os']['buildinfo'],
-                 'profile os.sets does not accept os.mk or os.buildinfo yet: '
-                 'the OS release builder sets its MK* flags and BUILDINFO itself')
+        _require(not profile['os']['buildinfo'],
+                 'profile os.sets does not accept os.buildinfo yet: the OS release builder sets BUILDINFO itself')
+        owned = {'MKCXX', 'MKLIBCXX', 'MKLLVM', 'MKLLVMRT', 'MKX11', 'MKREPRO'} & set(profile['os']['mk'])
+        _require(not owned, 'profile os.sets does not accept ' + ', '.join(sorted(owned)) +
+                 ': the release builder sets the C++ and LLVM runtime, X11 and reproducible build options')
         # The final release build adds the libc++ of the LLVM runtime to the base.
-        flags = [flag for flag in flags_for('aarch64', 'clang') if not flag.startswith(('MKCXX=', 'MKLIBCXX='))]
+        flags = [flag for flag in flags_for('aarch64', 'clang', mk=mk) if not flag.startswith(('MKCXX=', 'MKLIBCXX='))]
         flags += ['MKCXX=yes', 'MKLIBCXX=yes']
         _require('release' in shared, 'profile os.sets needs an OS whose ember/shared-sources.json '
                  'names release.select; update the OS')

@@ -143,6 +143,21 @@ class ReleaseNodeTests(ProfileFixture):
             self.assertNotIn(after_move[name], (before[name], after_edit[name]), name)
             self.assertNotEqual(after_edit[name], before[name], name)
 
+    def test_profile_make_options_reach_the_builder_with_their_own_objects(self):
+        self.run_sets()
+        before = self.calls[-1][0]
+        self.assertEqual(before['mk'], [])
+        profile = copy.deepcopy(self.plan_data['profile'])
+        profile['os']['mk'] = {'MKNTP': 'no'}
+        self.plan_data = self.plan(profile, state=self.work, selected_sources=self.config['selected_sources'])
+        self.nodes = {node['id']: node for node in self.plan_data['nodes']}
+        write_json(self.work / profile_build.PLAN_FILE, self.plan_data, exclusive=False)
+        self.run_sets()
+        after = self.calls[-1][0]
+        self.assertEqual(after['mk'], ['MKNTP=no'])
+        for name in ('objects', 'tools', 'llvm-objects'):
+            self.assertNotEqual(after[name], before[name], name)
+
     def test_a_new_run_starts_the_release_again(self):
         self.run_sets()
         destination = Path(self.calls[0][0]['destination'])

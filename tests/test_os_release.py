@@ -576,6 +576,17 @@ class BuilderReleaseTests(TemporaryCase):
                 with self.assertRaises(SDKError):
                     validate_profile(bad, sha, 'aarch64')
 
+    def test_profile_make_options_are_for_their_profile_build_only(self):
+        options = release_fixture(self.root, 'aarch64')
+        options['mk'] = ['MKNTP=no']
+        receipt = OSReleaseBuilder(options).run()
+        profile = jsonio.read_json(Path(options['destination']) / 'build-profile.json')
+        self.assertIn('MKNTP=no', profile['sdk_receipt']['signature']['flags'])
+        sha = receipt['sources']['os']['commit']
+        validate_profile(profile, sha, 'aarch64', make_options=True)
+        with self.assertRaisesRegex(SDKError, 'profile make options'):
+            validate_profile(profile, sha, 'aarch64')
+
     def test_release_rejects_a_reused_kernel_with_an_old_build_identity(self):
         options = release_fixture(self.root, 'aarch64')
         control = jsonio.read_json(self.root / 'control.json')
@@ -594,6 +605,15 @@ class BuilderReleaseTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, 'require the selected Clang'):
             producer_commands('aarch64', {}, {}, 'a' * 40, 1, '2', '/bin/sh',
                 compiler_family='gcc', base_cxx=True)
+
+    def test_make_options_replace_the_release_profile_options(self):
+        from emberbsd_sdk.os_release_builder import flags_for
+        flags = flags_for('aarch64', 'clang', mk=['MKNTP=no', 'MKX11=no'])
+        self.assertIn('MKNTP=no', flags)
+        self.assertEqual([flag for flag in flags if flag.startswith('MKX11=')], ['MKX11=no'])
+        for value in ('MKNTP=1', 'CC=no', 'MKNTP'):
+            with self.subTest(value=value), self.assertRaisesRegex(SDKError, 'invalid OS make option'):
+                flags_for('aarch64', 'clang', mk=[value])
 
     def test_current_profile_accepts_gettext_foundation_and_provider_sequence(self):
         from emberbsd_sdk.native_os_routing import native_path

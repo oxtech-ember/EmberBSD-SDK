@@ -380,8 +380,11 @@ def _release(work, node, nodes, plan, config, prefix):
     # for the same host and target tools and the same prepared sources: it
     # compares their paths and whole manifests. Other inputs get other
     # directories.
+    mk = [f'{name}={value}' for name, value in plan['profile']['os']['mk'].items()]
     material = [nodes[item]['input_key'] for item in RUNTIME_NODES]
     material += [f'{variable}={path}={_source_content(path)}' for variable, path in sorted(sources.items())]
+    # Other MK* options build other objects: make does not see a changed option.
+    material += mk
     tools_key = hashlib.sha256('\n'.join(material).encode()).hexdigest()[:16]
     options = {'sdk': root, 'os': config['os_source'], 'ports': config['ports_root'], 'compiler': prefix,
                'sdk-source': config['sdk_root'], 'host-prefix': prefix,
@@ -394,7 +397,7 @@ def _release(work, node, nodes, plan, config, prefix):
                'llvm-objects': os.path.join(root, 'obj', f'llvm-{tools_key}'),
                'distdir': config['distfiles'], 'target': platform['target'],
                'compiler-family': platform['compiler']['target'],
-               'host-compiler-family': platform['compiler']['host']}
+               'host-compiler-family': platform['compiler']['host'], 'mk': mk}
     for variable, path in sources.items():
         options[_source_option(variable)] = path
     # bmake has its own job pool: take the free jobserver tokens for it.

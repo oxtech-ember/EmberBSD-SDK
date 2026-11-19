@@ -30,9 +30,16 @@ come from the client configuration.
   names installation sets: the OS release builder makes `base`, `comp` and
   `etc` together, so the plan accepts exactly these three, for the aarch64
   target with Clang (the `aarch64-sysroot` release). With sets, the plan
-  refuses `os.mk` and `os.buildinfo` for now: the release builder sets its
-  `MK*` flags and `BUILDINFO` (from the OS commit) itself.
-  `os.mk` maps `MK*` options to `yes` or `no`.
+  refuses `os.buildinfo` for now: the release builder sets `BUILDINFO` (from
+  the OS commit) itself.
+  `os.mk` maps `MK*` options to `yes` or `no`. With sets, they replace the
+  options of the release profile; the release builder sets `MKCXX`,
+  `MKLIBCXX`, `MKLLVM`, `MKLLVMRT`, `MKX11` and `MKREPRO` itself. A release
+  with other `MK*` options uses other object, tools and LLVM directories,
+  because make does not see a changed option in the kept objects: the first
+  build of a new set of options also builds the LLVM stages. The objects of
+  each set of options are kept for the next build. Its receipt is for this
+  profile build only: release finalization and target acceptance refuse it.
   `os.buildinfo` is the release metadata that the kernel records (`BUILDINFO`).
   Select at least one kernel or set.
 - `ports` accepts `sets` and `packages` but refuses roots until stage 4. Plan
@@ -130,8 +137,8 @@ The plan has these nodes:
   stops the plan, also for a source that does not use the edited recipe.
   Commit such edits first.
 - `os:tools`, `os:kernel:<config>` and `os:sets`: OS stages, keyed by the OS
-  Git tree, the SDK `src` tree (the runner and builders; not the documents and
-  tests), target, make flags, `MK*` options and `MKREPRO_TIMESTAMP`
+  Git tree, the SDK `scripts` and `src` trees (the runners and builders; not
+  the documents and tests), target, make flags, `MK*` options and `MKREPRO_TIMESTAMP`
   (the commit time). Kernels and sets also bind `os.buildinfo`.
 
 The OS supplies the dependency facts; the plan does not list them a second
