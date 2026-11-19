@@ -14,7 +14,8 @@ from contextlib import redirect_stderr
 from unittest import mock
 
 from test_build_profile import PROFILE, ProfileFixture, git
-from emberbsd_sdk import profile_build
+from emberbsd_sdk import profile_build, workspace
+from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.jsonio import write_json
 
 NINJA = shutil.which('ninja')
@@ -293,6 +294,122 @@ class ProfileBuildTests(ProfileFixture):
         plan = self.plan(selected_sources=self.config['selected_sources'])
         text = profile_build.ninja_file(plan, command=['/a b/python', '$HOME'])
         self.assertIn("command = '/a b/python' '$$HOME' --node $id --key $key", text)
+
+
+class BuilderSourcesTests(ProfileFixture):
+    """build-sysroot.py and build-os-release.py prepare the sources of their build plan."""
+
+    class Builder:
+        @classmethod
+        def prepared_source_profile(cls, options):
+            return ['MKX11=no'], (('lib', frozenset(('dependall',))),)
+
+    def setUp(self):
+        super().setUp()
+        for path, text in (('scripts/source-inputs/byacc/source.py', "PACKAGE = 'devel/byacc'\n" + PRODUCER),
+                           ('scripts/source-inputs/heimdal/source.py', "PACKAGE = 'security/heimdal'\n" + PRODUCER),
+                           ('pkgsrc/devel/editline/distinfo', 'SHA512 (libedit-1.tar.gz) = 00\n'
+                                                              'Size (libedit-1.tar.gz) = 1 bytes\n')):
+            self.write('ports/' + path, text)
+        git(self.ports, 'add', '-A')
+        git(self.ports, 'commit', '-q', '-m', 'producers')
+        prefix = Path(self.native.bundle_root)
+        (prefix / 'bin/mksh').symlink_to(shutil.which('sh'))
+        self.write('prefix/bin/gpatch', '#!/bin/sh\n', 0o755)
+        for name in ('byacc-1.tgz', 'heimdal-7.tar.gz', 'libedit-1.tar.gz'):
+            self.write('distfiles/' + name, name)
+        self.llvm = self.write('llvm/llvm-source.json', '{}').parent
+        self.log = self.root / 'log'
+        os.environ['TEST_LOG'] = str(self.log)
+        self.addCleanup(os.environ.pop, 'TEST_LOG', None)
+        workspace.create(str(self.root / 'sdk-work'), target='aarch64')
+
+    def options(self, **changes):
+        return {'sdk': str(self.root / 'sdk-work'), 'os': str(self.os), 'ports': str(self.ports),
+                'sdk-source': str(self.sdk), 'host-prefix': self.native.bundle_root, 'target': 'aarch64',
+                'llvm-source': str(self.llvm), 'distdir': str(self.root / 'distfiles'), 'jobs': 2} | changes
+
+    def select(self, options):
+        log = self.log
+
+        def libedit(ports, archive, output, patch_tool):
+            # The SDK libedit producer; its own tests cover the tree.
+            os.makedirs(output)
+            Path(output, 'libedit-source.json').write_text(os.path.basename(archive))
+            with open(log, 'a') as stream:
+                stream.write('prepare ' + os.path.basename(archive) + '\n')
+
+        self.log.write_text('')
+        with mock.patch('emberbsd_sdk.libedit.prepare_source', libedit):
+            result = profile_build.builder_sources(options, self.Builder, required_sources=self.required_sources,
+                                                   native=self.native)
+        return result, self.log.read_text().splitlines()
+
+    def test_the_plan_names_the_sources_and_the_build_prepares_them_once(self):
+        prepared = self.root / 'sdk-work' / profile_build.BUILDER_SOURCES
+        options = self.options(plan=True)
+        result, log = self.select(options)
+        self.assertEqual(sorted(result['prepare']), ['ports:pkgsrc-export', 'source:EMBER_BYACC_SOURCE',
+                                                     'source:EMBER_HEIMDAL_SOURCE', 'source:EMBER_LIBEDIT_SOURCE'])
+        self.assertEqual(log, [])
+        self.assertFalse(prepared.exists())
+        options = self.options()
+        result, log = self.select(options)
+        self.assertIsNone(result)
+        self.assertEqual(sorted(log), ['prepare byacc-1.tgz', 'prepare heimdal-7.tar.gz', 'prepare libedit-1.tar.gz'])
+        for name, manifest, archive in (('byacc-source', 'emberbsd-prepared-source.json', 'byacc-1.tgz'),
+                                        ('heimdal-source', 'emberbsd-prepared-source.json', 'heimdal-7.tar.gz'),
+                                        ('libedit-source', 'libedit-source.json', 'libedit-1.tar.gz')):
+            path = Path(options[name])
+            self.assertEqual(path.parent, prepared.resolve() / 'sources')
+            self.assertEqual((path / manifest).read_text(), archive)
+        self.assertEqual(options['llvm-source'], str(self.llvm))
+        # The next build and its plan use the same trees and prepare nothing.
+        for changes in ({}, {'plan': True}):
+            again = self.options(**changes)
+            self.assertEqual(self.select(again), (None, []))
+            self.assertEqual(again['byacc-source'], options['byacc-source'])
+
+    def test_a_missing_distdir_stops_before_the_producer(self):
+        options = self.options()
+        del options['distdir']
+        with self.assertRaisesRegex(SDKError, '--distdir'):
+            self.select(options)
+        self.assertEqual(self.log.read_text(), '')
+
+    def test_a_source_without_a_producer_is_refused_before_all_producers(self):
+        # release.select names LLVM; no common producer prepares it.
+        for changes in ({}, {'plan': True}):
+            options = self.options(**changes)
+            del options['llvm-source']
+            with self.assertRaisesRegex(SDKError, r'EMBER_LLVM_SOURCE \(.*release.select.*\): select --llvm-source'):
+                self.select(options)
+        self.assertFalse((self.root / 'sdk-work' / profile_build.BUILDER_SOURCES).exists())
+
+    def test_the_walk_has_the_flags_and_directories_of_the_build(self):
+        walks = []
+        original = self.required_sources
+        self.required_sources = lambda traversals, flags: walks.append((traversals, flags)) or original(traversals, flags)
+        cases = (({}, ['MKCXX=yes', 'MKLIBCXX=yes'], 'lib'),
+                 ({'base-cxx': False}, ['MKCXX=yes', 'MKLIBCXX=no'], 'lib'),
+                 ({'c-foundation': True}, ['MKCXX=no', 'MKLIBCXX=no'], None))
+        for changes, cxx, library in cases:
+            with self.subTest(changes=changes):
+                walks.clear()
+                self.Builder.FLAGS = ('MKCXX=yes', 'MKLIBCXX=no')
+                self.select(self.options(plan=True, **changes))
+                traversals, flags = walks[0]
+                self.assertEqual([flag for flag in flags if flag.startswith('MK') and 'CXX' in flag], cxx)
+                self.assertEqual([path for path, _ in traversals], ['tools'] + ([library] if library else []))
+        # GCC keeps the flags of its builder.
+        walks.clear()
+        self.select(self.options(plan=True, **{'compiler-family': 'gcc'}))
+        self.assertNotIn('MKCXX=yes', walks[0][1])
+
+    def test_the_sdk_must_be_a_workspace_of_the_target(self):
+        with self.assertRaisesRegex(SDKError, '--sdk is not a Prebuild SDK workspace for aarch64'):
+            self.select(self.options(sdk=str(self.root / 'other')))
+
 
 if __name__ == '__main__':
     unittest.main()

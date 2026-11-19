@@ -223,7 +223,7 @@ class PreparedSourceTests(TemporaryCase):
         with self.assertRaises(SDKError):
             baseline(str(root))
         builder.native = SimpleNamespace(tool=lambda role: {'make': bmake, 'sed': sed}[role])
-        with self.assertRaisesRegex(SDKError, '--fixture-source'):
+        with self.assertRaisesRegex(SDKError, 'EMBER_FIXTURE_SOURCE for '):
             builder.require_prepared_sources([], traversals)
         builder.paths['fixture-source'] = '/prepared/fixture'
         found = builder.require_prepared_sources([], traversals)
@@ -454,10 +454,10 @@ class PreparedSourceTests(TemporaryCase):
                 builder.require_prepared_sources(flags + self.source_flags(SYSROOT_SOURCES),
                                                  OSReleaseBuilder.prepared_source_profile({'target': 'aarch64', 'x11-source': '/x'})[1])
         message = str(refused.exception)
-        for option in ('--iscsi-source', '--top-source', '--gettext-source', '--libxml2-source'):
+        for option in ('EMBER_ISCSI_SOURCE', 'EMBER_TOP_SOURCE', 'EMBER_GETTEXT_SOURCE', 'EMBER_LIBXML2_SOURCE'):
             self.assertIn(option, message)
         self.assertIn('EMBER_ISCSI_SOURCE for external/iscsi/lib', message)
-        self.assertNotIn('--byacc-source', message)
+        self.assertNotIn('EMBER_BYACC_SOURCE', message)
         builder = self.builder(RELEASE_SOURCES)
         with patch('emberbsd_sdk.prepared_sources.process.capture', side_effect=self.fake_make) as run:
             needed = builder.require_prepared_sources(flags + self.source_flags(RELEASE_SOURCES),
@@ -471,7 +471,7 @@ class PreparedSourceTests(TemporaryCase):
     def test_unselected_parse_time_source_is_reported(self):
         builder = self.builder(('llvm', 'libedit'))
         with patch('emberbsd_sdk.prepared_sources.process.capture', side_effect=self.fake_make):
-            with self.assertRaisesRegex(SDKError, r'--byacc-source \(EMBER_BYACC_SOURCE for external/byacc/bin\)'):
+            with self.assertRaisesRegex(SDKError, 'EMBER_BYACC_SOURCE for external/byacc/bin'):
                 builder.require_prepared_sources([], prepared_sources.LIBS_TRAVERSALS)
 
     def test_coordinator_checks_base_and_final_profiles_before_headers_build(self):
@@ -537,7 +537,7 @@ class PreparedSourceTests(TemporaryCase):
         builder.options, builder.llvm_phase = {'c-foundation': True}, 'headers'
         needed = self.walk([], builder.prepared_source_traversals())
         self.assertEqual(needed.get('EMBER_BYACC_SOURCE'), 'tools/host')
-        self.assertIn('--byacc-source', prepared_sources.missing_sources(needed, {})[0])
+        self.assertEqual(prepared_sources.missing_sources(needed, {})[0], 'EMBER_BYACC_SOURCE for tools/host')
 
     def test_c_foundation_requires_heimdal_before_plan_or_build(self):
         coordinator = LLVMCoordinator.__new__(LLVMCoordinator)
@@ -545,7 +545,7 @@ class PreparedSourceTests(TemporaryCase):
         for plan in (True, False):
             with self.subTest(plan=plan):
                 coordinator.options = {'c-foundation': True, 'plan': plan}
-                with self.assertRaisesRegex(SDKError, r'C foundation requires --heimdal-source'):
+                with self.assertRaisesRegex(SDKError, 'C foundation requires EMBER_HEIMDAL_SOURCE'):
                     coordinator.require_prepared_sources()
 
         calls = []
@@ -562,7 +562,7 @@ class PreparedSourceTests(TemporaryCase):
         builder.options, builder.llvm_phase = {}, 'headers'
         needed = self.walk([], builder.prepared_source_traversals())
         self.assertEqual(needed.get('EMBER_BYACC_SOURCE'), 'tools/host')
-        self.assertIn('--byacc-source', prepared_sources.missing_sources(needed, {})[0])
+        self.assertEqual(prepared_sources.missing_sources(needed, {})[0], 'EMBER_BYACC_SOURCE for tools/host')
 
     def test_host_tool_source_query_routes_selected_yacc(self):
         (self.os / 'tools/host/Makefile').write_text(BYACC)

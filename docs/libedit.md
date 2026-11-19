@@ -48,10 +48,10 @@ against a later clean Ports checkout compares the recipe metadata, archive and
 all patch hashes; unrelated commits do not invalidate the prepared source or
 rewrite its receipt. Recipe or patch changes still require preparation again.
 
-Both `build-sysroot.py` and `build-os-release.py` require `--libedit-source`.
-They validate it before and after producers, pass `-V EMBER_LIBEDIT_SOURCE`,
-and bind its identity into object contexts and output receipts. A changed
-source or recipe invalidates object reuse. Before accepting output, both
+`build-sysroot.py` and `build-os-release.py` prepare this source in all builds
+(see [sysroot preparation](sysroot.md#prepared-sources)). They validate it
+before and after producers, pass `-V EMBER_LIBEDIT_SOURCE`, and bind its
+identity into object contexts and output receipts. A changed source or recipe invalidates object reuse. Before accepting output, both
 builders require the matching installed distinfo, histedit/readline headers and
 a target ELF library with SONAME `libedit.so.3`. Native linker/runtime aliases
 must select that one provider. A separate `/usr/pkg/lib/libedit.*` is rejected.

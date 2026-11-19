@@ -42,46 +42,14 @@ def main():
             print(f'OS release finalization: {exc}', file=sys.stderr)
             return 1
     parser = argparse.ArgumentParser(description='Build an EmberBSD OS release with a native Ports prefix.')
-    for name in ('sdk', 'os-source', 'ports', 'compiler', 'sdk-source', 'libedit-source', 'libarchive-source', 'libevent-source', 'host-prefix', 'host-binutils'):
+    for name in ('sdk', 'os-source', 'ports', 'compiler', 'sdk-source', 'host-prefix', 'host-binutils'):
         parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix'}.get(name))
     parser.add_argument('--jobs', type=int, action=UniqueOption,
                         help='positive build parallelism; default: CPUs available to this process')
     parser.add_argument('--runtime-work', action=UniqueOption,
                         help='required for GCC or to build an LLVM runtime; not needed with a selected LLVM stage')
     parser.add_argument('--distdir', action=UniqueOption,
-                        help='existing shared distfile cache for the common cross-libtool producer')
-    parser.add_argument('--openssl-source', action=UniqueOption, help='prepared common Ports OpenSSL source')
-    parser.add_argument('--libfido2-source', action=UniqueOption, help='prepared common Ports libfido2 source')
-    parser.add_argument('--libcbor-source', action=UniqueOption, help='prepared common Ports libcbor source')
-    parser.add_argument('--expat-source', action=UniqueOption, help='prepared common Ports expat source')
-    parser.add_argument('--libfetch-source', action=UniqueOption, help='prepared common Ports libfetch source')
-    parser.add_argument('--openldap-source', action=UniqueOption, help='prepared common Ports OpenLDAP source')
-    parser.add_argument('--unbound-source', action=UniqueOption, help='prepared common Ports Unbound source')
-    parser.add_argument('--wpa-source', action=UniqueOption, help='prepared common Ports WPA source')
-    parser.add_argument('--mdns-source', action=UniqueOption, help='prepared common Ports mDNSResponder source')
-    parser.add_argument('--dhcpcd-source', action=UniqueOption, help='prepared common Ports dhcpcd source')
-    parser.add_argument('--heimdal-source', action=UniqueOption, help='prepared common Ports Heimdal source')
-    parser.add_argument('--openssh-source', action=UniqueOption, help='prepared common Ports OpenSSH source')
-    parser.add_argument('--texinfo-source', action=UniqueOption, help='prepared common Ports Texinfo C-only source')
-    parser.add_argument('--nvi-source', action=UniqueOption, help='prepared common Ports nvi source')
-    parser.add_argument('--ekermit-source', action=UniqueOption, help='prepared common Ports E-Kermit source')
-    parser.add_argument('--tcp-wrappers-source', action=UniqueOption, help='prepared common Ports TCP wrappers source')
-    parser.add_argument('--libpcap-source', action=UniqueOption, help='prepared common Ports libpcap source')
-    parser.add_argument('--tcpdump-source', action=UniqueOption, help='prepared common Ports tcpdump source')
-    parser.add_argument('--iscsi-source', action=UniqueOption, help='prepared common Ports NetBSD iSCSI source')
-    parser.add_argument('--top-source', action=UniqueOption, help='prepared common Ports top source')
-    parser.add_argument('--ntp-source', action=UniqueOption, help='prepared common Ports NTP source')
-    parser.add_argument('--libopts-source', action=UniqueOption, help='prepared common AutoGen libopts source')
-    parser.add_argument('--gettext-source', action=UniqueOption, help='prepared common Ports gettext source')
-    parser.add_argument('--libxml2-source', action=UniqueOption, help='prepared common Ports libxml2 source')
-    parser.add_argument('--tree-sitter-source', action=UniqueOption, help='prepared common Ports tree-sitter source')
-    parser.add_argument('--zlib-source', action=UniqueOption, help='prepared common Ports zlib source')
-    parser.add_argument('--ppp-source', action=UniqueOption, help='prepared common Ports PPP source')
-    parser.add_argument('--tdb-source', action=UniqueOption, help='prepared common Ports TDB source')
-    parser.add_argument('--diffutils-source', action=UniqueOption, help='prepared common Ports diffutils source')
-    parser.add_argument('--grep-source', action=UniqueOption, help='prepared common Ports GNU grep source')
-    parser.add_argument('--rcs-source', action=UniqueOption, help='prepared common Ports RCS source')
-    parser.add_argument('--byacc-source', action=UniqueOption, help='prepared common Ports byacc source')
+                        help='distfiles of the prepared sources that the build prepares and of the cross-libtool')
     parser.add_argument('--x11-source', action=UniqueOption,
                         help='prepared Ports xsrc source; builds the X11 sets (Clang aarch64-sysroot only)')
     parser.add_argument('--host-compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
@@ -126,6 +94,7 @@ def main():
         from emberbsd_sdk import API_VERSION
         from emberbsd_sdk.errors import SDKError
         from emberbsd_sdk.os_release_builder import OSReleaseBuilder
+        from emberbsd_sdk.profile_build import builder_sources
     except (OSError, ImportError, AttributeError, ValueError) as exc:
         print(f'OS release build: cannot load selected SDK source: {exc}', file=sys.stderr)
         return 1
@@ -136,7 +105,10 @@ def main():
         options = {key.replace('_', '-'): value for key, value in vars(arguments).items() if value is not None}
         options['os'] = options.pop('os-source')
         options['target'] = 'amd64' if options.pop('profile') == 'amd64' else 'aarch64'
-        print(json.dumps(OSReleaseBuilder(options).run(), ensure_ascii=False, indent=2))
+        # The build plan selects and prepares the shared sources of the OS.
+        planned = builder_sources(options, OSReleaseBuilder)
+        result = planned if planned is not None else OSReleaseBuilder(options).run()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except KeyboardInterrupt as exc:
         print(f'OS release build interrupted: {exc}', file=sys.stderr)

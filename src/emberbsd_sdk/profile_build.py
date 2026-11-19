@@ -24,7 +24,7 @@ import shutil
 import subprocess
 import sys
 
-from . import build_profile, jobserver, process
+from . import build_profile, jobserver, prepared_sources, process
 from .errors import SDKError
 from .jsonio import read_json, write_json
 
@@ -111,8 +111,9 @@ def _record(work, node_id):
 
 
 def _run(argv, env=None):
-    # Ninja shows the output of a failed edge.
-    if subprocess.run(argv, env=env, check=False).returncode != 0:
+    # Ninja shows the output of a failed edge. The output goes to stderr: the
+    # build scripts write their result to stdout.
+    if subprocess.run(argv, env=env, stdout=sys.stderr, check=False).returncode != 0:
         raise SDKError('producer failed: ' + ' '.join(argv[:3]))
 
 
@@ -125,6 +126,102 @@ def _write_record(work, node, outputs):
 def _source_path(work, config, variable):
     selected = config['selected_sources'].get(variable)
     return selected or _record(work, 'source:' + variable)['outputs'][variable]
+
+
+def prepare_sources(plan, work, config):
+    """Prepare the source and export nodes of PLAN in order, without Ninja.
+
+    PLAN comes from build_profile.source_plan. A node whose record has its
+    input key is ready and does not run again. CONFIG['workspace'] is the
+    Prebuild SDK workspace that keeps the shared pkgsrc export."""
+    work = Path(work)
+    work.mkdir(parents=True, exist_ok=True)
+    with open(work / '.lock', 'w') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise SDKError(f'another build uses {work}') from exc
+        write_json(work / PLAN_FILE, plan, exclusive=False)
+        for node in plan['nodes']:
+            _require(node['kind'] in ('source', 'export'), f'{node["id"]} is not a prepared source')
+            if node['decision']['action'] != 'ready':
+                _require(runnable(node) is None, f'{node["id"]}: {runnable(node)}')
+                run_node(work, node['id'], node['input_key'] or 'changed', config)
+
+
+# The prepared sources of build-sysroot.py and build-os-release.py.
+BUILDER_SOURCES = 'obj/prepared-sources'
+
+
+def builder_sources(options, builder, **plan_options):
+    """Select the prepared sources of an OS builder in OPTIONS; prepare missing ones.
+
+    BUILDER is SysrootBuilder or OSReleaseBuilder. Its prepared_source_profile
+    names the make flags and directories of its OS build; the build plan
+    finds the sources that they need, the sources of release.select and
+    libedit, which the builder reads in all builds. The common producers
+    prepare them in SDK/obj/prepared-sources with the distfiles of --distdir;
+    a tree with the same input key is used again. With --plan nothing is
+    prepared: when a source is not ready, return the plan of the sources that
+    the build prepares. Otherwise return None, with the path of each source
+    in OPTIONS. PLAN_OPTIONS go to source_plan."""
+    from . import workspace
+    from .cpu_capacity import resolve_jobs
+    try:
+        layout = workspace.inspect_layout(options['sdk'])
+        workspace.require_target(layout, options['target'])
+    except SDKError as exc:
+        raise SDKError(f'--sdk is not a Prebuild SDK workspace for {options["target"]}: {exc}') from exc
+    root = layout['canonical_root']
+    clang = options.get('compiler-family', 'clang') == 'clang'
+    if options.get('c-foundation'):
+        # The C foundation builds the OS tools and headers only.
+        flags, traversals = list(builder.FLAGS), ()
+    else:
+        flags, traversals = builder.prepared_source_profile(options)
+    if clang:
+        # The final Clang build has C++ and, by default, the libc++ of the
+        # LLVM runtime in the base; the builder uses the same default. The C
+        # foundation has the flags of the headers phase: no C++.
+        final = not options.get('c-foundation')
+        base_cxx = final and options.get('base-cxx', True)
+        flags = [flag for flag in flags if not flag.startswith(('MKCXX=', 'MKLIBCXX='))]
+        flags += ['MKCXX=' + ('yes' if final else 'no'), 'MKLIBCXX=' + ('yes' if base_cxx else 'no')]
+    selected = {'EMBER_LLVM_SOURCE': options['llvm-source']} if options.get('llvm-source') else {}
+    work = Path(root, BUILDER_SOURCES)
+    plan = build_profile.source_plan(
+        os_root=options['os'], ports_root=options['ports'], sdk_root=options['sdk-source'],
+        host_prefix=options['host-prefix'], host_compiler=options.get('host-compiler-family', 'clang'),
+        target=options['target'], flags=flags, traversals=(*prepared_sources.TOOLS_TRAVERSALS, *traversals),
+        read=('EMBER_LIBEDIT_SOURCE',), state=work, selected_sources=selected,
+        jobs=min(8, int(resolve_jobs(options.get('jobs')))), **plan_options)
+    pending = [node for node in plan['nodes'] if node['decision']['action'] != 'ready']
+    # Refuse, before a producer runs, a source that the builder does not read
+    # and a source that no common producer prepares.
+    from .sysroot_builder import SOURCE_OPTIONS
+    for node in plan['nodes']:
+        if node['kind'] != 'source':
+            continue
+        variable = node['identity']['variable']
+        why = f'the OS build needs {variable} ({"; ".join(node["reasons"])})'
+        _require(_source_option(variable) in (*SOURCE_OPTIONS, 'llvm-source', 'libedit-source'),
+                 f'{why}, but the SDK builder does not read it; update the SDK')
+        if node['decision']['action'] != 'ready' and runnable(node) is not None:
+            hint = ('select --llvm-source' if variable == 'EMBER_LLVM_SOURCE'
+                    else 'no common producer prepares it; update the OS ember/shared-sources.json')
+            raise SDKError(f'{why}: {hint}')
+    if pending and options.get('plan'):
+        return dict(format='emberbsd-prepared-source-plan', version=1,
+                    prepare={node['id']: node['decision']['why'] for node in pending})
+    config = dict(host_prefix=options['host-prefix'], ports_root=options['ports'], sdk_root=options['sdk-source'],
+                  distfiles=options.get('distdir'), selected_sources=selected, workspace=root)
+    if pending:
+        prepare_sources(plan, work, config)
+    for node in plan['nodes']:
+        if node['kind'] == 'source':
+            variable = node['identity']['variable']
+            options[_source_option(variable)] = _source_path(work, config, variable)
+    return None
 
 
 def run_node(work, node_id, key, config):
@@ -153,6 +250,7 @@ def run_node(work, node_id, key, config):
         output.parent.mkdir(parents=True, exist_ok=True)
         if identity['producer'] == build_profile.LIBEDIT:
             from .libedit import prepare_source
+            _require(config.get('distfiles'), f'{node_id}: select the distfiles directory (--distdir)')
             _require(len(identity['distfiles']) == 1, f'{node_id}: the libedit recipe must name one distfile')
             prepare_source(config['ports_root'], os.path.join(config['distfiles'], identity['distfiles'][0]),
                            str(output), patch_tool=gpatch)
@@ -163,14 +261,16 @@ def run_node(work, node_id, key, config):
                     '--sdk-source', config['sdk_root'], '--git', git, 'prepare', '--output', str(output),
                     '--patch', gpatch, '--pkgsrc-export', export, '--export-patch', gpatch]
             if identity['distfiles']:
+                _require(config.get('distfiles'), f'{node_id}: select the distfiles directory (--distdir)')
                 argv += ['--distdir', config['distfiles']]
             # A producer is one job; it does not take part in the jobserver.
             env = {name: value for name, value in os.environ.items() if name not in ('MAKEFLAGS', 'MFLAGS')}
             _run(argv, env=env)
         _write_record(work, node, {identity['variable']: str(output)})
     elif node['kind'] == 'export':
-        # The export stage keeps one export per fingerprint in the workspace.
-        root = Path(_workspace(work, plan), 'stages', 'pkgsrc-export')
+        # The export stage keeps one export per fingerprint in the workspace,
+        # where the OS release builder of that workspace finds it too.
+        root = Path(config.get('workspace') or _workspace(work, plan), 'stages', 'pkgsrc-export')
         root.mkdir(parents=True, exist_ok=True)
         data = subprocess.run([sys.executable, '-B', os.path.join(config['ports_root'], build_profile.EXPORT_TOOL),
                                'prepare', str(root), '--sdk-source', config['sdk_root'], '--git', git,

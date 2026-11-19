@@ -40,17 +40,15 @@ The OS contract can bind selected `cp` and `rm` roles to `HOST_MV_CP` and
 `HOST_MV_RM`. Host `mv` uses these fixed children for cross-device moves.
 Missing roles fail mapping publication before any tool runs.
 
-The sysroot and release builders accept an optional `--byacc-source` prepared
-by the common Ports byacc source owner. When selected, they verify its prepared
-tree and pass `EMBER_BYACC_SOURCE` to OS producers. Before building, the SDK
-queries the OS base yacc and host yacc makefiles and requires each effective
-`IDIST` to select that source. Without the option, older OS revisions retain
-their existing behavior.
+The sysroot and release builders select `EMBER_BYACC_SOURCE` from the build
+plan; the common Ports byacc source owner prepares it. They verify its prepared
+tree and pass it to OS producers. Before building, the SDK queries the OS base
+yacc and host yacc makefiles and requires each effective `IDIST` to select that
+source. An OS revision that does not need the source retains its behavior.
 
-The optional `--texinfo-source` selects the Ports prepared Texinfo source for
-the OS C-only producer and passes `EMBER_TEXINFO_SOURCE`. The SDK queries the
-actual producer for its effective source and C-only configure option; older OS
-revisions that do not select this source are refused when the option is used.
+The build plan entry `EMBER_TEXINFO_SOURCE` selects the Ports prepared Texinfo
+source for the OS C-only producer. The SDK queries the actual producer for its
+effective source and C-only configure option.
 The selected host prefix provides GNU make, and the checked native compiler
 provides the GNU build triple for this target producer. Its omitted Perl test
 fixture makes it unsuitable for a full Perl/text producer. Native makeinfo and
@@ -93,25 +91,25 @@ the previous validation, to avoid reusing hashes near a timestamp race window;
 an aggregate mismatch with cache hits triggers one full-hash retry. This does
 not change checksums required for downloaded archives or distributed packages.
 
-The optional `--rcs-source` selects the common Ports RCS source for the OS
+The build plan entry `EMBER_RCS_SOURCE` selects the common Ports RCS source for the OS
 producer, with the same checked GNU make and native compiler triplet. The SDK
 queries the producer's effective source and passes `EMBER_RCS_SOURCE` to the
 sysroot and release commands.
 
-The optional `--diffutils-source` selects the common Ports diffutils source
+The build plan entry `EMBER_DIFFUTILS_SOURCE` selects the common Ports diffutils source
 for the OS producer and passes `EMBER_DIFFUTILS_SOURCE` to sysroot, release,
 and set checks. GNU make and the native compiler triplet are selected from the
 same host prefix.
 
-The optional `--grep-source` selects the common Ports GNU grep source for
+The build plan entry `EMBER_GREP_SOURCE` selects the common Ports GNU grep source for
 sysroot, release and set checks. It uses the selected native GNU make and
 passes `EMBER_GREP_SOURCE` to the OS producer.
 
-The optional `--ekermit-source` selects the common Ports E-Kermit source for
+The build plan entry `EMBER_EKERMIT_SOURCE` selects the common Ports E-Kermit source for
 the OS producer and passes `EMBER_EKERMIT_SOURCE` to sysroot, release and set
 checks.
 
-The optional `--tdb-source` selects the prepared common Ports TDB source for
+The build plan entry `EMBER_TDB_SOURCE` selects the prepared common Ports TDB source for
 OS headers, the target library and release/set producers. The selected host
 Python is passed only for this Waf producer. The OS producer supplies its target configuration independently of
 the machine used for runtime tests.
@@ -174,40 +172,39 @@ xserver` to `MAKETARSETS`, and requires those sets as outputs. The xsrc
 identity is part of the native tools context because OS tools build X11 font
 tools from it. Without the option the profile keeps `MKX11=no`.
 
-The optional `--nvi-source` selects the common Ports nvi source for the
+The build plan entry `EMBER_NVI_SOURCE` selects the common Ports nvi source for the
 native OS producer. Native nvi uses the base DB1 API;
 the separate package uses Berkeley DB 18.
 
-The optional `--ppp-source` selects the common Ports PPP source for the OS
+The build plan entry `EMBER_PPP_SOURCE` selects the common Ports PPP source for the OS
 producer.
 
-The optional `--top-source` selects the common Ports top source for the OS
+The build plan entry `EMBER_TOP_SOURCE` selects the common Ports top source for the OS
 producer.
 
-The optional `--tcp-wrappers-source` selects the common Ports TCP wrappers
+The build plan entry `EMBER_TCP_WRAPPERS_SOURCE` selects the common Ports TCP wrappers
 source for native headers, library and consumers.
 
-The optional `--libpcap-source` selects the common Ports stable libpcap source for
+The build plan entry `EMBER_LIBPCAP_SOURCE` selects the common Ports stable libpcap source for
 native headers, library and release producers. The
 stable native library uses SONAME 12; consumers of SONAME 10 or 11 must be
 relinked.
 
-The optional `--tcpdump-source` selects the shared Ports tcpdump source for
+The build plan entry `EMBER_TCPDUMP_SOURCE` selects the shared Ports tcpdump source for
 the native OS producer. The native program retains its
 OS installation policy and links against the selected native libpcap.
 
-Select `--ntp-source` and `--libopts-source` together for the native NTP
-producer. The former is prepared by the common Ports NTP owner and the latter
+The native NTP producer needs `EMBER_NTP_SOURCE` and `EMBER_LIBOPTS_SOURCE`
+together. The former is prepared by the common Ports NTP owner and the latter
 by the common AutoGen owner. The AutoGen host package need not remain installed after the
 tearoff has been prepared.
 
-Select `--gettext-source`, `--libxml2-source`, and `--tree-sitter-source`
-together for the native gettext tools. Their Ports owners prepare them; the
+The native gettext tools need `EMBER_GETTEXT_SOURCE`, `EMBER_LIBXML2_SOURCE`,
+and `EMBER_TREE_SITTER_SOURCE` together; the builder refuses one without the others. Their Ports owners prepare them; the
 [Tree-sitter owner](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/scripts/source-inputs/tree-sitter/source.py)
 prepares the third input. The release builds the ordinary target foundation first, then prepares the shared Ports
 cross-libtool in its OS TOOLDIR before building the gettext and static libxml2
-consumers. Pass all three prepared paths through `EMBER_GETTEXT_SOURCE`,
-`EMBER_LIBXML2_SOURCE`, and `EMBER_TREE_SITTER_SOURCE`. Tree-sitter is built as
+consumers. Tree-sitter is built as
 a private target runtime for the libxml2 consumer; gettext continues using its
 pinned grammar inputs. This path uses the selected native tools and target
 runtime; it does not add GNU libintl to the native Citrus ABI. The OS base

@@ -11,8 +11,9 @@ The recorded producer sequence covers target headers, OS CRT and libraries,
 the dynamic loader, and the selected compiler's developer runtime. It does not install
 a system on a board.
 
-`--plan` also runs an optional prepared-source graph diagnostic before listing
-commands. A normal build skips that additional graph walk; the selected source
+`--plan` also runs a prepared-source graph diagnostic of each build phase
+before listing commands. A normal build walks the graph only for the source
+plan (see [prepared sources](#prepared-sources)); the selected source
 identities, target ABI, tools and build contexts are still checked, and the
 actual OS makefiles retain their `.error` guards for sources the build reaches.
 The graph diagnostic is not a guarantee that a build will succeed or that it
@@ -62,55 +63,23 @@ explicit `--pkgsrc` export on the GCC route instead. The common libarchive and
 libevent producers require the pinned pkgsrc checkout to prepare and verify
 their export inputs. Other gitlinks are rejected by this backend.
 
-See [libedit preparation](libedit.md) for the mandatory `--libedit-source` input.
-For an OS producer that consumes common OpenSSL, prepare the current Ports
-`security/openssl` source using `scripts/source-inputs/openssl/source.py` and
-select it with `--openssl-source`. The owner verifies its archive and complete
-patch set when it prepares the tree; the SDK reads the tree's preparation
-receipt. This optional selector is forwarded as `EMBER_OPENSSL_SOURCE`;
-older OS producers remain usable without it. For an OS producer using the
-common `security/libfido2` source, prepare it with the Ports
-`scripts/source-inputs/libfido2/source.py` owner and pass `--libfido2-source`;
-the SDK verifies its current recipe identity and forwards `EMBER_LIBFIDO2_SOURCE`.
+## Prepared sources
 
-For OS builds using the common `devel/libcbor` source, prepare it using the
-Ports `scripts/source-inputs/libcbor/source.py` owner and select it with
-`--libcbor-source`; SDK forwards `EMBER_LIBCBOR_SOURCE`. Source preparation
-needs no application sysroot.
-
-For OS builds using common `net/libfetch`, prepare its source using the Ports
-`scripts/source-inputs/libfetch/source.py` owner and select `--libfetch-source`.
-The SDK forwards `EMBER_LIBFETCH_SOURCE` to the OS build.
-
-For OS builds using common `databases/openldap`, prepare its source with the
-Ports `scripts/source-inputs/openldap/source.py` owner and select
-`--openldap-source`. The SDK forwards `EMBER_OPENLDAP_SOURCE`.
-
-For OS builds using common `net/unbound`, prepare its source with the Ports
-`scripts/source-inputs/unbound/source.py` owner and select `--unbound-source`.
-The SDK forwards `EMBER_UNBOUND_SOURCE`.
-
-For OS builds using common `net/wpa_supplicant`, prepare its source with the
-Ports `scripts/source-inputs/wpa/source.py` owner and select `--wpa-source`.
-The SDK forwards `EMBER_WPA_SOURCE`.
-Select prepared Ports `scripts/source-inputs/mdns/source.py` and `scripts/source-inputs/dhcpcd/source.py` outputs with `--mdns-source` and `--dhcpcd-source`. The SDK forwards `EMBER_MDNS_SOURCE` and `EMBER_DHCPCD_SOURCE`.
-
-For OS builds using common `security/heimdal`, prepare its source with the
-Ports `scripts/source-inputs/heimdal/source.py` owner and select `--heimdal-source`.
-The SDK forwards `EMBER_HEIMDAL_SOURCE`.
-For OS builds using common `security/openssh`, prepare the source with the
-Ports `scripts/source-inputs/openssh/source.py` owner and select
-`--openssh-source`. The SDK forwards `EMBER_OPENSSH_SOURCE`.
-
-For OS builds using common zlib, prepare the Ports `devel/zlib` source and pass
-`--zlib-source`; the SDK forwards `EMBER_ZLIB_SOURCE`, including during header
-installation.
-
-Prepare libarchive with the Ports `scripts/source-inputs/libarchive/source.py prepare` command
-and libevent with `scripts/source-inputs/libevent/source.py prepare`; both use
-the selected SDK source and canonical Ports export. Pass the resulting trees
-as `--libarchive-source` and `--libevent-source` for the base build. The
-bootstrap headers phase does not consume these two sources.
+The script selects the shared sources of the OS build itself. It makes the
+[build plan](build-profile.md) of the selected OS, Ports and SDK checkouts for
+the make flags of the build. The plan names each `EMBER_*_SOURCE` that the OS
+directories need, each source in the OS `release.select` list and libedit,
+which the builders read in all builds. An OS without `release.select` in
+`ember/shared-sources.json` is refused. The common
+Ports producers prepare the missing sources in `SDK/obj/prepared-sources` from
+the distfiles of `--distdir`. A source with the same input key is used again.
+The producers do not download archives; they name a missing archive.
+A source whose producer has local changes has no input key: it is prepared
+again in each run. A source that no common producer prepares, such as
+`EMBER_LLVM_SOURCE`, is refused before a producer runs.
+`--llvm-source` and `--x11-source` stay explicit selections.
+With `--plan`, the script shows the sources that it must prepare and stops;
+when all sources are ready, it shows the plan of the OS build.
 
 ## Preflight and plan
 
@@ -123,9 +92,7 @@ Use the implemented script's help for the exact options:
   --sdk /absolute/prebuild-sdk-aarch64 \
   --os /absolute/EmberBSD \
   --ports /absolute/EmberBSD-Ports \
-  --libedit-source /absolute/prepared-libedit \
-  --libarchive-source /absolute/prepared-libarchive \
-  --libevent-source /absolute/prepared-libevent \
+  --distdir /absolute/distfiles \
   --host-prefix /absolute/host-pkg-llvm \
   --host-binutils /absolute/binutils-aarch64 \
   --compiler /absolute/host-pkg-llvm \
@@ -362,10 +329,6 @@ restore a pinned copy into a new local directory on a developer host.
 A releasable SDK also needs the [distribution checks](distribution.md), including
 host-platform and relocation acceptance. The initial workspace tests do not
 establish a complete sysroot build on every advertised future platform.
-
-Select the common Ports `textproc/expat` prepared source with `--expat-source`
-when the OS producer requires `EMBER_EXPAT_SOURCE`. Prepare it with the Ports
-`scripts/source-inputs/expat/source.py` owner.
 
 For a reviewed, compatible change to target ELF object tools, an experienced
 developer can bind an explicit one-run transition to the saved object context

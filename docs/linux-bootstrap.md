@@ -73,7 +73,7 @@ The native build runners discard ambient proxy settings. On a host that requires
 a proxy, fetch needed archives through its declared network route before the
 closed build. Keep the recipe's checksum checks and retain the shared distfile cache.
 
-An OS build with `--gettext-source` can need native `sysutils/checkperms` and the
+An OS build that needs `EMBER_GETTEXT_SOURCE` can need native `sysutils/checkperms` and the
 common Libtool source archive. Build missing native dependencies through common Ports.
 The [cross-libtool producer](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/profiles/common-build-tools/cross/prepare-libtool.py)
 accepts `--distdir`. The OS build receipt records its complete command. After

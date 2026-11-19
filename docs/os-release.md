@@ -16,9 +16,9 @@ They do not define another toolchain recipe. The migration originates in
 `EmberBSD@4a4c98bb99999836103d3fe63fd6f4c98013f0c5:ember/release/`
 and its `ember/tests/release-*.rb` contracts. The source license is BSD-2-Clause.
 
-See [libedit preparation](libedit.md) for the mandatory `--libedit-source` input.
-Prepare and select the common Ports libarchive and libevent sources as
-described in [sysroot preparation](sysroot.md); release builds require both.
+The script prepares and selects the shared sources of the OS build as
+described in [sysroot preparation](sysroot.md#prepared-sources). Select the
+distfiles directory of these sources with `--distdir`.
 The `--host-binutils` work directory selects the matching common BFD and
 `elfedit` build used by OS host tools; see the [sysroot inputs](sysroot.md#required-inputs).
 
@@ -35,46 +35,6 @@ the independently selected host prefix. Prepare `--llvm-source` with the common 
 producer. Without `--llvm-runtime-stage`, the [LLVM coordinator](llvm-runtime.md)
 builds headers, the initial runtime, C base and full C++ runtime before the
 release. An explicitly supplied full stage is checked against these same inputs. When selecting a full stage directly, also pass `--llvm-bootstrap-stage` for the exact bootstrap stage recorded by that full runtime. For a separate recorded foundation, select `--llvm-runtime-base` as described in [the runtime guide](llvm-runtime.md). The OS embeds its checked static libunwind archive into libc; the full runtime remains the application runtime.
-
-When the selected OS consumes common Ports zlib, pass its prepared tree as
-`--zlib-source`; its receipt is validated and `EMBER_ZLIB_SOURCE` is forwarded
-to the OS.
-
-When the selected OS consumes the common Ports OpenSSL source, pass the
-prepared tree with `--openssl-source`. The optional input is identified by its
-preparation receipt and recorded with the other common source inputs; it is forwarded
-to the OS as `EMBER_OPENSSL_SOURCE`. An older OS build can omit it. For an OS
-that consumes the common `security/libfido2` source, prepare it with the Ports
-owner and select it with `--libfido2-source`; this forwards
-`EMBER_LIBFIDO2_SOURCE`.
-
-For OS builds using the common `devel/libcbor` source, prepare it using the
-Ports `scripts/source-inputs/libcbor/source.py` owner and select it with
-`--libcbor-source`; SDK forwards `EMBER_LIBCBOR_SOURCE`.
-
-For OS builds using common `net/libfetch`, prepare its source using the Ports
-`scripts/source-inputs/libfetch/source.py` owner and select `--libfetch-source`.
-The SDK forwards `EMBER_LIBFETCH_SOURCE` to the OS build.
-
-For OS builds using common `databases/openldap`, prepare its source with the
-Ports `scripts/source-inputs/openldap/source.py` owner and select
-`--openldap-source`. The SDK forwards `EMBER_OPENLDAP_SOURCE`.
-
-For OS builds using common `net/unbound`, prepare its source with the Ports
-`scripts/source-inputs/unbound/source.py` owner and select `--unbound-source`.
-The SDK forwards `EMBER_UNBOUND_SOURCE`.
-
-For OS builds using common `net/wpa_supplicant`, prepare its source with the
-Ports `scripts/source-inputs/wpa/source.py` owner and select `--wpa-source`.
-The SDK forwards `EMBER_WPA_SOURCE`.
-Select prepared Ports `scripts/source-inputs/mdns/source.py` and `scripts/source-inputs/dhcpcd/source.py` outputs with `--mdns-source` and `--dhcpcd-source`. The SDK forwards `EMBER_MDNS_SOURCE` and `EMBER_DHCPCD_SOURCE`.
-
-For OS builds using common `security/heimdal`, prepare its source with the
-Ports `scripts/source-inputs/heimdal/source.py` owner and select `--heimdal-source`.
-The SDK forwards `EMBER_HEIMDAL_SOURCE`.
-For OS builds using common `security/openssh`, prepare the source with the
-Ports `scripts/source-inputs/openssh/source.py` owner and select
-`--openssh-source`. The SDK forwards `EMBER_OPENSSH_SOURCE`.
 
 Select `aarch64-sysroot` for complete base/comp sets, the etc set and an EMBER64
 test kernel. A VM or a board boots from the sets only with etc. Profiles built
@@ -109,9 +69,7 @@ Canonical version behavior follows OS commit
   --sdk /absolute/prebuild-sdk-aarch64 \
   --os-source /absolute/EmberBSD \
   --ports /absolute/EmberBSD-Ports \
-  --libedit-source /absolute/prepared-libedit \
-  --libarchive-source /absolute/prepared-libarchive \
-  --libevent-source /absolute/prepared-libevent \
+  --distdir /absolute/distfiles \
   --host-prefix /absolute/host-pkg-llvm \
   --host-binutils /absolute/binutils-aarch64 \
   --compiler /absolute/host-pkg-llvm \
@@ -145,7 +103,7 @@ recorded as `object_mode` in the build receipt and in `build-profile.json`.
 Completed LLVM bootstrap stages are keyed by their recorded inputs (see
 `native-os-routing.md`) and are reused in both modes.
 
-A profile with `--gettext-source` builds the common cross-libtool from a
+A profile that needs `EMBER_GETTEXT_SOURCE` builds the common cross-libtool from a
 pkgsrc export. When the selected Ports checkout has
 `scripts/pkgsrc-export-stage.py`, preflight takes that export's Git fingerprint
 and selects `stages/pkgsrc-export/FINGERPRINT` under the SDK work root. The
@@ -317,15 +275,11 @@ acceptance before its binaries can be called qualified.
 The automatic SDK workflow runs host contracts only. The manual
 [OS release workflow](../.github/workflows/os-release.yml) requires a prepared
 self-hosted runner labelled `emberbsd-release`. It requires explicit clean
-source pins, workspace, independent host/target compiler families, and the
-matching LLVM source or GCC runtime/archive/pkgsrc inputs. Missing
+source pins, workspace, distfiles directory, independent host/target compiler
+families, and the matching LLVM source or GCC runtime/archive/pkgsrc inputs. Missing
 inputs fail; the job does not substitute another compiler or report a skipped
 producer as a successful binary build. This migration does not establish that
 such a runner exists or qualify its complete producer pipeline.
-
-Select the common Ports `textproc/expat` prepared source with `--expat-source`
-when the OS producer requires `EMBER_EXPAT_SOURCE`. Prepare it with the Ports
-`scripts/source-inputs/expat/source.py` owner.
 
 For a developer-reviewed target ELF object-tool transition, the same scoped
 `--compatible-target-tool ROLE:OLD_SHA256:NEW_SHA256` option documented in

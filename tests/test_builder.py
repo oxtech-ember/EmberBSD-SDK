@@ -26,6 +26,23 @@ from emberbsd_sdk.workspace import create
 from emberbsd_sdk.libedit import prepare_source
 from libedit_fixture import recipe_fixture, installation_source
 
+# The scripts select the prepared OS sources through the build plan; a test
+# selects them itself. These source options stay script options.
+SCRIPT_SOURCES = ('sdk-source', 'os-source', 'llvm-source', 'x11-source', 'llvm-runtime-original-source')
+
+
+def split_sources(options):
+    """Return the script options and the prepared source options of OPTIONS."""
+    sources = {key: value for key, value in options.items()
+               if key.endswith('-source') and key not in SCRIPT_SOURCES}
+    return {key: value for key, value in options.items() if key not in sources}, sources
+
+
+def selected_sources(sources):
+    """Replace the source preparation of the scripts with the SOURCES options."""
+    return patch('emberbsd_sdk.profile_build.builder_sources',
+                 lambda options, builder: options.update(sources))
+
 
 def fixture_native_selection(builder):
     """Synthetic dispatch input only. This bypass never qualifies native tools."""
@@ -448,7 +465,7 @@ class BuilderTests(TemporaryCase):
         for name in ('libarchive', 'libevent'):
             options = dict(self.options)
             options.pop(name + '-source')
-            with self.assertRaisesRegex(SDKError, '--' + name + '-source'):
+            with self.assertRaisesRegex(SDKError, 'did not select EMBER_' + name.upper() + '_SOURCE'):
                 B(options).preflight()
             path = Path(self.options[name + '-source']) / 'emberbsd-prepared-source.json'
             original = path.read_text()
@@ -549,7 +566,8 @@ class BuilderTests(TemporaryCase):
 
     def cli(self, **changes):
         args = []
-        for key, value in (self.options | changes).items():
+        options, sources = split_sources(self.options | changes)
+        for key, value in options.items():
             args.extend(['--' + key, value])
         # The real CLI is covered by native-consumer refusal contracts. This
         # harness preserves existing signal/dispatch tests for the fake producer.
@@ -560,6 +578,8 @@ class BuilderTests(TemporaryCase):
                  'from emberbsd_sdk.sysroot_builder import SysrootBuilder; '
                  'SysrootBuilder.load_native_toolset=fixture_native_selection; '
                  'SysrootBuilder.prepare_native_routing=lambda self: None; '
+                 'from emberbsd_sdk import profile_build; '
+                 f'profile_build.builder_sources=lambda options, builder: options.update({sources!r}); '
                  'sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name="__main__")')
         return [sys.executable, '-B', '-c', setup, str(SDK_SOURCE / 'scripts/build-sysroot.py'), *args]
 

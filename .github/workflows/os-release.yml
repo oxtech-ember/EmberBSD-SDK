@@ -44,8 +44,8 @@ name: Complete OS release producer
       sdk_python:
         description: Absolute Python 3.15+ interpreter inside host_prefix
         required: true
-      libedit_source:
-        description: Prepared libedit source for the selected Ports recipe
+      distdir:
+        description: Distfiles of the shared OS sources that the build prepares
         required: true
       runtime_work:
         description: LLVM work directory inside SDK/obj, or existing GCC runtime work
@@ -87,7 +87,7 @@ jobs:
       HOST_BINUTILS: ${{ inputs.host_binutils }}
       HOST_COMPILER_FAMILY: ${{ inputs.host_compiler_family }}
       SDK_PYTHON: ${{ inputs.sdk_python }}
-      LIBEDIT_SOURCE: ${{ inputs.libedit_source }}
+      DISTDIR: ${{ inputs.distdir }}
       RUNTIME_WORK: ${{ inputs.runtime_work }}
       LLVM_SOURCE: ${{ inputs.llvm_source }}
       LLVM_RUNTIME_STAGE: ${{ inputs.llvm_runtime_stage }}
@@ -119,7 +119,7 @@ jobs:
           set -- --profile "$PROFILE" --python "$SDK_PYTHON" \
             --sdk-source "$GITHUB_WORKSPACE" --sdk "$SDK_WORKSPACE" \
             --os-source "$OS_SOURCE" --ports "$PORTS_SOURCE" --compiler "$COMPILER" \
-            --host-prefix "$HOST_PREFIX" --libedit-source "$LIBEDIT_SOURCE" \
+            --host-prefix "$HOST_PREFIX" --distdir "$DISTDIR" \
             --host-binutils "$HOST_BINUTILS" \
             --compiler-family "$COMPILER_FAMILY" --host-compiler-family "$HOST_COMPILER_FAMILY" \
             --llvm-source "$LLVM_SOURCE" \

@@ -481,6 +481,6 @@ def required_sources(os_root, query, traversals, *, jobs=None):
 
 
 def missing_sources(needed, selected):
-    """Return '--option (VARIABLE for directory)' for each needed source not in SELECTED."""
-    return sorted(f'--{source_option(variable)} ({variable} for {directory})'
+    """Return 'VARIABLE for directory' for each needed source whose option is not in SELECTED."""
+    return sorted(f'{variable} for {directory}'
                   for variable, directory in needed.items() if source_option(variable) not in selected)

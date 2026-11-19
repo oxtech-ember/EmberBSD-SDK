@@ -24,7 +24,7 @@ from emberbsd_sdk.llvm_sysroot import runtime_paths, llvm_flags, LLVMCoordinator
 from emberbsd_sdk.libedit import prepare_source
 from emberbsd_sdk.target_toolchain import CLANG_BINARIES
 from emberbsd_sdk import sysroot_transfer
-from test_builder import B, fixture, write, git, commit
+from test_builder import B, fixture, write, git, commit, selected_sources, split_sources
 import test_llvm_runtime as runtime_tests
 
 
@@ -58,6 +58,7 @@ class LLVMBuilderTests(TemporaryCase):
         original.pop('gcc-archive', None)
         original.pop('pkgsrc', None)
         original.pop('base-cxx', None)
+        original, sources = split_sources(original)
 
         class FixtureRelease(OSReleaseBuilder, ClangBuilder):
             pass
@@ -80,7 +81,7 @@ class LLVMBuilderTests(TemporaryCase):
                         argv.extend(['--' + key, str(value)])
                     argv.append('--plan')
                     stdout, stderr = io.StringIO(), io.StringIO()
-                    with patch(module, fixture_class), patch.object(sys, 'argv', argv), \
+                    with patch(module, fixture_class), patch.object(sys, 'argv', argv), selected_sources(sources), \
                             contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), \
                             self.assertRaises(SystemExit) as result:
                         runpy.run_path(argv[0], run_name='__main__')
@@ -288,8 +289,7 @@ class LLVMBuilderTests(TemporaryCase):
     def test_base_cxx_cli_defaults_and_boolean_opt_out(self):
         base = dict(sdk='/unused/sdk', ports='/unused/ports', compiler='/unused/compiler',
                     runtime_work='/unused/runtime',
-                    sdk_source=str(SDK_SOURCE), libedit_source='/unused/libedit',
-                    libarchive_source='/unused/libarchive', libevent_source='/unused/libevent',
+                    sdk_source=str(SDK_SOURCE),
                     host_prefix='/unused/host', host_binutils='/unused/host-binutils',
                     llvm_source='/unused/llvm')
 
@@ -304,7 +304,7 @@ class LLVMBuilderTests(TemporaryCase):
                 arguments.extend(['--' + key.replace('_', '-'), value])
             arguments.extend(profile_args)
             arguments.extend(extra_args)
-            with patch.object(builder_type, 'run', fake_run), \
+            with patch.object(builder_type, 'run', fake_run), selected_sources({}), \
                  patch.object(sys, 'argv', [str(script), *arguments]), \
                  contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as exit_info:
                 runpy.run_path(str(script), run_name='__main__')
@@ -478,7 +478,7 @@ class LLVMBuilderTests(TemporaryCase):
         base_arguments = ['--sdk', '/unused/sdk', '--os', '/unused/os',
                           '--ports', '/unused/ports', '--compiler', '/unused/compiler',
                           '--target', 'aarch64', '--sdk-source', str(SDK_SOURCE),
-                          '--libedit-source', '/unused/libedit', '--host-prefix', '/unused/host',
+                          '--host-prefix', '/unused/host',
                           '--host-binutils', '/unused/binutils', '--runtime-work', '/unused/runtime',
                           '--llvm-source', '/unused/llvm']
 
@@ -496,7 +496,7 @@ class LLVMBuilderTests(TemporaryCase):
             with self.subTest(case=case):
                 captured = {}
                 with patch.object(sysroot_builder, 'SysrootBuilder', CaptureBuilder), \
-                     patch.object(sys, 'argv', [str(script), *base_arguments, *extra]), \
+                     patch.object(sys, 'argv', [str(script), *base_arguments, *extra]), selected_sources({}), \
                      contextlib.redirect_stdout(io.StringIO()), \
                      self.assertRaises(SystemExit) as exit_info:
                     runpy.run_path(str(script), run_name='__main__')

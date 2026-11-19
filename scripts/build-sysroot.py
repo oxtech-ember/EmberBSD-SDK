@@ -19,14 +19,14 @@ class UniqueOption(argparse.Action):
 
 def main():
     parser = argparse.ArgumentParser(description='Build an EmberBSD OS sysroot with a native Ports prefix.')
-    for name in ('sdk', 'os', 'ports', 'compiler', 'target', 'sdk-source', 'libedit-source', 'host-prefix', 'host-binutils'):
+    for name in ('sdk', 'os', 'ports', 'compiler', 'target', 'sdk-source', 'host-prefix', 'host-binutils'):
         parser.add_argument('--' + name, required=True, action=UniqueOption, help={'sdk-source': 'selected SDK source checkout', 'host-prefix': 'native Ports tool prefix'}.get(name))
     parser.add_argument('--jobs', type=int, action=UniqueOption,
                         help='positive build parallelism; default: CPUs available to this process')
     parser.add_argument('--runtime-work', action=UniqueOption,
                         help='required for GCC or to build an LLVM runtime; not needed with a selected LLVM stage')
-    for name in ('libarchive-source', 'libevent-source', 'openssl-source', 'libfido2-source', 'libcbor-source', 'expat-source', 'libfetch-source', 'openldap-source', 'unbound-source', 'wpa-source', 'mdns-source', 'dhcpcd-source', 'heimdal-source', 'openssh-source', 'byacc-source', 'texinfo-source', 'rcs-source', 'diffutils-source', 'grep-source', 'ekermit-source', 'nvi-source', 'tdb-source', 'ppp-source', 'top-source', 'iscsi-source', 'libpcap-source', 'tcpdump-source', 'tcp-wrappers-source', 'ntp-source', 'libopts-source', 'gettext-source', 'libxml2-source', 'tree-sitter-source', 'zlib-source'):
-        parser.add_argument('--' + name, action=UniqueOption, help='required for the OS base build')
+    parser.add_argument('--distdir', action=UniqueOption,
+                        help='distfiles of the prepared sources that the build prepares')
     parser.add_argument('--host-compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
                         help='Clang by default; select GCC explicitly for a platform exception')
     parser.add_argument('--compiler-family', choices=('clang', 'gcc'), action=UniqueOption,
@@ -67,6 +67,7 @@ def main():
         from emberbsd_sdk import API_VERSION
         from emberbsd_sdk.errors import SDKError
         from emberbsd_sdk.sysroot_builder import SysrootBuilder
+        from emberbsd_sdk.profile_build import builder_sources
     except (OSError, ImportError, AttributeError, ValueError) as exc:
         print(f'sysroot build: cannot load selected SDK source: {exc}', file=sys.stderr)
         return 1
@@ -75,7 +76,10 @@ def main():
         return 1
     try:
         options = {key.replace('_', '-'): value for key, value in vars(arguments).items() if value is not None}
-        print(json.dumps(SysrootBuilder(options).run(), ensure_ascii=False, indent=2))
+        # The build plan selects and prepares the shared sources of the OS.
+        planned = builder_sources(options, SysrootBuilder)
+        result = planned if planned is not None else SysrootBuilder(options).run()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except KeyboardInterrupt as exc:
         print(f'sysroot build interrupted: {exc}', file=sys.stderr)

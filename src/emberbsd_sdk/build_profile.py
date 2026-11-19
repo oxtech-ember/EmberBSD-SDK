@@ -251,54 +251,52 @@ def source_manifest(root):
     raise SDKError(f'{root} is not a prepared source: it has no manifest')
 
 
-def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_config, state=None,
-              selected_sources=None, required_sources=None, native=None, jobs=None):
-    """Return the build-graph-v2 plan of PROFILE. Build and write nothing.
+class _Planner:
+    """The checkouts, OS source list, host prefix and nodes of one plan."""
 
-    SELECTED_SOURCES maps EMBER_*_SOURCE to a prepared tree that the
-    configuration selects; the plan does not prepare it. Ports names the
-    current recipe and the distfiles of each source. REQUIRED_SOURCES(traversals,
-    flags) -> {VARIABLE: directory} can replace the bmake guard walk;
-    NATIVE can replace the loaded host prefix."""
-    selected_sources = dict(selected_sources or {})
-    from .native_os_routing import parse_native_os_contract
-    profile = validate_profile(profile)
-    target = target_definition(profile['platform']['target'])
-    compiler = profile['platform']['compiler']
-    _require(compiler['target'] == 'clang', 'the build plan supports the Clang target toolchain only')
-    found = {'os': checkout(os_root), 'ports': checkout(ports_root)}
+    def __init__(self, *, os_root, ports_root, sdk_root, host_prefix, host_compiler, target_name, state,
+                 selected_sources, required_sources, native, jobs):
+        from .native_os_routing import parse_native_os_contract
+        self.state, self.target_name = state, target_name
+        self.target = target_definition(target_name)
+        self.selected_sources = dict(selected_sources or {})
+        self.found = {'os': checkout(os_root), 'ports': checkout(ports_root)}
+        self.sdk_root = sdk_root
+        self.shared = read_shared_sources(self.found['os']['root'])
+        _require(set(self.selected_sources) <= set(self.shared['sources']),
+                 'build.sources names unknown sources: ' +
+                 ' '.join(sorted(set(self.selected_sources) - set(self.shared['sources']))))
+        try:
+            _, self.rows, roles = parse_native_os_contract(
+                Path(self.found['os']['root'], NATIVE_CONTRACT).read_bytes())
+        except OSError as exc:
+            raise SDKError(f'the OS has no {NATIVE_CONTRACT}') from exc
+        if native is None:
+            from .host_prefix import load_host_prefix
+            native = load_host_prefix(host_prefix, required_roles=set(roles) | {'make'},
+                                      compiler_family=host_compiler)
+        self.native, self.jobs = native, jobs
+        self.prefix = os.path.realpath(native.bundle_root)
+        self.required = required_sources or self.walk
+        self.nodes, self.recipes, self.export = {}, {}, []
 
-    def checkouts(name):
-        if name not in found:
-            found[name] = checkout(sdk_root)
-        return found[name]
+    def checkouts(self, name):
+        if name not in self.found:
+            self.found[name] = checkout(self.sdk_root)
+        return self.found[name]
 
-    os_identity = found['os']
-    shared = read_shared_sources(os_identity['root'])
-    _require(set(selected_sources) <= set(shared['sources']),
-             'build.sources names unknown sources: ' + ' '.join(sorted(set(selected_sources) - set(shared['sources']))))
-    try:
-        _, rows, roles = parse_native_os_contract(Path(os_identity['root'], NATIVE_CONTRACT).read_bytes())
-    except OSError as exc:
-        raise SDKError(f'the OS has no {NATIVE_CONTRACT}') from exc
-    if native is None:
-        from .host_prefix import load_host_prefix
-        native = load_host_prefix(host_prefix, required_roles=set(roles) | {'make'},
-                                  compiler_family=compiler['host'])
-    prefix = os.path.realpath(native.bundle_root)
-    mk = [f'{name}={value}' for name, value in profile['os']['mk'].items()]
-    if required_sources is None:
-        def required_sources(traversals, flags):
-            with tempfile.TemporaryDirectory(prefix='emberbsd-plan-') as objects:
-                query = prepared_sources.os_query(
-                    native, rows, os_identity['root'], objects=objects, tools=os.path.join(objects, 'tools'),
-                    machine=target['machine'], arch=target['arch'], timestamp=os_identity['time'],
-                    traversals=traversals, flags=flags, env=process.sanitized_environment())
-                return prepared_sources.required_sources(os_identity['root'], query, traversals, jobs=jobs)
+    def walk(self, traversals, flags):
+        """Return the sources that the bmake guards of TRAVERSALS under FLAGS need."""
+        os_identity = self.found['os']
+        with tempfile.TemporaryDirectory(prefix='emberbsd-plan-') as objects:
+            query = prepared_sources.os_query(
+                self.native, self.rows, os_identity['root'], objects=objects, tools=os.path.join(objects, 'tools'),
+                machine=self.target['machine'], arch=self.target['arch'], timestamp=os_identity['time'],
+                traversals=traversals, flags=flags, env=process.sanitized_environment())
+            return prepared_sources.required_sources(os_identity['root'], query, traversals, jobs=self.jobs)
 
-    nodes = {}
-
-    def add(node_id, kind, identity, inputs, dependencies, outputs, reason, ready=None):
+    def add(self, node_id, kind, identity, inputs, dependencies, outputs, reason, ready=None):
+        nodes = self.nodes
         if node_id in nodes:
             nodes[node_id]['reasons'].append(reason)
             return node_id
@@ -315,7 +313,7 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
                             dependencies={item: nodes[item]['input_key'] for item in sorted(dependencies)}))
             if ready is not None:
                 decision = dict(action='ready', why=ready)
-            elif _record(state, node_id, key) is not None:
+            elif _record(self.state, node_id, key) is not None:
                 decision = dict(action='ready', why='recorded result has this input key')
             elif kind == 'runtime':
                 decision = dict(action='ready', why='installed outside the build plan')
@@ -326,6 +324,113 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
                               decision=decision, outputs=outputs)
         return node_id
 
+    def describe(self, names):
+        # One Ports call reads the current recipes of a stage.
+        packages = sorted({self.shared['sources'][name]['package'] for name in names
+                           if name not in self.selected_sources} - set(self.recipes))
+        if packages:
+            self.recipes.update(ports_tool(self.found['ports']['root'], self.checkouts('sdk')['root'], self.prefix,
+                                           RECIPE_TOOL, *[word for package in packages
+                                                          for word in ('--describe', package)]))
+
+    def pkgsrc_export(self, reason):
+        # One shared pkgsrc export for all Ports producers, keyed by the Git
+        # fingerprint of its inputs.
+        if not self.export:
+            fingerprint = ports_tool(self.found['ports']['root'], self.checkouts('sdk')['root'], self.prefix,
+                                     EXPORT_TOOL, 'fingerprint').get('fingerprint')
+            _require(isinstance(fingerprint, str) and re.fullmatch(r'[0-9a-f]{64}', fingerprint),
+                     f'{EXPORT_TOOL} printed no fingerprint')
+            self.export.append(fingerprint)
+        return self.add(EXPORT_NODE, 'export', dict(producer='ports:' + EXPORT_TOOL),
+                        dict(fingerprint=self.export[0]), [], ['pkgsrc-export'], reason)
+
+    def source(self, variable, reason):
+        entry = self.shared['sources'][variable]
+        identity = dict(variable=variable, package=entry['package'], producer=entry['producer'])
+        if variable in self.selected_sources:
+            manifest = source_manifest(self.selected_sources[variable])
+            return self.add('source:' + variable, 'source', identity,
+                            dict(manifest_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest()), [],
+                            [variable], reason, ready='selected in the configuration')
+        recipe = self.recipes[entry['package']]
+        dependencies = ([self.pkgsrc_export('needed by source:' + variable)]
+                        if entry['producer'].startswith(COMMON_PRODUCERS) else [])
+        # The producer selects its archives in the distfiles directory and
+        # names a missing one; the plan does not.
+        return self.add('source:' + variable, 'source', dict(identity, distfiles=recipe['distfiles']),
+                        dict(recipe=recipe['effective'], git=_producer(entry, self.checkouts)), dependencies,
+                        [variable], reason)
+
+    def sources(self, names, reason):
+        """Add the source nodes of NAMES; return their node ids."""
+        _require(set(names) <= set(self.shared['sources']),
+                 'OS needs a source that ember/shared-sources.json does not name: ' +
+                 ' '.join(sorted(set(names) - set(self.shared['sources']))))
+        self.describe(names)
+        return [self.source(name, reason(name)) for name in sorted(names)]
+
+    def document(self, profile):
+        nodes = self.nodes
+        order, waves, done = sorted(nodes), [], set()
+        while len(done) < len(order):
+            wave = [item for item in order if item not in done and set(nodes[item]['dependencies']) <= done]
+            _require(wave, 'build plan has a dependency cycle')
+            waves.append(wave)
+            done.update(wave)
+        plan = dict(schema=PLAN_SCHEMA, profile=profile, profile_sha256=_key(profile),
+                    checkouts={name: dict(commit=item['commit'], tree=item['tree'], dirty=item['dirty'])
+                               for name, item in sorted(self.found.items())},
+                    nodes=[nodes[item] for wave in waves for item in wave], waves=waves)
+        plan['plan_sha256'] = _key(plan)
+        return plan
+
+
+def source_plan(*, os_root, ports_root, sdk_root, host_prefix, host_compiler, target, flags, traversals,
+                read=(), state=None, selected_sources=None, required_sources=None, native=None, jobs=None):
+    """Return a plan of the prepared sources that an OS build needs. Build nothing.
+
+    FLAGS and TRAVERSALS are the make flags and directories of the build, as
+    the prepared_source_profile of its builder names them. The plan also
+    selects release.select of ember/shared-sources.json. It has the source
+    nodes and the shared pkgsrc export only. READ names the sources that the
+    builder reads in all builds. REQUIRED_SOURCES and NATIVE are as for
+    make_plan."""
+    planner = _Planner(os_root=os_root, ports_root=ports_root, sdk_root=sdk_root, host_prefix=host_prefix,
+                       host_compiler=host_compiler, target_name=target, state=state,
+                       selected_sources=selected_sources, required_sources=required_sources, native=native,
+                       jobs=jobs)
+    _require('release' in planner.shared, 'the OS has no release.select in ember/shared-sources.json; update the OS')
+    needed = planner.required(traversals, flags)
+    release = set(planner.shared['release']['select'])
+
+    def reason(name):
+        if name in needed:
+            return f'needed by the OS build ({needed[name]})'
+        return 'needed by the OS build (release.select)' if name in release else 'read by the OS builder'
+    planner.sources(set(needed) | release | set(read), reason)
+    return planner.document(dict(platform=dict(target=target), os=dict(flags=list(flags))))
+
+
+def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_config, state=None,
+              selected_sources=None, required_sources=None, native=None, jobs=None):
+    """Return the build-graph-v2 plan of PROFILE. Build and write nothing.
+
+    SELECTED_SOURCES maps EMBER_*_SOURCE to a prepared tree that the
+    configuration selects; the plan does not prepare it. Ports names the
+    current recipe and the distfiles of each source. REQUIRED_SOURCES(traversals,
+    flags) -> {VARIABLE: directory} can replace the bmake guard walk;
+    NATIVE can replace the loaded host prefix."""
+    profile = validate_profile(profile)
+    compiler = profile['platform']['compiler']
+    _require(compiler['target'] == 'clang', 'the build plan supports the Clang target toolchain only')
+    planner = _Planner(os_root=os_root, ports_root=ports_root, sdk_root=sdk_root, host_prefix=host_prefix,
+                       host_compiler=compiler['host'], target_name=profile['platform']['target'], state=state,
+                       selected_sources=selected_sources, required_sources=required_sources, native=native,
+                       jobs=jobs)
+    native, prefix, shared, target = planner.native, planner.prefix, planner.shared, planner.target
+    os_identity, add, nodes = planner.found['os'], planner.add, planner.nodes
+    mk = [f'{name}={value}' for name, value in profile['os']['mk'].items()]
     tools = [native.tool(role) for role in sorted(native.tools)]
     host = add('runtime:host-prefix', 'runtime', dict(compiler=compiler['host']),
                dict(host=dict(native.host),
@@ -346,47 +451,8 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
                    dict(inputs_sha256=hashlib.sha256(record.read_bytes()).hexdigest()), [], [],
                    'needed by os:tools (EMBER_HOST_BFD_CONFIG)')
 
-    recipes, export = {}, []
-
-    def describe(names):
-        # One Ports call reads the current recipes of a stage.
-        packages = sorted({shared['sources'][name]['package'] for name in names
-                           if name not in selected_sources} - set(recipes))
-        if packages:
-            recipes.update(ports_tool(found['ports']['root'], checkouts('sdk')['root'], prefix, RECIPE_TOOL,
-                                      *[word for package in packages for word in ('--describe', package)]))
-
-    def pkgsrc_export(reason):
-        # One shared pkgsrc export for all Ports producers, keyed by the Git
-        # fingerprint of its inputs.
-        if not export:
-            fingerprint = ports_tool(found['ports']['root'], checkouts('sdk')['root'], prefix, EXPORT_TOOL,
-                                     'fingerprint').get('fingerprint')
-            _require(isinstance(fingerprint, str) and re.fullmatch(r'[0-9a-f]{64}', fingerprint),
-                     f'{EXPORT_TOOL} printed no fingerprint')
-            export.append(fingerprint)
-        return add(EXPORT_NODE, 'export', dict(producer='ports:' + EXPORT_TOOL), dict(fingerprint=export[0]),
-                   [], ['pkgsrc-export'], reason)
-
-    def source(variable, reason):
-        entry = shared['sources'][variable]
-        identity = dict(variable=variable, package=entry['package'], producer=entry['producer'])
-        if variable in selected_sources:
-            manifest = source_manifest(selected_sources[variable])
-            return add('source:' + variable, 'source', identity,
-                       dict(manifest_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest()), [], [variable],
-                       reason, ready='selected in the configuration')
-        recipe = recipes[entry['package']]
-        dependencies = ([pkgsrc_export('needed by source:' + variable)]
-                        if entry['producer'].startswith(COMMON_PRODUCERS) else [])
-        # The producer selects its archives in the distfiles directory and
-        # names a missing one; the plan does not.
-        return add('source:' + variable, 'source', dict(identity, distfiles=recipe['distfiles']),
-                   dict(recipe=recipe['effective'], git=_producer(entry, checkouts)), dependencies, [variable],
-                   reason)
-
     # OS builders run the native runner of this SDK.
-    sdk_identity = checkouts('sdk')
+    sdk_identity = planner.checkouts('sdk')
     os_inputs = dict(git=[dict(repository='os', path='.', object=os_identity['tree'],
                                dirty=bool(os_identity['dirty'])),
                           dict(repository='sdk', path='.', object=sdk_identity['tree'],
@@ -396,15 +462,10 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
     release_inputs = dict(os_inputs, buildinfo=profile['os']['buildinfo'])
 
     def stage(node_id, identity, traversals, flags, extra, outputs, reason, inputs):
-        needed = required_sources(traversals, flags) if traversals else {}
-        names = sorted(set(needed) | set(extra))
-        _require(set(names) <= set(shared['sources']),
-                 'OS needs a source that ember/shared-sources.json does not name: ' +
-                 ' '.join(sorted(set(names) - set(shared['sources']))))
-        describe(names)
-        dependencies = [host, toolchain] + [
-            source(name, f'needed by {node_id}' + (f' ({needed[name]})' if name in needed else ''))
-            for name in names]
+        needed = planner.required(traversals, flags) if traversals else {}
+        dependencies = [host, toolchain] + planner.sources(
+            set(needed) | set(extra),
+            lambda name: f'needed by {node_id}' + (f' ({needed[name]})' if name in needed else ''))
         if node_id == 'os:tools':
             dependencies.append(binutils)
         else:
@@ -438,25 +499,14 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
         # The OS names the sources that a release selects although no make guard
         # requires them (release.select of ember/shared-sources.json).
         # The release builder also reads the Ports producers and names the OS commit.
-        ports_identity = checkouts('ports')
+        ports_identity = planner.checkouts('ports')
         sets_inputs = dict(release_inputs, os_commit=os_identity['commit'], git=release_inputs['git'] + [
             dict(repository='ports', path='.', object=ports_identity['tree'], dirty=bool(ports_identity['dirty']))])
         stage('os:sets', dict(stage='sets', sets=profile['os']['sets']), prepared_sources.RELEASE_TRAVERSALS,
               flags, shared['release']['select'], [name + '.tar.xz' for name in profile['os']['sets']],
               'profile os.sets', sets_inputs)
 
-    order, waves, done = sorted(nodes), [], set()
-    while len(done) < len(order):
-        wave = [item for item in order if item not in done and set(nodes[item]['dependencies']) <= done]
-        _require(wave, 'build plan has a dependency cycle')
-        waves.append(wave)
-        done.update(wave)
-    plan = dict(schema=PLAN_SCHEMA, profile=profile, profile_sha256=_key(profile),
-                checkouts={name: dict(commit=item['commit'], tree=item['tree'], dirty=item['dirty'])
-                           for name, item in sorted(found.items())},
-                nodes=[nodes[item] for wave in waves for item in wave], waves=waves)
-    plan['plan_sha256'] = _key(plan)
-    return plan
+    return planner.document(profile)
 
 
 def load_profile(path):

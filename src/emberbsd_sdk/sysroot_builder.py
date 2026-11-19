@@ -1461,7 +1461,8 @@ class SysrootBuilder:
                                                    jobs=max(1, min(8, int(self.options['jobs']))))
         missing = prepared_sources.missing_sources(needed, self.paths)
         if missing:
-            raise SDKError('selected OS build needs prepared sources that are not selected: ' + ', '.join(missing))
+            raise SDKError('the OS build needs prepared sources that its build plan did not select: '
+                           + ', '.join(missing) + '; update the OS ember/shared-sources.json')
         return needed
 
     def require_runtime_work(self):
@@ -1491,7 +1492,8 @@ class SysrootBuilder:
             raise SDKError('gettext, libxml2, and tree-sitter sources must be selected together')
         for name in ('libarchive-source', 'libevent-source'):
             if self.llvm_phase != 'headers' and not self.options.get('c-foundation') and not self.options.get(name):
-                raise SDKError(f'--{name} is required: prepare the common Ports source')
+                raise SDKError(f'the OS build plan did not select EMBER_{name.removesuffix("-source").upper()}_SOURCE; '
+                               'update the OS ember/shared-sources.json')
         if bool(self.options.get('libarchive-source')) != bool(self.options.get('libevent-source')):
             raise SDKError('select both common sources together')
         if clang:
