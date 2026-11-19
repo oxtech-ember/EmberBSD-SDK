@@ -149,8 +149,10 @@ def prepare_sources(plan, work, config):
                 run_node(work, node['id'], node['input_key'] or 'changed', config)
 
 
-# The prepared sources of build-sysroot.py and build-os-release.py.
+# The prepared sources of build-sysroot.py and build-os-release.py, and the
+# cache of their source plans.
 BUILDER_SOURCES = 'obj/prepared-sources'
+PLAN_CACHE = 'obj/plan-cache'
 
 
 def builder_sources(options, builder, **plan_options):
@@ -193,7 +195,7 @@ def builder_sources(options, builder, **plan_options):
         os_root=options['os'], ports_root=options['ports'], sdk_root=options['sdk-source'],
         host_prefix=options['host-prefix'], host_compiler=options.get('host-compiler-family', 'clang'),
         target=options['target'], flags=flags, traversals=(*prepared_sources.TOOLS_TRAVERSALS, *traversals),
-        read=('EMBER_LIBEDIT_SOURCE',), state=work, selected_sources=selected,
+        read=('EMBER_LIBEDIT_SOURCE',), state=work, cache=Path(root, PLAN_CACHE), selected_sources=selected,
         jobs=min(8, int(resolve_jobs(options.get('jobs')))), **plan_options)
     pending = [node for node in plan['nodes'] if node['decision']['action'] != 'ready']
     # Refuse, before a producer runs, a source that the builder does not read

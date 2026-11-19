@@ -21,7 +21,7 @@ import tempfile
 
 from . import prepared_sources, process
 from .errors import CommandError, SDKError
-from .jsonio import json_bytes, loads_json, read_json
+from .jsonio import json_bytes, loads_json, read_json, write_json
 from .targets import target_definition
 
 PROFILE_SCHEMA = 'emberbsd.build-profile.v1'
@@ -65,6 +65,82 @@ def _require(condition, message):
 
 def _key(value):
     return hashlib.sha256(json_bytes(value)).hexdigest()
+
+
+def _file_key(path):
+    """Return a key of the file, link or directory at PATH; None if it is missing.
+
+    A file has the sha256 of its bytes. A directory has the name, size and
+    modification time of each entry: an untracked build directory can be
+    large, and a change of a file changes its time."""
+    try:
+        if os.path.islink(path):
+            return 'link:' + os.readlink(path)
+        if os.path.isfile(path):
+            with open(path, 'rb') as stream:
+                return 'file:' + hashlib.file_digest(stream, 'sha256').hexdigest()
+        if os.path.isdir(path):
+            entries = []
+            for directory, names, files in os.walk(path):
+                names.sort()
+                for name in sorted(names + files):
+                    item = os.lstat(os.path.join(directory, name))
+                    entries.append([os.path.relpath(os.path.join(directory, name), path),
+                                    item.st_mode, item.st_size, item.st_mtime_ns])
+            return 'tree:' + _key(entries)
+    except OSError as exc:
+        # The key of a path that cannot be read changes when the error changes.
+        return f'error:{exc.errno}'
+    return None
+
+
+def content_key(identity):
+    """Return a key of the files of a checkout: its Git tree and each changed path.
+
+    A changed submodule has the commit of its checkout: the Ports tools read
+    the submodule through Git objects. Ignored files are not in the key."""
+    changed = {}
+    for path in identity['dirty']:
+        full = os.path.join(identity['root'], path.rstrip('/'))
+        if os.path.exists(os.path.join(full, '.git')):
+            changed[path] = 'commit:' + _git(full, 'rev-parse', 'HEAD')
+        else:
+            changed[path] = _file_key(full)
+    return _key(dict(tree=identity['tree'], changed=changed))
+
+
+# The SDK code of the plan queries: a change of it gives other results.
+_CODE = [os.path.join(os.path.dirname(__file__), name) for name in ('build_profile.py', 'prepared_sources.py',
+                                                                      'process.py')]
+
+
+def _cached(cache, kind, material, compute):
+    """Return the result of COMPUTE() that the CACHE directory keeps for MATERIAL.
+
+    The slow plan queries keep their results there, keyed by all of their
+    inputs: MATERIAL() returns them, and it also gets the SDK code and the
+    Python of the plan. Without CACHE, compute it each time. A result is kept
+    only when its inputs did not change while it was computed. Remove the
+    directory to remove old results."""
+    if cache is None:
+        return compute()
+
+    def inputs():
+        return loads_json(json_bytes(dict(material(), code=[_file_key(path) for path in _CODE],
+                                          python=sys.executable)))
+    before = inputs()
+    path = Path(cache, f'{kind}-{_key(before)}.json')
+    try:
+        record = read_json(path)
+        if isinstance(record, dict) and record.get('material') == before and 'result' in record:
+            return record['result']
+    except (OSError, SDKError, ValueError):
+        pass
+    result = compute()
+    if inputs() == before:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_json(path, dict(material=before, result=result), exclusive=False)
+    return result
 
 
 def _names(value, pattern, label):
@@ -255,9 +331,9 @@ class _Planner:
     """The checkouts, OS source list, host prefix and nodes of one plan."""
 
     def __init__(self, *, os_root, ports_root, sdk_root, host_prefix, host_compiler, target_name, state,
-                 selected_sources, required_sources, native, jobs):
+                 selected_sources, required_sources, native, jobs, cache=None):
         from .native_os_routing import parse_native_os_contract
-        self.state, self.target_name = state, target_name
+        self.state, self.cache, self.target_name = state, cache, target_name
         self.target = target_definition(target_name)
         self.selected_sources = dict(selected_sources or {})
         self.found = {'os': checkout(os_root), 'ports': checkout(ports_root)}
@@ -286,14 +362,41 @@ class _Planner:
         return self.found[name]
 
     def walk(self, traversals, flags):
-        """Return the sources that the bmake guards of TRAVERSALS under FLAGS need."""
+        """Return the sources that the bmake guards of TRAVERSALS under FLAGS need.
+
+        The result depends on the OS files, the flags, the directories, the
+        target and the host make only; the plan cache keeps it."""
         os_identity = self.found['os']
-        with tempfile.TemporaryDirectory(prefix='emberbsd-plan-') as objects:
-            query = prepared_sources.os_query(
-                self.native, self.rows, os_identity['root'], objects=objects, tools=os.path.join(objects, 'tools'),
-                machine=self.target['machine'], arch=self.target['arch'], timestamp=os_identity['time'],
-                traversals=traversals, flags=flags, env=process.sanitized_environment())
-            return prepared_sources.required_sources(os_identity['root'], query, traversals, jobs=self.jobs)
+
+        def compute():
+            with tempfile.TemporaryDirectory(prefix='emberbsd-plan-') as objects:
+                query = prepared_sources.os_query(
+                    self.native, self.rows, os_identity['root'], objects=objects,
+                    tools=os.path.join(objects, 'tools'), machine=self.target['machine'], arch=self.target['arch'],
+                    timestamp=os_identity['time'], traversals=traversals, flags=flags,
+                    env=process.sanitized_environment())
+                return prepared_sources.required_sources(os_identity['root'], query, traversals, jobs=self.jobs)
+        make = self.native.tool('make')
+
+        def material():
+            return dict(os=content_key(os_identity), root=os_identity['root'], time=os_identity['time'],
+                        flags=list(flags), traversals=[[path, sorted(targets)] for path, targets in traversals],
+                        machine=self.target['machine'], arch=self.target['arch'],
+                        make=[make, _file_key(os.path.realpath(make))], rows=self.rows)
+        return _cached(self.cache, 'walk', material, compute)
+
+    def ports_tool(self, script, *arguments):
+        """Return the output of a Ports tool. It reads the Ports and SDK files and
+        the host gpatch only; the plan cache keeps it."""
+        ports, sdk = self.found['ports'], self.checkouts('sdk')
+        # The tool gets this path of gpatch, and the export fingerprint has it.
+        gpatch = os.path.join(self.prefix, 'bin/gpatch')
+
+        def material():
+            return dict(script=script, arguments=list(arguments), ports=content_key(ports), sdk=content_key(sdk),
+                        roots=[ports['root'], sdk['root']], gpatch=[gpatch, _file_key(os.path.realpath(gpatch))])
+        return _cached(self.cache, 'ports-tool', material,
+                       lambda: ports_tool(ports['root'], sdk['root'], self.prefix, script, *arguments))
 
     def add(self, node_id, kind, identity, inputs, dependencies, outputs, reason, ready=None):
         nodes = self.nodes
@@ -329,16 +432,14 @@ class _Planner:
         packages = sorted({self.shared['sources'][name]['package'] for name in names
                            if name not in self.selected_sources} - set(self.recipes))
         if packages:
-            self.recipes.update(ports_tool(self.found['ports']['root'], self.checkouts('sdk')['root'], self.prefix,
-                                           RECIPE_TOOL, *[word for package in packages
-                                                          for word in ('--describe', package)]))
+            self.recipes.update(self.ports_tool(RECIPE_TOOL, *[word for package in packages
+                                                               for word in ('--describe', package)]))
 
     def pkgsrc_export(self, reason):
         # One shared pkgsrc export for all Ports producers, keyed by the Git
         # fingerprint of its inputs.
         if not self.export:
-            fingerprint = ports_tool(self.found['ports']['root'], self.checkouts('sdk')['root'], self.prefix,
-                                     EXPORT_TOOL, 'fingerprint').get('fingerprint')
+            fingerprint = self.ports_tool(EXPORT_TOOL, 'fingerprint').get('fingerprint')
             _require(isinstance(fingerprint, str) and re.fullmatch(r'[0-9a-f]{64}', fingerprint),
                      f'{EXPORT_TOOL} printed no fingerprint')
             self.export.append(fingerprint)
@@ -387,19 +488,20 @@ class _Planner:
 
 
 def source_plan(*, os_root, ports_root, sdk_root, host_prefix, host_compiler, target, flags, traversals,
-                read=(), state=None, selected_sources=None, required_sources=None, native=None, jobs=None):
+                read=(), state=None, cache=None, selected_sources=None, required_sources=None, native=None,
+                jobs=None):
     """Return a plan of the prepared sources that an OS build needs. Build nothing.
 
     FLAGS and TRAVERSALS are the make flags and directories of the build, as
     the prepared_source_profile of its builder names them. The plan also
     selects release.select of ember/shared-sources.json. It has the source
     nodes and the shared pkgsrc export only. READ names the sources that the
-    builder reads in all builds. REQUIRED_SOURCES and NATIVE are as for
+    builder reads in all builds. CACHE, REQUIRED_SOURCES and NATIVE are as for
     make_plan."""
     planner = _Planner(os_root=os_root, ports_root=ports_root, sdk_root=sdk_root, host_prefix=host_prefix,
                        host_compiler=host_compiler, target_name=target, state=state,
                        selected_sources=selected_sources, required_sources=required_sources, native=native,
-                       jobs=jobs)
+                       jobs=jobs, cache=cache)
     _require('release' in planner.shared, 'the OS has no release.select in ember/shared-sources.json; update the OS')
     needed = planner.required(traversals, flags)
     release = set(planner.shared['release']['select'])
@@ -412,9 +514,12 @@ def source_plan(*, os_root, ports_root, sdk_root, host_prefix, host_compiler, ta
     return planner.document(dict(platform=dict(target=target), os=dict(flags=list(flags))))
 
 
-def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_config, state=None,
+def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_config, state=None, cache=None,
               selected_sources=None, required_sources=None, native=None, jobs=None):
-    """Return the build-graph-v2 plan of PROFILE. Build and write nothing.
+    """Return the build-graph-v2 plan of PROFILE. Build nothing.
+
+    The CACHE directory keeps the results of the bmake guard walks and the
+    Ports tools for the same inputs; the plan writes nothing else.
 
     SELECTED_SOURCES maps EMBER_*_SOURCE to a prepared tree that the
     configuration selects; the plan does not prepare it. Ports names the
@@ -427,7 +532,7 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
     planner = _Planner(os_root=os_root, ports_root=ports_root, sdk_root=sdk_root, host_prefix=host_prefix,
                        host_compiler=compiler['host'], target_name=profile['platform']['target'], state=state,
                        selected_sources=selected_sources, required_sources=required_sources, native=native,
-                       jobs=jobs)
+                       jobs=jobs, cache=cache)
     native, prefix, shared, target = planner.native, planner.prefix, planner.shared, planner.target
     os_identity, add, nodes = planner.found['os'], planner.add, planner.nodes
     mk = [f'{name}={value}' for name, value in profile['os']['mk'].items()]

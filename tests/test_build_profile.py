@@ -381,5 +381,69 @@ class BuildProfileTests(ProfileFixture):
         with self.assertRaisesRegex(SDKError, 'initialize submodule upstream/pkgsrc'):
             self.plan()
 
+
+class PlanCacheTests(ProfileFixture):
+    """The plan cache keeps the guard walks and the Ports tool output for the same files."""
+
+    def setUp(self):
+        super().setUp()
+        self.cache = self.root / 'cache'
+
+    def cached_plan(self, **options):
+        return build_profile.make_plan(
+            copy.deepcopy(PROFILE), os_root=self.os, ports_root=self.ports, sdk_root=self.sdk,
+            host_prefix=self.native.bundle_root, host_bfd_config=str(self.bfd), native=self.native,
+            cache=self.cache, **options)
+
+    def test_the_same_files_do_not_run_the_walk_and_the_ports_tools_again(self):
+        walks = []
+
+        def query(*arguments, **options):
+            return None
+
+        def required(root, query, traversals, jobs=None):
+            walks.append(traversals)
+            return {'EMBER_BYACC_SOURCE': 'tools/yacc'} if traversals[0][0] == 'tools' else {}
+
+        with patch.object(prepared_sources, 'os_query', query), \
+                patch.object(prepared_sources, 'required_sources', required):
+            first = self.cached_plan()
+            walked = list(walks)
+            self.assertTrue(walked)
+            # The second plan takes all slow results from the cache.
+            with patch.object(build_profile, 'ports_tool', side_effect=AssertionError('the Ports tool ran')):
+                self.assertEqual(self.cached_plan()['nodes'], first['nodes'])
+            self.assertEqual(walks, walked)
+            # A local change of a Ports recipe gives the plan the new recipe.
+            self.write('ports/pkgsrc/devel/byacc/Makefile', 'DISTNAME= byacc-2\n')
+            changed = self.nodes(self.cached_plan())
+            self.assertNotEqual(changed['source:EMBER_BYACC_SOURCE']['inputs']['recipe'],
+                                self.nodes(first)['source:EMBER_BYACC_SOURCE']['inputs']['recipe'])
+            # A Ports change does not walk the OS again.
+            self.assertEqual(walks, walked)
+            # A local change of an OS file walks the OS again, and so does a new untracked file.
+            for path in ('os/sys/arch/evbarm/conf/EMBER64', 'os/sys/arch/evbarm/conf/LOCAL'):
+                before = len(walks)
+                self.write(path, 'include "arch/evbarm/conf/std"\n# local\n')
+                self.cached_plan()
+                self.assertEqual(walks[before:], walked)
+
+    def test_other_sdk_code_runs_the_queries_again(self):
+        code = self.write('code.py', 'pass\n')
+        with patch.object(build_profile, '_CODE', [str(code)]):
+            self.cached_plan(required_sources=self.required_sources)
+            code.write_text('# changed\n')
+            with patch.object(build_profile, 'ports_tool', side_effect=AssertionError('the Ports tool ran')):
+                with self.assertRaisesRegex(AssertionError, 'the Ports tool ran'):
+                    self.cached_plan(required_sources=self.required_sources)
+
+    def test_a_damaged_cache_file_is_computed_again(self):
+        self.cached_plan(required_sources=self.required_sources)
+        for path in self.cache.iterdir():
+            path.write_text('{')
+        self.assertEqual(self.nodes(self.cached_plan(required_sources=self.required_sources)),
+                         self.nodes(self.plan()))
+
+
 if __name__ == '__main__':
     unittest.main()

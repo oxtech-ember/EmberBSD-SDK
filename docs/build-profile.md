@@ -64,6 +64,19 @@ python3 scripts/packages.py --config /work/client.json profile-plan --profile /w
 
 The command prints the plan on standard output and a summary on standard error.
 
+The plan keeps the results of its slow queries in `CACHE_DIR/plan`: the walks
+of the OS make guards and the output of the Ports tools (recipe identities and
+the export fingerprint). The key of a result is all of its inputs: the Git
+tree of each checkout that the query reads and its changed paths, the make
+flags and directories, the target, the host make or gpatch, and the SDK code
+and Python of the plan. A changed file has the hash of its bytes in the key; an
+untracked directory has the size and time of its files; a changed submodule
+has its commit. Ignored files are not in the key: a query that reads an
+ignored file can give a result of the earlier file. A result is kept only if
+its inputs did not change while the query ran. Remove the directory to remove
+old results. `build-sysroot.py` and `build-os-release.py` keep the cache of
+their source plans in `SDK/obj/plan-cache`.
+
 ## Plan schema `build-graph-v2`
 
 `build-graph-v2` succeeds the Ports schema [`ports-graph-v1`](ports-plan.md). It

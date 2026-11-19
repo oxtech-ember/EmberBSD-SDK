@@ -945,7 +945,7 @@ def make_profile_plan(config, profile_path):
         ports_root=options['ports_root'], sdk_root=options['sdk_root'], host_prefix=options['host_prefix'],
         host_bfd_config=options['host_bfd_config'],
         state=options.get('work', os.path.join(config['state_dir'], 'build')),
-        selected_sources=options['selected_sources'])
+        cache=os.path.join(config['cache_dir'], 'plan'), selected_sources=options['selected_sources'])
 
 
 def plan_profile(config, profile_path):
