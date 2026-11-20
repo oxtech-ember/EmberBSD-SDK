@@ -362,12 +362,6 @@ def _release(work, node, nodes, plan, config, prefix):
     _require(runnable(node) is None, f'{node["id"]}: {runnable(node)}')
     root = _workspace(work, plan)
     platform = plan['profile']['platform']
-    destination = Path(root, 'stages', f'os-sets-{node["input_key"][:16]}')
-    if destination.exists():
-        # A failed or interrupted release leaves no record; start again.
-        shutil.rmtree(destination)
-    # A new workspace has no stages directory yet.
-    destination.parent.mkdir(exist_ok=True)
     sources = {}
     for item in sorted(set(nodes['os:tools']['dependencies'] + node['dependencies'])):
         if item.startswith('source:'):
@@ -386,6 +380,15 @@ def _release(work, node, nodes, plan, config, prefix):
     # Other MK* options build other objects: make does not see a changed option.
     material += mk
     tools_key = hashlib.sha256('\n'.join(material).encode()).hexdigest()[:16]
+    # The release of the kept objects has one directory: the compiler flags
+    # name the install directory (--sysroot and the prefix maps), and other
+    # flags would configure each GNU program of the OS again. A new release
+    # replaces the release of an earlier run.
+    destination = Path(root, 'stages', f'os-sets-{tools_key}')
+    if destination.exists():
+        shutil.rmtree(destination)
+    # A new workspace has no stages directory yet.
+    destination.parent.mkdir(exist_ok=True)
     options = {'sdk': root, 'os': config['os_source'], 'ports': config['ports_root'], 'compiler': prefix,
                'sdk-source': config['sdk_root'], 'host-prefix': prefix,
                'host-binutils': os.path.dirname(config['host_bfd_config']),

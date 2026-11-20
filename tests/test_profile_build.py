@@ -139,7 +139,7 @@ class ReleaseNodeTests(ProfileFixture):
         (moved / 'emberbsd-prepared-source.json').write_text('{"tree_sha256": "%s"}' % ('1' * 64))
         self.run_sets()
         after_edit = self.calls[-1][0]
-        for name in ('objects', 'tools', 'llvm-objects', 'runtime-work', 'llvm-stage-root'):
+        for name in ('objects', 'tools', 'llvm-objects', 'runtime-work', 'llvm-stage-root', 'destination'):
             self.assertNotIn(after_move[name], (before[name], after_edit[name]), name)
             self.assertNotEqual(after_edit[name], before[name], name)
 
@@ -157,6 +157,24 @@ class ReleaseNodeTests(ProfileFixture):
         self.assertEqual(after['mk'], ['MKNTP=no'])
         for name in ('objects', 'tools', 'llvm-objects'):
             self.assertNotEqual(after[name], before[name], name)
+
+    def test_a_new_os_commit_installs_to_the_same_release_directory(self):
+        # The compiler flags name the install directory: the same directory
+        # keeps them, so make does not configure the GNU programs again.
+        self.run_sets()
+        before, key = self.calls[-1][0], self.nodes['os:sets']['input_key']
+        self.write('os/bin/cat/cat.c', 'int main(void) { return 0; }\n')
+        git(self.os, 'add', '-A')
+        git(self.os, 'commit', '-q', '-m', 'cat')
+        self.plan_data = self.plan(self.plan_data['profile'], state=self.work,
+                                   selected_sources=self.config['selected_sources'])
+        self.nodes = {node['id']: node for node in self.plan_data['nodes']}
+        self.assertNotEqual(self.nodes['os:sets']['input_key'], key)
+        write_json(self.work / profile_build.PLAN_FILE, self.plan_data, exclusive=False)
+        self.run_sets()
+        after = self.calls[-1][0]
+        for name in ('destination', 'objects', 'tools'):
+            self.assertEqual(after[name], before[name], name)
 
     def test_a_new_run_starts_the_release_again(self):
         self.run_sets()

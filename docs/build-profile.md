@@ -220,10 +220,14 @@ nodes keep them ready.
   the keyed LLVM stages (`work/sdk/stages/llvm-<ctx>`). A changed source tree
   builds the OS again in new directories. A development
   build continues the LLVM stages that an interrupted run left. The release
-  goes to `work/sdk/stages/os-sets-<key>`, and the record names its set files.
+  goes to `work/sdk/stages/os-sets-<ctx>`, and the record names its set files.
+  The compiler flags name this install directory (`--sysroot` and the prefix
+  maps), so a release with the kept objects uses the same directory, and make
+  does not configure the GNU programs of the OS again. A new release replaces
+  the release of an earlier run with the same `<ctx>`.
   The builder needs clean OS, Ports and SDK checkouts, so `profile-build`
   refuses a sets node with local changes. The kept objects are used for an
-  earlier OS commit too. Earlier releases and build states stay in `obj` and
+  earlier OS commit too. The build states of other contexts stay in `obj` and
   `stages`.
 
   The key of `os:sets` also binds the Ports tree, which has the producers
