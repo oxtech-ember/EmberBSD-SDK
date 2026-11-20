@@ -11,6 +11,9 @@ the catalog has no compatible host bootstrap or components.
 Read the [EmberBSD Developer Guide](https://github.com/oxtech-ember/EmberBSD-Docs/blob/main/modules/sdk.md)
 for the SDK architecture, package selection and its boundaries with the target OS.
 
+For small graphical applications, the optional [EmberBSD QML compiler](docs/qml.md)
+translates a QML scene into C for the embedded RGB565 renderer.
+
 ## Prebuild SDK
 
 Prebuild SDK is the shared development-host workspace for compiled objects,
