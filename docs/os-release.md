@@ -94,8 +94,9 @@ records, native tools), the SDK build configuration and every compiled input;
 any difference refuses them, and the build needs new directories. Only the
 flags that name the OS commit (`MKREPRO_TIMESTAMP`, `EMBER_BUILD_ID`,
 `BUILDINFO`) are left out of that comparison, so a new OS commit updates the
-kept trees with `build.sh -u`. The source ancestry check still requires the
-kept trees' commits to be ancestors of the selected ones.
+kept trees with `build.sh -u`. The selected commits can be later, earlier or of
+other history than the commits of the kept trees (see
+[source history](source-history.md)).
 `--object-mode fresh` requires new or empty `--objects` and `--tools`
 directories at the start of the run, so the OS phases of this run are the only
 producers of the tools; use it for a published release. The selected mode is

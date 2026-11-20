@@ -582,7 +582,7 @@ class SysrootBuilder:
                       self.plan_header_tools_refresh(record, path))) or
                     (path == self.paths['tools'] and self.plan_native_refresh(record, path))):
                 raise SDKError(f'unknown or incompatible object context; leave it unchanged: {path}')
-        self.validate_source_ancestry(record, path)
+        self.validate_source_history(record, path)
         return record
 
     def plan_header_tools_refresh(self, record, path):
@@ -868,31 +868,20 @@ class SysrootBuilder:
         except (KeyError, TypeError, AttributeError):
             return False
 
-    def validate_source_ancestry(self, record, path):
-        """Check prior pins from a context or completed stage in current sources."""
+    def validate_source_history(self, record, path):
+        """Check that the recorded commits of kept objects are in the current repositories.
+
+        The current commit can be any commit: a later one, an earlier one or
+        one of other history. Git writes each file that it changes with a new
+        time, so build.sh -u builds again what the files changed. The context
+        comparison, clean-source admission and scoped refreshes still apply."""
         try:
             for name in ('os', 'ports', 'sdk'):
                 old = record['sources'][name]['commit']
                 if not isinstance(old, str) or re.fullmatch('[0-9a-f]{40}', old) is None:
                     raise SDKError('invalid recorded source pin')
-                root = self.sources[name]['path']
-                current = self.sources[name]['commit']
-                try:
-                    self.git(root, 'merge-base', '--is-ancestor', old, current)
-                except CommandError as exc:
-                    # A rebase or cherry-pick can change provenance without
-                    # changing any tracked input. Only the normal non-ancestor
-                    # result permits this fallback; Git errors still fail.
-                    if exc.returncode != 1:
-                        raise
-                    before = self.git(root, 'rev-parse', '--verify', old + '^{tree}')
-                    after = self.git(root, 'rev-parse', '--verify', current + '^{tree}')
-                    if before != after:
-                        raise
-                    # This is history admission only. inspect_context already
-                    # checked compiled signatures/allowed scoped refreshes;
-                    # clean source admission and artifact checks stay intact.
-
+                # The scoped refreshes compare the files of the recorded commit.
+                self.git(self.sources[name]['path'], 'rev-parse', '--verify', '--quiet', old + '^{commit}')
         except (KeyError, TypeError) as exc:
             raise SDKError(f'invalid source history: {path}: {exc}') from exc
 

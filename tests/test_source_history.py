@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-"""Real Git history admission tests; no target build or ABI qualification."""
+"""Real Git history admission of kept objects; no target build or ABI qualification."""
 import os
 from pathlib import Path
 import shutil
@@ -16,7 +16,7 @@ from emberbsd_sdk.errors import CommandError, SDKError
 from emberbsd_sdk.sysroot_builder import SysrootBuilder
 
 
-class SourceHistoryEquivalenceTests(unittest.TestCase):
+class SourceHistoryTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -39,27 +39,28 @@ class SourceHistoryEquivalenceTests(unittest.TestCase):
     def check(self, current):
         self.builder.sources = {name: {'commit': current, 'path': self.root}
                                 for name in ('os', 'ports', 'sdk')}
-        self.builder.validate_source_ancestry(self.record, self.root)
+        self.builder.validate_source_history(self.record, self.root)
 
     def test_identical_pin(self):
         self.check(self.old)
 
-    def test_descendant_still_allowed(self):
+    def test_later_earlier_and_other_history_commits_are_accepted(self):
         Path(self.root, 'input').write_text('new\n')
         self.git('commit', '-qam', 'next')
-        self.check(self.git('rev-parse', 'HEAD'))
-
-    def test_rewritten_history_equal_tree(self):
-        self.git('commit', '--amend', '-qm', 'rewritten provenance')
-        current = self.git('rev-parse', 'HEAD')
-        self.assertNotEqual(current, self.old)
-        self.check(current)
-
-    def test_rewritten_history_changed_tree_refused(self):
+        later = self.git('rev-parse', 'HEAD')
+        self.check(later)
+        # Objects of the later commit and an earlier current commit.
+        self.record['sources']['os']['commit'] = later
+        self.check(self.old)
+        # A rewritten commit with other files.
         Path(self.root, 'input').write_text('changed\n')
         self.git('commit', '-qam', 'rewritten inputs', '--amend')
-        with self.assertRaises(CommandError):
-            self.check(self.git('rev-parse', 'HEAD'))
+        self.check(self.git('rev-parse', 'HEAD'))
+        # A commit of other history.
+        self.git('checkout', '-q', '--orphan', 'other')
+        Path(self.root, 'input').write_text('other history\n')
+        self.git('commit', '-qam', 'other root')
+        self.check(self.git('rev-parse', 'HEAD'))
 
     def test_unknown_old_commit_refused(self):
         self.record['sources']['ports']['commit'] = 'f' * 40
@@ -71,8 +72,11 @@ class SourceHistoryEquivalenceTests(unittest.TestCase):
         with self.assertRaises(SDKError):
             self.check(self.old)
 
-    def test_git_error_never_becomes_tree_fallback(self):
-        with patch.object(self.builder, 'git', side_effect=CommandError(128, ['git'])) as call:
+    def test_git_error_is_a_failure(self):
+        with patch.object(self.builder, 'git', side_effect=CommandError(128, ['git'])):
             with self.assertRaises(CommandError):
                 self.check(self.old)
-        self.assertEqual(call.call_count, 1)
+
+
+if __name__ == '__main__':
+    unittest.main()

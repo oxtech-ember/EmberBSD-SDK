@@ -457,6 +457,26 @@ class PreparedRefreshTests(unittest.TestCase):
         self.assertIn('external/cbor', dirs)
         self.assertEqual(outputs, [str(nested)])
 
+    def test_a_pattern_owner_covers_each_crunched_program(self):
+        (self.os / 'rescue').mkdir()
+        (self.os / 'rescue/Makefile').write_text('')
+        for program in ('chmod', 'ls'):
+            nested = self.obj / 'rescue' / program
+            nested.mkdir(parents=True)
+            (nested / 'unit.o').write_bytes(b'object without dependency output')
+        self.contract['nested_object_owners'] = {'rescue/*': 'rescue'}
+        self.write_contract()
+        outputs = []
+        dirs = prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [], outputs)
+        self.assertIn('rescue', dirs)
+        self.assertEqual(sorted(outputs), [str(self.obj / 'rescue/chmod'), str(self.obj / 'rescue/ls')])
+        for pattern in ({'rescue/c*': 'rescue'}, {'*/x': '*'}):
+            with self.subTest(pattern=pattern):
+                self.contract['nested_object_owners'] = pattern
+                self.write_contract()
+                with self.assertRaisesRegex(SDKError, 'invalid'):
+                    prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [])
+
     def test_top_level_crunched_owner_covers_only_its_nested_output(self):
         (self.os / 'rescue').mkdir()
         (self.os / 'rescue/Makefile').write_text('')
@@ -818,7 +838,7 @@ class TransitionTests(unittest.TestCase):
             from types import MethodType
             fake.compatible_context = lambda record, path: record['signature'] == selected
             fake.plan_native_refresh = MethodType(SysrootBuilder.plan_native_refresh, fake)
-            fake.validate_source_ancestry = lambda record, path: None
+            fake.validate_source_history = lambda record, path: None
             with patch('emberbsd_sdk.sysroot_builder.prepared_refresh.plan_native', return_value=dirs):
                 self.assertEqual(SysrootBuilder.inspect_context(fake, str(root/'tools')), pending)
                 selected = {'native_sources': {'demo': 'old'}}

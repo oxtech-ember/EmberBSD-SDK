@@ -144,7 +144,7 @@ class LLVMPhaseBuilder(SysrootBuilder):
                                       os.path.join(self.paths['sdk'], 'obj')):
                 if not self.compatible_context(self.completed, self.paths['objects']):
                     raise SDKError('LLVM OS stage inputs changed; select new stage objects')
-                self.validate_source_ancestry(self.completed, self.paths['destination'])
+                self.validate_source_history(self.completed, self.paths['destination'])
                 # Object reuse permits incremental rebuilding after source changes.
                 # Returning a completed stage does not rebuild, so the OS files
                 # it read must still be identical. Ports recipes are checked in

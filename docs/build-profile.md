@@ -222,10 +222,9 @@ nodes keep them ready.
   build continues the LLVM stages that an interrupted run left. The release
   goes to `work/sdk/stages/os-sets-<key>`, and the record names its set files.
   The builder needs clean OS, Ports and SDK checkouts, so `profile-build`
-  refuses a sets node with local changes. The builder refuses objects of an
-  OS commit that is not a descendant of the last one; remove
-  `work/sdk/obj/os-<ctx>`, `tools-<ctx>` and `llvm-<ctx>` then. Earlier
-  releases and build states stay in `obj` and `stages`.
+  refuses a sets node with local changes. The kept objects are used for an
+  earlier OS commit too. Earlier releases and build states stay in `obj` and
+  `stages`.
 
   The key of `os:sets` also binds the Ports tree, which has the producers
   that the builder runs, and the OS commit, which the builder writes into

@@ -176,7 +176,8 @@ file by file. An OS contract
 may add an explicit utility role while every existing command, binding, tool
 selection, and the relative order of existing search directories stays intact.
 Removing or replacing a tool, changing a compiler binding, or changing ABI
-inputs refuses reuse. Published source ancestry is checked as before.
+inputs refuses reuse. The recorded commits must be in the repositories (see
+[source history](source-history.md)).
 Completed LLVM header/base stages use the same significant-input comparison
 and retain their original build records when reused. Their complete output
 inventory and the OS files recorded in the stage set's `inputs.json` (the

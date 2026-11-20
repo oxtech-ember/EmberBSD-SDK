@@ -1906,7 +1906,7 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         stored = dict(record, format='emberbsd-sysroot-object-context', version=1)
         Path(objects).mkdir(parents=True, exist_ok=True)
         jsonio.write_json(Path(objects) / builder.CONTEXT, stored, exclusive=True)
-        with patch.object(builder, 'validate_source_ancestry'):
+        with patch.object(builder, 'validate_source_history'):
             self.assertEqual(builder.inspect_context(objects), stored)
         self.assertEqual(builder.refresh_dirs, ['tools'])
         self.assertFalse(builder.plan_header_tools_refresh(record, tools))

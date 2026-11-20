@@ -68,6 +68,14 @@ def plan_native(os_root, objects, names):
     return sorted(result)
 
 
+def _nested_prefix(name, subdir):
+    """Return the part of NAME that the nested owner pattern SUBDIR names, or None."""
+    parts, pattern = name.split('/'), subdir.split('/')
+    if len(parts) < len(pattern) or any(want not in ('*', part) for want, part in zip(pattern, parts)):
+        return None
+    return '/'.join(parts[:len(pattern)])
+
+
 def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
          extra_headers=(), extra_linked=(), allowed_source_roots=(), scan_consumers=True,
          file_outputs=None, native_tool_aliases=None, object_dir_map=None,
@@ -122,9 +130,12 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
         if not isinstance(nested, dict):
             raise ValueError('invalid nested object owners')
         for subdir, owner in nested.items():
-            relative(subdir)
+            # A '*' component names each object directory of the owner, as
+            # crunchgen makes in rescue: rescue/* is owned by rescue.
+            relative(subdir, pattern=True)
             relative(owner)
-            if not subdir.startswith(owner + '/'):
+            if (not subdir.startswith(owner + '/') or '*' in owner or
+                    any('*' in part and part != '*' for part in subdir.split('/'))):
                 raise ValueError('invalid nested object owner')
         patterns = [relative(p, pattern=True) for p in contract['header_independent_object_patterns']]
         archive_patterns = [relative(p, pattern=True) for p in contract['header_independent_archive_patterns']]
@@ -260,8 +271,8 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
             if not source.resolve().is_relative_to(root.resolve()) or not built.resolve().is_relative_to(obj.resolve()):
                 raise ValueError('refresh path escapes its root')
             if not (source / 'Makefile').is_file():
-                owners = [(subdir, owner) for subdir, owner in nested.items()
-                          if name == subdir or name.startswith(subdir + '/')]
+                owners = [(_nested_prefix(name, subdir), owner) for subdir, owner in nested.items()
+                          if _nested_prefix(name, subdir)]
                 if len(owners) != 1:
                     missing.append(name)
                     continue
