@@ -62,9 +62,31 @@ class SourceHistoryTests(unittest.TestCase):
         self.git('commit', '-qam', 'other root')
         self.check(self.git('rev-parse', 'HEAD'))
 
+    def test_an_earlier_commit_that_removes_a_file_of_the_objects_is_refused(self):
+        # Make does not see a removed file: an object of x.c would stay.
+        Path(self.root, 'x.c').write_text('int x;\n')
+        Path(self.root, 'notes').write_text('notes\n')
+        self.git('add', '-A')
+        self.git('commit', '-qm', 'add x.c')
+        self.record['sources']['os']['commit'] = self.git('rev-parse', 'HEAD')
+        with self.assertRaisesRegex(SDKError, 'removes files of the kept objects .*x.c.*select new objects'):
+            self.check(self.old)
+        # A later commit that removes the file still uses the objects, as before.
+        self.git('rm', '-q', 'x.c')
+        self.git('commit', '-qm', 'remove x.c')
+        self.check(self.git('rev-parse', 'HEAD'))
+
+    def test_an_earlier_commit_without_a_document_of_the_objects_is_accepted(self):
+        Path(self.root, 'notes.md').write_text('notes\n')
+        Path(self.root, 'input').write_text('later\n')
+        self.git('add', '-A')
+        self.git('commit', '-qm', 'notes')
+        self.record['sources']['os']['commit'] = self.git('rev-parse', 'HEAD')
+        self.check(self.old)
+
     def test_unknown_old_commit_refused(self):
         self.record['sources']['ports']['commit'] = 'f' * 40
-        with self.assertRaises(CommandError):
+        with self.assertRaisesRegex(SDKError, 'recorded ports commit f+ .* is not in .*fetch it'):
             self.check(self.old)
 
     def test_malformed_old_pin_refused(self):
@@ -74,7 +96,7 @@ class SourceHistoryTests(unittest.TestCase):
 
     def test_git_error_is_a_failure(self):
         with patch.object(self.builder, 'git', side_effect=CommandError(128, ['git'])):
-            with self.assertRaises(CommandError):
+            with self.assertRaises(SDKError):
                 self.check(self.old)
 
 

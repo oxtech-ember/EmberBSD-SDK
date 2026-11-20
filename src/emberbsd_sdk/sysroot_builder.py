@@ -483,8 +483,14 @@ class SysrootBuilder:
                         raise SDKError('LLVM runtime base OS differs from selection')
                     # A measured foundation permits a descendant OS source while
                     # preserving the runtime's original recorded revision.
-                    self.git(self.sources['os']['path'], 'merge-base', '--is-ancestor',
-                             record['base']['os_revision'], self.sources['os']['commit'])
+                    try:
+                        self.git(self.sources['os']['path'], 'merge-base', '--is-ancestor',
+                                 record['base']['os_revision'], self.sources['os']['commit'])
+                    except CommandError as exc:
+                        if exc.returncode != 1:
+                            raise
+                        raise SDKError('the LLVM runtime base needs an OS commit that is a descendant of '
+                                       + record['base']['os_revision'] + '; select a new runtime') from exc
                 # The stage manifest is the input key of the reused runtime; its
                 # recorded digests stand for the bytes under the runtime prefix.
                 prefix = record['prefix'] + '/'
@@ -868,20 +874,50 @@ class SysrootBuilder:
         except (KeyError, TypeError, AttributeError):
             return False
 
-    def validate_source_history(self, record, path):
-        """Check that the recorded commits of kept objects are in the current repositories.
+    # Removed OS files that cannot change an object: documents and manual
+    # pages. Make does not see a removed file, so a kept object can stay
+    # from any other file that is gone.
+    @staticmethod
+    def removal_is_document(name):
+        return (name.endswith('.md') or name.startswith('share/doc/') or
+                re.search(r'\.[1-9][a-z]?$', name) is not None)
 
-        The current commit can be any commit: a later one, an earlier one or
-        one of other history. Git writes each file that it changes with a new
-        time, so build.sh -u builds again what the files changed. The context
-        comparison, clean-source admission and scoped refreshes still apply."""
+    def validate_source_history(self, record, path):
+        """Check the recorded commits of kept objects against the current commits.
+
+        A recorded commit must be in its repository: the scoped refreshes
+        compare its files. Git writes each file that it changes with a new
+        time, so build.sh -u builds again what the changed files need, for a
+        later, an earlier or a rewritten OS commit. Make does not see a
+        removed file: an OS commit that is not a descendant must not remove
+        or change the type of a file of the recorded commit other than a
+        document."""
         try:
             for name in ('os', 'ports', 'sdk'):
                 old = record['sources'][name]['commit']
                 if not isinstance(old, str) or re.fullmatch('[0-9a-f]{40}', old) is None:
                     raise SDKError('invalid recorded source pin')
-                # The scoped refreshes compare the files of the recorded commit.
-                self.git(self.sources[name]['path'], 'rev-parse', '--verify', '--quiet', old + '^{commit}')
+                root, current = self.sources[name]['path'], self.sources[name]['commit']
+                try:
+                    self.git(root, 'cat-file', '-e', old + '^{commit}')
+                except CommandError as exc:
+                    raise SDKError(f'the recorded {name} commit {old} of {path} is not in {root}; '
+                                   'fetch it or select new objects') from exc
+                if name != 'os' or old == current:
+                    continue
+                try:
+                    self.git(root, 'merge-base', '--is-ancestor', old, current)
+                    continue
+                except CommandError as exc:
+                    # Only the normal non-ancestor result goes on; Git errors fail.
+                    if exc.returncode != 1:
+                        raise
+                removed = [item for item in self.git(root, 'diff-tree', '-r', '--no-renames', '--name-only',
+                                                     '-z', '--diff-filter=DT', old, current, '--').split('\0')
+                           if item and not self.removal_is_document(item)]
+                if removed:
+                    raise SDKError(f'the OS commit {current} removes files of the kept objects {path} '
+                                   f'({", ".join(removed[:5])}); select new objects')
         except (KeyError, TypeError) as exc:
             raise SDKError(f'invalid source history: {path}: {exc}') from exc
 

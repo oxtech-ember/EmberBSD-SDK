@@ -470,7 +470,7 @@ class PreparedRefreshTests(unittest.TestCase):
         dirs = prepared_refresh.plan(self.os, self.obj, {'libcbor'}, lambda p: [], outputs)
         self.assertIn('rescue', dirs)
         self.assertEqual(sorted(outputs), [str(self.obj / 'rescue/chmod'), str(self.obj / 'rescue/ls')])
-        for pattern in ({'rescue/c*': 'rescue'}, {'*/x': '*'}):
+        for pattern in ({'rescue/c*': 'rescue'}, {'*/x': '*'}, {'rescue/*': 'rescue', 'rescue/ls': 'rescue'}):
             with self.subTest(pattern=pattern):
                 self.contract['nested_object_owners'] = pattern
                 self.write_contract()

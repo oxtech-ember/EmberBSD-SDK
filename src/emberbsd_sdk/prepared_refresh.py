@@ -135,7 +135,9 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
             relative(subdir, pattern=True)
             relative(owner)
             if (not subdir.startswith(owner + '/') or '*' in owner or
-                    any('*' in part and part != '*' for part in subdir.split('/'))):
+                    any('*' in part and part != '*' for part in subdir.split('/')) or
+                    any(other != subdir and (_nested_prefix(subdir, other) or _nested_prefix(other, subdir))
+                        for other in nested)):
                 raise ValueError('invalid nested object owner')
         patterns = [relative(p, pattern=True) for p in contract['header_independent_object_patterns']]
         archive_patterns = [relative(p, pattern=True) for p in contract['header_independent_archive_patterns']]
@@ -271,8 +273,8 @@ def plan(os_root, objects, names, archive_members=None, nested_outputs=None, *,
             if not source.resolve().is_relative_to(root.resolve()) or not built.resolve().is_relative_to(obj.resolve()):
                 raise ValueError('refresh path escapes its root')
             if not (source / 'Makefile').is_file():
-                owners = [(_nested_prefix(name, subdir), owner) for subdir, owner in nested.items()
-                          if _nested_prefix(name, subdir)]
+                owners = [(prefix, owner) for prefix, owner in
+                          ((_nested_prefix(name, subdir), owner) for subdir, owner in nested.items()) if prefix]
                 if len(owners) != 1:
                     missing.append(name)
                     continue

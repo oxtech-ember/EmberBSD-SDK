@@ -95,7 +95,8 @@ any difference refuses them, and the build needs new directories. Only the
 flags that name the OS commit (`MKREPRO_TIMESTAMP`, `EMBER_BUILD_ID`,
 `BUILDINFO`) are left out of that comparison, so a new OS commit updates the
 kept trees with `build.sh -u`. The selected commits can be later, earlier or of
-other history than the commits of the kept trees (see
+other history than the commits of the kept trees, if an OS commit that is not
+a descendant removes no file of them other than documents (see
 [source history](source-history.md)).
 `--object-mode fresh` requires new or empty `--objects` and `--tools`
 directories at the start of the run, so the OS phases of this run are the only

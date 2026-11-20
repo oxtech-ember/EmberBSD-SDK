@@ -1127,6 +1127,8 @@ class BuilderTests(TemporaryCase):
         self.refusal_unchanged('incompatible object context', destination=self.options['sdk'] + '/next')
 
     def test_earlier_os_commit_reuses_the_objects(self):
+        # The earlier commit has the files of the later one, with other bytes.
+        write(Path(self.options['os']) / 'revision', 'first'); commit(self.options['os'])
         first = self.run_builder()
         write(Path(self.options['os']) / 'revision', 'next'); commit(self.options['os'])
         self.run_builder(destination=self.options['sdk'] + '/stages/next')

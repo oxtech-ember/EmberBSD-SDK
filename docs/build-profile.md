@@ -227,7 +227,8 @@ nodes keep them ready.
   the release of an earlier run with the same `<ctx>`.
   The builder needs clean OS, Ports and SDK checkouts, so `profile-build`
   refuses a sets node with local changes. The kept objects are used for an
-  earlier OS commit too. The build states of other contexts stay in `obj` and
+  earlier OS commit too, if it removes no file of the kept objects other
+  than documents (see [source history](source-history.md)). The build states of other contexts stay in `obj` and
   `stages`.
 
   The key of `os:sets` also binds the Ports tree, which has the producers
