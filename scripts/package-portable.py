@@ -218,8 +218,7 @@ def main():
                 for flag, member in (('-i', '+INSTALL'), ('-k', '+DEINSTALL')):
                     if (database / member).exists():
                         command += [flag, database / member]
-            crypto.run_package('pkg_create', [*command, args.output.absolute()],
-                timeout=args.pkg_create_timeout)
+            crypto.create_package(command, args.output, timeout=args.pkg_create_timeout)
         print(args.output)
         return 0
     except (SDKError, OSError, ValueError, subprocess.CalledProcessError) as exc:

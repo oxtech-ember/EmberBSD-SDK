@@ -33,6 +33,35 @@ class ToolTimeoutTests(unittest.TestCase):
         self.assertEqual([c.kwargs['timeout'] for c in run.call_args_list], [900, 120, 120])
 
 
+class PackageOutputTests(unittest.TestCase):
+    def test_failed_create_can_retry_without_exposing_partial_output(self):
+        crypto = ReleaseCrypto(Mock())
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            output = directory / 'example-1.tgz'
+
+            def interrupt(role, argv, *, timeout):
+                self.assertEqual((role, timeout), ('pkg_create', 900))
+                argv[-1].write_bytes(b'partial')
+                self.assertFalse(output.exists())
+                raise SDKError('pkg_create interrupted')
+
+            with patch.object(crypto, 'run_package', side_effect=interrupt):
+                with self.assertRaisesRegex(SDKError, 'interrupted'):
+                    crypto.create_package([], output, timeout=900)
+            self.assertEqual(list(directory.iterdir()), [])
+
+            def finish(role, argv, *, timeout):
+                argv[-1].write_bytes(b'complete')
+
+            with patch.object(crypto, 'run_package', side_effect=finish):
+                crypto.create_package([], output)
+                with self.assertRaises(FileExistsError):
+                    crypto.create_package([], output)
+            self.assertEqual(output.read_bytes(), b'complete')
+            self.assertEqual(list(directory.iterdir()), [output])
+
+
 class ReleasePathTests(unittest.TestCase):
     def test_parent_alias_added_during_sealing_is_rejected(self):
         with tempfile.TemporaryDirectory(prefix='release-path-') as temporary:

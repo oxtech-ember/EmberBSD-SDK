@@ -51,6 +51,18 @@ def write_new(path, data, mode=0o644):
         os.unlink(name)
 
 
+def _publish_archive(archive, output):
+    """Publish a completed archive without replacing a concurrent writer's output."""
+    with archive.open('rb') as handle:
+        os.fsync(handle.fileno())
+    os.link(archive, output)
+    parent_fd = os.open(output.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    try:
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
 @dataclass(frozen=True)
 class SigningIdentity:
     certificate: Path
@@ -93,6 +105,13 @@ class ReleaseCrypto:
         if role not in ('pkg_admin', 'pkg_create', 'pkg_info'):
             raise SDKError(f'unsupported release package tool: {role}')
         return self._run(role, arguments, timeout=timeout)
+
+    def create_package(self, arguments, output, *, timeout=DEFAULT_TOOL_TIMEOUT):
+        output = Path(output).absolute()
+        with tempfile.TemporaryDirectory(prefix='.pkg-create-', dir=output.parent) as directory:
+            archive = Path(directory) / output.name
+            self.run_package('pkg_create', [*arguments, archive], timeout=timeout)
+            _publish_archive(archive, output)
 
     def _leaf_profile(self, certificate):
         pem = read_bytes(certificate, 128 * 1024)
@@ -219,12 +238,4 @@ class ReleaseCrypto:
                                           identity.key, identity.certificate])
             verify_stable(source, before)
             self.verify_package(signed, root)
-            # Link the completed archive without loading large packages into memory.
-            with signed.open('rb') as handle:
-                os.fsync(handle.fileno())
-            os.link(signed, output)
-            parent_fd = os.open(output.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
-            try:
-                os.fsync(parent_fd)
-            finally:
-                os.close(parent_fd)
+            _publish_archive(signed, output)
