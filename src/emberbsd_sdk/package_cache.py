@@ -12,6 +12,7 @@ import shutil
 
 from .errors import SDKError
 from .paths import open_regular, verify_stable
+from .release_s3 import remaining_ranges
 
 
 def _hold(path, flags):
@@ -133,13 +134,8 @@ class PackageCache:
                             partial.unlink()
                     raise
             else:
-                while start < item['size']:
-                    end = min(item['size'], start + 4 * 1024 * 1024) - 1
-                    block = store.range(key, start, end, item['size'])
-                    if len(block) != end - start + 1:
-                        raise SDKError('truncated resumed package')
+                for block in remaining_ranges(store, key, start, item['size']):
                     stream.write(block)
-                    start = end + 1
             stream.flush()
             os.fsync(stream.fileno())
         try:

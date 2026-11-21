@@ -61,6 +61,16 @@ def sign_request(method, path, headers, region, access_key, secret_key):
     return f'AWS4-HMAC-SHA256 Credential={access_key}/{scope}, SignedHeaders={signed}, Signature={signature}'
 
 
+def remaining_ranges(store, key, start, size):
+    while start < size:
+        end = min(size, start + 4 * 1024 * 1024) - 1
+        block = store.range(key, start, end, size)
+        if len(block) != end - start + 1:
+            raise SDKError(f'truncated HTTP byte range: {key}')
+        yield block
+        start = end + 1
+
+
 class HTTPStore:
     def __init__(self, base_url, *, ca_file=None, timeout=60, proxy_url=None):
         url = urlsplit(base_url)
@@ -191,22 +201,41 @@ class HTTPStore:
             return data, {name.lower(): value for name, value in response.getheaders()}
 
     def verify(self, key, size, sha256, *, sink=None):
-        with self.request('GET', key, headers={'cache-control': 'no-cache'}) as response:
-            if self._length(response) != size:
-                raise SDKError(f'published size differs: {key}')
-            digest, received = hashlib.sha256(), 0
-            while block := response.read(BLOCK_SIZE):
-                received += len(block)
-                if received > size:
-                    raise SDKError(f'published size exceeds inventory: {key}')
-                digest.update(block)
-                if sink is not None:
-                    try:
-                        sink.write(block)
-                    except OSError as exc:
-                        raise SDKError(f'cannot store downloaded artifact: {exc}') from exc
-            if received != size or digest.hexdigest() != sha256:
+        digest = hashlib.sha256()
+        received = 0
+
+        def consume(block):
+            digest.update(block)
+            if sink is not None:
+                try:
+                    sink.write(block)
+                except OSError as exc:
+                    raise SDKError(f'cannot store downloaded artifact: {exc}') from exc
+
+        def check_digest():
+            if digest.hexdigest() != sha256:
                 raise SDKError(f'published bytes differ from inventory: {key}')
+
+        try:
+            with self.request('GET', key, headers={'cache-control': 'no-cache'}) as response:
+                if self._length(response) != size:
+                    raise SDKError(f'published size differs: {key}')
+                while block := response.read(BLOCK_SIZE):
+                    received += len(block)
+                    if received > size:
+                        raise SDKError(f'published size exceeds inventory: {key}')
+                    consume(block)
+                if received == size:
+                    check_digest()
+                    return
+        except TransportError:
+            if not 0 < received < size:
+                raise
+        if received == 0:
+            raise SDKError(f'empty response for nonempty artifact: {key}')
+        for block in remaining_ranges(self, key, received, size):
+            consume(block)
+        check_digest()
 
     def range(self, key, start, end, total):
         if not 0 <= start <= end < total:

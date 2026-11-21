@@ -112,6 +112,8 @@ class ObjectHandler(BaseHTTPRequestHandler):
         self.send_header('ETag', etag)
         self.end_headers()
         if not head:
+            if not selected and hasattr(self.server, 'cut_after'):
+                data = data[:self.server.cut_after]
             self.wfile.write(data)
 
 
@@ -156,6 +158,19 @@ class HTTPTests(unittest.TestCase):
                 self.public.verify('file', size, digest)
         with self.assertRaises(SDKError):
             self.public.read('file', 3)
+
+    def test_interrupted_public_verification_resumes_and_checks_the_whole_hash(self):
+        data = b'EmberBSD binary package'
+        self.server.objects['/bucket/file'] = data
+        self.server.cut_after = 7
+        digest = hashlib.sha256(data).hexdigest()
+        with patch.object(self.public, 'range', wraps=self.public.range) as resume:
+            saved = io.BytesIO()
+            self.public.verify('file', len(data), digest, sink=saved)
+            self.assertEqual(saved.getvalue(), data)
+            resume.assert_called_once_with('file', 7, len(data) - 1, len(data))
+        with self.assertRaisesRegex(SDKError, 'bytes differ'):
+            self.public.verify('file', len(data), '0' * 64)
 
     def test_range_has_exact_bounds(self):
         self.server.objects['/bucket/file'] = b'0123456789'
@@ -390,6 +405,12 @@ class HTTPConnectionReuseTests(unittest.TestCase):
             response.close()
         self.assertEqual(self.store.read('after-closed', 100)[0], b'payload')
         self.assertNotEqual(self.server.seen[0][2], self.server.seen[1][2])
+        self.assertEqual(len(self.connections), 2)
+
+    def test_failed_digest_discards_the_connection(self):
+        with self.assertRaisesRegex(SDKError, 'bytes differ'):
+            self.store.verify('bad-digest', len(b'payload'), '0' * 64)
+        self.assertEqual(self.store.read('fresh', 100)[0], b'payload')
         self.assertEqual(len(self.connections), 2)
 
     def test_stale_pooled_connection_retries_a_fresh_connection(self):

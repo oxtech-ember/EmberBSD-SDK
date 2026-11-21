@@ -5,8 +5,11 @@ its authenticated metadata through HTTPS. It uses Python's standard library
 and the selected Ports OpenSSL/pkg_tools. Installation is a separate layer.
 
 Bodyless GET and HEAD requests make at most three connection attempts for
-transient timeouts or disconnected peers before exposing a response. TLS trust,
-HTTP status, signed-byte failures and interrupted response bodies remain errors.
+transient timeouts or disconnected peers before exposing a response. When a
+package transfer stops after a partial body, verification can fetch the
+remaining bytes in bounded HTTP ranges. It checks each range and the SHA256
+of the complete artifact. Invalid certificates, HTTP responses and mismatched
+signed bytes stop verification.
 S3 writes and deletes are never automatically retried; publication recovery uses
 the existing lock, conditional operations and reconciliation.
 
