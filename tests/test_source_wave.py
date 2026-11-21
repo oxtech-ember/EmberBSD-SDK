@@ -1457,7 +1457,7 @@ exit 0
 
     def _command_map(self):
         result = subprocess.run(
-            ['ps', '-axww', '-o', 'pid=,command='], capture_output=True, text=True, check=False)
+            ['ps', '-axww', '-o', 'pid=,command='], capture_output=True, text=True, errors='replace', check=False)
         mapping = {}
         for line in result.stdout.splitlines():
             line = line.strip()
