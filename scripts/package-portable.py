@@ -49,6 +49,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('package', type=Path)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--pkg-create-timeout', type=int, metavar='SECONDS',
+        default=ReleaseCrypto.DEFAULT_TOOL_TIMEOUT,
+        help='allow pkg_create this many seconds to write the finished archive (default: %(default)s)')
     parser.add_argument('--host-prefix', required=True)
     parser.add_argument('--dependency-prefix', type=Path, required=True)
     parser.add_argument('--bootstrap-install-name-tool', type=Path, required=True)
@@ -66,6 +69,8 @@ def main():
     parser.add_argument('--defer-hooks', action='store_true',
         help='qualify repeatable hooks that run after extraction and text relocation')
     args = parser.parse_args()
+    if args.pkg_create_timeout < 1:
+        parser.error('--pkg-create-timeout must be a positive number of seconds')
     try:
         if platform.system() != 'Darwin' or args.output.exists():
             raise SDKError('select a new output on a Darwin producer')
@@ -213,7 +218,8 @@ def main():
                 for flag, member in (('-i', '+INSTALL'), ('-k', '+DEINSTALL')):
                     if (database / member).exists():
                         command += [flag, database / member]
-            crypto.run_package('pkg_create', [*command, args.output.absolute()])
+            crypto.run_package('pkg_create', [*command, args.output.absolute()],
+                timeout=args.pkg_create_timeout)
         print(args.output)
         return 0
     except (SDKError, OSError, ValueError, subprocess.CalledProcessError) as exc:

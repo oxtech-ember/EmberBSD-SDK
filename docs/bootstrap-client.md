@@ -101,7 +101,9 @@ current. The bootstrap archive currently occupies approximately 39 MB.
 ## Prefix-independent component packages
 
 `scripts/package-portable.py --help` qualifies simple Darwin packages such as
-fetch before signing. It adjusts Mach-O references, validates their dependency
+fetch before signing. For large trees or slow storage, `--pkg-create-timeout SECONDS`
+sets the time available to write the final archive. The default is 120 seconds.
+The tool adjusts Mach-O references, validates their dependency
 closure against the selected prefix, rejects unqualified hooks and packing-list commands, and rejects
 payloads still containing the producer prefix by default. Prefix-local `REQUIRES` are replaced
 by the existing package dependencies only after checking library ownership;

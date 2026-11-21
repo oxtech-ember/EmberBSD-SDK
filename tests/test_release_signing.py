@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
@@ -16,6 +17,20 @@ from emberbsd_sdk.host_prefix import load_host_prefix
 from emberbsd_sdk.release_signing import ReleaseCrypto
 from emberbsd_sdk import release_cli
 from emberbsd_sdk.jsonio import json_bytes
+
+
+class ToolTimeoutTests(unittest.TestCase):
+    def test_pkg_create_timeout_is_local_to_the_requested_call(self):
+        prefix = Mock(path='/tools/bin')
+        prefix.tool.return_value = '/tools/bin/tool'
+        crypto = ReleaseCrypto(prefix)
+        with patch('emberbsd_sdk.release_signing.subprocess.run') as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = b''
+            crypto.run_package('pkg_create', ['archive.tgz'], timeout=900)
+            crypto.run_package('pkg_info', ['-V'])
+            crypto.run(['version'])
+        self.assertEqual([c.kwargs['timeout'] for c in run.call_args_list], [900, 120, 120])
 
 
 class ReleasePathTests(unittest.TestCase):

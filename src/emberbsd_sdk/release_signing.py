@@ -58,6 +58,8 @@ class SigningIdentity:
 
 
 class ReleaseCrypto:
+    DEFAULT_TOOL_TIMEOUT = 120
+
     def __init__(self, prefix):
         self.prefix = prefix
 
@@ -68,7 +70,7 @@ class ReleaseCrypto:
             roles += ['pkg_admin']
         return cls(load_host_prefix(prefix, required_roles=roles))
 
-    def _run(self, role, arguments, data=None):
+    def _run(self, role, arguments, data=None, *, timeout=DEFAULT_TOOL_TIMEOUT):
         environment = {'PATH': self.prefix.path, 'LC_ALL': 'C', 'LANG': 'C',
                        'OPENSSL_CONF': os.devnull}
         if 'TMPDIR' in os.environ:
@@ -76,7 +78,7 @@ class ReleaseCrypto:
         try:
             result = subprocess.run([self.prefix.tool(role), *map(str, arguments)],
                 input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                env=environment, timeout=120, check=False)
+                env=environment, timeout=timeout, check=False)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise SDKError(f'{role} failed: {exc}') from exc
         if result.returncode:
@@ -87,10 +89,10 @@ class ReleaseCrypto:
     def run(self, arguments, *, data=None):
         return self._run('openssl', arguments, data)
 
-    def run_package(self, role, arguments):
+    def run_package(self, role, arguments, *, timeout=DEFAULT_TOOL_TIMEOUT):
         if role not in ('pkg_admin', 'pkg_create', 'pkg_info'):
             raise SDKError(f'unsupported release package tool: {role}')
-        return self._run(role, arguments)
+        return self._run(role, arguments, timeout=timeout)
 
     def _leaf_profile(self, certificate):
         pem = read_bytes(certificate, 128 * 1024)
