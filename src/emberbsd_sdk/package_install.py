@@ -295,9 +295,9 @@ class PackageInstaller:
         # A path inspected under one root/policy is not checked under another.
         return str(Path(package).absolute()), json.dumps(config, sort_keys=True)
 
-    def check(self, package, config):
+    def check(self, package, config, *, visit=None):
         self.crypto.verify_package(package, self.trust)
-        result = inspect_install_paths(package, config)
+        result = inspect_install_paths(package, config, visit=visit)
         self._checked[self._check_key(package, config)] = result
         return result
 

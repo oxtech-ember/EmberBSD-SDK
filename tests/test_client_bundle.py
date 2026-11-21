@@ -23,6 +23,7 @@ class BundleTests(unittest.TestCase):
             with zipfile.ZipFile(archive) as contents:
                 names = contents.namelist()
                 self.assertIn('emberbsd_sdk/emberbsd-release-root.pem', names)
+                self.assertIn('emberbsd_sdk/package_runtime.py', names)
                 self.assertFalse(any('private-key' in name or name.startswith('tests/') for name in names))
             self.assertLess(archive.stat().st_size, 1024 * 1024)
 

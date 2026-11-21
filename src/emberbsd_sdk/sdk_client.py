@@ -16,7 +16,7 @@ import sys
 import tarfile
 import tempfile
 
-from . import sysroot_package, package_automatic
+from . import sysroot_package, package_automatic, package_runtime
 from .binary_catalog import load_release_catalogs, select_packages
 from .desktop_apps import bind_installed_desktops
 from .binary_release import _arch, _matches
@@ -490,41 +490,65 @@ def apply_plan(plan, config, installer, cache, store, *, source_locked=False):
         check_space(Path(sysroot['destination']).parent, sysroot['artifact']['unpacked_size'])
         items.append(sysroot['artifact'])
     paths = _fetch_archives(items, cache, store, config.get('url_prefix', ''))
+    next_root = Path(sysroot['destination']).resolve() if new_sysroot else None
     archives = {}
-    for package in pending:
-        item = package['artifact']
-        path = paths[item['sha256']]
-        installer.check(path, config['repositories'][package['repository']])
-        archives[item['id']] = path
-    if new_sysroot:
-        sysroot_archive = paths[sysroot['artifact']['sha256']]
-        sysroot_package.check(sysroot_archive, sysroot)
+
+    def lock_repositories(locks, repositories):
+        for repository in repositories:
+            _, database = install_paths(config['repositories'][repository])
+            locks.enter_context(directory_lock(database.parent / (database.name + '.sdk-lock')))
+
+    def retain_installed(repositories):
+        for repository in repositories:
+            cfg = config['repositories'][repository]
+            packages = [p for p in plan['packages'] if p['repository'] == repository]
+            plan['compatible_reuse'].extend(reuse_compatible_dependencies(installer.crypto, cfg,
+                packages, archives, installer.installed(cfg, recover=False), plan['roots']))
+
     with ExitStack() as locks:
         # Same whole-build lock as cross-bulk. A source-wave supervisor already
         # holds it across adoption, so this install must not take it again.
         if config.get('source') and (new_sysroot or selected_repositories) and not source_locked:
             locks.enter_context(directory_lock(Path(config['source']['state']) / 'build.lock'))
-        # A target pkgdb lock can create its parent inside the sysroot. Publish
-        # the verified base first, then add target packages through pkg_tools.
+        # A pkgdb lock creates its parent. Only the new base has to be
+        # published before its package database can be locked.
+        fresh = sorted(repo for repo in selected_repositories
+                       if next_root is not None and target_sysroot(config['repositories'][repo])
+                       and Path(config['repositories'][repo]['sysroot']).resolve() == next_root)
+        existing = sorted(selected_repositories.difference(fresh))
+        lock_repositories(locks, existing)
+        staged = None
         if new_sysroot:
-            sysroot_package.install(sysroot_archive, sysroot)
-        for repository in sorted(selected_repositories):
-            _, database = install_paths(config['repositories'][repository])
-            locks.enter_context(directory_lock(database.parent / (database.name + '.sdk-lock')))
-        # The signed graph pins artifact identities. Before applying replacements,
-        # retain a newer installed dependency when selected consumers' authenticated
-        # pkg_tools constraints accept it. This stays inside the pkgdb lock and never
-        # suppresses an explicitly requested package root.
+            archive = paths[sysroot['artifact']['sha256']]
+            staged = locks.enter_context(sysroot_package.staged_install(archive, sysroot))
+        overlays = {}
+        for package in pending:
+            repository = package['repository']
+            cfg = config['repositories'][repository]
+            if repository not in overlays and isinstance(installer, PackageInstaller):
+                overlays[repository] = package_runtime.selected(cfg, staged if repository in fresh else None)
+            item = package['artifact']
+            path = paths[item['sha256']]
+            if overlay := overlays.get(repository):
+                installer.check(path, cfg, visit=overlay.visitor(package['pkgname']))
+            else:
+                installer.check(path, cfg)
+            archives[item['id']] = path
         if isinstance(installer, PackageInstaller):
-            compatible_reuse = []
+            plan['compatible_reuse'] = []
+            retain_installed(existing)
+            for repository, overlay in overlays.items():
+                if overlay:
+                    overlay.check([p for p in plan['packages'] if p['repository'] == repository])
+        if new_sysroot:
+            sysroot_package.publish_install(staged[0], sysroot)
+        lock_repositories(locks, fresh)
+        if isinstance(installer, PackageInstaller):
+            retain_installed(fresh)
+            pending = [p for p in plan['packages'] if p['action'] != 'installed']
             for repository in sorted(selected_repositories):
                 cfg = config['repositories'][repository]
                 package_automatic.recover(installer.crypto, cfg, installer.installed(cfg, recover=False))
-                repository_packages = [p for p in plan['packages'] if p['repository'] == repository]
-                compatible_reuse.extend(reuse_compatible_dependencies(installer.crypto, cfg,
-                    repository_packages, archives, installer.installed(cfg, recover=False), plan['roots']))
-            plan['compatible_reuse'] = compatible_reuse
-            pending = [p for p in plan['packages'] if p['action'] != 'installed']
         automatic_states = {}
         # Check every replacement before changing any package. pkg_add remains
         # the dependency and file owner; this path preserves installed consumers.
@@ -542,7 +566,11 @@ def apply_plan(plan, config, installer, cache, store, *, source_locked=False):
                 # Recheck paths after earlier packages have populated the prefix.
                 from .package_install import inspect_install_paths
                 if isinstance(installer, PackageInstaller):
-                    inspect_install_paths(archives[package['artifact']['id']], cfg)
+                    archive = archives[package['artifact']['id']]
+                    if overlay := overlays.get(package['repository']):
+                        overlay.recheck(package, archive)
+                    else:
+                        inspect_install_paths(archive, cfg)
                     for name in package.get('removes', []):
                         _remove_conflicting(installer, cfg, package['repository'], name, pending,
                                             automatic_states[package['repository']], removed)

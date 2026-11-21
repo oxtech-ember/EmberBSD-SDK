@@ -160,7 +160,7 @@ class ProducerContractTests(unittest.TestCase):
             'build_profile': {'libedit', 'os_release_builder'},
             'profile_build': {'libedit', 'os_release_builder', 'sysroot_builder'},
             'sdk_client': {'binary_catalog', 'binary_release', 'desktop_apps', 'package_auto_update',
-                           'package_automatic', 'package_cache', 'package_install', 'package_selection',
+                           'package_automatic', 'package_cache', 'package_install', 'package_runtime', 'package_selection',
                            'package_state', 'package_updates', 'release_delivery', 'release_s3',
                            'release_signing', 'source_wave', 'sysroot_package'},
             'os_release': {'os_release_github', 'private_root'},

@@ -80,6 +80,15 @@ class SysrootTransferTests(TemporaryCase):
         mutate(receipt)
         path.write_text(json.dumps(receipt))
 
+    def test_gcc_build_and_import_keep_their_runtime_policy(self):
+        from emberbsd_sdk import application_toolchain, package_runtime
+        self.restore(self.export()['manifest_sha256'])
+        for root in (self.source, self.destination):
+            config = dict(target={'triplet': 'aarch64--netbsd'}, sysroot=str(root))
+            self.assertIsNone(package_runtime.selected(config))
+            with self.assertRaisesRegex(SDKError, 'application runtime requires an LLVM sysroot'):
+                application_toolchain.load_clang_runtime(root, target='aarch64')
+
     def test_explicit_native_v2_and_historical_v1_build_receipts(self):
         original = json.loads((self.source / Builder.RECEIPT).read_text())
         self.assertEqual(original['version'], 2)

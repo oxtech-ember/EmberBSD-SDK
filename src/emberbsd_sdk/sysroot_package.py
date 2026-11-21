@@ -109,7 +109,9 @@ def check(archive, selected):
         return manifest
 
 
-def install(archive, selected):
+@contextmanager
+def staged_install(archive, selected):
+    """Prepare the validated base privately for package preflight before publication."""
     destination = Path(selected['destination'])
     destination.parent.mkdir(parents=True, exist_ok=True)
     item = selected['artifact']
@@ -121,7 +123,16 @@ def install(archive, selected):
             sysroot_transfer.import_sysroot(bundle, tree, target=selected['target'], manifest_sha256=pin,
                                            max_bytes=item['unpacked_size'])
             jsonio.write_json(tree / RECEIPT, dict(sha256=item['sha256'], target=item['target']))
-            publication.publish_directory_noreplace(str(tree), str(destination))
+            yield tree, manifest
+
+
+def publish_install(tree, selected):
+    publication.publish_directory_noreplace(str(tree), str(selected['destination']))
+
+
+def install(archive, selected):
+    with staged_install(archive, selected) as (tree, _):
+        publish_install(tree, selected)
 
 
 def bind_compiler(config, selected):

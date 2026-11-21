@@ -481,8 +481,11 @@ class ClientTests(unittest.TestCase):
         self.assertFalse(self.store.calls)
         self.assertFalse(self.installer.actions)
         item['size'] -= 1
-        with patch('emberbsd_sdk.sysroot_package.check', side_effect=SDKError('invalid sysroot')) as check:
-            with self.assertRaisesRegex(SDKError, 'invalid sysroot'):
+        from contextlib import nullcontext
+        with patch('emberbsd_sdk.sysroot_package.staged_install',
+                   return_value=nullcontext((self.root / 'stage', {}))) as check, \
+             patch('emberbsd_sdk.sysroot_package.publish_install', side_effect=SDKError('stop before install')):
+            with self.assertRaisesRegex(SDKError, 'stop before install'):
                 apply_plan(plan, self.cfg, self.installer, self.cache, self.store)
         check.assert_called_once()
         self.assertEqual(len(self.store.calls), 1)

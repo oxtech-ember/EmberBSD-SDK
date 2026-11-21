@@ -7,7 +7,7 @@ import io
 from pathlib import Path
 import sys
 import tarfile
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from test_core import TemporaryCase
@@ -91,6 +91,50 @@ class SysrootPackageTests(TemporaryCase):
         apply_plan(plan, self.config, installer, self.cache, Store(self.archive.read_bytes()))
         self.assertEqual(self.select()['action'], 'installed')
         self.assertFalse((destination / 'usr/pkg/pkgdb.sdk-lock').exists())
+
+    def test_signed_package_runtime_mismatch_precedes_new_and_existing_base_mutation(self):
+        from emberbsd_sdk.package_install import PackageInstaller
+        from emberbsd_sdk.sdk_client import apply_plan
+
+        destination = self.root / 'target'
+        cfg = dict(target=self.target, prefix='/usr/pkg', pkgdb='/usr/pkg/pkgdb', sysroot=str(destination))
+        self.config['repositories']['target'] = cfg
+        selected = self.select()
+        record = application_toolchain.load_clang_runtime(self.source, target='aarch64')
+        shared = record['artifacts']['libunwind']['shared']
+        archive = self.root / 'runtime-package.tgz'
+
+        def plan(contents):
+            members = {'+CONTENTS': b'@name runtime-1\n@cwd /usr/pkg\n', shared.removeprefix('usr/pkg/'): contents}
+            with tarfile.open(archive, 'w:gz') as tar:
+                for name, data in members.items():
+                    member = tarfile.TarInfo(name)
+                    member.size = len(data)
+                    tar.addfile(member, io.BytesIO(data))
+            item = dict(self.artifact, kind='target-package', id='runtime', path='runtime.tgz',
+                        size=archive.stat().st_size, sha256=hashlib.sha256(archive.read_bytes()).hexdigest())
+            self.cache.path(item).write_bytes(archive.read_bytes())
+            return dict(roots=['lang/runtime'], build_roots=[], packages=[dict(pkgname='runtime-1',
+                root='lang/runtime', repository='target', action='cache', artifact=item, replaces=[])],
+                download_size=0, unpacked_size=0)
+
+        self.cache.path(self.artifact).write_bytes(self.archive.read_bytes())
+        installer = PackageInstaller(Mock(), self.root / 'trust')
+        mismatched = plan(b'different bytes')
+        with patch.object(installer, 'installed', return_value=set()), patch.object(installer, 'install') as install, \
+             patch('emberbsd_sdk.package_automatic.finish'):
+            with self.assertRaisesRegex(SDKError, 'runtime-1.*' + shared):
+                apply_plan(dict(mismatched, sysroot=selected), self.config, installer, self.cache, None)
+            self.assertFalse(destination.exists())
+            sysroot_package.install(self.archive, selected)
+            before = (destination / shared).read_bytes()
+            with self.assertRaisesRegex(SDKError, 'runtime-1.*' + shared):
+                apply_plan(mismatched, self.config, installer, self.cache, None)
+            install.assert_not_called()
+            self.assertEqual((destination / shared).read_bytes(), before)
+            apply_plan(plan(before), self.config, installer, self.cache, None)
+            install.assert_called_once()
+            self.assertEqual(installer.crypto.verify_package.call_count, 3)
 
     def test_ambiguous_or_incompatible_target_is_not_selected(self):
         self.release['artifacts'].append(copy.deepcopy(self.artifact))

@@ -408,6 +408,25 @@ it with the explicit Ports stage configuration first; the SDK client refuses
 source fallback before mutation because its live-prefix producer cannot
 establish stage isolation.
 
+### Packages in a target LLVM sysroot
+
+An SDK-built or imported LLVM sysroot records the files and symlink targets
+used by its application compiler. Before publishing a new base or installing
+packages, the client compares target package writes in that runtime with the
+record. An update must preserve each recorded path owned by the package it
+replaces. Additional regular Clang resource headers are supported. A conflict
+identifies the package and runtime path before installation. Existing directory
+links are resolved in the target tree. If one selected package creates or changes
+a link and a later package writes beneath it, install the link owner separately
+so that the client can check the resulting directory. The client also checks the
+actual destinations immediately before each package operation.
+
+To obtain compatible archives, package the selected full LLVM stage or
+completed application sysroot through the
+[Ports target runtime recipes](https://github.com/oxtech-ember/EmberBSD-Ports/blob/main/pkgsrc/lang/compiler-rt/RUNTIME-PACKAGES.md).
+To select a new runtime, compose and import its matching base at a new
+destination. See [sysroot composition](sysroot-transfer.md).
+
 ## Cache and interruption
 
 Archives are stored once as `SHA256.tgz`, with partial downloads as `SHA256.part`.

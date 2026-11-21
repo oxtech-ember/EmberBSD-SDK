@@ -120,7 +120,7 @@ def bind_clang_c_foundation_commands(destination, compiler, foundation_result, s
     return dict(commands=bound, selection=selected['selection'])
 
 
-def _release_dest_runtime(root, target):
+def _release_dest_runtime(root, target, *, required=True):
     """Select only the recorded dest of a completed amd64 Clang release."""
     from . import os_release_builder
     if target != 'amd64' or os.path.basename(root) != 'dest':
@@ -144,11 +144,45 @@ def _release_dest_runtime(root, target):
             raise SDKError('release contains an error or incomplete command')
         signature = receipt['signature']
         if signature.get('compiler_family') != 'clang':
-            raise SDKError('application runtime requires an LLVM release')
+            if required:
+                raise SDKError('application runtime requires an LLVM release')
+            return None, False
         return (signature['runtime']['manifest'],
                 llvm_runtime_install.base_cxx_enabled(signature.get('flags', [])))
     except (KeyError, TypeError, OSError) as exc:
         raise SDKError('invalid completed OS release') from exc
+
+
+def recorded_clang_runtime(root, *, target, required=False):
+    """Read the runtime selected by a build, transfer or completed release."""
+    if paths.entry(os.path.join(root, sysroot_transfer.INCOMPLETE)) is not None:
+        raise SDKError('cannot select an incomplete application sysroot')
+    build = os.path.join(root, sysroot_transfer.RECEIPT)
+    imported = os.path.join(root, IMPORT_RECORD)
+    if os.path.isfile(build) and os.path.isfile(imported):
+        raise SDKError('ambiguous sysroot build and import records')
+    if os.path.isfile(build):
+        receipt = jsonio.read_json(build)
+        sysroot_transfer._provenance(receipt, target)
+        if receipt['version'] == 3:
+            return (receipt['signature']['runtime']['manifest'],
+                    llvm_runtime_install.base_cxx_enabled(receipt['signature'].get('flags', [])))
+    elif os.path.isfile(imported):
+        receipt = jsonio.read_json(imported)
+        if (not isinstance(receipt, dict) or set(receipt) != {'format','version','manifest_sha256','manifest'} or
+                receipt['format'] != 'emberbsd-sysroot-import' or type(receipt['version']) is not int or receipt['version'] != 1):
+            raise SDKError('invalid sysroot import record')
+        manifest = sysroot_transfer.validate_manifest(receipt['manifest'], target=target)
+        if sysroot_transfer._hash_json(manifest) != receipt['manifest_sha256']:
+            raise SDKError('sysroot import manifest digest changed')
+        if manifest['version'] == 2:
+            return manifest['runtime']['manifest'], manifest['provenance'].get('base_cxx') == 'libcxx'
+    elif required or (target == 'amd64' and os.path.basename(root) == 'dest' and os.path.isfile(
+            os.path.join(os.path.dirname(root), 'build-profile.json'))):
+        return _release_dest_runtime(root, target, required=required)
+    if required:
+        raise SDKError('application runtime requires an LLVM sysroot')
+    return None, False
 
 
 def load_clang_runtime(sysroot, *, target):
@@ -160,33 +194,7 @@ def load_clang_runtime(sysroot, *, target):
     """
     root = paths.canonical_existing(sysroot)
     paths.real_directory(root)
-    if paths.entry(os.path.join(root, sysroot_transfer.INCOMPLETE)) is not None:
-        raise SDKError('cannot select an incomplete application sysroot')
-    build = os.path.join(root, sysroot_transfer.RECEIPT)
-    imported = os.path.join(root, IMPORT_RECORD)
-    if os.path.isfile(build) and os.path.isfile(imported):
-        raise SDKError('ambiguous sysroot build and import records')
-    if os.path.isfile(build):
-        receipt = jsonio.read_json(build)
-        sysroot_transfer._provenance(receipt, target)
-        if receipt['version'] != 3:
-            raise SDKError('application runtime requires an LLVM sysroot')
-        record = receipt['signature']['runtime']['manifest']
-        base_cxx = llvm_runtime_install.base_cxx_enabled(receipt['signature'].get('flags', []))
-    elif os.path.isfile(imported):
-        receipt = jsonio.read_json(imported)
-        if (not isinstance(receipt, dict) or set(receipt) != {'format','version','manifest_sha256','manifest'} or
-                receipt['format'] != 'emberbsd-sysroot-import' or type(receipt['version']) is not int or receipt['version'] != 1):
-            raise SDKError('invalid sysroot import record')
-        manifest = sysroot_transfer.validate_manifest(receipt['manifest'], target=target)
-        if sysroot_transfer._hash_json(manifest) != receipt['manifest_sha256']:
-            raise SDKError('sysroot import manifest digest changed')
-        if manifest['version'] != 2:
-            raise SDKError('application runtime requires an LLVM sysroot')
-        record = manifest['runtime']['manifest']
-        base_cxx = manifest['provenance'].get('base_cxx') == 'libcxx'
-    else:
-        record, base_cxx = _release_dest_runtime(root, target)
+    record, base_cxx = recorded_clang_runtime(root, target=target, required=True)
     selected = llvm_runtime.validate_install(root, record, target=target)
     if base_cxx:
         llvm_runtime_install.validate_base_aliases(root, record)
