@@ -293,7 +293,9 @@ class Parser:
             while self.current.text == ".":
                 self.take(".")
                 key += "." + self.name().text
-            if key in ("Text", "Rectangle", "Item", "Grid", "Row", "MouseArea"):
+            if key in ("Text", "Rectangle", "Item", "Grid", "Row", "MouseArea", "Image"):
+                if kind == "Image":
+                    raise start.error("Image children are unsupported")
                 if kind in ("Grid", "Row") and key != "Rectangle":
                     raise start.error(f"{kind} places fixed-size Rectangle children")
                 item = self.text_item() if key == "Text" else self.container(key, depth + 1, properties)
@@ -377,14 +379,17 @@ class Parser:
                     handlers[key] = self.raw_value()
                 elif key == "id":
                     fields[key] = self.object_id()
-                elif kind in ("Rectangle", "Item") and key in ("width", "height"):
+                elif kind == "Image" and key == "source":
+                    literal = self.current
+                    fields[key] = (literal, self.string())
+                elif kind in ("Rectangle", "Item", "Image") and key in ("width", "height"):
                     fields[key] = self.integer(0 if depth else 1, 4096)
                 elif kind == "Rectangle" and key == "color":
                     fields[key] = self.color()
                 elif key == "objectName":
                     fields[key] = self.string()
                 elif (kind == "Rectangle" and key == "opacity") or (
-                    kind in ("Rectangle", "Item", "MouseArea") and key == "visible"):
+                    kind in ("Rectangle", "Item", "MouseArea", "Image") and key == "visible"):
                     fields[key] = self.raw_value()
                 elif kind == "Grid" and key == "columns":
                     fields[key] = self.integer(1, 4096)
@@ -407,7 +412,7 @@ class Parser:
                     fields[key] = self.raw_value()
                 elif key in ("x", "y"):
                     fields[key] = self.raw_value()
-                elif depth and key == "z" and kind in ("Rectangle", "Item", "MouseArea"):
+                elif depth and key == "z" and kind in ("Rectangle", "Item", "MouseArea", "Image"):
                     fields[key] = self.integer(-(2**31), 2**31 - 1)
                 else:
                     raise start.error(f"unsupported {kind} field {key}")
@@ -585,6 +590,9 @@ def paint_items(root, indices):
         if item.kind == "Rectangle" and width and height and (item is not root or split):
             yield (f'    {{ .kind = EQML_RECT, .data.rect = {{ .x = {x}, .y = {y}, '
                    f'.width = {width}, .height = {height}, .color = 0x{fields.get("color", 0xffff):04x} }} }},')
+        if item.kind == "Image":
+            yield (f'    {{ .kind = EQML_IMAGE, .data.image = {{ .x = {x}, .y = {y}, '
+                   f'.bitmap = &{fields["bitmap"]} }} }},')
         for child in children[split:]:
             yield from visit(child, x, y, width, height)
 
@@ -782,7 +790,7 @@ def _interactive_opacity(raw, nodes, ids):
     return ids[area_name], int((1.0 - opacity) * 255 + 0.5), 0
 
 
-def interactive_scene(root, properties, name):
+def interactive_scene(root, properties, name, bitmap_lines):
     if properties:
         raise QmlError("integer model properties cannot be combined with an interactive scene")
     nodes, parents = _interactive_nodes(root)
@@ -1082,25 +1090,27 @@ def interactive_scene(root, properties, name):
             "EQML_RELEASED", "EQML_CLICKED", "EQML_DOUBLE_CLICKED", "EQML_PRESS_AND_HOLD",
             "EQML_TEXT_CHANGED")).index(value))) or "0"
         text_slot_index = text_slot.get(index, -1)
-        node_kind = {"Rectangle": "RECT", "Item": "ITEM", "Text": "TEXT", "MouseArea": "AREA"}[item.kind]
+        node_kind = {"Rectangle": "RECT", "Item": "ITEM", "Text": "TEXT", "MouseArea": "AREA",
+                     "Image": "IMAGE"}[item.kind]
         records.append(
             "    { .kind = EQML_NODE_%s, .parent = %d, .x = %d, .y = %d, "
             ".width = %d, .height = %d, .color = 0x%04x, .pixel_size = %d, .anchors = %d, "
             ".bottom_edge = %s, .bottom_target = %d, .bottom_margin = %d, .text = %s, "
             ".text_slot = %d, .opacity_area = %d, .pressed_transparency = %d, "
             ".transparency = %d, .hidden = %d, .buttons = %s, .signals = %s, .hover = %d, .drag_axes = %d, .drag_target = %d, "
-            ".min_x = %d, .max_x = %d, .min_y = %d, .max_y = %d }," % (
+            ".min_x = %d, .max_x = %d, .min_y = %d, .max_y = %d%s }," % (
                 node_kind, parent_index, x, y, width, height, color, pixel_size, anchors,
                 bottom_edge, bottom_target, bottom_margin, text or "NULL", text_slot_index,
                 opacity_area, pressed_transparency, transparency, hidden, buttons, signal_bits, hover, drag_axes, drag_target,
-                min_x, max_x, min_y, max_y))
+                min_x, max_x, min_y, max_y,
+                ", .bitmap = &" + fields["bitmap"] if item.kind == "Image" else ""))
 
     _check_layout_cycles(parents, bottom_dependencies)
     lines = ['/* Generated by EmberBSD qml-compile. */', '#include "eqml.h"',
              '#include "eqml_input.h"', '#include <errno.h>', '#include <stdio.h>',
              '#include <stdint.h>', '#include <string.h>',
-             '#if EQML_SCENE_ABI != 4', '#error "Expected EmberBSD QML scene ABI 4"', '#endif', '',
-             "static const struct eqml_node nodes[] = {", *records, "};", ""]
+             '#if EQML_SCENE_ABI != 5', '#error "Expected EmberBSD QML scene ABI 5"', '#endif', '',
+             *bitmap_lines, "static const struct eqml_node nodes[] = {", *records, "};", ""]
     lines.extend(callbacks)
     if callbacks:
         lines.append("")
@@ -1124,17 +1134,34 @@ def interactive_scene(root, properties, name):
     return "\n".join(lines)
 
 
-def compile_scene(source, name="app"):
+def compile_scene(source, name="app", *, assets=None):
     """Return a complete C99 translation unit; raise QmlError for unsupported input."""
     if not re.fullmatch(r"[a-z][A-Za-z0-9_]*", name):
         raise QmlError("scene name must begin with a lowercase ASCII letter and contain only identifier characters")
     parser = Parser(source)
     root, properties = parser.scene()
+    for item in _walk(root):
+        if item.kind != "Image":
+            continue
+        fields = item.fields
+        if assets is None or "source" not in fields:
+            raise QmlError("Image requires a local PNG source and an explicit asset loader")
+        token, source_name = fields["source"]
+        if any(key.startswith("anchors.") for key in fields):
+            raise token.error("Image supports explicit x/y coordinates only")
+        try:
+            symbol, width, height = assets.load(source_name)
+        except (OSError, ValueError) as error:
+            raise token.error(str(error)) from None
+        if fields.get("width", width) != width or fields.get("height", height) != height:
+            raise token.error("Image width and height must match the PNG dimensions")
+        fields.update(bitmap=symbol, width=width, height=height)
+    bitmap_lines = assets.lines if assets else []
     interactive = any(item.kind == "MouseArea" for item in _walk(root))
     if interactive:
         if parser.static_bools:
             raise QmlError("root boolean layout properties are static-only and cannot be used in interactive scenes")
-        return interactive_scene(root, properties, name)
+        return interactive_scene(root, properties, name, bitmap_lines)
     unused_bools = parser.static_bools.keys() - parser.static_bool_uses
     if unused_bools:
         raise QmlError("root boolean properties must select a supported static Row layout direction")
@@ -1155,7 +1182,8 @@ def compile_scene(source, name="app"):
     fields = root.fields
     items = paint_items(root, {key: i for i, key in enumerate(properties)})
     lines = ['/* Generated by EmberBSD qml-compile. */', '#include "eqml.h"',
-             '#if EQML_SCENE_ABI != 4', '#error "Expected EmberBSD QML scene ABI 4"', '#endif', '']
+             '#if EQML_SCENE_ABI != 5', '#error "Expected EmberBSD QML scene ABI 5"', '#endif', '']
+    lines.extend(bitmap_lines)
     if properties:
         lines.append("static const struct eqml_int properties[] = {")
         lines.extend(f'    {{ .name = {c_string(key)}, .initial = {value} }},' for key, value in properties.items())

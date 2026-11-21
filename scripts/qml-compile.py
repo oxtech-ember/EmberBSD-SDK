@@ -11,6 +11,7 @@ import tempfile
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from emberbsd_sdk.qml import QmlError, compile_scene
+from emberbsd_sdk.qml_image import BitmapAssets
 
 
 def main():
@@ -18,11 +19,13 @@ def main():
     parser.add_argument("source", type=Path)
     parser.add_argument("-o", "--output", type=Path, required=True)
     parser.add_argument("--name", default="app", help="suffix of the exported eqml_ symbol")
+    parser.add_argument("--pngtopam", type=Path, help="absolute native Netpbm PNG decoder for Image assets")
     args = parser.parse_args()
     if args.source.resolve() == args.output.resolve():
         parser.error("source and output must be different files")
     try:
-        result = compile_scene(args.source.read_text(encoding="utf-8"), args.name)
+        result = compile_scene(args.source.read_text(encoding="utf-8"), args.name,
+                               assets=BitmapAssets(args.source.parent, args.pngtopam))
         try:
             existing = args.output.lstat()
         except FileNotFoundError:

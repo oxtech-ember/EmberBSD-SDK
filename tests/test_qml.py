@@ -2,6 +2,8 @@
 # Copyright (c) 2026 EmberBSD contributors.
 from pathlib import Path
 import stat
+import struct
+from unittest.mock import patch
 import subprocess
 import sys
 import tempfile
@@ -10,9 +12,52 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from emberbsd_sdk.qml import QmlError, compile_scene
+from emberbsd_sdk.qml_image import BitmapAssets
 
 
 class QmlCompilerTest(unittest.TestCase):
+    def test_image_decoding_and_placement(self):
+        header = bytes.fromhex("89504e470d0a1a0a 0000000d 49484452") + struct.pack(
+            ">IIBBBBBI", 2, 1, 8, 6, 0, 0, 0, 0)
+        pam = b"P7\nWIDTH 2\nHEIGHT 1\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n"
+        content = 'Image { x: 2; source: "test.png" }'
+        scene = 'import QtQuick\nItem { width: 6; height: 3; %s }'
+        with tempfile.TemporaryDirectory() as tmp, patch("emberbsd_sdk.qml_image.subprocess.run") as run:
+            folder = Path(tmp) / "scene"
+            folder.mkdir()
+            (folder / "test.png").write_bytes(header)
+            def compile_items(items):
+                return compile_scene(scene % items, assets=BitmapAssets(folder, "/native/pngtopam"))
+            run.return_value.returncode = 0
+            run.return_value.stdout = pam + bytes.fromhex("ff000040 00ff00ff")
+            output = compile_items(content + "; " + content)
+            run.assert_called_once()
+            self.assertEqual(output.count(".bitmap = &bitmap_0"), 2)
+            self.assertIn("0xf800, 0x07e0", output)
+            self.assertIn("0x40, 0xff", output)
+            self.assertIn(".kind = EQML_IMAGE, .data.image = { .x = 2", output)
+            run.return_value.stdout = pam + bytes.fromhex("ff0000ff 00ff00ff")
+            output = compile_items(content + "; MouseArea { anchors.fill: parent }")
+            self.assertIn("EQML_NODE_IMAGE", output)
+            self.assertNotIn("bitmap_0_alpha", output)
+            for field, problem in [('width: 1;', "dimensions"), ('anchors.centerIn: parent;', "explicit")]:
+                with self.assertRaisesRegex(QmlError, problem):
+                    compile_items(content.replace("x: 2;", field))
+            for name in ("/test.png", "../escape.png", "https://remote/a.png", "test.jpeg"):
+                with self.assertRaisesRegex(QmlError, "local relative PNG"):
+                    compile_items(content.replace("test.png", name))
+            external = Path(tmp) / "outside.png"
+            external.write_bytes(header)
+            (folder / "link.png").symlink_to(external)
+            with self.assertRaisesRegex(QmlError, "within the QML directory"):
+                compile_items(content.replace("test.png", "link.png"))
+            run.return_value.stdout = pam
+            with self.assertRaisesRegex(QmlError, "unexpected RGB_ALPHA"):
+                compile_items(content)
+            (folder / "test.png").write_bytes(header[:16] + struct.pack(">II", 4096, 4096) + header[24:])
+            with self.assertRaisesRegex(QmlError, "scene budget"):
+                compile_items(content)
+
     def test_item_visibility_and_opacity(self):
         source = """import QtQuick
 Item { width: 320; height: 480
@@ -156,7 +201,7 @@ Rectangle { id: root; width: 320; height: 480
 }'''
         result = compile_scene(source, "mousearea")
         self.assertIn('#include "eqml_input.h"', result)
-        self.assertIn("#if EQML_SCENE_ABI != 4", result)
+        self.assertIn("#if EQML_SCENE_ABI != 5", result)
         self.assertIn(".program = &program", result)
         self.assertIn("static const struct eqml_node nodes[]", result)
         self.assertEqual(result.count(".kind = EQML_NODE_AREA"), 2)
@@ -387,7 +432,7 @@ Rectangle { width: 20; height: 10
             ('Rectangle { id: part } Text { id: part }', 'duplicate object id'),
             ('property int part: 3; Rectangle { id: part }', 'id also names a root property'),
             ('Rectangle { opacity: 0 }', 'unsupported Rectangle field opacity'),
-            ('Image {}', 'unsupported object or grouped property Image'),
+            ('Image {}', 'Image requires a local PNG source'),
             ('Rectangle {' * 65 + '}' * 65, 'at most 64 nested'),
             ('Grid { Text { text: "item" } }', 'Grid places fixed-size'),
             ('Grid { Rectangle { x: 1 } }', 'Grid determines'),

@@ -55,6 +55,13 @@ class QmlScriptTest(unittest.TestCase):
         self.assertIn("eqml_ui_pressed(ui, 3)", result)
         self.assertIn("eqml_ui_contains_press(ui, 3)", result)
 
+    def test_integer_relational_precedence(self):
+        result = compile_expression("1 + 2 < 4 && -5 >= -6")
+        self.assertEqual(result.type, "bool")
+        for left, operator in [("true", ">"), ("'abc'", "<=")]:
+            with self.assertRaisesRegex(QmlScriptError, "typed operation"):
+                compile_expression(f"{left} {operator} {left}")
+
     def test_shared_typed_expression_lowering(self):
         result = compile_expression("box.width - width - 10",
                                     geometry={"box.width": 320},

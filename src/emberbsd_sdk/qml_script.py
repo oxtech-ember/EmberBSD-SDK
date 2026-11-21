@@ -33,7 +33,7 @@ def signal_enum(name):
 
 
 TOKEN = re.compile(r"\s+|//[^\n]*|/\*[\s\S]*?\*/|(?:'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\")|"
-                   r"(?:\+=|-=|===|!==|==|!=|&&|\|\||=>)|(?:0[xX][0-9a-fA-F]+|(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+))|"
+                   r"(?:\+=|-=|===|!==|==|!=|<=|>=|&&|\|\||=>)|(?:0[xX][0-9a-fA-F]+|(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+))|"
                    r"[A-Za-z_$][A-Za-z0-9_$]*|[{}().,:;?+&|=!<>-]")
 
 
@@ -158,12 +158,12 @@ class Parser:
         return Stmt("expr", args=(expression,))
 
     PRECEDENCE = {"||": 1, "&&": 2, "|": 3, "&": 4, "==": 5, "===": 5,
-                  "!=": 5, "!==": 5, "+": 6, "-": 6}
+                  "!=": 5, "!==": 5, "<": 6, ">": 6, "<=": 6, ">=": 6, "+": 7, "-": 7}
 
     def expression(self, minimum=0):
         token = self.take()
         if token in ("!", "+", "-"):
-            left = Expr("unary", token, (self.expression(7),))
+            left = Expr("unary", token, (self.expression(8),))
         elif token == "(":
             left = self.expression()
             self.take(")")
@@ -378,6 +378,8 @@ class Emitter:
                 if left.type == "string":
                     return Value(f"(strcmp({left.c}, {right.c}) {c_op} 0)", "bool")
                 return Value(f"(({left.c}) {c_op} ({right.c}))", "bool")
+            if operator in ("<", "<=", ">", ">=") and left.type == right.type == "int":
+                return Value(f"(({left.c}) {operator} ({right.c}))", "bool")
             if operator in ("&", "|") and left.type == right.type == "int":
                 return Value(f"(({left.c}) {operator} ({right.c}))", "int")
             if operator in ("&&", "||") and left.type == right.type == "bool":

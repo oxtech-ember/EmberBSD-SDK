@@ -14,7 +14,7 @@ From the SDK checkout, run the generator with the native SDK Python:
 
 Compile that file for the target with the renderer's `qml/` include directory.
 It exports `const struct eqml_scene eqml_app`; `--name dashboard` exports
-`eqml_dashboard` instead. Generated C checks scene ABI 4 at compile time. The
+`eqml_dashboard` instead. Generated C checks scene ABI 5 at compile time. The
 [weather example](https://github.com/oxtech-ember/EmberBSD-Examples/tree/main/desktop/mosaico-weather)
 exercises cross-linking, model updates and the RGB565 wsdisplay backend.
 
@@ -24,7 +24,7 @@ exercises cross-linking, model updates and the RGB565 wsdisplay backend.
 | --- | --- |
 | Module and root | `import QtQuick` or `import QtQuick 2.0` and one `Rectangle` or `Item` with literal `width`, `height` (1–4096). `Item` uses the renderer's white default background. Other versioned module imports are rejected. |
 | Model | Root `property int name: constant`, signed 32-bit. Text bindings can reference integer properties by name or `rootId.name`. A root boolean literal may select a static layout branch; it is evaluated at compile time and is not exported as a mutable scene property. |
-| Children | `Rectangle`, `Text`, `Grid` and `Row` items. A nested rectangle takes literal `width` and `height` (0–4096, default zero) and can contain children. An optional `id` must be unique within the scene. |
+| Children | `Rectangle`, `Item`, `Text`, `Image`, `Grid` and `Row` items. A nested rectangle takes literal `width` and `height` (0–4096, default zero) and can contain children. An optional `id` must be unique within the scene. |
 | Grid | Static left-to-right layout of fixed-size rectangles. Optional integer `columns` (1–4096, default 4), `spacing` (0–4096, default 0), and parent-centering anchors. Row and column sizes follow their largest cells. The compiler computes positions on the host; the grid's implicit dimensions must fit within 4096 × 4096. |
 | Row | Static horizontal layout of fixed-size rectangles. Integer `spacing` (0–4096, default 0), optional parent-centering anchors, and `layoutDirection` as `Qt.LeftToRight`, `Qt.RightToLeft`, or the supported root-boolean ternary form. The compiler evaluates the boolean literal; it is not a mutable runtime property and no live QML binding is kept. Zero-sized children do not participate. Visible children retain their own sizes and are top-aligned. The implicit dimensions must fit within 4096 × 4096. |
 | Colors | Opaque `#RRGGBB` or one of the 16 basic SVG color names, case insensitive. Rectangles default to white and text to black. |
@@ -37,7 +37,7 @@ exercises cross-linking, model updates and the RGB565 wsdisplay backend.
 ## Interactive profile
 
 An interactive scene uses a fixed-size `Rectangle` or `Item` root with nested
-`Rectangle`, `Item`, `Text` and `MouseArea` nodes. An `Item` positions its
+`Rectangle`, `Item`, `Text`, `Image` and `MouseArea` nodes. An `Item` positions its
 children without drawing a background. The viewport clears to white. The compiler emits nodes in
 parent-first order and sorts nonnegative sibling `z` values stably; negative
 `z` and `Grid` mixed with interactive nodes are rejected. The Runtime resolves
@@ -83,3 +83,14 @@ Regenerate scene C from the original QML after changing the scene ABI. Static
 scenes emit a flat list in final paint order, allowing RGB565 scanlines to be
 rendered without a scene-tree walk. Interactive scenes retain the bounded node
 tree needed for hit-testing, anchors and input dispatch.
+
+## Local PNG images
+
+A nested `Image` loads a double-quoted local `source` relative to the QML
+file. Supply `--pngtopam "$HOST_PREFIX/bin/pngtopam"` when compiling images.
+The host compiler decodes 8-bit RGB and RGBA PNGs once per distinct file,
+embeds RGB565 pixels and includes an 8-bit alpha plane when needed. A scene
+can reference up to 1,048,576 distinct image pixels, with up to 4,096 per
+axis. Each image uses its intrinsic dimensions and explicit x/y placement.
+Interactive handlers can switch its visibility and compare integer values
+with `<`, `<=`, `>`, and `>=`. The target reads the linked data directly.
