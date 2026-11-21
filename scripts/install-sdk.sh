@@ -21,9 +21,26 @@ temporary=$(/usr/bin/mktemp -d "$parent/.ember-install.XXXXXX")
 trap '/bin/rm -rf "$temporary"' EXIT HUP INT TERM
 base=https://emberbsd-pkg.oxteam.me
 get() {
+    url=$1 output=$2
+    shift 2
     /usr/bin/curl --fail --location --proto '=https' --proto-redir '=https' \
         --connect-timeout 15 --max-time 600 --retry 3 --retry-delay 2 \
-        --retry-max-time 900 --silent --show-error "$1" -o "$2"
+        --retry-max-time 900 --silent --show-error "$@" "$url" -o "$output"
+}
+get_archive() {
+    # A proxy may close a long successful response before its last byte.
+    # Only resume the private partial archive. check_file verifies the complete
+    # file against signed metadata before tar reads it.
+    if get "$1" "$2"; then return 0; else status=$?; fi
+    for attempt in 1 2 3; do
+        case "$status" in
+            18|28|56|92) [ -s "$2" ] || return "$status" ;;
+            33) /bin/rm -f "$2" ;;  # The server did not support the byte range.
+            *) return "$status" ;;
+        esac
+        if get "$1" "$2" --continue-at - --retry 0; then return 0; else status=$?; fi
+    done
+    return "$status"
 }
 field() { /usr/bin/plutil -extract "$2" raw -o - "$1"; }
 verify() {
@@ -87,7 +104,7 @@ done
 [ -n "$selected" ] || fail "current has no self-contained bootstrap for this host"
 path=$(field "$temporary/release.json" "artifacts.$selected.path")
 case "$path" in /*|*../*) fail "invalid bootstrap path" ;; esac
-get "$base/current/host/darwin-arm64/${path##*/}" "$temporary/sdk.tar.gz"
+get_archive "$base/current/host/darwin-arm64/${path##*/}" "$temporary/sdk.tar.gz"
 check_file "$temporary/sdk.tar.gz" "$(field "$temporary/release.json" "artifacts.$selected.size")" "$(field "$temporary/release.json" "artifacts.$selected.sha256")"
 /bin/mkdir "$temporary/unpack"
 /usr/bin/tar -xzf "$temporary/sdk.tar.gz" -C "$temporary/unpack"

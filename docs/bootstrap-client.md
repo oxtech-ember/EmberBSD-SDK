@@ -21,12 +21,16 @@ sh install-sdk.sh "$HOME/Downloads/ember-sdk"
 "$HOME/Downloads/ember-sdk/bin/ember-sdk" install --set sdk-source-tools
 ```
 
-The first installer uses macOS curl, LibreSSL, plutil and tar. It pins the signing
-root fingerprint, verifies both CMS envelopes and the selected archive hash
-before running downloaded code. HTTPS acquisition uses finite connection and
-transfer timeouts and up to three retries for transient network failures; a
-failed transfer leaves no installed prefix. The first RSA-3072/SHA256 certificate
-profile is explicit; changing that profile requires updating this installer. No Python,
+The first installer uses macOS curl, LibreSSL, plutil and tar. Each initial
+HTTPS transfer has finite connection and transfer timeouts and allows up to
+three curl retries for transient network failures. If an archive transfer ends
+with a partial file, the installer makes up to three further requests. It resumes
+from the saved offset when the server supports byte ranges and starts again if
+the server declines a range. The installer pins the signing root fingerprint,
+verifies both CMS envelopes and checks the archive size and SHA256 from the signed
+release before unpacking. A failed transfer leaves the destination available for
+a new installation. The first RSA-3072/SHA256 certificate profile is explicit.
+Changing that profile requires updating the installer. No Python,
 Homebrew, compiler or SDK is required beforehand. Further operations use the
 installed Python/OpenSSL and the [normal client](sdk-client.md), including its
 bounded shared cache and authenticated current metadata.

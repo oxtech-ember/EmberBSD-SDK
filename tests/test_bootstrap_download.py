@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
-"""Exercise the bootstrap downloader against a stalled TLS handshake."""
+"""Exercise the bootstrap downloader against interrupted HTTPS transfers."""
 import os
 from pathlib import Path
 import re
@@ -26,6 +26,15 @@ class BootstrapDownloadTest(unittest.TestCase):
         subprocess.run(['/bin/sh', '-n', str(INSTALLER)], check=True)
 
     def test_handshake_timeout_retries_and_downloads_exact_bytes(self):
+        self.transfer('handshake')
+
+    def test_partial_archive_resumes_at_the_saved_offset(self):
+        self.transfer('partial')
+
+    def test_server_ignoring_range_restarts_the_archive(self):
+        self.transfer('no-range')
+
+    def transfer(self, fault):
         source = INSTALLER.read_text()
         match = re.search(r'(?ms)^get\(\) \{.*?(?=^field\(\))', source)
         self.assertIsNotNone(match, 'installer get() not found')
@@ -50,19 +59,35 @@ class BootstrapDownloadTest(unittest.TestCase):
             port = listener.getsockname()[1]
             errors, accepted = [], []
 
+            def reply(status, content, size, extra=b''):
+                connection, _ = listener.accept()
+                with context.wrap_socket(connection, server_side=True) as client:
+                    client.settimeout(5)
+                    request = bytearray()
+                    while b'\r\n\r\n' not in request:
+                        data = client.recv(8192)
+                        if not data:
+                            raise EOFError('incomplete HTTP request')
+                        request.extend(data)
+                    client.sendall(b'HTTP/1.1 ' + status + b'\r\n' + extra +
+                                   f'Content-Length: {size}\r\nConnection: close\r\n\r\n'.encode() +
+                                   content)
+                    accepted.append(b'range: bytes=7-' in request.lower())
+
             def serve():
                 try:
-                    stalled, _ = listener.accept()
-                    accepted.append('stalled')
-                    # Hold the first TCP connection open through curl's TLS timeout.
-                    with stalled:
-                        second, _ = listener.accept()
-                        accepted.append('retry')
-                        with context.wrap_socket(second, server_side=True) as client:
-                            client.recv(8192)
-                            client.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: ' +
-                                           str(len(PAYLOAD)).encode() +
-                                           b'\r\nConnection: close\r\n\r\n' + PAYLOAD)
+                    if fault == 'handshake':
+                        stalled, _ = listener.accept()
+                        with stalled:
+                            reply(b'200 OK', PAYLOAD, len(PAYLOAD))
+                    else:
+                        reply(b'200 OK', PAYLOAD[:7], len(PAYLOAD))
+                        if fault == 'no-range':
+                            reply(b'200 OK', PAYLOAD, len(PAYLOAD))
+                            reply(b'200 OK', PAYLOAD, len(PAYLOAD))
+                        else:
+                            content_range = f'Content-Range: bytes 7-{len(PAYLOAD)-1}/{len(PAYLOAD)}\r\n'
+                            reply(b'206 Partial Content', PAYLOAD[7:], len(PAYLOAD)-7, content_range.encode())
                 except Exception as exc:
                     errors.append(repr(exc))
                 finally:
@@ -73,7 +98,8 @@ class BootstrapDownloadTest(unittest.TestCase):
             output = root / 'download'
             env = dict(os.environ, CURL_CA_BUNDLE=str(cert), NO_PROXY='localhost,127.0.0.1',
                        no_proxy='localhost,127.0.0.1')
-            command = match.group() + '\nget "$1" "$2"\n'
+            function = 'get' if fault == 'handshake' else 'get_archive'
+            command = match.group() + f'\n{function} "$1" "$2"\n'
             try:
                 result = subprocess.run(['/bin/sh', '-c', command, 'test-get',
                                          f'https://localhost:{port}/payload', str(output)],
@@ -82,7 +108,8 @@ class BootstrapDownloadTest(unittest.TestCase):
                 worker.join(timeout=27)
             self.assertFalse(errors, errors)
             self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
-            self.assertEqual(accepted, ['stalled', 'retry'])
+            expected = {'handshake': [False], 'partial': [False, True], 'no-range': [False, True, False]}
+            self.assertEqual(accepted, expected[fault])
             self.assertEqual(output.read_bytes(), PAYLOAD)
 
 
