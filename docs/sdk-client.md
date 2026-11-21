@@ -14,6 +14,10 @@ before installing.
 Target sysroots use pkg_add's alternate root and no-script mode; an explicit live target uses native package hooks.
 There is no separate dependency resolver, toolchain or build tree per task.
 
+The client starts `pkg_add` with `umask 022` in every install mode.
+This gives implicit package directories consistent permissions.
+The client keeps the caller's mask for its own files and directories.
+
 ## Use the client
 
 For a machine without Python or SDK tools, use the [first-install bootstrap](bootstrap-client.md).

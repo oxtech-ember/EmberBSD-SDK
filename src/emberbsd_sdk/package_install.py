@@ -344,7 +344,8 @@ class PackageInstaller:
                 # install into the matching live target must create declared
                 # service accounts; host prefixes and sysroots must not.
                 environment['PKG_CREATE_USERGROUP'] = 'YES'
-            result = subprocess.run(args, env=environment, capture_output=True)
+            # pkg_add uses the child mask for implicit package directories.
+            result = subprocess.run(args, env=environment, capture_output=True, umask=0o022)
             if result.returncode:
                 raise SDKError('pkg_add failed: ' + result.stderr[-4096:].decode('utf-8', 'replace'))
             if selected is not None:

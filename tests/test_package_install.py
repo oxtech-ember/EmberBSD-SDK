@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -189,6 +190,23 @@ class InstallTests(unittest.TestCase):
         self.assertIn('fixture-1.0', installer.installed(self.cfg))
         self.assertEqual(installer.inventory(self.cfg),
                          [dict(pkgname='fixture-1.0', root='devel/fixture@native')])
+
+    def test_package_directories_under_restrictive_umask(self):
+        package = self.package(payload_path='share/fixture/model')
+        installer = PackageInstaller(self.crypto, self.ca.certificate)
+        stage_config, stage_prefix, _ = self.native_stage_config()
+
+        old_umask = os.umask(0o077)
+        try:
+            for config, prefix in ((self.cfg, self.destination), (stage_config, stage_prefix)):
+                with self.subTest(mode=config.get('install_mode', 'native')):
+                    installer.install(package, config)
+                    self.assertEqual((prefix / 'share/fixture/model').read_text(), 'installed data')
+                    self.assertEqual(stat.S_IMODE((prefix / 'share/fixture').stat().st_mode), 0o755)
+                    self.assertEqual(stat.S_IMODE(prefix.stat().st_mode), 0o700)
+        finally:
+            client_umask = os.umask(old_umask)
+        self.assertEqual(client_umask, 0o077)
 
     def test_signed_pkg_tools_replacement_preserves_installed_consumer(self):
         installer = PackageInstaller(self.crypto, self.ca.certificate)
