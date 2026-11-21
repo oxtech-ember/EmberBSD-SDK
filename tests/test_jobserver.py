@@ -30,6 +30,33 @@ class JobserverTests(TemporaryCase):
                 self.assertEqual(fourth, 4)
         self.assertFalse(path.exists())
 
+    def test_unsupported_parent_pipe_and_explicit_serial_budget(self):
+        for flags in ('-j --jobserver-auth=3,4', ' -j1', '--jobs=1', '-j1 --jobserver-auth=fifo:/unused'):
+            with self.subTest(flags=flags), jobserver.budget(self.root / 'fifo', 8, flags) as child:
+                with jobserver.slots(child, 8) as jobs:
+                    self.assertEqual(jobs, 1)
+
+    def test_smaller_local_budget_reserves_parent_slots_and_returns_their_bytes(self):
+        parent = self.root / 'parent'
+        with jobserver.serve(parent, 5) as outer:
+            descriptor = os.open(parent, os.O_RDWR | os.O_NONBLOCK)
+            try:
+                self.assertEqual(os.read(descriptor, 4), b'++++')
+                os.write(descriptor, b'ABCD')
+                with jobserver.budget(self.root / 'child', 3, outer) as child:
+                    self.assertNotEqual(jobserver.fifo(child), str(parent))
+                    with jobserver.slots(child, 9) as jobs:
+                        self.assertEqual(jobs, 3)
+                    self.assertEqual(os.read(descriptor, 2), b'CD')
+                self.assertEqual(os.read(descriptor, 2), b'AB')
+            finally:
+                os.close(descriptor)
+
+    def test_a_workspace_with_spaces_gets_a_usable_fifo(self):
+        with jobserver.budget(self.root / 'name with space', 3, '') as flags:
+            with jobserver.slots(flags, 8) as jobs:
+                self.assertEqual(jobs, 3)
+
     def test_without_a_jobserver_a_job_uses_its_budget(self):
         with jobserver.slots('', 6) as jobs:
             self.assertEqual(jobs, 6)

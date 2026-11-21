@@ -7,10 +7,8 @@ The plan decides what to build. Ninja decides the order and runs the edges.
 The producer of a node decides how: a Ports source producer prepares a
 source, ember/build-kernel.sh builds the tools and a kernel. Each edge
 writes the record of its node (results/<id>.json) after its producer
-succeeds. The input key is in the command line of the edge, so Ninja runs an
-edge again when the key changes. A node without a key (local changes) depends
-on a phony target without outputs, so Ninja runs it on each build; the
-incremental builder of its owner then skips unchanged work.
+succeeds. Every edge in the generated file is pending according to the
+planner, even if an old record has the same key and its artifact is missing.
 """
 
 import fcntl
@@ -52,7 +50,7 @@ def record_name(node_id):
     return os.path.relpath(build_profile.result_path('/', node_id), '/')
 
 
-def runnable(node):
+def runnable(node, checkouts=None):
     """Return why profile-build cannot run NODE, or None."""
     if node['kind'] == 'source':
         producer = node['identity']['producer']
@@ -61,7 +59,8 @@ def runnable(node):
             return f'select the prepared tree in build.sources; {producer} has no common producer interface'
     elif node['kind'] == 'os-stage' and node['identity'].get('stage') not in ('tools', 'kernel', 'sets'):
         return f'profile-build cannot build the OS stage {node["identity"].get("stage")}'
-    elif node['identity'].get('stage') == 'sets' and node['input_key'] is None:
+    elif node['identity'].get('stage') == 'sets' and (node['input_key'] is None or
+            any(checkout['dirty'] for checkout in (checkouts or {}).values())):
         return 'commit the OS, Ports and SDK changes first: the OS release builder needs clean checkouts'
     return None
 
@@ -78,21 +77,19 @@ def ninja_file(plan, *, command):
              '# OS stages run build.sh, which runs its own jobs.',
              'pool os', '  depth = 1', '',
              'rule node', f'  command = {command} --node $id --key $key', '  description = $id', '',
-             '# A node with local changes depends on this target, which never exists.',
-             'build changed: phony', '']
+             '# Run each node the current plan marked for building.',
+             'build pending: phony', '']
     for node in plan['nodes']:
         if node['decision']['action'] == 'ready':
             continue
         _require(node['decision']['action'] == 'build',
                  f'{node["id"]}: {node["decision"]["action"]} first ({node["decision"]["why"]})')
-        reason = runnable(node)
+        reason = runnable(node, plan['checkouts'])
         _require(reason is None, f'{node["id"]}: {reason}')
         # Ready dependencies are already complete; order only the edges of this build.
         inputs = [_escape(record_name(item)) for item in node['dependencies']
                   if nodes[item]['decision']['action'] != 'ready']
-        line = f'build {_escape(record_name(node["id"]))}: node'
-        if node['input_key'] is None:
-            line += ' | changed'
+        line = f'build {_escape(record_name(node["id"]))}: node | pending'
         if inputs:
             line += ' || ' + ' '.join(inputs)
         lines += [line, f'  id = {node["id"]}', f'  key = {node["input_key"] or "changed"}']
@@ -340,15 +337,6 @@ def _source_option(variable):
     return variable.removeprefix('EMBER_').lower().replace('_', '-')
 
 
-def _source_content(path):
-    """Return the sha256 of the manifest at the root of a prepared source tree."""
-    for name in ('emberbsd-prepared-source.json', 'libedit-source.json', 'llvm-source.json'):
-        manifest = Path(path, name)
-        if manifest.is_file():
-            return hashlib.sha256(manifest.read_bytes()).hexdigest()
-    raise SDKError(f'{path} has no prepared source manifest')
-
-
 def _release(work, node, nodes, plan, config, prefix):
     """Build the sets of NODE with the OS release builder; return the set files."""
     from .os_release_builder import OSReleaseBuilder
@@ -359,7 +347,8 @@ def _release(work, node, nodes, plan, config, prefix):
         # interrupted run left, as build-sysroot.py does.
         RESUMES_FAILED_STAGES = True
 
-    _require(runnable(node) is None, f'{node["id"]}: {runnable(node)}')
+    reason = runnable(node, plan['checkouts'])
+    _require(reason is None, f'{node["id"]}: {reason}')
     root = _workspace(work, plan)
     platform = plan['profile']['platform']
     sources = {}
@@ -376,7 +365,7 @@ def _release(work, node, nodes, plan, config, prefix):
     # directories.
     mk = [f'{name}={value}' for name, value in plan['profile']['os']['mk'].items()]
     material = [nodes[item]['input_key'] for item in RUNTIME_NODES]
-    material += [f'{variable}={path}={_source_content(path)}' for variable, path in sorted(sources.items())]
+    material += [f'{variable}={path}={build_profile.source_manifest_digest(path)}' for variable, path in sorted(sources.items())]
     # Other MK* options build other objects: make does not see a changed option.
     material += mk
     tools_key = hashlib.sha256('\n'.join(material).encode()).hexdigest()[:16]
@@ -450,9 +439,7 @@ def build(plan, *, work, command, ninja, jobs, explain=False):
         write_json(work / PLAN_FILE, plan, exclusive=False)
         (work / NINJA_FILE).write_text(text + '\n', encoding='utf-8')
         argv = [ninja, '-C', str(work)] + (['-d', 'explain'] if explain else [])
-        # The budget replaces the MAKEFLAGS of an outer make: this build has
-        # its own jobserver.
-        with jobserver.serve(work / '.jobserver', jobs) as makeflags:
+        with jobserver.budget(work / '.jobserver', jobs, os.environ.get('MAKEFLAGS')) as makeflags:
             env = dict(os.environ, MAKEFLAGS=makeflags)
             env.pop('MFLAGS', None)
             return subprocess.run(argv, env=env, check=False).returncode

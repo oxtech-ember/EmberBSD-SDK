@@ -19,7 +19,8 @@ import shutil
 import sys
 import tempfile
 
-from . import prepared_sources, process
+from . import libedit, prepared_sources, process
+from .graph import dependency_waves
 from .errors import CommandError, SDKError
 from .jsonio import json_bytes, loads_json, read_json, write_json
 from .targets import target_definition
@@ -45,6 +46,31 @@ EXPORT_NODE = 'ports:pkgsrc-export'
 # The make flags of the tools build in ember/build-kernel.sh, which builds them
 # with the target compiler of the host prefix.
 KERNEL_TOOLS_FLAGS = ('TOOLCHAIN_MISSING=yes', 'MKCROSSGDB=no')
+# SDK-side files read by the profile node, ember/build-kernel.sh and the two
+# native runners, including the per-host child launchers and bindings snapshot.
+OS_SCRIPTS = ('scripts/packages.py', 'scripts/run-native-check.py', 'scripts/run-native-os.py')
+HOST_MODULES = (
+    '__init__', '_darwin_process', '_linux_process', '_linux_supervisor', '_netbsd_launcher', '_netbsd_process',
+    'cpu_capacity', 'elf', 'errors', 'host_identity', 'host_prefix', 'host_services', 'inventory',
+    'jsonio', 'native_toolset', 'paths', 'process', 'publication')
+SOURCE_MODULES = (*HOST_MODULES, 'archive_metadata', 'provenance', 'sourceprep')
+OS_MODULES = (
+    *HOST_MODULES, 'build_profile', 'command_directory', 'compiler_bindings', 'graph', 'jobserver', 'native_checks',
+    'native_os', 'native_os_routing', 'prepared_sources', 'profile_build', 'sdk_client', 'targets', 'workspace')
+# Extra producers for the release traversal, including the SDK API used by
+# the Ports LLVM runtime and target libtool producers.
+SETS_MODULES = (
+    'application_toolchain', 'libedit', 'llvm_runtime', 'llvm_runtime_install', 'llvm_runtime_sets',
+    'llvm_source_refresh', 'llvm_stage_inputs', 'llvm_sysroot', 'native_runtime_install', 'os_release',
+    'os_release_builder', 'prepared_refresh', 'provenance', 'runtime_refresh', 'sourceprep', 'sysroot_builder',
+    'sysroot_transfer', 'target_toolchain', 'tarstream', 'verification_receipts')
+# Outside the pkgsrc export, the Clang release invokes the prepared-source
+# validators and the common cross-libtool producer, including their helpers.
+PORTS_RELEASE_PATHS = (
+    EXPORT_TOOL, RECIPE_TOOL, 'scripts/pkgsrc-source-identity.py',
+    'scripts/source-inputs', 'scripts/prepared_receipt.py', 'scripts/source_distdir.py',
+    'profiles/common-build-tools/cross',
+    'profiles/common-build-tools/patches/cross-libtool-tool-paths.patch')
 # The external Clang toolchain programs that an OS build uses.
 TARGET_REQUIRED = ('bin/clang', 'bin/ld.lld')
 TARGET_TOOLCHAIN = ('bin/clang', 'bin/clang++', 'bin/ld.lld', 'bin/llvm-ar', 'bin/llvm-nm',
@@ -223,6 +249,30 @@ def _tree(identity, path, repository):
                 dirty=dirty)
 
 
+def _git_paths(checkout, repository, paths):
+    """Return the selected Git files, trees or gitlinks and their worktree status."""
+    paths = set(paths)
+    entries = _git(checkout['root'], 'ls-tree', '-z', 'HEAD', '--', *sorted(paths))
+    objects = {}
+    for entry in entries.split('\0'):
+        if entry:
+            metadata, path = entry.split('\t', 1)
+            mode, _, digest = metadata.split()
+            objects[path] = dict(mode=mode, object=digest)
+    # status may collapse an untracked directory into a single name.
+    dirty = {path for path in paths
+             if any(path == name or name.startswith(path + '/') or
+                    (name.endswith('/') and path.startswith(name)) for name in checkout['dirty'])}
+    return [dict(repository=repository, path=path, dirty=path in dirty,
+                 **objects.get(path, dict(mode=None, object=None)))
+            for path in sorted(objects.keys() | dirty)]
+
+
+def _sdk_files(checkout, modules, scripts=()):
+    paths = [*scripts, *(f'src/emberbsd_sdk/{name}.py' for name in modules)]
+    return _git_paths(checkout, 'sdk', paths)
+
+
 def read_shared_sources(os_root):
     """Return ember/shared-sources.json as the OS tool checks and prints it."""
     tool = os.path.join(os_root, SHARED_TOOL)
@@ -296,14 +346,19 @@ def result_path(state, node_id):
     return Path(state, 'results', node_id.replace(':', '_') + '.json')
 
 
-def _record(state, node_id, key):
+def _record(state, node_id, key, outputs):
     """Return the record of NODE_ID if it has KEY and its outputs exist."""
     if state is None or not result_path(state, node_id).is_file():
         return None
     record = read_json(result_path(state, node_id))
     if not isinstance(record, dict) or record.get('input_key') != key or not isinstance(record.get('outputs'), dict):
         return None
-    return record if all(os.path.exists(path) for path in record['outputs'].values()) else None
+    # os:tools is a virtual dependency. Each OS producer owns its actual tools.
+    expected = set() if node_id == 'os:tools' else set(outputs)
+    paths = record['outputs']
+    if set(paths) != expected or not all(isinstance(path, str) and os.path.exists(path) for path in paths.values()):
+        return None
+    return record
 
 
 def ports_tool(ports_root, sdk_root, prefix, script, *arguments):
@@ -319,11 +374,12 @@ def ports_tool(ports_root, sdk_root, prefix, script, *arguments):
         raise SDKError(f'{script}: ' + (message[-1] if message else 'failed')) from exc
 
 
-def source_manifest(root):
-    """Return the manifest that identifies a prepared source tree."""
-    for name in ('emberbsd-prepared-source.json', 'llvm-source.json'):
-        if Path(root, name).is_file():
-            return Path(root, name)
+def source_manifest_digest(root):
+    """Hash the manifest that identifies a prepared source for planning and execution."""
+    for name in ('emberbsd-prepared-source.json', libedit.RECEIPT, 'llvm-source.json'):
+        manifest = Path(root, name)
+        if manifest.is_file():
+            return hashlib.sha256(manifest.read_bytes()).hexdigest()
     raise SDKError(f'{root} is not a prepared source: it has no manifest')
 
 
@@ -355,6 +411,7 @@ class _Planner:
         self.prefix = os.path.realpath(native.bundle_root)
         self.required = required_sources or self.walk
         self.nodes, self.recipes, self.export = {}, {}, []
+        self.source_helpers = None
 
     def checkouts(self, name):
         if name not in self.found:
@@ -416,7 +473,7 @@ class _Planner:
                             dependencies={item: nodes[item]['input_key'] for item in sorted(dependencies)}))
             if ready is not None:
                 decision = dict(action='ready', why=ready)
-            elif _record(self.state, node_id, key) is not None:
+            elif _record(self.state, node_id, key, outputs) is not None:
                 decision = dict(action='ready', why='recorded result has this input key')
             elif kind == 'runtime':
                 decision = dict(action='ready', why='installed outside the build plan')
@@ -450,17 +507,20 @@ class _Planner:
         entry = self.shared['sources'][variable]
         identity = dict(variable=variable, package=entry['package'], producer=entry['producer'])
         if variable in self.selected_sources:
-            manifest = source_manifest(self.selected_sources[variable])
+            digest = source_manifest_digest(self.selected_sources[variable])
             return self.add('source:' + variable, 'source', identity,
-                            dict(manifest_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest()), [],
+                            dict(manifest_sha256=digest), [],
                             [variable], reason, ready='selected in the configuration')
         recipe = self.recipes[entry['package']]
         dependencies = ([self.pkgsrc_export('needed by source:' + variable)]
                         if entry['producer'].startswith(COMMON_PRODUCERS) else [])
+        if self.source_helpers is None:
+            self.source_helpers = _sdk_files(self.checkouts('sdk'), SOURCE_MODULES)
+        git_inputs = [*_producer(entry, self.checkouts), *self.source_helpers]
         # The producer selects its archives in the distfiles directory and
         # names a missing one; the plan does not.
         return self.add('source:' + variable, 'source', dict(identity, distfiles=recipe['distfiles']),
-                        dict(recipe=recipe['effective'], git=_producer(entry, self.checkouts)), dependencies,
+                        dict(recipe=recipe['effective'], git=git_inputs), dependencies,
                         [variable], reason)
 
     def sources(self, names, reason):
@@ -473,12 +533,7 @@ class _Planner:
 
     def document(self, profile):
         nodes = self.nodes
-        order, waves, done = sorted(nodes), [], set()
-        while len(done) < len(order):
-            wave = [item for item in order if item not in done and set(nodes[item]['dependencies']) <= done]
-            _require(wave, 'build plan has a dependency cycle')
-            waves.append(wave)
-            done.update(wave)
+        waves = dependency_waves({name: node['dependencies'] for name, node in nodes.items()})
         plan = dict(schema=PLAN_SCHEMA, profile=profile, profile_sha256=_key(profile),
                     checkouts={name: dict(commit=item['commit'], tree=item['tree'], dirty=item['dirty'])
                                for name, item in sorted(self.found.items())},
@@ -556,12 +611,9 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
                    dict(inputs_sha256=hashlib.sha256(record.read_bytes()).hexdigest()), [], [],
                    'needed by os:tools (EMBER_HOST_BFD_CONFIG)')
 
-    # OS builders run the native runner scripts and the builders of this SDK:
-    # its code is an input, its documents and tests are not.
+    sdk = planner.checkouts('sdk')
     os_inputs = dict(git=[dict(repository='os', path='.', object=os_identity['tree'],
-                               dirty=bool(os_identity['dirty'])),
-                          _tree(planner.checkouts('sdk'), 'scripts', 'sdk'),
-                          _tree(planner.checkouts('sdk'), 'src', 'sdk')],
+                               dirty=bool(os_identity['dirty'])), *_sdk_files(sdk, OS_MODULES, OS_SCRIPTS)],
                      target=dict(name=profile['platform']['target'], **target),
                      mk=profile['os']['mk'], repro_timestamp=os_identity['time'])
     release_inputs = dict(os_inputs, buildinfo=profile['os']['buildinfo'])
@@ -576,6 +628,9 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
         else:
             dependencies.append(tools_stage)
             nodes[tools_stage]['reasons'].append('needed by ' + node_id)
+        if node_id == 'os:sets':
+            # The release verifies and uses the shared export even when all prepared sources were selected.
+            dependencies.append(planner.pkgsrc_export('needed by os:sets'))
         return add(node_id, 'os-stage', identity, dict(inputs, flags=list(flags)), dependencies, outputs, reason)
 
     tools_stage = stage('os:tools', dict(stage='tools'), prepared_sources.TOOLS_TRAVERSALS,
@@ -607,8 +662,9 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
         # requires them (release.select of ember/shared-sources.json).
         # The release builder also reads the Ports producers and names the OS commit.
         ports_identity = planner.checkouts('ports')
-        sets_inputs = dict(release_inputs, os_commit=os_identity['commit'], git=release_inputs['git'] + [
-            dict(repository='ports', path='.', object=ports_identity['tree'], dirty=bool(ports_identity['dirty']))])
+        sets_inputs = dict(release_inputs, os_commit=os_identity['commit'], git=[*release_inputs['git'],
+            *_sdk_files(sdk, SETS_MODULES),
+            *_git_paths(ports_identity, 'ports', PORTS_RELEASE_PATHS)])
         stage('os:sets', dict(stage='sets', sets=profile['os']['sets']), prepared_sources.RELEASE_TRAVERSALS,
               flags, shared['release']['select'], [name + '.tar.xz' for name in profile['os']['sets']],
               'profile os.sets', sets_inputs)

@@ -2,6 +2,7 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Build profiles and the build-graph-v2 plan."""
 
+import ast
 import contextlib
 import copy
 import io
@@ -148,6 +149,46 @@ class ProfileFixture(TemporaryCase):
 
     def nodes(self, plan):
         return {node['id']: node for node in plan['nodes']}
+
+
+class ProducerContractTests(unittest.TestCase):
+    def test_sdk_producer_groups_cover_imports_and_python_helpers(self):
+        # The CLI also dispatches package installation, publishing and unrelated
+        # source producers. These imports have separate entry points.
+        excluded = {
+            'scripts/packages.py': {'package_selection'},
+            'build_profile': {'libedit', 'os_release_builder'},
+            'profile_build': {'libedit', 'os_release_builder', 'sysroot_builder'},
+            'sdk_client': {'binary_catalog', 'binary_release', 'desktop_apps', 'package_auto_update',
+                           'package_automatic', 'package_cache', 'package_install', 'package_selection',
+                           'package_state', 'package_updates', 'release_delivery', 'release_s3',
+                           'release_signing', 'source_wave', 'sysroot_package'},
+            'os_release': {'os_release_github', 'private_root'},
+        }
+        package = Path(build_profile.__file__).parent
+        available = {path.stem for path in package.glob('*.py')}
+        common = set(build_profile.OS_MODULES)
+        groups = [(build_profile.SOURCE_MODULES, set(build_profile.SOURCE_MODULES)),
+                  (build_profile.OS_SCRIPTS, common), (build_profile.OS_MODULES, common),
+                  (build_profile.SETS_MODULES, common | set(build_profile.SETS_MODULES))]
+        for names, covered in groups:
+            for name in names:
+                path = package.parents[1] / name if name.endswith('.py') else package / (name + '.py')
+                imports = set()
+                for node in ast.walk(ast.parse(path.read_bytes())):
+                    if isinstance(node, ast.ImportFrom):
+                        if (node.level == 1 and not node.module) or node.module == 'emberbsd_sdk':
+                            imports.update(alias.name for alias in node.names)
+                        elif node.level == 1 or (node.module or '').startswith('emberbsd_sdk.'):
+                            imports.add(node.module.split('.')[-1])
+                    elif isinstance(node, ast.Import):
+                        imports.update(x.name.split('.')[1] for x in node.names if x.name.startswith('emberbsd_sdk.'))
+                    elif isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.endswith('.py'):
+                        # Bindings snapshot and process helpers executed as separate Python programs.
+                        imports.add(node.value.removesuffix('.py'))
+                with self.subTest(producer=name):
+                    missing = (imports & available) - covered - excluded.get(name, set())
+                    self.assertEqual(missing, set(), 'declare the invoked SDK module in its producer group')
 
 
 class BuildProfileTests(ProfileFixture):
@@ -388,18 +429,83 @@ class BuildProfileTests(ProfileFixture):
         with self.assertRaisesRegex(SDKError, 'initialize submodule upstream/pkgsrc'):
             self.plan()
 
-    def test_sdk_documents_are_not_an_input_of_the_os_stages(self):
-        before = self.nodes(self.plan())
+    def test_os_stages_key_their_sdk_producers(self):
+        profile = copy.deepcopy(PROFILE)
+        profile['os']['sets'] = ['base', 'comp', 'etc']
+
+        def keys():
+            nodes = self.nodes(self.plan(profile))
+            return tuple(nodes[name]['input_key'] for name in ('os:tools', 'os:kernel:EMBER64', 'os:sets'))
+
+        before = keys()
         self.write('sdk/docs/notes.md', 'notes\n')
+        self.write('sdk/scripts/qml-compile.py', '# qml command\n')
+        self.write('sdk/src/emberbsd_sdk/qml.py', '# qml\n')
         git(self.sdk, 'add', '-A')
-        git(self.sdk, 'commit', '-q', '-m', 'notes')
-        after = self.nodes(self.plan())
-        self.assertEqual(after['os:kernel:EMBER64']['input_key'], before['os:kernel:EMBER64']['input_key'])
-        self.write('sdk/src/emberbsd_sdk/runner.py', '# runner\n')
+        git(self.sdk, 'commit', '-q', '-m', 'unrelated files')
+        self.assertEqual(keys(), before)
+        self.write('sdk/src/emberbsd_sdk/os_release_builder.py', '# release-only SDK module\n')
         git(self.sdk, 'add', '-A')
-        git(self.sdk, 'commit', '-q', '-m', 'runner')
-        self.assertNotEqual(self.nodes(self.plan())['os:kernel:EMBER64']['input_key'],
-                            before['os:kernel:EMBER64']['input_key'])
+        git(self.sdk, 'commit', '-q', '-m', 'sets')
+        release = keys()
+        self.assertEqual(release[:2], before[:2])
+        self.assertNotEqual(release[2], before[2])
+        self.write('sdk/src/emberbsd_sdk/host_prefix.py', '# common native tool selection\n')
+        self.assertEqual(keys(), (None, None, None))
+        git(self.sdk, 'add', '-A')
+        git(self.sdk, 'commit', '-q', '-m', 'shared runner')
+        self.assertTrue(all(a != b for a, b in zip(release, keys())))
+
+    def test_sdk_preparation_changes_a_built_source_but_preserves_a_selected_tree(self):
+        llvm = self.write('llvm/llvm-source.json', '{}').parent
+        selected = {'EMBER_LLVM_SOURCE': llvm}
+        before = self.nodes(self.plan(selected_sources=selected))
+        self.write('sdk/src/emberbsd_sdk/sourceprep.py', '# new SDK preparation implementation')
+        git(self.sdk, 'add', '-A')
+        git(self.sdk, 'commit', '-qm', 'source preparation')
+        after = self.nodes(self.plan(selected_sources=selected))
+        built, ready = 'source:EMBER_BYACC_SOURCE', 'source:EMBER_LLVM_SOURCE'
+        self.assertNotEqual(after[built]['input_key'], before[built]['input_key'])
+        self.assertNotEqual(after['os:kernel:EMBER64']['input_key'], before['os:kernel:EMBER64']['input_key'])
+        self.assertEqual(after[ready]['input_key'], before[ready]['input_key'])
+        self.assertEqual(after[ready]['decision']['action'], 'ready')
+
+    def test_sets_bind_export_and_release_helpers_with_all_sources_selected(self):
+        selected = {name: self.write('prepared/' + name + '/emberbsd-prepared-source.json', '{}').parent
+                    for name in SOURCES}
+        profile = copy.deepcopy(PROFILE)
+        profile['os']['sets'] = ['base', 'comp', 'etc']
+
+        def node():
+            return self.nodes(self.plan(profile, selected_sources=selected))['os:sets']
+
+        before = node()
+        self.assertIn(build_profile.EXPORT_NODE, before['dependencies'])
+        self.write('ports/docs/readme.md', 'notes')
+        git(self.ports, 'add', '-A')
+        git(self.ports, 'commit', '-qm', 'documentation')
+        self.assertEqual(node()['input_key'], before['input_key'])
+        self.write('ports/profiles/common-build-tools/cross/prepare-libtool.py', '# new producer')
+        self.assertIsNone(node()['input_key'])
+        git(self.ports, 'add', '-A')
+        git(self.ports, 'commit', '-qm', 'libtool')
+        updated = node()['input_key']
+        self.assertNotEqual(updated, before['input_key'])
+        self.write('ports/pkgsrc/export.conf', 'another export')
+        git(self.ports, 'commit', '-qam', 'export')
+        self.assertNotEqual(node()['input_key'], updated)
+
+    def test_selected_libedit_uses_the_release_manifest(self):
+        self.tools_sources = {'EMBER_LIBEDIT_SOURCE': 'lib/libedit'}
+        path = self.write('libedit/libedit-source.json', '{}')
+        selected = {'EMBER_LIBEDIT_SOURCE': path.parent}
+        nodes = self.nodes(self.plan(selected_sources=selected))
+        self.assertEqual(nodes['source:EMBER_LIBEDIT_SOURCE']['decision']['action'], 'ready')
+        self.assertEqual(nodes['source:EMBER_LIBEDIT_SOURCE']['inputs']['manifest_sha256'],
+                         build_profile.source_manifest_digest(path.parent))
+        path.write_text('{"revision": 2}')
+        self.assertNotEqual(self.nodes(self.plan(selected_sources=selected))['os:tools']['input_key'],
+                            nodes['os:tools']['input_key'])
 
 
 class PlanCacheTests(ProfileFixture):

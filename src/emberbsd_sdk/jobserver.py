@@ -12,20 +12,26 @@ It takes them once: a stage that starts while other jobs hold tokens keeps
 the smaller number of slots until it stops.
 
 A job that stops on SIGKILL cannot give its tokens back, and the budget is
-smaller for the rest of that run. Each run makes a new FIFO.
+smaller for the lifetime of that jobserver.
 """
 
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import os
 from pathlib import Path
 import re
 import signal
 import stat
+import tempfile
 
 from .errors import SDKError
 
 TOKEN = b'+'
-_AUTH = re.compile(r'(?:^|\s)--jobserver-auth=fifo:(\S+)')
+_AUTH = re.compile(r'(?:^|\s)--jobserver-(?:auth|fds)=(\S+)')
+_JOBS = re.compile(r'(?:^|\s)(?:-j\s*|--jobs(?:=|\s+))([1-9]\d*)(?=\s|$)')
+
+
+def _options(makeflags):
+    return re.split(r'(?:^|\s)--(?:\s|$)', makeflags or '', maxsplit=1)[0]
 
 
 def _write(descriptor, data):
@@ -61,10 +67,11 @@ def serve(path, jobs):
 
 def fifo(makeflags):
     """Return the jobserver FIFO that MAKEFLAGS names, or None."""
-    match = _AUTH.search(makeflags or '')
-    if match is None:
+    # GNU make can override an earlier --jobserver-auth. Variables follow --.
+    matches = _AUTH.findall(_options(makeflags))
+    if not matches or not matches[-1].startswith('fifo:'):
         return None
-    path = match.group(1)
+    path = os.path.abspath(matches[-1][len('fifo:'):])
     try:
         mode = os.stat(path).st_mode
     except OSError as exc:
@@ -72,6 +79,34 @@ def fifo(makeflags):
     if not stat.S_ISFIFO(mode):
         raise SDKError(f'the jobserver {path} is not a FIFO')
     return path
+
+
+@contextmanager
+def budget(path, jobs, makeflags):
+    """Join a parent FIFO, or give Ninja a local budget for its available slots."""
+    if type(jobs) is not int or jobs < 1:
+        raise SDKError('the job budget must be a positive integer')
+    options = _options(makeflags)
+    counts = _JOBS.findall(options)
+    parent_jobs = int(counts[-1]) if counts else None
+    inherited = fifo(makeflags) if parent_jobs != 1 else None
+    if inherited and parent_jobs is not None and parent_jobs <= jobs:
+        # Ninja takes tokens dynamically. Only forward the budget and authentication.
+        yield f'-j{parent_jobs} --jobserver-auth=fifo:{inherited}'
+        return
+    with ExitStack() as stack:
+        if inherited:
+            # Ninja cannot use an explicit -j cap and a parent FIFO together.
+            # Reserve at most the local budget, then serve it to this subtree.
+            jobs = stack.enter_context(slots(makeflags, jobs))
+        elif _AUTH.search(options) or parent_jobs is not None:
+            # With no usable parent FIFO, only the caller's implicit slot is ours.
+            jobs = 1
+        if any(character.isspace() for character in str(path)):
+            # GNU make and Ninja delimit the authentication word with whitespace.
+            directory = stack.enter_context(tempfile.TemporaryDirectory(dir='/tmp', prefix='emberbsd-jobserver-'))
+            path = Path(directory, 'fifo')
+        yield stack.enter_context(serve(path, jobs))
 
 
 @contextmanager

@@ -209,6 +209,15 @@ class NinjaClientTests(ProfileFixture):
         self.assertEqual(log, f'-C {self.root / "work"} tokens=3')
         self.assertFalse((self.root / 'work/.jobserver').exists())
 
+    def test_ninja_shares_the_outer_fifo(self):
+        from emberbsd_sdk import jobserver
+        with jobserver.serve(self.root / 'outer', 3) as flags:
+            with jobserver.slots(flags, 2), mock.patch.dict(os.environ, MAKEFLAGS=flags):
+                status, log = self.run_ninja('1.13.2')
+                self.assertEqual((status, log), (0, f'-C {self.root / "work"} tokens=1'))
+            with jobserver.slots(flags, 9) as slots:
+                self.assertEqual(slots, 3)
+
     def test_older_ninja_is_refused(self):
         with self.assertRaisesRegex(Exception, 'older than Ninja 1.13'):
             self.run_ninja('1.11.1')
@@ -278,6 +287,21 @@ class ProfileBuildTests(ProfileFixture):
         status, plan, log = self.build()
         self.assertEqual(status, 0)
         self.assertEqual([line.split()[0:2] for line in log], [['prepare', 'byacc-1.tgz'], ['kernel', 'EMBER64']])
+
+    def test_a_missing_output_runs_just_its_producer_with_the_same_key(self):
+        status, plan, _ = self.build()
+        self.assertEqual(status, 0)
+        node_id = 'os:kernel:EMBER64'
+        key = self.nodes(plan)[node_id]['input_key']
+        image = self.work / 'kernels/netbsd-EMBER64.img'
+        image.unlink()
+        self.assertTrue((self.work / profile_build.record_name(node_id)).is_file())
+        status, plan, log = self.build()
+        self.assertEqual(status, 0)
+        self.assertEqual(self.nodes(plan)[node_id]['input_key'], key)
+        self.assertEqual([line.split()[0] for line in log], ['kernel'])
+        self.assertTrue(image.is_file())
+        self.assertEqual(self.build()[2], [])
 
     def test_local_changes_run_the_kernel_on_each_build(self):
         self.write('os/sys/arch/evbarm/conf/EMBER64', 'include "arch/evbarm/conf/std"\n# local\n')

@@ -127,7 +127,8 @@ The plan has these nodes:
   prints the effective recipe identity (overlay or `upstream/pkgsrc`, with
   the Ports patches), for most owners the one that a prepared receipt records, and the distfiles of
   the effective `distinfo`. The key binds that identity and the Git trees of
-  the producer and of the shared Ports producer helpers; the libedit key also
+  the producer, the shared Ports producer helpers and the SDK modules used
+  to prepare and validate source trees. The libedit key also
   binds `src/emberbsd_sdk/libedit.py`, which prepares it. A source of a
   producer under `scripts/source-inputs/` also needs `ports:pkgsrc-export`.
 - `ports:pkgsrc-export`: one shared pkgsrc export for the Ports producers,
@@ -136,10 +137,20 @@ The plan has these nodes:
   files in its inputs, and so does the plan: a local edit below `pkgsrc/`
   stops the plan, also for a source that does not use the edited recipe.
   Commit such edits first.
-- `os:tools`, `os:kernel:<config>` and `os:sets`: OS stages, keyed by the OS
-  Git tree, the SDK `scripts` and `src` trees (the runners and builders; not
-  the documents and tests), target, make flags, `MK*` options and `MKREPRO_TIMESTAMP`
-  (the commit time). Kernels and sets also bind `os.buildinfo`.
+- `os:tools`, `os:kernel:<config>` and `os:sets` bind the OS Git tree,
+  target, make flags, `MK*` options and `MKREPRO_TIMESTAMP` (the commit
+  time). Kernels and sets also bind `os.buildinfo`. The plan lists the Git
+  object and file mode of each SDK runner or shared module used by these
+  stages. Sets additionally bind the release, sysroot and LLVM producers.
+  When a producer starts using another SDK file, add it to its group in
+  [build_profile.py](../src/emberbsd_sdk/build_profile.py). Changes confined
+  to SDK documentation, tests or QML tooling preserve the OS keys. Old OS
+  and prepared-source receipts made with broader or incomplete keys are
+  reevaluated once under the new inputs.
+
+For an explicitly selected source, planning and release reuse hash the same
+manifest: `emberbsd-prepared-source.json`, `libedit-source.json` or
+`llvm-source.json`, in that order.
 
 The OS supplies the dependency facts; the plan does not list them a second
 time. Tools and sets need the sources whose makefile guards their
@@ -152,7 +163,9 @@ no `input_key` (`null`) and is `build`: a local edit has no reusable identity,
 so stage 3 records no result for it. Another node is `build` when no recorded
 result has its input key. Stage 3 records results in
 `STATE_DIR/build/results/<id>.json`, with `:` in the ID written as `_`, and
-the `input_key`; a matching record makes the node `ready`. Runtime nodes are
+the `input_key`. Reuse requires the same key and all expected output paths.
+The virtual `os:tools` edge records completion with an empty outputs map.
+Runtime nodes are
 `ready`: the plan does not install them. Downloads from signed
 `current` exist only for packages; OS stages and sources have no download
 decision. The plan does not fetch distfiles: fetch them with pkgsrc
@@ -168,27 +181,26 @@ The command writes the plan and `build.ninja` into `work` and runs Ninja from
 the host prefix. When all nodes are ready, Ninja does not run. `--explain`
 passes `-d explain` to Ninja.
 
-The job budget of `resolve_jobs` is one GNU make jobserver: a FIFO
-`work/.jobserver` with one token for each job after the first. The command
-needs Ninja 1.13 or later, which takes its jobs from the jobserver through
-`MAKEFLAGS` when no `-j` is given; it stops on older Ninja. The budget
-replaces the `MAKEFLAGS` of an outer make, so a `profile-build` under make has
-its own budget. Each edge holds one job. An OS stage runs bmake, which has its
-own job pool, so it takes the free tokens before `build.sh` starts, passes one
-job per slot as `NETBSD2_JOBS`, and gives the tokens back when it stops. It
-takes them once: a stage that starts while other edges hold tokens keeps fewer
-jobs. A source producer is one job and gets no `MAKEFLAGS`; an edge that runs
-GNU make with this `MAKEFLAGS` needs GNU make 4.4 or later. A job that stops on
-SIGKILL loses its tokens for the rest of the run; each run makes a new FIFO.
+Ninja 1.13 or later receives a GNU make FIFO jobserver through `MAKEFLAGS`.
+The SDK joins an inherited FIFO directly when its advertised capacity fits
+the profile budget. Ninja receives no explicit `-j`. For a larger or
+unspecified parent capacity, the SDK borrows up to its local limit and runs
+a private FIFO with those slots until the profile exits. An explicit serial
+make budget, a pipe jobserver or a numeric make budget without FIFO
+authentication gives the profile its caller's one slot. Standalone builds create a FIFO with `resolve_jobs() - 1` tokens
+at `work/.jobserver` (in a private temporary directory for a work path with
+whitespace). Each edge holds one implicit slot. An OS stage borrows free
+tokens before starting bmake, passes the resulting count as `NETBSD2_JOBS`
+or the release builder's `jobs`, and returns those same bytes when it exits.
+This count is fixed for the stage. A source producer uses one slot.
+SIGKILL can lose borrowed tokens for the lifetime of that jobserver.
 
-Each node that is not ready is one Ninja edge. Its command runs the internal
-`profile-node` command with the node ID and its input key, so a changed key
-runs the edge again. A node without a key depends on a phony target that never
-exists, so it runs on each build; the incremental builder of its owner skips
-unchanged work. An edge writes `results/<id>.json` with the input key and the
-outputs only after its producer succeeds. A failed or interrupted build keeps
-no record, and the next `profile-build` runs that node again. Records of other
-nodes keep them ready.
+Only pending nodes appear in the generated Ninja file. Each has a phony
+prerequisite so an old Ninja stamp cannot suppress a decision to rebuild a
+missing artifact, even when its recorded key still matches. Each edge writes
+`results/<id>.json` after its producer succeeds. On the next invocation
+the planner checks the outputs again. An owner with local changes can use
+its incremental builder on each run.
 
 - `ports:pkgsrc-export` runs `scripts/pkgsrc-export-stage.py prepare` into
   `work/sdk/stages/pkgsrc-export`.
@@ -231,9 +243,10 @@ nodes keep them ready.
   than documents (see [source history](source-history.md)). The build states of other contexts stay in `obj` and
   `stages`.
 
-  The key of `os:sets` also binds the Ports tree, which has the producers
-  that the builder runs, and the OS commit, which the builder writes into
-  `BUILDINFO`. The plan walks the release tree with the final `MKCXX=yes` and
+  The key of `os:sets` also binds the shared Ports export, the prepared-source
+  validators, the common cross-libtool producer and its patch. The release
+  consumes that export even with all sources selected. It binds the OS commit
+  because the builder writes it into `BUILDINFO`. The plan walks the release tree with the final `MKCXX=yes` and
   `MKLIBCXX=yes` of the Clang release. It also selects the sources that
   `release.select` of `ember/shared-sources.json` names although no make guard
   requires them: LLVM, and the OpenSSL of Ports, for which the other Ports
