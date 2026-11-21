@@ -3,9 +3,11 @@
 """Binary-first component installation, with source builds owned by Ports."""
 
 import argparse
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import ExitStack, redirect_stdout
 import hashlib
 from importlib import resources
+from itertools import islice
 import os
 from pathlib import Path
 import platform
@@ -438,6 +440,35 @@ def include_source_dependencies(plan, release, catalogs, config, installer, cach
     return result
 
 
+def _fetch_archives(items, cache, store, prefix):
+    """One writer per SHA256 under the client's shared cache lock."""
+    unique = {}
+    for item in items:
+        digest = item['sha256']
+        if unique.setdefault(digest, item)['size'] != item['size']:
+            raise SDKError(f'conflicting signed sizes for archive {digest}')
+
+    def fetch(item):
+        path = cache.fetch(store, _key(prefix, artifact_key(item, '')), item)
+        return item['sha256'], path
+
+    remaining = iter(unique.values())
+    limit = 4
+    active = set()
+    paths = {}
+    pool = ThreadPoolExecutor(max_workers=limit)
+    try:
+        while True:
+            for item in islice(remaining, limit - len(active)):
+                active.add(pool.submit(fetch, item))
+            if not active:
+                return paths
+            done, active = wait(active, return_when=FIRST_COMPLETED)
+            paths.update(future.result() for future in done)
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+
+
 def apply_plan(plan, config, installer, cache, store, *, source_locked=False):
     _source_config(config, plan['build_roots'])
     pending = [p for p in plan['packages'] if p['action'] != 'installed']
@@ -454,17 +485,19 @@ def apply_plan(plan, config, installer, cache, store, *, source_locked=False):
         size = sum(p['artifact']['unpacked_size'] for p in pending if p['repository'] == repository)
         prefix, _ = install_paths(config['repositories'][repository])
         check_space(prefix, size)
+    items = [package['artifact'] for package in pending]
+    if new_sysroot:
+        check_space(Path(sysroot['destination']).parent, sysroot['artifact']['unpacked_size'])
+        items.append(sysroot['artifact'])
+    paths = _fetch_archives(items, cache, store, config.get('url_prefix', ''))
     archives = {}
     for package in pending:
         item = package['artifact']
-        path = cache.fetch(store, _key(config.get('url_prefix', ''), artifact_key(item, '')), item)
+        path = paths[item['sha256']]
         installer.check(path, config['repositories'][package['repository']])
         archives[item['id']] = path
-    sysroot_archive = None
     if new_sysroot:
-        item = sysroot['artifact']
-        check_space(Path(sysroot['destination']).parent, item['unpacked_size'])
-        sysroot_archive = cache.fetch(store, _key(config.get('url_prefix', ''), artifact_key(item, '')), item)
+        sysroot_archive = paths[sysroot['artifact']['sha256']]
         sysroot_package.check(sysroot_archive, sysroot)
     with ExitStack() as locks:
         # Same whole-build lock as cross-bulk. A source-wave supervisor already

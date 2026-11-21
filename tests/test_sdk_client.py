@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -404,6 +405,88 @@ class ClientTests(unittest.TestCase):
         self.assertEqual([a[0] for a in self.installer.actions],
                          ['check', 'check', 'install', 'install', 'configure'])
         self.assertEqual(len(self.store.calls), 1)
+
+    def _distinct_archive_plan(self):
+        plan = self.plan(sets=['task'])
+        template = plan['packages'][0]
+        plan['packages'] = []
+        payloads = {}
+        for index in range(8):
+            package = deepcopy(template)
+            name = f'pkg{index}'
+            payload = name.encode()
+            digest = hashlib.sha256(payload).hexdigest()
+            package.update(pkgname=name, root=f'devel/{name}@native')
+            package['artifact'].update(id=name, path=f'native/{name}.tgz',
+                                       sha256=digest, size=len(payload))
+            plan['packages'].append(package)
+            payloads[digest] = payload
+
+        return plan, payloads
+
+    def test_fetch_overlaps_four_unique_archives_and_installs_in_plan_order(self):
+        plan, payloads = self._distinct_archive_plan()
+        # Four independent readers must reach the barrier in each wave.
+        gate = threading.Barrier(4, timeout=5)
+        lock = threading.Lock()
+        active = peak = 0
+        requests = []
+
+        def verify(key, size, digest, *, sink):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                requests.append(digest)
+            try:
+                gate.wait()
+                sink.write(payloads[digest])
+            finally:
+                with lock:
+                    active -= 1
+
+        with patch.object(self.store, 'verify', side_effect=verify):
+            apply_plan(plan, self.cfg, self.installer, self.cache, self.store)
+        self.assertEqual(peak, 4)
+        self.assertCountEqual(requests, list(payloads))
+        self.assertEqual([action[1] for action in self.installer.actions if action[0] == 'install'],
+                         [digest + '.tgz' for digest in payloads])
+
+    def test_failed_first_fetch_wave_stops_before_requesting_queued_archives(self):
+        plan, payloads = self._distinct_archive_plan()
+        first = set(list(payloads)[:4])
+        gate = threading.Barrier(4, timeout=5)
+        requests = []
+
+        def denied(key, size, digest, *, sink):
+            requests.append(digest)
+            if digest in first:
+                gate.wait()
+            raise HTTPStatusError(401, 'GET', key)
+
+        with patch.object(self.store, 'verify', side_effect=denied):
+            with self.assertRaises(HTTPStatusError) as caught:
+                apply_plan(plan, self.cfg, self.installer, self.cache, self.store)
+        self.assertEqual(caught.exception.status, 401)
+        self.assertCountEqual(requests, first)
+        self.assertFalse(self.installer.actions)
+
+    def test_shared_digest_requires_matching_size_and_checks_each_role(self):
+        plan = self.plan(sets=['task'])
+        item = deepcopy(plan['packages'][0]['artifact'])
+        plan['sysroot'] = dict(artifact=item, action='download', destination=str(self.root / 'base'))
+        item['size'] += 1
+        with self.assertRaisesRegex(SDKError, 'size'):
+            apply_plan(plan, self.cfg, self.installer, self.cache, self.store)
+        self.assertFalse(self.store.calls)
+        self.assertFalse(self.installer.actions)
+        item['size'] -= 1
+        with patch('emberbsd_sdk.sysroot_package.check', side_effect=SDKError('invalid sysroot')) as check:
+            with self.assertRaisesRegex(SDKError, 'invalid sysroot'):
+                apply_plan(plan, self.cfg, self.installer, self.cache, self.store)
+        check.assert_called_once()
+        self.assertEqual(len(self.store.calls), 1)
+        self.assertEqual([action[0] for action in self.installer.actions], ['check', 'check'])
 
     def test_download_failure_does_not_install_or_build(self):
         self.store.fail = True

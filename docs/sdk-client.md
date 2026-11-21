@@ -407,7 +407,11 @@ establish stage isolation.
 ## Cache and interruption
 
 Archives are stored once as `SHA256.tgz`, with partial downloads as `SHA256.part`.
-The complete selection is downloaded and verified before the first pkg_add.
+The client fetches up to four distinct archives concurrently and shares each
+SHA256 download across the selection. It checks every package for its selected
+repository and checks the base sysroot before the first installation. Installation
+then follows the dependency order. A fetch failure stops scheduling new archives.
+Active transfers finish under the cache lock.
 Sizes and SHA256 come from the signed release; pkg_admin also authenticates each
 package. A displaced current archive causes one metadata reread/replan, only
 when the current release changed. Corruption and an unchanged missing archive
