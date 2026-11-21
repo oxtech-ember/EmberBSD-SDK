@@ -155,6 +155,37 @@ class BootstrapTests(unittest.TestCase):
                         make_relative(self.root, '/producer/sdk', {'os':'Darwin', 'cpu':'arm64'},
                                       '/usr/bin/install_name_tool', '/usr/bin/codesign')
 
+    def test_native_rpath_records_only_the_declared_resolved_path(self):
+        image = self.root / 'program'
+        image.write_bytes(bytes.fromhex('cffaedfe') + bytes(28))
+        dependencies = self.work / 'dependencies'
+        name = '@rpath/libsample.dylib'
+        for directory in ('lib', 'foreign'):
+            folder = dependencies / directory
+            folder.mkdir(parents=True)
+            (folder / 'libsample.dylib').write_text(directory)
+        prefix = '/producer/sdk'
+        for directories, error in [(('lib',), None), (('foreign',), 'declared package dependency'),
+                                   (('lib', 'foreign'), 'ambiguous or missing')]:
+            with self.subTest(directories=directories):
+                image_info = dict(loads=[dict(name=name)], install_name=None, filetype=2,
+                                  rpaths=[prefix + '/' + directory for directory in directories])
+                final = dict(image_info, loads=[dict(name='@loader_path/lib/libsample.dylib')])
+                verified = {}
+                with patch('emberbsd_sdk.bootstrap_bundle.read_macho_runtime',
+                           side_effect=[image_info, final]), patch('emberbsd_sdk.bootstrap_bundle.subprocess.run'):
+                    args = (self.root, prefix, {'os': 'Darwin', 'cpu': 'arm64'},
+                            '/usr/bin/install_name_tool', '/usr/bin/codesign')
+                    options = dict(dependency_root=dependencies, dependency_files={'lib/libsample.dylib'},
+                                   verified_rpaths=verified)
+                    if error:
+                        with self.assertRaisesRegex(SDKError, error):
+                            make_relative(*args, **options)
+                        self.assertEqual(verified, {})
+                    else:
+                        make_relative(*args, **options)
+                        self.assertEqual(verified, {name: {'lib/libsample.dylib'}})
+
     def test_native_rpath_refuses_escaping_directory_link(self):
         image = self.root / 'bin' / 'example'
         image.parent.mkdir()

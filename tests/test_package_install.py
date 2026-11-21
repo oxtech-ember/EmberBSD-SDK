@@ -45,7 +45,7 @@ class InstallTests(unittest.TestCase):
                 payload='installed data', provides=False, install_script=None, install_script_mode=0o755,
                 package_name='fixture-1.0',
                 payload_path='payload', executable=False, build_version=None, deinstall_script=None,
-                sizes=None):
+                sizes=None, requires=None):
         stage = self.work / 'stage'
         stage.mkdir()
         payload_file = stage / payload_path
@@ -61,6 +61,7 @@ class InstallTests(unittest.TestCase):
         (stage / 'INFO').write_text('PKGPATH=devel/fixture\nDISTNAME=fixture-1.0\nLICENSE=2-clause-bsd\n' +
             f'LOCALBASE={prefix}\nCFLAGS=-I{prefix}/include\n' +
             (f'REQUIRES={prefix}/payload\n' if requires_self else '') +
+            (f'REQUIRES={requires}\n' if requires else '') +
             (f'PROVIDES={prefix}/payload\n' if provides else '') +
             (f'OPSYS=NetBSD\nMACHINE_ARCH={arch}\nOS_VERSION=11.0\n' if target else
              f'OPSYS={platform.system()}\nMACHINE_ARCH={_arch(native_cpu())}\nOS_VERSION={platform.release()}\n'))
@@ -694,6 +695,20 @@ class InstallTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('--package-revision and --defer-hooks', result.stderr)
         self.assertFalse(refused.exists())
+
+    @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
+    def test_portable_producer_rejects_rpath_metadata_without_a_matching_load(self):
+        name = '@rpath/libfixture.dylib'
+        package = self.package(payload_path='lib/libfixture.dylib', requires=name)
+        output = self.work / 'refused.tgz'
+        result = subprocess.run([sys.executable, '-B', str(Path(__file__).resolve().parents[1] /
+            'scripts/package-portable.py'), str(package), '--host-prefix', os.environ['EMBERBSD_TEST_HOST_PREFIX'],
+            '--dependency-prefix', str(self.work / 'unused'), '--output', str(output),
+            '--bootstrap-install-name-tool', '/usr/bin/false', '--codesign', '/usr/bin/false'],
+            capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('external package requirement: ' + name, result.stderr)
+        self.assertFalse(output.exists())
 
     @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
     def test_portable_producer_omits_empty_requires_before_real_pkg_add(self):

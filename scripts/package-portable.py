@@ -125,9 +125,11 @@ def main():
             # existing pkgdep contracts; keep all system requirements intact.
             dependencies = [line[8:] for line in lines if line.startswith('@pkgdep ')]
             providers = dependency_files(crypto, args.dependency_prefix, dependencies)
+            verified_rpaths = {}
             make_relative(root, prefix, dict(os='Darwin', cpu=platform.machine()),
                           args.bootstrap_install_name_tool, args.codesign,
-                          dependency_root=args.dependency_prefix, dependency_files=providers)
+                          dependency_root=args.dependency_prefix, dependency_files=providers,
+                          verified_rpaths=verified_rpaths)
             info = database / '+BUILD_INFO'
             updated = []
             for line in info.read_text().splitlines():
@@ -148,6 +150,9 @@ def main():
                                 owner = args.dependency_prefix
                             if not supplied.is_file() or not supplied.resolve().is_relative_to(owner.resolve()):
                                 raise SDKError('local library has no declared package dependency: ' + relative)
+                        elif len(verified_rpaths.get(value, ())) == 1:
+                            # This load resolved to one owned payload or dependency path.
+                            continue
                         elif value.startswith(('/usr/lib/', '/System/Library/')):
                             required.append(value)
                         else:

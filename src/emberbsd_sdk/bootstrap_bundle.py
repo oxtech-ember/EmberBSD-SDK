@@ -189,7 +189,7 @@ def _native_fat_archive(path, host):
 
 
 def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency_root=None,
-                  dependency_files=None):
+                  dependency_files=None, verified_rpaths=None):
     """Rewrite native load commands before release signing, never on a client."""
     changed = []
     dependency_root = dependency_root or root
@@ -233,6 +233,8 @@ def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency
             if not provider.is_file() or not provider.resolve().is_relative_to(
                     root.resolve() if provider == target else dependency_root.resolve()):
                 raise SDKError('bootstrap lacks native library: ' + name)
+            if verified_rpaths is not None and name.startswith('@rpath/'):
+                verified_rpaths.setdefault(name, set()).add(dependency.relative_to(prefix).as_posix())
             new = '@loader_path/' + os.path.relpath(target, path.parent)
             if new != name:
                 options += ['-change', name, new]
