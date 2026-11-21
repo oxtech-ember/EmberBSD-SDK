@@ -232,7 +232,7 @@ class Value:
 
 class Emitter:
     def __init__(self, name, current_node, nodes, slots, mouse_name,
-                 coordinates=None,
+                 coordinates=None, signals=None,
                  geometry=None, locals_=None, checked_math=True):
         self.checked_math = checked_math
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
@@ -242,6 +242,7 @@ class Emitter:
         self.lines, self.local_types, self.temp = [], {}, 0
         self.geometry = geometry or {}
         self.coordinates = coordinates or {}
+        self.signals = signals or {}
         for key, value in (locals_ or {}).items():
             self.local_types[key] = value if isinstance(value, (dict, str)) else {
                 "type": "int", "code": str(value)}
@@ -398,6 +399,8 @@ class Emitter:
             return Value(f"(({condition.c}) ? ({yes.c}) : ({no.c}))", yes.type)
         if op == "call":
             callee, *args = expr.args
+            if self.member_path(callee) in self.signals:
+                self.fail("a root signal call must be a standalone statement")
             if callee.op == "member" and callee.value == "mapToItem" and len(args) == 3:
                 from_name = callee.args[0]
                 to_name, x, y = args
@@ -598,7 +601,17 @@ class Emitter:
             value = self.integer_math(current, statement.args[0][0], right)
             self.lines.append(prefix + f"if (eqml_ui_set_coordinate(ui, {spec['node']}, {spec['axis']}, {value.c}, {spec['duration_ms']}) != 0) return -1;")
         elif statement.op == "expr":
-            value = self.expression(statement.args[0])
+            expr = statement.args[0]
+            if expr.op == "call":
+                path = self.member_path(expr.args[0])
+                if path in self.signals:
+                    if len(expr.args) != 1:
+                        self.fail("root signal calls take no arguments")
+                    if expr.args[0].args[0].value == self.mouse_name:
+                        self.fail("mouse event parameter shadows the root id")
+                    self.lines.append(prefix + f'eqml_ui_emit(ui, "{self.signals[path]}");')
+                    return
+            value = self.expression(expr)
             self.lines.append(prefix + f"(void)({value.c});")
         else:
             self.fail(f"unsupported statement {statement.op}")
@@ -614,12 +627,12 @@ class Emitter:
 
 
 def compile_handler(source, name, *, current_node, nodes, slots, allow_mouse=True,
-                    coordinates=None):
+                    coordinates=None, signals=None):
     tree, mouse_name = Parser(source).handler()
     if mouse_name is not None and not allow_mouse:
         raise QmlScriptError("this signal has no mouse event parameter")
     return Emitter(name, current_node, nodes, slots, mouse_name,
-                   coordinates=coordinates).compile(tree)
+                   coordinates=coordinates, signals=signals).compile(tree)
 
 
 @dataclass(frozen=True)

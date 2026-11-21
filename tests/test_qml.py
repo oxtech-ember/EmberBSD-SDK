@@ -11,11 +11,46 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from emberbsd_sdk.qml import QmlError, compile_scene
+from emberbsd_sdk.qml import QmlError, compile_scene, compile_scene_with_header
 from emberbsd_sdk.qml_image import BitmapAssets
 
 
 class QmlCompilerTest(unittest.TestCase):
+    def test_root_signal_calls(self):
+        def compile_signals(fields, body):
+            return compile_scene("import QtQuick\nRectangle { id: lab; width: 20; height: 20; "
+                                 "MouseArea { id: button; anchors.fill: parent; onClicked: "
+                                 + body + " }; " + fields + " }")
+
+        output = compile_signals("signal refreshRequested(); signal resetRequested()",
+                                 '{ lab.refreshRequested(); if (lab.visible) lab.resetRequested() }')
+        self.assertIn('eqml_ui_emit(ui, "refreshRequested");', output)
+        self.assertIn('eqml_ui_emit(ui, "resetRequested");', output)
+        self.assertNotIn("eqml_ui_log", output)
+        self.assertNotIn("eqml_ui_emit", compile_signals("signal refreshRequested()",
+                                                        'console.log("refreshRequested")'))
+        for fields, body in (
+            ("signal refreshRequested(int count)", "lab.refreshRequested()"),
+            ("signal refreshRequested(); signal refreshRequested()", "lab.refreshRequested()"),
+            ("signal refreshRequested()", "lab.refreshRequested(1)"),
+            ("signal refreshRequested()", "lab.refreshRequest()"),
+            ("signal refreshRequested()", "button.refreshRequested()"),
+            ("signal refreshRequested()", "refreshRequested()"),
+            ("signal refreshRequested()", "{ if (lab.refreshRequested()) lab.refreshRequested() }"),
+            ("signal refreshRequested()", "(lab) => lab.refreshRequested()"),
+            ("signal button()", "lab.button()"),
+            ("signal if()", "lab.if()"),
+            ("signal widthChanged()", "lab.widthChanged()"),
+            ("signal mapToItem()", "lab.mapToItem()"),
+            ("signal levelChanged(); property int level: 1", "lab.levelChanged()"),
+            ("property int level: 1; signal level()", "lab.level()"),
+            ("Item { signal refreshRequested() }", "lab.refreshRequested()"),
+        ):
+            with self.subTest(fields=fields, body=body), self.assertRaises(QmlError):
+                compile_signals(fields, body)
+        with self.assertRaisesRegex(QmlError, "root id"):
+            compile_scene("import QtQuick\nItem { width: 1; height: 1; signal go() }")
+
     def test_image_decoding_and_placement(self):
         header = bytes.fromhex("89504e470d0a1a0a 0000000d 49484452") + struct.pack(
             ">IIBBBBBI", 2, 1, 8, 6, 0, 0, 0, 0)
@@ -449,6 +484,70 @@ Rectangle { width: 20; height: 10
     def test_reject_unsupported_qtquick_import_major(self):
         with self.assertRaisesRegex(QmlError, "only QtQuick 2.0"):
             compile_scene("import QtQuick 6.0\nRectangle { width: 1; height: 1 }")
+
+    def test_header_matches_compiled_node_order_and_text_slots(self):
+        source = """import QtQuick
+Item { id: page; width: 32; height: 32
+    Rectangle { id: cursor; z: 2; Behavior on x { NumberAnimation { duration: 321 } } }
+    MouseArea { id: controls; anchors.fill: parent; property string reserved }
+    Text { id: fixed; text: "literal" }
+    Text { id: value }
+}"""
+        scene, header = compile_scene_with_header(source, "myScene")
+        self.assertEqual(scene, compile_scene(source, "myScene"))
+        for name, value in [("node_page", 0), ("node_controls", 1), ("node_fixed", 2),
+                            ("node_value", 3), ("text_value", 1), ("node_cursor", 4),
+                            ("duration_x_cursor", 321)]:
+            self.assertIn(f"eqml_myScene_{name} = {value},", header)
+        self.assertNotIn("text_fixed", header)
+        self.assertNotIn("duration_y_cursor", header)
+        self.assertNotIn("eqml_myScene_node_", scene)
+        other = compile_scene_with_header(source, "myscene")[1]
+        self.assertNotEqual(header.splitlines()[1], other.splitlines()[1])
+        static = compile_scene_with_header("import QtQuick; Item { width: 2; height: 1 }")[1]
+        self.assertIn("extern const struct eqml_scene eqml_app;", static)
+        self.assertNotIn("enum {", static)
+
+    def test_cli_header_independent_updates_and_aliases(self):
+        with tempfile.TemporaryDirectory() as work:
+            directory = Path(work)
+            source, output, header = (directory / name for name in ("App.qml", "app.c", "app.h"))
+            content = "import QtQuick; Item { width: 2; height: 1; MouseArea { id: area } }"
+            source.write_text(content)
+            def run(dest, interface):
+                return subprocess.run([sys.executable, str(ROOT / "scripts/qml-compile.py"), str(source),
+                                       "-o", str(dest), "--header", str(interface)], capture_output=True)
+            def stamp(path):
+                info = path.stat()
+                return (info.st_ino, info.st_mtime_ns)
+            self.assertEqual(run(output, header).returncode, 0)
+            header.chmod(0o600)
+            before = stamp(output), stamp(header)
+            self.assertEqual(run(output, header).returncode, 0)
+            self.assertEqual((stamp(output), stamp(header)), before)
+            source.write_text(content.replace("width: 2", "width: 3"))
+            self.assertEqual(run(output, header).returncode, 0)
+            self.assertNotEqual(stamp(output), before[0])
+            self.assertEqual(stamp(header), before[1])
+            changed_scene = stamp(output)
+            source.write_text(content.replace("width: 2", "width: 3").replace("id: area", "id: button"))
+            self.assertEqual(run(output, header).returncode, 0)
+            self.assertEqual(stamp(output), changed_scene)
+            self.assertNotEqual(stamp(header), before[1])
+            self.assertEqual(stat.S_IMODE(header.stat().st_mode), 0o600)
+            saved = output.read_bytes(), header.read_bytes(), source.read_bytes()
+            alias = directory / "hardlink"
+            alias.hardlink_to(source)
+            symlink = directory / "symlink"
+            symlink.symlink_to(output)
+            for dest, interface in [(source, header), (output, source), (output, output),
+                                    (output, alias), (output, symlink)]:
+                self.assertNotEqual(run(dest, interface).returncode, 0)
+                self.assertEqual((output.read_bytes(), header.read_bytes(), source.read_bytes()), saved)
+            source.write_text(content.replace("width: 2", "width: 4"))
+            for invalid in (directory, directory / "missing" / "header.h"):
+                self.assertNotEqual(run(output, invalid).returncode, 0)
+                self.assertEqual(output.read_bytes(), saved[0])
 
     def test_cli_keeps_unchanged_output_and_selected_permissions(self):
         with tempfile.TemporaryDirectory() as work:

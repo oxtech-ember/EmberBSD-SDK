@@ -84,6 +84,7 @@ class Parser:
         self.index = 0
         self.last = self.current
         self.ids = set()
+        self.root_signals = set()
         self.static_bools = {}
         self.static_bool_uses = set()
 
@@ -305,7 +306,20 @@ class Parser:
                 if self.current.text == ";":
                     self.take(";")
                 continue
-            if key == "property":
+            if key == "signal":
+                if depth:
+                    raise start.error("application signals must be declared on the root")
+                token = self.name()
+                signal = token.text
+                if (not re.fullmatch(r"[a-z][A-Za-z0-9_]*", signal) or
+                    signal in RESERVED or signal in SIGNAL_KEYWORDS or signal in self.root_signals):
+                    raise token.error(f"invalid or duplicate root signal {signal}")
+                self.take("(")
+                if self.current.text != ")":
+                    raise self.current.error("root signals take no parameters")
+                self.take(")")
+                self.root_signals.add(signal)
+            elif key == "property":
                 type_token = self.name()
                 token = self.name()
                 property_name = token.text
@@ -422,7 +436,18 @@ class Parser:
             for key in ("width", "height"):
                 if key not in fields:
                     raise end.error(f"{kind} requires {key}")
-            ambiguous = self.ids.intersection(properties | self.static_bools)
+            root_properties = properties.keys() | self.static_bools.keys()
+            if self.root_signals:
+                if "id" not in fields:
+                    raise end.error("root signal declarations require a root id")
+                members = ITEM_PROPERTIES | root_properties
+                if kind == "Rectangle":
+                    members |= RECTANGLE_PROPERTIES
+                occupied = self.ids | members | ITEM_CALLS | {name + "Changed" for name in members}
+                conflicts = self.root_signals & occupied
+                if conflicts:
+                    raise end.error(f"root signal name already in use: {min(conflicts)}")
+            ambiguous = self.ids.intersection(root_properties)
             if ambiguous:
                 raise end.error(f"object id also names a root property: {min(ambiguous)}")
         if kind in ("Grid", "Row"):
@@ -462,6 +487,33 @@ ANCHORS = {"anchors.horizontalCenter": "parent.horizontalCenter",
            "anchors.verticalCenter": "parent.verticalCenter", "anchors.centerIn": "parent"}
 RESERVED = {"id", "parent", "width", "height", "color", "anchors", "property", "import",
             "int", "x", "y", "z", "text", "font", "true", "false", "null", "undefined"}
+
+
+# These QML / JavaScript tokens cannot declare a signal name.
+SIGNAL_KEYWORDS = set("""
+as break case catch class const continue debugger default delete do else enum export
+extends finally for from function get if implements in instanceof interface let new of
+on package private protected public readonly required return set signal static super
+switch this throw try typeof var void while with
+""".split())
+
+# Public Item / Rectangle names already used by Qt. A new application signal
+# must not capture a call or property notification belonging to these types.
+ITEM_PROPERTIES = set("""
+activeFocus activeFocusOnTab anchors antialiasing baseline baselineOffset bottom children
+childrenRect clip containmentMask data enabled focus focusPolicy height horizontalCenter
+implicitHeight implicitWidth layer left objectName opacity palette parent resources right
+rotation scale smooth state states top transform transformOrigin transformOriginPoint
+transitions verticalCenter visible visibleChildren width x y z
+""".split())
+RECTANGLE_PROPERTIES = set("""
+border bottomLeftRadius bottomRightRadius color gradient radius topLeftRadius topRightRadius
+""".split())
+ITEM_CALLS = set("""
+childAt contains destroy destroyed dumpItemTree ensurePolished forceActiveFocus grabToImage
+mapFromGlobal mapFromItem mapToGlobal mapToItem nextItemInFocusChain paletteCreated
+update windowChanged
+""".split())
 
 
 def check_anchors(fields, token):
@@ -790,7 +842,8 @@ def _interactive_opacity(raw, nodes, ids):
     return ids[area_name], int((1.0 - opacity) * 255 + 0.5), 0
 
 
-def interactive_scene(root, properties, name, bitmap_lines):
+def interactive_scene(root, properties, name, bitmap_lines, bindings, root_signals):
+    signal_paths = {f'{root.fields["id"]}.{signal}': signal for signal in root_signals}
     if properties:
         raise QmlError("integer model properties cannot be combined with an interactive scene")
     nodes, parents = _interactive_nodes(root)
@@ -897,7 +950,7 @@ def interactive_scene(root, properties, name, bitmap_lines):
                 allow_mouse = canonical not in ("onEntered", "onExited", "onTextChanged")
                 callbacks.append(compile_handler(handler.source, function,
                     current_node=index, nodes=ids, slots=local_slots,
-                    allow_mouse=allow_mouse, coordinates=coordinates))
+                    allow_mouse=allow_mouse, coordinates=coordinates, signals=signal_paths))
                 dispatch[(index, signal)] = function
                 signal_masks[index].add(signal)
             except QmlScriptError as error:
@@ -1105,6 +1158,14 @@ def interactive_scene(root, properties, name, bitmap_lines):
                 min_x, max_x, min_y, max_y,
                 ", .bitmap = &" + fields["bitmap"] if item.kind == "Image" else ""))
 
+    if bindings is not None:
+        for ident, index in ids.items():
+            bindings.append((f"node_{ident}", index))
+            if index in text_slot:
+                bindings.append((f"text_{ident}", text_slot[index]))
+            for axis, duration in nodes[index].behaviors.items():
+                bindings.append((f"duration_{axis}_{ident}", duration))
+
     _check_layout_cycles(parents, bottom_dependencies)
     lines = ['/* Generated by EmberBSD qml-compile. */', '#include "eqml.h"',
              '#include "eqml_input.h"', '#include <errno.h>', '#include <stdio.h>',
@@ -1136,6 +1197,26 @@ def interactive_scene(root, properties, name, bitmap_lines):
 
 def compile_scene(source, name="app", *, assets=None):
     """Return a complete C99 translation unit; raise QmlError for unsupported input."""
+    return _compile_scene(source, name, assets, None)
+
+
+def compile_scene_with_header(source, name="app", *, assets=None):
+    """Return the C translation unit and its C application bindings header."""
+    bindings = []
+    result = _compile_scene(source, name, assets, bindings)
+    guard = f"EMBERBSD_QML_SCENE_{name}_H"
+    header = ["/* Generated by EmberBSD qml-compile. */", f"#ifndef {guard}", f"#define {guard}",
+              "", '#include "eqml.h"', "", "#ifdef __cplusplus", 'extern "C" {', "#endif",
+              f"extern const struct eqml_scene eqml_{name};", "#ifdef __cplusplus", "}", "#endif", ""]
+    if bindings:
+        header.append("enum {")
+        header.extend(f"    eqml_{name}_{symbol} = {value}," for symbol, value in bindings)
+        header.extend(["};", ""])
+    header.extend([f"#endif /* {guard} */", ""])
+    return result, "\n".join(header)
+
+
+def _compile_scene(source, name, assets, bindings):
     if not re.fullmatch(r"[a-z][A-Za-z0-9_]*", name):
         raise QmlError("scene name must begin with a lowercase ASCII letter and contain only identifier characters")
     parser = Parser(source)
@@ -1161,7 +1242,7 @@ def compile_scene(source, name="app", *, assets=None):
     if interactive:
         if parser.static_bools:
             raise QmlError("root boolean layout properties are static-only and cannot be used in interactive scenes")
-        return interactive_scene(root, properties, name, bitmap_lines)
+        return interactive_scene(root, properties, name, bitmap_lines, bindings, parser.root_signals)
     unused_bools = parser.static_bools.keys() - parser.static_bool_uses
     if unused_bools:
         raise QmlError("root boolean properties must select a supported static Row layout direction")

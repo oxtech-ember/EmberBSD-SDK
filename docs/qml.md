@@ -18,6 +18,25 @@ It exports `const struct eqml_scene eqml_app`; `--name dashboard` exports
 [weather example](https://github.com/oxtech-ember/EmberBSD-Examples/tree/main/desktop/mosaico-weather)
 exercises cross-linking, model updates and the RGB565 wsdisplay backend.
 
+## Using a scene from C
+
+Add `--header dashboard.h --name dashboard` to emit a header alongside the
+scene C file. Include it in the controller and link the generated C file and
+Runtime. The header declares `eqml_dashboard`. For an interactive scene it
+also exports integer constants for the following source-level bindings.
+
+| QML object | Generated constant | Runtime use |
+| --- | --- | --- |
+| Node with `id: marker` | `eqml_dashboard_node_marker` | Identify the node for visibility, coordinates or input. |
+| Mutable `Text { id: reading }` | `eqml_dashboard_text_reading` | Pass the slot to `eqml_ui_set` to change the label. |
+| Declared `Behavior on x` of `marker` | `eqml_dashboard_duration_x_marker` | Pass the duration with the node and `EQML_AXIS_X` to `eqml_ui_set_coordinate`. The y axis uses `duration_y_`. |
+
+A `Text` with an initial literal becomes mutable when a compiled handler
+assigns its text. Omit the initial `text` field to declare a label that the
+controller fills. Static scenes export the scene declaration alone.
+Regenerate both outputs together when the scene changes. The compiler keeps
+the modification time of each file whose contents already match.
+
 ## Static profile
 
 | Construct | Accepted values |
@@ -63,6 +82,23 @@ defaults to true and accepts a boolean literal. Hiding a parent also hides its
 children. Interactive rectangles accept literal opacity from zero through one
 and the existing `containsPress` binding. A transparent visible item can still
 receive pointer events.
+
+An identified root can declare parameterless application signals. A handler can
+emit one with a standalone call qualified by the root id, as in this example:
+
+```qml
+Rectangle {
+    id: panel
+    width: 200; height: 100
+    signal refreshRequested()
+    MouseArea { anchors.fill: parent; onClicked: panel.refreshRequested() }
+}
+```
+
+The compiler resolves the name at build time. The application receives the
+signal through its Runtime signal handler. `console.log()` uses the separate
+diagnostic callback. Signal names must be unique within the supported scene
+namespace. Signals have no arguments or return value.
 
 Identified `Rectangle` nodes also support `x` and `y` reads and assignments in
 handlers. `+=` uses checked signed 32-bit arithmetic. An axis with no anchor
