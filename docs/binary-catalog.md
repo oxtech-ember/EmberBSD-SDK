@@ -109,7 +109,8 @@ Source-only descendants of that reused node are not required unless independentl
 selected; other missing runtime packages still fail. A different source profile does not
 replace an unchanged binary's signed dependency edges. New archives still need
 their resolved runtime providers. Changed roots retain their artifact
-IDs, and retained reverse consumers are checked against replacements. Repository
+IDs. Package version patterns are checked for changed archives and their direct
+consumers. Target library paths are also checked for transitive consumers. Repository
 platform identity cannot change. Package downgrades are refused.
 The resulting directory contains new packages and all small indexes, without
 copies of the old payloads; publish it with the existing sparse-release options.

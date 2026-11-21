@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_binary_catalog import BinaryReleaseFixture, graph
+from emberbsd_sdk import binary_release
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.binary_release import load_catalogs
 from emberbsd_sdk.jsonio import json_bytes
@@ -231,6 +232,39 @@ class BinaryCatalogUpdateTests(BinaryReleaseFixture):
         self.assertEqual(old_lib['id'], 'arm64-' + hashlib.sha256(
             b'target:devel/lib').hexdigest()[:24])
         self.assertFalse((self.work / 'incompatible').exists())
+
+    def test_retained_transitive_consumer_rechecks_paths_and_reuses_version_matches(self):
+        value = graph()
+        app = next(node for node in value['nodes'] if node['id'] == 'target:net/app')
+        app['dependencies'] = [dict(id='target:devel/lib-devel', kind='runtime')]
+        self.graph_path.write_bytes(json_bytes(value))
+        path = '/usr/pkg/lib/libshared.so.1'
+        repo = self.repository(
+            app_options=dict(depends=('lib-devel>=1',), extra_build_info=f'REQUIRES={path}\n'),
+            lib_options=dict(extra_build_info=f'PROVIDES={path}\n'))
+        repo['sets'] = []
+        repo['roots'] = ['net/app']
+        self.compose()
+        current = self.work / 'release'
+
+        lib = next(node for node in value['nodes'] if node['id'] == 'target:devel/lib')
+        repo['roots'] = ['devel/lib']
+        for version, provides in [('2.0', path), ('3.0', '/usr/pkg/lib/libshared.so.2')]:
+            lib['version'] = version
+            self.graph_path.write_bytes(json_bytes(value))
+            repo['packages'] = {'target:devel/lib': self.package(
+                'devel/lib', version=version, extra_build_info=f'PROVIDES={provides}\n')}
+            self.spec.update(release_id='replacement-' + version, created_at=2)
+            output = self.work / version
+            with patch.object(binary_release, '_matches', wraps=binary_release._matches) as match:
+                if provides == path:
+                    self.compose(current=current, output=output)
+                else:
+                    with self.assertRaisesRegex(SDKError, 'runtime file absent'):
+                        self.compose(current=current, output=output)
+            checked = [call.args[1:] for call in match.call_args_list]
+            self.assertIn(('lib>=1', 'lib-' + version), checked)
+            self.assertNotIn(('lib-devel>=1', 'lib-devel-1.0'), checked)
 
     def test_missing_runtime_closure_and_wrong_platform_are_rejected(self):
         repo = self.repository()

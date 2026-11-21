@@ -303,13 +303,15 @@ def _prepare_repository(crypto, spec, ports_root, sources, trust, previous=None,
     return spec, sets, entries
 
 
-def _check_runtime(crypto, entries, role, selected):
+def _check_runtime(crypto, entries, role, changed_archives, affected):
     """Check affected consumers against fixed producer edges, using pkg_tools versions."""
     match_cache = {}
     for identity, item in entries.items():
-        if identity not in selected:
+        # Package patterns only see the names on this consumer's direct edges.
+        dependencies = item['node']['dependencies']
+        if identity not in changed_archives and changed_archives.isdisjoint(dependencies):
             continue
-        providers = [entries[child]['name'] for child in item['node']['dependencies']]
+        providers = [entries[child]['name'] for child in dependencies]
         for pattern in item['record'].get('DEPENDS', []):
             count = 0
             for provider in providers:
@@ -334,7 +336,7 @@ def _check_runtime(crypto, entries, role, selected):
             if not changed:
                 break
         for key, item in entries.items():
-            if key not in selected:
+            if key not in affected:
                 continue
             for path in item['record'].get('REQUIRES', []):
                 if path.startswith('/usr/pkg/') and path not in provided[key]:
@@ -465,7 +467,7 @@ def compose(crypto, spec, ports_root, output, identity, trust, *, current=None,
                 if extra <= affected:
                     break
                 affected.update(extra)
-            _check_runtime(crypto, checks, 'host' if repo['host'] else 'target', affected)
+            _check_runtime(crypto, checks, 'host' if repo['host'] else 'target', changed, affected)
             summary = _summary_bytes(records[root] for root in sorted(records))
             (directory / 'pkg_summary.gz').write_bytes(gzip.compress(summary, mtime=0))
             summary_id = repo['id'] + '-summary'
