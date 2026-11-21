@@ -27,6 +27,22 @@ class Token:
         return QmlError(f"{self.line}:{self.column}: {message}")
 
 
+@dataclass
+class Item:
+    kind: str
+    fields: dict
+    children: list
+
+
+# The opaque basic SVG color keywords. Qt's "green" is distinct from "lime".
+BASIC_COLORS = {
+    "aqua": "#00ffff", "black": "#000000", "blue": "#0000ff", "fuchsia": "#ff00ff",
+    "gray": "#808080", "green": "#008000", "lime": "#00ff00", "maroon": "#800000",
+    "navy": "#000080", "olive": "#808000", "purple": "#800080", "red": "#ff0000",
+    "silver": "#c0c0c0", "teal": "#008080", "white": "#ffffff", "yellow": "#ffff00",
+}
+
+
 def tokens(source):
     pos, line, column = 0, 1, 1
     while pos < len(source):
@@ -50,6 +66,7 @@ class Parser:
         self.stream = iter(tokens(source))
         self.current = next(self.stream)
         self.last = self.current
+        self.ids = set()
 
     def take(self, expected=None):
         token = self.current
@@ -71,6 +88,15 @@ class Parser:
             self.take(".")
             parts.append(self.name().text)
         return ".".join(parts)
+
+    def object_id(self):
+        token = self.name()
+        if not re.fullmatch(r"[a-z][A-Za-z0-9_]*", token.text) or token.text in RESERVED:
+            raise token.error("invalid object id")
+        if token.text in self.ids:
+            raise token.error(f"duplicate object id {token.text}")
+        self.ids.add(token.text)
+        return token.text
 
     def integer(self, low, high):
         token = self.take()
@@ -94,8 +120,9 @@ class Parser:
     def color(self):
         token = self.current
         rgb = self.string()
+        rgb = BASIC_COLORS.get(rgb.lower(), rgb)
         if not re.fullmatch(r"#[a-fA-F0-9]{6}", rgb):
-            raise token.error("expected an opaque #RRGGBB color")
+            raise token.error("expected an opaque #RRGGBB or basic SVG color")
         r, g, b = bytes.fromhex(rgb[1:])
         return (r >> 3) << 11 | (g >> 2) << 5 | (b >> 3)
 
@@ -104,6 +131,12 @@ class Parser:
             self.take(";")
         elif self.current.text not in ("}", "") and self.current.line == self.last.line:
             raise self.current.error("separate fields with a newline or semicolon")
+
+    def parent_anchor(self, key, start):
+        path = self.path()
+        if path != ANCHORS[key]:
+            raise start.error(f"{key} requires {ANCHORS[key]}")
+        return path
 
     def binding(self):
         # One integer reference, with optional literal text on either side.
@@ -138,44 +171,50 @@ class Parser:
             self.take(":")
             if key == "text":
                 value = self.binding()
+            elif key == "id":
+                value = self.object_id()
             elif key in ("x", "y"):
                 value = self.integer(-32768, 32767)
+            elif key == "z":
+                value = self.integer(-(2**31), 2**31 - 1)
             elif key == "color":
                 value = self.color()
             elif key == "font.pixelSize":
                 value = self.integer(7, 64)
             elif key in ANCHORS:
-                value = self.path()
-                if value != ANCHORS[key]:
-                    raise start.error(f"{key} requires {ANCHORS[key]}")
+                value = self.parent_anchor(key, start)
             else:
                 raise start.error(f"unsupported Text field {key}")
             fields[key] = value
             self.finish_field()
         end = self.take("}")
-        hc = "anchors.horizontalCenter" in fields
-        vc = "anchors.verticalCenter" in fields
-        both = "anchors.centerIn" in fields
-        if (both and (hc or vc)) or ((both or hc) and "x" in fields) or ((both or vc) and "y" in fields):
-            raise end.error("overlapping anchor and position constraints")
-        return fields
+        check_anchors(fields, end)
+        return Item("Text", fields, [])
 
-    def scene(self):
-        self.take("import")
-        self.take("QtQuick")
-        self.finish_field()
-        self.take("Rectangle")
+    def container(self, kind, depth, properties):
+        if depth > 64:
+            raise self.current.error("at most 64 nested containers are supported")
         self.take("{")
-        fields, properties, items = {}, {}, []
+        fields, children = {}, []
         while self.current.text != "}":
             start = self.name()
             key = start.text
-            if key == "Text":
-                items.append(self.text_item())
+            while self.current.text == ".":
+                self.take(".")
+                key += "." + self.name().text
+            if key in ("Text", "Rectangle", "Grid"):
+                if kind == "Grid" and key != "Rectangle":
+                    raise start.error("Grid places fixed-size Rectangle children")
+                item = self.text_item() if key == "Text" else self.container(key, depth + 1, properties)
+                if kind == "Grid" and ("x" in item.fields or "y" in item.fields):
+                    raise start.error("Grid determines the x and y of its children")
+                children.append(item)
                 if self.current.text == ";":
                     self.take(";")
                 continue
             if key == "property":
+                if depth:
+                    raise start.error("integer properties belong to the root Rectangle")
                 self.take("int")
                 token = self.name()
                 key = token.text
@@ -185,35 +224,94 @@ class Parser:
                 properties[key] = self.integer(-(2**31), 2**31 - 1)
             else:
                 if key in fields:
-                    raise start.error(f"duplicate Rectangle field {key}")
+                    raise start.error(f"duplicate {kind} field {key}")
+                if self.current.text == "{":
+                    raise start.error(f"unsupported object or grouped property {key}")
                 self.take(":")
                 if key == "id":
-                    token = self.name()
-                    if not re.fullmatch(r"[a-z][A-Za-z0-9_]*", token.text) or token.text in RESERVED:
-                        raise token.error("invalid root id")
-                    fields[key] = token.text
-                elif key in ("width", "height"):
-                    fields[key] = self.integer(1, 4096)
-                elif key == "color":
+                    fields[key] = self.object_id()
+                elif kind == "Rectangle" and key in ("width", "height"):
+                    fields[key] = self.integer(0 if depth else 1, 4096)
+                elif kind == "Rectangle" and key == "color":
                     fields[key] = self.color()
+                elif kind == "Grid" and key == "columns":
+                    fields[key] = self.integer(1, 4096)
+                elif kind == "Grid" and key == "spacing":
+                    fields[key] = self.integer(0, 4096)
+                elif kind == "Grid" and key in ANCHORS:
+                    fields[key] = self.parent_anchor(key, start)
+                elif depth and key in ("x", "y"):
+                    fields[key] = self.integer(-32768, 32767)
+                elif depth and key == "z":
+                    fields[key] = self.integer(-(2**31), 2**31 - 1)
                 else:
-                    raise start.error(f"unsupported Rectangle field {key}")
+                    raise start.error(f"unsupported {kind} field {key}")
             self.finish_field()
         end = self.take("}")
+        if depth == 0:
+            for key in ("width", "height"):
+                if key not in fields:
+                    raise end.error(f"Rectangle requires {key}")
+            ambiguous = self.ids.intersection(properties)
+            if ambiguous:
+                raise end.error(f"object id also names an integer property: {min(ambiguous)}")
+        if kind == "Grid":
+            check_anchors(fields, end)
+            place_grid(fields, children, end)
+        return Item(kind, fields, children)
+
+    def scene(self):
+        self.take("import")
+        self.take("QtQuick")
+        self.finish_field()
+        self.take("Rectangle")
+        properties = {}
+        root = self.container("Rectangle", 0, properties)
         if self.current.text:
             raise self.current.error("unexpected content after the scene")
-        for key in ("width", "height"):
-            if key not in fields:
-                raise end.error(f"Rectangle requires {key}")
-        if fields.get("id") in properties:
-            raise end.error("root id also names an integer property")
-        return fields, properties, items
+        return root, properties
 
 
 ANCHORS = {"anchors.horizontalCenter": "parent.horizontalCenter",
            "anchors.verticalCenter": "parent.verticalCenter", "anchors.centerIn": "parent"}
 RESERVED = {"id", "parent", "width", "height", "color", "anchors", "property", "import",
-            "int", "x", "y", "text", "font", "true", "false", "null", "undefined"}
+            "int", "x", "y", "z", "text", "font", "true", "false", "null", "undefined"}
+
+
+def check_anchors(fields, token):
+    hc = "anchors.horizontalCenter" in fields
+    vc = "anchors.verticalCenter" in fields
+    both = "anchors.centerIn" in fields
+    if (both and (hc or vc)) or ((both or hc) and "x" in fields) or ((both or vc) and "y" in fields):
+        raise token.error("overlapping anchor and position constraints")
+
+
+def place_grid(fields, children, end):
+    cells = [child.fields for child in children
+             if child.fields.get("width", 0) and child.fields.get("height", 0)]
+    if not cells:
+        return
+    columns = fields.get("columns", 4)
+    spacing = fields.get("spacing", 0)
+    # Qt includes the first trailing empty column when the first row is short.
+    widths = [0] * min(columns, len(cells) + 1)
+    heights = [0] * ((len(cells) + columns - 1) // columns)
+    for index, cell in enumerate(cells):
+        row, col = divmod(index, columns)
+        widths[col] = max(widths[col], cell["width"])
+        heights[row] = max(heights[row], cell["height"])
+    def offsets(sizes):
+        result = [0]
+        for size in sizes[:-1]:
+            result.append(result[-1] + size + spacing)
+        return result
+    xs, ys = offsets(widths), offsets(heights)
+    fields["width"], fields["height"] = xs[-1] + widths[-1], ys[-1] + heights[-1]
+    if max(fields["width"], fields["height"]) > 4096:
+        raise end.error("implicit Grid size exceeds 4096 pixels")
+    for index, cell in enumerate(cells):
+        row, col = divmod(index, columns)
+        cell["x"], cell["y"] = xs[col], ys[row]
 
 
 def c_string(text):
@@ -221,7 +319,7 @@ def c_string(text):
     return json.dumps(text).replace("?", r"\?")
 
 
-def text_initializer(fields, root_id, indices):
+def text_initializer(fields, root_id, indices, x, y, parent_width, parent_height):
     prefix, reference, suffix = fields.get("text", ("", None, ""))
     index = -1
     if reference is not None:
@@ -236,32 +334,64 @@ def text_initializer(fields, root_id, indices):
         anchors.append("EQML_HCENTER")
     if "anchors.centerIn" in fields or "anchors.verticalCenter" in fields:
         anchors.append("EQML_VCENTER")
-    return (f'    {{ .prefix = {c_string(prefix)}, .suffix = {c_string(suffix)}, .binding = {index},\n'
-            f'      .x = {fields.get("x", 0)}, .y = {fields.get("y", 0)}, '
+    return (f'    {{ .kind = EQML_TEXT, .data.text = {{\n'
+            f'      .prefix = {c_string(prefix)}, .suffix = {c_string(suffix)}, .binding = {index},\n'
+            f'      .x = {x}, .y = {y}, '
             f'.color = 0x{fields.get("color", 0):04x}, '
-            f'.pixel_size = {fields.get("font.pixelSize", 14)}, .anchors = {" | ".join(anchors) or "0"} }},')
+            f'.pixel_size = {fields.get("font.pixelSize", 14)}, .anchors = {" | ".join(anchors) or "0"},\n'
+            f'      .parent_width = {parent_width}, .parent_height = {parent_height} }} }},')
+
+
+def paint_items(root, indices):
+    def visit(item, x, y, parent_width, parent_height):
+        fields = item.fields
+        x += fields.get("x", 0)
+        y += fields.get("y", 0)
+        if item.kind == "Text":
+            yield text_initializer(fields, root.fields.get("id"), indices, x, y, parent_width, parent_height)
+            return
+        width, height = fields.get("width", 0), fields.get("height", 0)
+        if item.kind == "Grid":
+            if "anchors.centerIn" in fields or "anchors.horizontalCenter" in fields:
+                x += (parent_width + 1) // 2 - (width + 1) // 2
+            if "anchors.centerIn" in fields or "anchors.verticalCenter" in fields:
+                y += (parent_height + 1) // 2 - (height + 1) // 2
+        children = sorted(item.children, key=lambda child: child.fields.get("z", 0))
+        # Qt stacks siblings as subtrees. Negative-z children precede their parent.
+        split = next((i for i, child in enumerate(children) if child.fields.get("z", 0) >= 0), len(children))
+        for child in children[:split]:
+            yield from visit(child, x, y, width, height)
+        # The renderer already clears the scene to the root color before painting.
+        if item.kind == "Rectangle" and width and height and (item is not root or split):
+            yield (f'    {{ .kind = EQML_RECT, .data.rect = {{ .x = {x}, .y = {y}, '
+                   f'.width = {width}, .height = {height}, .color = 0x{fields.get("color", 0xffff):04x} }} }},')
+        for child in children[split:]:
+            yield from visit(child, x, y, width, height)
+
+    return list(visit(root, 0, 0, 0, 0))
 
 
 def compile_scene(source, name="app"):
     """Return a complete C99 translation unit; raise QmlError for unsupported input."""
     if not re.fullmatch(r"[a-z][A-Za-z0-9_]*", name):
         raise QmlError("scene name must begin with a lowercase ASCII letter and contain only identifier characters")
-    fields, properties, items = Parser(source).scene()
+    root, properties = Parser(source).scene()
+    fields = root.fields
+    items = paint_items(root, {key: i for i, key in enumerate(properties)})
     lines = ['/* Generated by EmberBSD qml-compile. */', '#include "eqml.h"',
-             '#if EQML_SCENE_ABI != 1', '#error "Expected EmberBSD QML scene ABI 1"', '#endif', '']
+             '#if EQML_SCENE_ABI != 2', '#error "Expected EmberBSD QML scene ABI 2"', '#endif', '']
     if properties:
         lines.append("static const struct eqml_int properties[] = {")
         lines.extend(f'    {{ .name = {c_string(key)}, .initial = {value} }},' for key, value in properties.items())
         lines.extend(["};", ""])
     if items:
-        indices = {key: i for i, key in enumerate(properties)}
-        lines.append("static const struct eqml_text texts[] = {")
-        lines.extend(text_initializer(item, fields.get("id"), indices) for item in items)
+        lines.append("static const struct eqml_item items[] = {")
+        lines.extend(items)
         lines.extend(["};", ""])
     lines.extend([f"const struct eqml_scene eqml_{name} = {{",
                   f'    .width = {fields["width"]}, .height = {fields["height"]}, '
                   f'.background = 0x{fields.get("color", 0xffff):04x},',
-                  f'    .texts = {"texts" if items else "NULL"}, .text_count = {len(items)},',
+                  f'    .items = {"items" if items else "NULL"}, .item_count = {len(items)},',
                   f'    .properties = {"properties" if properties else "NULL"}, .property_count = {len(properties)}',
                   "};", ""])
     return "\n".join(lines)

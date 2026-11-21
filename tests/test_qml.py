@@ -30,12 +30,54 @@ Rectangle { id: board; width: 80; height: 32; color: "#ff0000"
         self.assertEqual(result, compile_scene(scene, "gauge"))
 
     def test_comments_escaping_and_empty_scene(self):
-        self.assertIn('.text_count = 0', compile_scene('import QtQuick; Rectangle { width: 1; height: 2 }'))
+        self.assertIn('.item_count = 0', compile_scene('import QtQuick; Rectangle { width: 1; height: 2 }'))
         result = compile_scene(r'''import QtQuick
 Rectangle { /* text: fake */ width: 1; height: 2
 Text { text: "\"??/" } // question marks and a quoted character
 }''')
         self.assertIn(r'.prefix = "\"\?\?/"', result)
+
+    def test_parent_coordinates_and_subtree_stacking(self):
+        scene = '''import QtQuick
+Rectangle { width: 20; height: 15
+    Rectangle { x: -2; y: 3; width: 8; height: 4; color: "lime"
+        Rectangle { x: 4; y: 5; z: -1; width: 2; height: 3; color: "green" }
+        Text { anchors.centerIn: parent; text: "inner"; z: 2000 }
+    }
+    Rectangle { width: 1; height: 1; color: "blue" }
+}'''
+        result = compile_scene(scene)
+        self.assertIn(".x = 2, .y = 8, .width = 2, .height = 3, .color = 0x0400", result)
+        self.assertIn(".parent_width = 8, .parent_height = 4", result)
+        self.assertLess(result.index("0x0400"), result.index("0x07e0"))
+        self.assertLess(result.index("0x07e0"), result.index('"inner"'))
+        self.assertLess(result.index('"inner"'), result.index("0x001f"))
+        self.assertIn(".item_count = 4", result)
+
+    def test_zero_size_parent_leaves_children_visible(self):
+        scene = '''import QtQuick
+Rectangle { width: 20; height: 15
+    Rectangle { x: 7; Rectangle { x: -2; width: 5; height: 3; color: "RED" } }
+}'''
+        result = compile_scene(scene)
+        self.assertIn(".x = 5, .y = 0, .width = 5, .height = 3, .color = 0xf800", result)
+        self.assertIn(".item_count = 1", result)
+
+    def test_grid_resolves_unequal_rows_and_columns_on_host(self):
+        scene = '''import QtQuick
+Rectangle { width: 30; height: 20
+    Grid { columns: 2; spacing: 1; anchors.centerIn: parent
+        Rectangle { width: 4; height: 3; color: "red" }
+        Rectangle { width: 0; height: 9 }
+        Rectangle { width: 7; height: 5; color: "blue" }
+        Rectangle { width: 6; height: 2; color: "white"; z: -1 }
+    }
+}'''
+        result = compile_scene(scene)
+        for coordinates in (".x = 8, .y = 6, .width = 4", ".x = 15, .y = 6, .width = 7",
+                            ".x = 8, .y = 12, .width = 6"):
+            self.assertIn(coordinates, result)
+        self.assertIn(".item_count = 3", result)
 
     def test_refuse_unsupported_or_ambiguous_semantics(self):
         cases = [
@@ -50,6 +92,15 @@ Text { text: "\"??/" } // question marks and a quoted character
             ('Text { text: "' + 'x' * 4097 + '" }', '4096 bytes'),
             ('Text { x: 0 y: 0 }', 'separate fields'),
             ('Text { text: "a"; text: "b" }', 'duplicate'),
+            ('Rectangle { id: part } Text { id: part }', 'duplicate object id'),
+            ('property int part: 3; Rectangle { id: part }', 'id also names an integer property'),
+            ('Rectangle { opacity: 0 }', 'unsupported Rectangle field opacity'),
+            ('MouseArea {}', 'unsupported object or grouped property MouseArea'),
+            ('Rectangle {' * 65 + '}' * 65, 'at most 64 nested'),
+            ('Grid { Text { text: "item" } }', 'Grid places fixed-size'),
+            ('Grid { Rectangle { x: 1 } }', 'Grid determines'),
+            ('Grid { columns: 2; spacing: 4096; Rectangle { width: 10; height: 1 } }',
+             'implicit Grid size exceeds'),
         ]
         for body, reason in cases:
             with self.subTest(body=body), self.assertRaisesRegex(QmlError, reason):
