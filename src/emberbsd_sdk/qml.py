@@ -83,6 +83,8 @@ class Parser:
         self.index = 0
         self.last = self.current
         self.ids = set()
+        self.static_bools = {}
+        self.static_bool_uses = set()
 
     @property
     def current(self):
@@ -186,6 +188,7 @@ class Parser:
             raise start.error("expected a property value")
         depths = {"{": 0, "(": 0, "[": 0}
         pairs = {"}": "{", ")": "(", "]": "["}
+        conditional_depth = 0
         end = start.end
         previous = start
         while self.current.text:
@@ -194,9 +197,14 @@ class Parser:
                 if token.text in (";", "}") or token.line != previous.line:
                     break
                 if (self.index > 0 and
+                    conditional_depth == 0 and
                     re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) and
                     self.index + 1 < len(self.stream) and self.stream[self.index + 1].text == ":"):
                     break
+            if token.text == "?":
+                conditional_depth += 1
+            elif token.text == ":" and conditional_depth:
+                conditional_depth -= 1
             if token.text in depths:
                 depths[token.text] += 1
             elif token.text in pairs:
@@ -284,12 +292,12 @@ class Parser:
             while self.current.text == ".":
                 self.take(".")
                 key += "." + self.name().text
-            if key in ("Text", "Rectangle", "Grid", "MouseArea"):
-                if kind == "Grid" and key != "Rectangle":
-                    raise start.error("Grid places fixed-size Rectangle children")
+            if key in ("Text", "Rectangle", "Grid", "Row", "MouseArea"):
+                if kind in ("Grid", "Row") and key != "Rectangle":
+                    raise start.error(f"{kind} places fixed-size Rectangle children")
                 item = self.text_item() if key == "Text" else self.container(key, depth + 1, properties)
-                if kind == "Grid" and ("x" in item.fields or "y" in item.fields):
-                    raise start.error("Grid determines the x and y of its children")
+                if kind in ("Grid", "Row") and ("x" in item.fields or "y" in item.fields):
+                    raise start.error(f"{kind} determines the x and y of its children")
                 children.append(item)
                 if self.current.text == ";":
                     self.take(";")
@@ -308,13 +316,19 @@ class Parser:
                         self.take(":")
                         if self.current.text not in ("\n", "}", ";"):
                             raise self.current.error("initialized MouseArea string properties are unsupported")
-                elif depth == 0 and type_token.text == "int":
-                    if property_name in RESERVED or property_name in properties:
+                elif depth == 0 and type_token.text in ("int", "bool"):
+                    if (property_name in RESERVED or property_name in properties or
+                        property_name in self.static_bools):
                         raise token.error(f"invalid or duplicate integer property {property_name}")
                     self.take(":")
-                    properties[property_name] = self.integer(-(2**31), 2**31 - 1)
+                    if type_token.text == "int":
+                        properties[property_name] = self.integer(-(2**31), 2**31 - 1)
+                    elif self.current.text in ("true", "false"):
+                        self.static_bools[property_name] = int(self.take().text == "true")
+                    else:
+                        raise self.current.error("root boolean property requires a literal true or false")
                 else:
-                    raise start.error("only root integer and MouseArea string properties are supported")
+                    raise start.error("only root integer/boolean and MouseArea string properties are supported")
             elif key == "anchors" and self.current.text == "{":
                 self.grouped_fields(fields, "anchors")
                 self.finish_field()
@@ -333,10 +347,12 @@ class Parser:
                     handlers[key] = self.raw_value()
                 elif key == "id":
                     fields[key] = self.object_id()
-                elif kind == "Rectangle" and key in ("width", "height"):
+                elif kind in ("Rectangle", "Item") and key in ("width", "height"):
                     fields[key] = self.integer(0 if depth else 1, 4096)
                 elif kind == "Rectangle" and key == "color":
                     fields[key] = self.color()
+                elif key == "objectName":
+                    fields[key] = self.string()
                 elif kind == "Rectangle" and key == "opacity":
                     fields[key] = self.raw_value()
                 elif kind == "Grid" and key == "columns":
@@ -344,6 +360,12 @@ class Parser:
                 elif kind == "Grid" and key == "spacing":
                     fields[key] = self.integer(0, 4096)
                 elif kind == "Grid" and key in ANCHORS:
+                    fields[key] = self.raw_value()
+                elif kind == "Row" and key == "spacing":
+                    fields[key] = self.integer(0, 4096)
+                elif kind == "Row" and key == "layoutDirection":
+                    fields[key] = self.raw_value()
+                elif kind == "Row" and key in ANCHORS:
                     fields[key] = self.raw_value()
                 elif (kind == "MouseArea" and key in (
                     "acceptedButtons", "hoverEnabled", "anchors.fill", "drag.target",
@@ -363,22 +385,38 @@ class Parser:
         if depth == 0:
             for key in ("width", "height"):
                 if key not in fields:
-                    raise end.error(f"Rectangle requires {key}")
-            ambiguous = self.ids.intersection(properties)
+                    raise end.error(f"{kind} requires {key}")
+            ambiguous = self.ids.intersection(properties | self.static_bools)
             if ambiguous:
-                raise end.error(f"object id also names an integer property: {min(ambiguous)}")
-        if kind == "Grid":
+                raise end.error(f"object id also names a root property: {min(ambiguous)}")
+        if kind in ("Grid", "Row"):
             check_anchors(fields, end)
-            place_grid(fields, children, end)
+            if kind == "Grid":
+                place_grid(fields, children, end)
         return Item(kind, fields, children, handlers, declared)
 
     def scene(self):
         self.take("import")
         self.take("QtQuick")
+        if re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", self.current.text):
+            version = self.take()
+            if version.text != "2.0":
+                raise version.error("only QtQuick 2.0 or an unversioned QtQuick import is supported")
         self.finish_field()
-        self.take("Rectangle")
+        start = self.name()
+        if start.text not in ("Rectangle", "Item"):
+            raise start.error("scene root must be Rectangle or Item")
         properties = {}
-        root = self.container("Rectangle", 0, properties)
+        root = self.container(start.text, 0, properties)
+        def place_rows(item):
+            for child in item.children:
+                place_rows(child)
+            if item.kind == "Row":
+                used = place_row(item.fields, item.children, self.last,
+                                 self.static_bools)
+                if used is not None:
+                    self.static_bool_uses.add(used)
+        place_rows(root)
         if self.current.text:
             raise self.current.error("unexpected content after the scene")
         return root, properties
@@ -426,6 +464,45 @@ def place_grid(fields, children, end):
         cell["x"], cell["y"] = xs[col], ys[row]
 
 
+def place_row(fields, children, end, properties):
+    cells = [child.fields for child in children
+             if child.fields.get("width", 0) and child.fields.get("height", 0)]
+    spacing = fields.get("spacing", 0)
+    direction = fields.get("layoutDirection")
+    reverse = False
+    used = None
+    if direction is not None:
+        value = direction.source
+        match = re.fullmatch(
+            r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*\?\s*Qt\.RightToLeft\s*:\s*Qt\.LeftToRight\s*",
+            value)
+        if match is not None and match.group(1) in properties:
+            reverse = bool(properties[match.group(1)])
+            used = match.group(1)
+        elif value.strip() == "Qt.RightToLeft":
+            reverse = True
+        elif value.strip() != "Qt.LeftToRight":
+            raise direction.token.error("Row layoutDirection requires a supported static Qt direction")
+    if not cells:
+        fields["width"], fields["height"] = 0, 0
+        return used
+    offsets = []
+    extent = 0
+    for index, cell in enumerate(cells):
+        if index:
+            extent += spacing
+        offsets.append(extent)
+        extent += cell["width"]
+    height = max(cell["height"] for cell in cells)
+    if max(extent, height) > 4096:
+        raise end.error("implicit Row size exceeds 4096 pixels")
+    fields["width"], fields["height"] = extent, height
+    for cell, x in zip(cells, offsets):
+        cell["x"] = extent - x - cell.get("width", 0) if reverse else x
+        cell["y"] = 0
+    return used
+
+
 def c_string(text):
     # Escaping '?' also prevents trigraphs in strict C99 compilers.
     return json.dumps(text).replace("?", r"\?")
@@ -463,7 +540,7 @@ def paint_items(root, indices):
             yield text_initializer(fields, root.fields.get("id"), indices, x, y, parent_width, parent_height)
             return
         width, height = fields.get("width", 0), fields.get("height", 0)
-        if item.kind == "Grid":
+        if item.kind in ("Grid", "Row"):
             if "anchors.centerIn" in fields or "anchors.horizontalCenter" in fields:
                 x += (parent_width + 1) // 2 - (width + 1) // 2
             if "anchors.centerIn" in fields or "anchors.verticalCenter" in fields:
@@ -541,8 +618,8 @@ def _interactive_nodes(root):
     parents = []
 
     def visit(item, parent):
-        if item.kind == "Grid":
-            raise QmlError("Grid cannot be combined with interactive scene nodes")
+        if item.kind in ("Grid", "Row"):
+            raise QmlError(f"{item.kind} cannot be combined with interactive scene nodes")
         index = len(nodes)
         nodes.append(item)
         parents.append(parent)
@@ -977,10 +1054,16 @@ def compile_scene(source, name="app"):
     """Return a complete C99 translation unit; raise QmlError for unsupported input."""
     if not re.fullmatch(r"[a-z][A-Za-z0-9_]*", name):
         raise QmlError("scene name must begin with a lowercase ASCII letter and contain only identifier characters")
-    root, properties = Parser(source).scene()
+    parser = Parser(source)
+    root, properties = parser.scene()
     interactive = any(item.kind == "MouseArea" for item in _walk(root))
     if interactive:
+        if parser.static_bools:
+            raise QmlError("root boolean layout properties are static-only and cannot be used in interactive scenes")
         return interactive_scene(root, properties, name)
+    unused_bools = parser.static_bools.keys() - parser.static_bool_uses
+    if unused_bools:
+        raise QmlError("root boolean properties must select a supported static Row layout direction")
     for item in _walk(root):
         if item.handlers:
             key, handler = next(iter(item.handlers.items()))

@@ -22,14 +22,15 @@ exercises cross-linking, model updates and the RGB565 wsdisplay backend.
 
 | Construct | Accepted values |
 | --- | --- |
-| Module and root | `import QtQuick` and one opaque `Rectangle` with literal `width`, `height` (1–4096) |
-| Model | Root `property int name: constant`, signed 32-bit; bindings can reference it by name or `rootId.name` |
-| Children | `Rectangle`, `Text` and `Grid` items. A nested rectangle takes literal `width` and `height` (0–4096, default zero) and can contain children. An optional `id` must be unique within the scene. |
+| Module and root | `import QtQuick` or `import QtQuick 2.0` and one `Rectangle` or `Item` with literal `width`, `height` (1–4096). `Item` uses the renderer's white default background. Other versioned module imports are rejected. |
+| Model | Root `property int name: constant`, signed 32-bit. Text bindings can reference integer properties by name or `rootId.name`. A root boolean literal may select a static layout branch; it is evaluated at compile time and is not exported as a mutable scene property. |
+| Children | `Rectangle`, `Text`, `Grid` and `Row` items. A nested rectangle takes literal `width` and `height` (0–4096, default zero) and can contain children. An optional `id` must be unique within the scene. |
 | Grid | Static left-to-right layout of fixed-size rectangles. Optional integer `columns` (1–4096, default 4), `spacing` (0–4096, default 0), and parent-centering anchors. Row and column sizes follow their largest cells. The compiler computes positions on the host; the grid's implicit dimensions must fit within 4096 × 4096. |
+| Row | Static horizontal layout of fixed-size rectangles. Integer `spacing` (0–4096, default 0), optional parent-centering anchors, and `layoutDirection` as `Qt.LeftToRight`, `Qt.RightToLeft`, or the supported root-boolean ternary form. The compiler evaluates the boolean literal; it is not a mutable runtime property and no live QML binding is kept. Zero-sized children do not participate. Visible children retain their own sizes and are top-aligned. The implicit dimensions must fit within 4096 × 4096. |
 | Colors | Opaque `#RRGGBB` or one of the 16 basic SVG color names, case insensitive. Rectangles default to white and text to black. |
 | Paint order | Integer `z` sorts siblings (signed 32-bit, default zero); ties keep declaration order. A negative-z child paints before its parent. Each sibling paints its whole subtree; children can extend outside their parent. The scene bounds clip the final image. |
 | String bindings | Printable ASCII literals (up to 4096 bytes per literal part) and one root integer joined with `+`, e.g. `"T=" + gauge.value + " C"`; changing the integer takes effect on the next render |
-| Geometry | Signed integer `x`, `y` offsets (16-bit) relative to the parent. A grid determines the offsets of its cells. Text and Grid support `anchors.horizontalCenter`, `anchors.verticalCenter`, or `anchors.centerIn` relative to their immediate parent. |
+| Geometry | Signed integer `x`, `y` offsets (16-bit) relative to the parent. Grid and Row determine the offsets of their children. Text, Grid and Row support `anchors.horizontalCenter`, `anchors.verticalCenter`, or `anchors.centerIn` relative to their immediate parent. |
 | Font | Integer `font.pixelSize` from 7 to 64 (default 14); the runtime supplies its bitmap font. |
 | Syntax | Double-quoted strings with JSON escapes, line and block comments, newlines or semicolons between fields |
 

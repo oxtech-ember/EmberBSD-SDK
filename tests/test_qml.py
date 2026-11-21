@@ -200,6 +200,68 @@ Rectangle { width: 30; height: 20
             self.assertIn(coordinates, result)
         self.assertIn(".item_count = 3", result)
 
+    def test_row_positions_unequal_children_and_spacing_on_host(self):
+        scene = '''import QtQuick
+Rectangle { width: 50; height: 20
+    Row { spacing: 3; anchors.centerIn: parent
+        Rectangle { width: 5; height: 7; color: "red" }
+        Rectangle { width: 2; height: 3; color: "green" }
+        Rectangle { width: 4; height: 9; color: "blue" }
+    }
+}'''
+        result = compile_scene(scene)
+        self.assertIn(".x = 16, .y = 5, .width = 5, .height = 7", result)
+        self.assertIn(".x = 24, .y = 5, .width = 2, .height = 3", result)
+        self.assertIn(".x = 29, .y = 5, .width = 4, .height = 9", result)
+        self.assertIn(".item_count = 3", result)
+
+    def test_row_initial_layout_direction_from_boolean_property(self):
+        scene = '''import QtQuick 2.0
+Item { width: 120; height: 40
+    property bool testRightToLeft: false
+    Row { spacing: 4; layoutDirection: testRightToLeft ? Qt.RightToLeft : Qt.LeftToRight
+        Rectangle { objectName: "one"; width: 5; height: 7; color: "red" }
+        Rectangle { objectName: "two"; width: 2; height: 3; color: "green" }
+        Rectangle { objectName: "three"; width: 4; height: 9; color: "blue" }
+    }
+}'''
+        ltr = compile_scene(scene)
+        rtl = compile_scene(scene.replace("testRightToLeft: false", "testRightToLeft: true"))
+        for x in (0, 9, 15):
+            self.assertIn(f".x = {x}, .y = 0", ltr)
+        for x in (14, 8, 0):
+            self.assertIn(f".x = {x}, .y = 0", rtl)
+        self.assertIn(".properties = NULL, .property_count = 0", ltr)
+        self.assertIn(".properties = NULL, .property_count = 0", rtl)
+        self.assertNotIn('"testRightToLeft"', ltr)
+        with self.assertRaisesRegex(QmlError, "root boolean properties must select"):
+            compile_scene("import QtQuick\nRectangle { width: 2; height: 2\nproperty bool unused: false\n}")
+        later = '''import QtQuick
+Item { width: 20; height: 10
+    Row { spacing: 2; layoutDirection: reverse ? Qt.RightToLeft : Qt.LeftToRight
+        Rectangle { width: 4; height: 2; color: "red" }
+        Rectangle { width: 3; height: 4; color: "blue" }
+    }
+    property bool reverse: true
+}'''
+        self.assertIn(".x = 0, .y = 0, .width = 3", compile_scene(later))
+
+    def test_row_omits_zero_sized_children_from_spacing(self):
+        scene = '''import QtQuick
+Rectangle { width: 20; height: 10
+    Row { spacing: 2; anchors.centerIn: parent
+        Rectangle { width: 4; height: 2; color: "red" }
+        Rectangle { width: 0; height: 3; color: "green" }
+        Rectangle { width: 3; height: 4; color: "blue" }
+    }
+}'''
+        result = compile_scene(scene)
+        self.assertIn(".x = 5, .y = 3, .width = 4, .height = 2", result)
+        self.assertIn(".x = 11, .y = 3, .width = 3, .height = 4", result)
+        self.assertIn(".item_count = 2", result)
+        empty = compile_scene("import QtQuick\nRectangle { width: 20; height: 10\nRow {}\n}")
+        self.assertIn(".item_count = 0", empty)
+
     def test_refuse_unsupported_or_ambiguous_semantics(self):
         cases = [
             ('Text { text: other.value }', 'unknown root integer'),
@@ -215,7 +277,7 @@ Rectangle { width: 30; height: 20
             ('Text { x: 0 y: 0 }', 'separate fields'),
             ('Text { text: "a"; text: "b" }', 'duplicate'),
             ('Rectangle { id: part } Text { id: part }', 'duplicate object id'),
-            ('property int part: 3; Rectangle { id: part }', 'id also names an integer property'),
+            ('property int part: 3; Rectangle { id: part }', 'id also names a root property'),
             ('Rectangle { opacity: 0 }', 'unsupported Rectangle field opacity'),
             ('Image {}', 'unsupported object or grouped property Image'),
             ('Rectangle {' * 65 + '}' * 65, 'at most 64 nested'),
@@ -223,10 +285,17 @@ Rectangle { width: 30; height: 20
             ('Grid { Rectangle { x: 1 } }', 'Grid determines'),
             ('Grid { columns: 2; spacing: 4096; Rectangle { width: 10; height: 1 } }',
              'implicit Grid size exceeds'),
+            ('Row { layoutDirection: false ? Qt.RightToLeft : Qt.LeftToRight }',
+             'supported static Qt direction'),
+            ('Row { width: 10 }', 'unsupported Row field width'),
         ]
         for body, reason in cases:
             with self.subTest(body=body), self.assertRaisesRegex(QmlError, reason):
                 compile_scene("import QtQuick\nRectangle { width: 1; height: 1\n" + body + "\n}")
+
+    def test_reject_unsupported_qtquick_import_major(self):
+        with self.assertRaisesRegex(QmlError, "only QtQuick 2.0"):
+            compile_scene("import QtQuick 6.0\nRectangle { width: 1; height: 1 }")
 
     def test_cli_keeps_unchanged_output_and_selected_permissions(self):
         with tempfile.TemporaryDirectory() as work:
