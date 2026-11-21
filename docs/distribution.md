@@ -1,21 +1,18 @@
 # SDK and binary package distribution
 
-The [signed release contract and CLI](signed-releases.md) implement the shared
-authenticated inventory, package signing and replay-protected channel pointer.
-They verify local complete releases. [S3 publication and HTTPS metadata delivery](s3-distribution.md)
-are implemented; the [SDK client](sdk-client.md) supplies binary installation
-and uses Ports for missing roots. The self-contained runtime/bootstrap and
-complete compiler/sysroot distribution remain separate acceptance work.
-The [binary catalog producer and reader](binary-catalog.md) compose signed
-package repositories from Ports graphs and select fixed runtime closures without
-source checkouts or bmake on the client.
+A [signed release](signed-releases.md) binds the inventory, package
+signatures and replay-protected channel pointer. Maintainers publish it to
+[S3](s3-distribution.md). The [bootstrap installer](bootstrap-client.md)
+installs the SDK client on a supported host. The [SDK client](sdk-client.md)
+reads the signed catalog over HTTPS, installs compatible packages and target
+sysroots, and delegates missing package roots to Ports when source inputs are
+configured. The [binary catalog](binary-catalog.md) supplies package runtime
+closures for binary installation without a source checkout or bmake.
 
-This document defines the release boundary. The implemented
-[sysroot transfer commands](sysroot-transfer.md) export and import a completed
-builder output with pinned hashes and portable provenance. They do not supply
-a native compiler or authenticate a release. The transfer commands alone do not
-qualify relocation or target execution. A complete binary SDK and a published
-SDK channel remain separate work.
+The [sysroot transfer commands](sysroot-transfer.md) export and import a
+completed builder output with pinned hashes and portable provenance. For binary distribution,
+the signed inventory identifies the target sysroot. Qualify the compiler
+and sysroot together for each declared host and target.
 
 ## Keep the workspace and release separate
 

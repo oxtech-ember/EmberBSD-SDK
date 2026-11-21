@@ -1,12 +1,11 @@
 # Build profiles and build plans
 
-A build profile selects what to build. `profile-plan` finds the closure of a
-profile and prints the build plan. It does not build, download, install or
-write build results. `profile-build` plans the profile and lets Ninja run the
-nodes that are not ready. This is stages 2 and 3 of the
-[build graph](https://github.com/oxtech-ember/ember-wiki/blob/main/docs/strategy/sborochnyj-graf.md):
-`profile-build` builds prepared sources, the tools, kernels and the release
-sets now; sysroots follow, Ports nodes come in stage 4.
+A build profile selects the target, compiler families and OS components.
+`profile-plan` evaluates dependencies, caches its queries and prints the work
+still needed. `profile-build` uses Ninja to prepare shared sources and build
+the selected kernels or release sets with their OS tools. For an application
+sysroot, [install a signed artifact](sdk-client.md#application-compiler-and-sysroot)
+or [build the sysroot](sysroot.md).
 
 ## Profile
 
@@ -42,8 +41,9 @@ come from the client configuration.
   profile build only: release finalization and target acceptance refuse it.
   `os.buildinfo` is the release metadata that the kernel records (`BUILDINFO`).
   Select at least one kernel or set.
-- `ports` accepts `sets` and `packages` but refuses roots until stage 4. Plan
-  Ports with [`plan` or `source-plan`](sdk-client.md) until then.
+- Use `"ports": {}` or empty `sets` and `packages` lists. To select Ports
+  roots, pass `--set` or `--package` to the package client's `plan`,
+  `source-plan` or `install` command. [SDK package client](sdk-client.md)
 
 ## Plan the profile
 
@@ -86,9 +86,9 @@ their source plans in `SDK/obj/plan-cache`.
 
 ## Plan schema `build-graph-v2`
 
-`build-graph-v2` succeeds the Ports schema [`ports-graph-v1`](ports-plan.md). It
-adds OS, prepared source and runtime nodes. `ports-plan.py` keeps
-`ports-graph-v1` until stage 4 moves it to this schema.
+`profile-plan` emits `build-graph-v2` for OS, prepared source, export and
+runtime nodes. The Ports exporter and `ports-plan.py` use
+[`ports-graph-v1`](ports-plan.md) for evaluated package dependencies.
 
 The plan contains the normalized `profile` and its `profile_sha256`, the
 commit, tree and changed paths of each checkout (`os`, `ports`, `sdk`), the
@@ -158,12 +158,11 @@ time. Tools and sets need the sources whose makefile guards their
 needs the sources that `ember/shared-sources.json` declares for its
 configuration; the OS kernel build stops when the kernel reads other sources.
 
-A node with local changes in an input path, or with such a dependency, has
-no `input_key` (`null`) and is `build`: a local edit has no reusable identity,
-so stage 3 records no result for it. Another node is `build` when no recorded
-result has its input key. Stage 3 records results in
-`STATE_DIR/build/results/<id>.json`, with `:` in the ID written as `_`, and
-the `input_key`. Reuse requires the same key and all expected output paths.
+A node with local changes in a keyed input path, or with such a dependency,
+has a null `input_key`. The planner schedules it on each run. When a producer
+succeeds, `profile-build` records the node ID, input key and output paths in
+`work/results/<id>.json`, replacing `:` in the ID with `_`. Reuse requires
+a matching non-null key and all expected outputs.
 The virtual `os:tools` edge records completion with an empty outputs map.
 Runtime nodes are
 `ready`: the plan does not install them. Downloads from signed
