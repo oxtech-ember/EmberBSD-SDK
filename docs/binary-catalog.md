@@ -103,11 +103,15 @@ Both unsigned TARs and signed BSD-ar containers undergo the same payload checks.
 
 For a sparse update, pass `--current /work/current-snapshot`, obtained with
 `s3-release.py fetch`. Composition preserves all current artifacts and merges
-the selected roots and sets. Missing archive-map entries can reuse an exact
-root/version and its runtime dependency IDs from authenticated current metadata.
-Source-only descendants of that reused node are not required unless independently
-selected; other missing runtime packages still fail. A different source profile does not
-replace an unchanged binary's signed dependency edges. New archives still need
+the selected roots and sets. Selected roots and supplied archives must match
+resolved source versions. An unselected dependency without a supplied archive
+can keep its version and runtime edges from authenticated current metadata.
+This does not select a second version or change the repository platform.
+New archives must accept the retained provider through their actual `DEPENDS`
+patterns and required runtime files; incompatible or missing providers fail.
+Source-only descendants of a retained package are not required unless independently
+selected. A source profile cannot replace an unchanged binary's signed edges.
+New archives still need
 their resolved runtime providers. Changed roots retain their artifact
 IDs. Package version patterns are checked for changed archives and their direct
 consumers. Target library paths are also checked for transitive consumers. Repository

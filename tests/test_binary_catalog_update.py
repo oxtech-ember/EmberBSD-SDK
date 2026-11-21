@@ -87,6 +87,64 @@ class BinaryCatalogUpdateTests(BinaryReleaseFixture):
         self.spec.update(release_id='source-graph-changed', created_at=2)
         return release, current
 
+    def source_newer_reused_dependency(self, *, depends=('app>=1',),
+                                      required='/usr/pkg/lib/libfixture.so.1', source_only=True):
+        repo = self.repository(lib_options={'extra_build_info':
+            'PROVIDES=/usr/pkg/lib/libfixture.so.1\n'})
+        previous = self.compose()
+        current = self.work / 'release'
+        for package in (current / 'arm64').glob('*.tgz'):
+            package.unlink()
+        value = graph()
+        app = next(node for node in value['nodes'] if node['id'] == 'target:net/app')
+        app['version'] = '2.0'
+        # The reused binary still depends on lib, not this newer source edge.
+        if source_only:
+            app['dependencies'] = [dict(id='target:lang/new-tool', kind='runtime')]
+        value['nodes'].append(dict(id='target:lang/new-tool', version='1.0',
+            input_sha256='d' * 64, dependencies=[]))
+        value['nodes'].append(dict(id='target:net/new', version='1.0',
+            input_sha256='c' * 64, dependencies=[dict(id='target:net/app', kind='runtime')]))
+        self.graph_path.write_bytes(json_bytes(value))
+        repo['sets'] = []
+        repo['roots'] = ['net/new']
+        repo['packages'] = {'target:net/new': self.package('net/new', depends=depends,
+            extra_build_info='REQUIRES=' + required + '\n')}
+        self.spec.update(release_id='newer-source-dependency', created_at=2)
+        return previous, current, repo
+
+    def test_newer_source_dependency_reuses_signed_compatible_binary_and_edges(self):
+        previous, current, _ = self.source_newer_reused_dependency()
+        result = self.compose(current=current, output=self.work / 'compatible')
+        old_app = next(item for item in previous['artifacts'] if item['path'].endswith('/app-1.0.tgz'))
+        new_app = next(item for item in result['artifacts'] if item['id'] == old_app['id'])
+        self.assertEqual(new_app, old_app)
+        self.assertTrue(old_app['depends'])
+        _, catalogs = self.load(self.work / 'compatible')
+        self.assertNotIn('lang/new-tool', {item['root'] for item in catalogs[0]['packages']})
+
+    def test_newer_source_dependency_rejects_incompatible_depends(self):
+        _, current, _ = self.source_newer_reused_dependency(depends=('app>=2',))
+        with self.assertRaisesRegex(SDKError, 'dependency absent or ambiguous'):
+            self.compose(current=current, output=self.work / 'incompatible-newer-source')
+
+    def test_newer_source_dependency_rejects_missing_required_file(self):
+        _, current, _ = self.source_newer_reused_dependency(required='/usr/pkg/lib/libmissing.so.1')
+        with self.assertRaisesRegex(SDKError, 'runtime file absent'):
+            self.compose(current=current, output=self.work / 'missing-newer-source')
+
+    def test_newer_source_explicit_root_still_requires_new_binary(self):
+        _, current, repo = self.source_newer_reused_dependency(source_only=False)
+        repo['roots'].append('net/app')
+        with self.assertRaisesRegex(SDKError, 'missing runtime binary: target:net/app'):
+            self.compose(current=current, output=self.work / 'explicit-newer-source')
+
+    def test_newer_source_supplied_old_binary_is_rejected(self):
+        _, current, repo = self.source_newer_reused_dependency(source_only=False)
+        repo['packages']['target:net/app'] = str(self.work / 'app-1.0-NetBSD-aarch64/app-1.0.tgz')
+        with self.assertRaisesRegex(SDKError, 'archive name/path/version differs from graph'):
+            self.compose(current=current, output=self.work / 'supplied-old-source')
+
     def test_reused_node_does_not_require_new_source_only_descendant(self):
         previous, current = self.source_graph_changed_addition()
         value = graph()
@@ -124,8 +182,14 @@ class BinaryCatalogUpdateTests(BinaryReleaseFixture):
         value['nodes'].append(dict(id='target:net/new', version='1.0', input_sha256='c' * 64,
             dependencies=[dict(id='target:net/app', kind='runtime')]))
         self.graph_path.write_bytes(json_bytes(value))
+        self.compose(current=current, output=self.work / 'retained-newer')
+        _, catalogs = self.load(self.work / 'retained-newer')
+        retained = next(item for item in catalogs[0]['packages'] if item['root'] == 'net/app')
+        self.assertEqual(retained['pkgname'], 'app-1.0')
+        self.spec['repositories'][0]['roots'].append('net/app')
         with self.assertRaisesRegex(SDKError, 'downgrade'):
             self.compose(current=current, output=self.work / 'downgrade')
+        self.spec['repositories'][0]['roots'].remove('net/app')
         envelope = current / 'release.p7m'
         envelope.write_bytes(envelope.read_bytes()[:-20] + b'corrupt-signature')
         with self.assertRaises(SDKError):
