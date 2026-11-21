@@ -140,10 +140,26 @@ def _macho(read, host, *, cached=False, executable=False, bundle=False, relative
             name = data[8:24].split(b'\0', 1)[0].decode('ascii', 'strict')
             address, vm_size, file_offset, file_size, max_prot, init_prot, sections, segment_flags = \
                 struct.unpack_from('<4Q4I', data, 24)
-            _require(length == 72 + sections * 80 and file_size <= vm_size,
-                     'invalid Mach-O segment extent')
-            result['segments'].append(dict(name=name, address=address, vm_size=vm_size,
-                file_offset=file_offset, file_size=file_size))
+            _require(length == 72 + sections * 80, 'invalid Mach-O segment extent')
+            if file_size > vm_size:
+                # Go's internal linker puts DWARF bytes on disk without mapping them.
+                _require(not cached and name == '__DWARF' and vm_size == 0 and
+                         max_prot == init_prot == 0 and sections and file_offset >= 32 + size,
+                         'invalid Mach-O segment extent')
+                _require(len(read(file_offset + file_size - 1, 1)) == 1,
+                         'Mach-O debug segment is outside its file')
+                for index in range(sections):
+                    section = 72 + index * 80
+                    segment_name = data[section + 16:section + 32].rstrip(b'\0')
+                    section_size, section_offset = struct.unpack_from('<QI', data, section + 40)
+                    section_flags, = struct.unpack_from('<I', data, section + 64)
+                    _require(segment_name == b'__DWARF' and section_flags & 0x02000000 and
+                             file_offset <= section_offset <= file_offset + file_size and
+                             section_size <= file_offset + file_size - section_offset,
+                             'invalid unmapped Mach-O debug section')
+            else:
+                result['segments'].append(dict(name=name, address=address, vm_size=vm_size,
+                    file_offset=file_offset, file_size=file_size))
         elif command == 0x27:
             raise SDKError('embedded dyld environment commands are not supported')
         elif command == 0x32:

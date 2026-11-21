@@ -176,6 +176,36 @@ class DarwinRuntimeTests(unittest.TestCase):
             with self.assertRaises(SDKError):
                 _macho(lambda offset, size: data[offset:offset + size], host)
 
+    def test_unmapped_go_debug_segment_is_file_only(self):
+        base = macho(0x100000000)
+        position = 32 + struct.unpack_from('<I', base, 20)[0]
+        section = struct.pack('<16s16sQQ8I', b'__zdebug_info', b'__DWARF',
+            0x100002000, 4, len(base), 0, 0, 0, 0x02000000, 0, 0, 0)
+        segment = struct.pack('<II16s4Q4I', 0x19, 152, b'__DWARF',
+            0x100002000, 0, len(base), 4, 0, 0, 1, 0)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'go'
+            host = {'os': 'Darwin', 'cpu': 'arm64'}
+            def image(cmd, data=section):
+                output = bytearray(base + b'dbug')
+                count, size = struct.unpack_from('<II', output, 16)
+                struct.pack_into('<II', output, 16, count + 1, size + len(cmd) + len(data))
+                output[position:position + len(cmd) + len(data)] = cmd + data
+                return output
+            path.write_bytes(image(segment))
+            self.assertEqual([s['name'] for s in read_macho_runtime(path, host)['segments']], ['__TEXT'])
+            for offset, value in ((56, 1), (60, 1), (48, 5)):
+                invalid = bytearray(segment)
+                struct.pack_into('<I', invalid, offset, value)
+                path.write_bytes(image(invalid))
+                with self.assertRaises(SDKError):
+                    read_macho_runtime(path, host)
+            invalid_section = bytearray(section)
+            struct.pack_into('<I', invalid_section, 64, 0)
+            path.write_bytes(image(segment, invalid_section))
+            with self.assertRaises(SDKError):
+                read_macho_runtime(path, host)
+
     def test_alias_subcache_cycle_and_versions(self):
         f = Fixture(self)
         audit, closure = f.accepted()
