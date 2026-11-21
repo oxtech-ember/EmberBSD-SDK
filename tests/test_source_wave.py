@@ -248,6 +248,16 @@ exit 0
             time.sleep(0.02)
         self.assertFalse(self._fixture_commands())
 
+    def test_process_table_accepts_non_utf8_process_names(self):
+        ps = self.root / 'snapshot-ps'
+        ps.write_bytes(
+            b"#!/bin/sh\n"
+            b"printf '123 1 S Fri Nov  6 22:51:34 2026 /build/worker\\377\\n'\n"
+            b"printf '124 123 R Fri Nov  6 22:51:35 2026 /bin/ps\\n'\n")
+        ps.chmod(0o755)
+        with patch.object(source_wave, '_service_path', return_value=str(ps)):
+            self.assertEqual(_process_table(), {123: (1, 'S', 'Fri Nov 6 22:51:34 2026')})
+
     def test_wave_uses_os_process_service_with_restricted_tool_path(self):
         state = self.fix / 'state'
         with patch.dict(os.environ, {'PATH': str(self.fix / 'bin')}):

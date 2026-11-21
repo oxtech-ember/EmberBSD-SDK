@@ -210,21 +210,21 @@ def _process_table():
     """pid -> (ppid, state, creation). The ``ps`` helper itself is not a build process."""
     last = ''
     process_service = _service_path('ps')
-    for columns in ('pid=,ppid=,stat=,lstart=,command=', 'pid=,ppid=,state=,lstart=,command='):
-        # -ww keeps Darwin from truncating command lines at the terminal width.
+    for columns in ('pid=,ppid=,stat=,lstart=,comm=', 'pid=,ppid=,state=,lstart=,comm='):
+        # Process names can contain arbitrary bytes. Only the ps helper needs identifying.
         result = subprocess.run(
-            [process_service, '-axww', '-o', columns], capture_output=True, text=True, check=False)
+            [process_service, '-axww', '-o', columns], capture_output=True, text=True,
+            errors='replace', check=False)
         last = result.stderr.strip()
         if result.returncode != 0 or not result.stdout.strip():
             continue
         rows = {}
         for line in result.stdout.splitlines():
-            parts = line.strip().split()
+            parts = line.strip().split(maxsplit=8)
             # lstart is five words: "Fri Nov  6 22:51:34 2026". Darwin and Linux both print it.
             if len(parts) < 8 or not parts[0].isdigit() or not parts[1].isdigit():
                 continue
-            command = ' '.join(parts[8:])
-            tool = command.split()[0] if command else ''
+            tool = parts[8] if len(parts) == 9 else ''
             if tool == 'ps' or tool.endswith('/ps'):
                 continue
             rows[int(parts[0])] = (int(parts[1]), parts[2], ' '.join(parts[3:8]))
