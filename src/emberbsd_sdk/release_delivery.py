@@ -377,7 +377,8 @@ def release_snapshot(crypto, public, trust, directory, *, prefix='', repositorie
                 release = _fetch_snapshot(crypto, public, trust, snapshot, prefix,
                                           repositories, channel_bytes, cache)
             except HTTPStatusError as exc:
-                if exc.status != 404 or attempt:
+                # Public S3 readers without ListBucket receive 403 for removed keys.
+                if exc.status not in (403, 404) or attempt:
                     raise
                 newer, _ = public.read(_key(prefix, 'current.p7m'), MAX_ENVELOPE,
                                       headers={'cache-control': 'no-cache'})

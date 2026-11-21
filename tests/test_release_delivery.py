@@ -234,8 +234,8 @@ class DeliveryTests(unittest.TestCase):
         old = self.server.objects['/bucket/current.p7m']
         self.publish(self.release('two'))
         read = self.public.read
-        for changed in (False, True):
-            with self.subTest(changed=changed):
+        for status, changed in ((403, False), (403, True), (404, False), (404, True)):
+            with self.subTest(status=status, changed=changed):
                 calls = 0
                 def switch(key, *args, **kwargs):
                     nonlocal calls
@@ -243,6 +243,8 @@ class DeliveryTests(unittest.TestCase):
                         calls += 1
                         if calls == 1 or not changed:
                             return old, {}
+                    if key == first['release']['path'] and status == 403:
+                        raise release_delivery.HTTPStatusError(status, 'GET', key)
                     return read(key, *args, **kwargs)
                 with patch.object(self.public, 'read', side_effect=switch):
                     if changed:
@@ -250,7 +252,7 @@ class DeliveryTests(unittest.TestCase):
                             self.assertEqual(release['release_id'], 'two')
                         self.assertFalse(snapshot.exists())
                     else:
-                        with self.assertRaises(SDKError):
+                        with self.assertRaisesRegex(SDKError, f'HTTP {status}'):
                             with release_snapshot(self.crypto, self.public, self.ca.certificate, self.work):
                                 self.fail('missing metadata was yielded')
                 self.assertEqual(list(self.work.glob('.release-metadata-*')), [])
