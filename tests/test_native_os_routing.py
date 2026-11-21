@@ -83,7 +83,7 @@ class NativeOSRoutingTests(unittest.TestCase):
     def test_publication_failure_cleans_only_owned_stage(self):
         sentinel = self.root / '.native-os-tools-foreign'
         sentinel.mkdir()
-        with patch('emberbsd_sdk.native_os_routing.publish_directory_noreplace',
+        with patch('emberbsd_sdk.native_os_routing.command_directory.publish',
                    side_effect=OSError('refused')):
             with self.assertRaises(OSError):
                 self.publish()

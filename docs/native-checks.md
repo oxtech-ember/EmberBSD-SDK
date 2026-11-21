@@ -197,3 +197,14 @@ same view to `prepare-darwin-stage.py --runtime-view` when recipes must retain
 the selection alongside their own build-time library directories.
 Use `scripts/run-darwin-with-runtime.py --print-inputs` to obtain the JSON
 list of launcher source files for build-system action dependencies.
+
+On EmberBSD the generated command path is a relative symlink. The SDK installs
+it with one exclusive symlink operation after the selected command tree is
+complete. Identical trees share a generation in the private sibling directory
+`.emberbsd-command-trees`. Keep the store with the workspace while its checks
+run. Removing an individual command link allows a rebuild to reuse the same
+generation. Removing the build workspace also removes its stored generations.
+Package releases and sysroot publication have a separate directory-rename
+contract.
+Existing adapters keep their SDK snapshot. When upgrading the SDK, use a new
+binding path or remove the old binding after its consumers have finished.

@@ -13,7 +13,7 @@ from .errors import SDKError
 from .host_prefix import HostPrefix
 from .paths import (canonical_existing, entry, open_regular, path_string,
                     real_directory, reject_overlap, verify_stable)
-from .publication import publish_directory_noreplace
+from . import command_directory
 
 NATIVE_OS_ROUTING_API = 1
 _SAFE_PATH = re.compile(r'/[A-Za-z0-9_./+@%=\-]+\Z')
@@ -71,7 +71,7 @@ def ensure_native_os_routing(toolset, *, contract_path, contract_sha256, destina
     if entry(destination) is None:
         return publish_native_os_routing(toolset, contract_path=contract_path,
             contract_sha256=contract_sha256, destination=destination)
-    real_directory(destination)
+    real_directory(str(command_directory.managed_tree(destination) or destination))
     _, rows, _ = read_native_os_contract(contract_path, sha256=contract_sha256)
     read_native_os_contract(os.path.join(destination, 'contract'), sha256=contract_sha256)
     if set(os.listdir(destination)) != {'contract', *(command for command, _, _ in rows)}:
@@ -166,7 +166,7 @@ def publish_native_os_routing(toolset, *, contract_path, contract_sha256,
             stream.write(data)
         for command, selected in members.items():
             os.symlink(selected, os.path.join(stage, command))
-        publish_directory_noreplace(stage, destination)
+        command_directory.publish(stage, destination)
     finally:
         # Publication moves the stage. On failure remove only our exact stage.
         if os.path.isdir(stage):

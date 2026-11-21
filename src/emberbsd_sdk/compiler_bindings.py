@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 
-from . import elf, jsonio, paths, publication
+from . import command_directory, elf, jsonio, paths
 from .errors import SDKError
 
 COMPILER_BINDINGS_API = 3
@@ -37,7 +37,7 @@ _LIBRARY_NAME = re.compile(r'lib[A-Za-z0-9_+-]+')
 # A binding runs execute() from its own copy of these modules, never from
 # the SDK tree that generated it, so a later checkout cannot change it.
 _SNAPSHOT = 'sdk'
-_SNAPSHOT_MODULES = ('__init__.py', 'compiler_bindings.py', 'elf.py', 'errors.py',
+_SNAPSHOT_MODULES = ('__init__.py', 'command_directory.py', 'compiler_bindings.py', 'elf.py', 'errors.py',
                      'jsonio.py', 'paths.py', 'publication.py')
 
 
@@ -398,7 +398,7 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
     python = paths.canonical_existing(python)
     if any(character.isspace() for character in python):
         raise SDKError('native Python shebang path cannot contain whitespace')
-    destination = paths.canonical_new(destination)
+    destination = command_directory.binding_path(destination)
     parent = os.path.dirname(destination)
     paths.real_directory(parent)
     record = dict(format='emberbsd-compiler-binding', version=_FORMAT_VERSION,
@@ -464,7 +464,7 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
             f'execute({os.path.join(destination, "commands.json")!r}, {role!r}, sys.argv[1:])\n').encode()
     abi = record.get('native_cxx_runtime', {}).get('platform_cxxabi')
     if os.path.lexists(destination):
-        paths.real_directory(destination)
+        paths.real_directory(str(command_directory.managed_tree(destination) or destination))
         if set(os.listdir(destination)) != (set(content) | set(aliases) | {_SNAPSHOT} |
                                             ({'darwin-cxxabi'} if abi else set())):
             raise SDKError('compiler binding differs from selected commands')
@@ -516,7 +516,7 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
                     os.symlink(header['path'], view / name)
             for name, target in aliases.items():
                 os.symlink(target, os.path.join(stage, name))
-            publication.publish_directory_noreplace(stage, destination)
+            command_directory.publish(stage, destination)
         finally:
             if os.path.isdir(stage):
                 shutil.rmtree(stage)

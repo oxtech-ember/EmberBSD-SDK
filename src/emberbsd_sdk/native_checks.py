@@ -6,7 +6,7 @@ import os
 import re
 import shlex
 
-from . import compiler_bindings, paths, process
+from . import command_directory, compiler_bindings, paths, process
 from .errors import SDKError
 
 NATIVE_CHECKS_API = 1
@@ -65,7 +65,7 @@ def check_environment(native, *, bindings, extra_flags=None, environment=None,
                 cpus + r'-apple-(?:darwin|macosx?)[0-9.]*', target)
                 for target in native_cxx_runtime['targets']):
             raise SDKError('native C++ runtime targets differ from the selected Darwin host')
-    bindings = paths.canonical_new(bindings)
+    bindings = command_directory.binding_path(bindings)
     aliases = {role:native.command(role)[0] for role in native.tools if role not in commands}
     aliases.update({'c++':bindings + '/cxx', 'python3':native.command('python')[0]})
     bound = compiler_bindings.bind_compilers(bindings, commands=commands,
