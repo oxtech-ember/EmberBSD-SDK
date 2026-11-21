@@ -493,7 +493,7 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
             modules[name] = resources.files(__package__).joinpath(name).read_bytes()
     content = {'commands.json':jsonio.json_bytes(record)}
     for role in sorted(commands):
-        content[role] = (f'#!{python}\nimport sys\nsys.dont_write_bytecode=True\n'
+        content[role] = (f'#!{python} -I\nimport sys\nsys.dont_write_bytecode=True\n'
             f'sys.path.insert(0, {os.path.join(destination, _SNAPSHOT)!r})\n'
             'from emberbsd_sdk.compiler_bindings import execute\n'
             f'execute({os.path.join(destination, "commands.json")!r}, {role!r}, sys.argv[1:])\n').encode()

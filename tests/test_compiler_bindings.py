@@ -35,6 +35,18 @@ class CompilerBindingTests(TemporaryCase):
         result = subprocess.run([tools[role], *arguments], cwd=self.root, capture_output=True, text=True)
         return result, json.loads(result.stdout)
 
+    def test_binding_uses_host_python_modules_in_a_cross_build_environment(self):
+        target_modules = self.root / 'target-python'
+        target_modules.mkdir()
+        (target_modules / 'ctypes.py').write_text("raise ImportError('target ctypes')\n")
+        self.compiler.write_text('#!/bin/sh\nprintf "%s" "$PYTHONPATH"\n')
+        tools = compiler_bindings.bind_compilers(self.destination,
+            commands=self.commands, flags=self.flags, python=sys.executable)
+        result = subprocess.run([tools['cxx'], '-E', 'source.cpp'], cwd=self.root,
+            env={**os.environ, 'PYTHONPATH': str(target_modules)}, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, str(target_modules))
+
     def test_netbsd_asan_marks_only_a_fresh_address_sanitized_executable(self):
         paxctl = self.root / 'paxctl'
         paxctl.touch()

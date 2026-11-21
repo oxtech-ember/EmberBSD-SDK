@@ -73,7 +73,9 @@ Compiler binding API 3 preserves the existing version 1 mapping format,
 so unchanged compiler-only bindings remain reusable by the same SDK.
 Each binding runs a read-only copy of the SDK modules it needs from its
 `sdk` directory, not the SDK tree that made it, so a later checkout of
-that tree cannot change a bound compiler. A binding made by a different
+that tree cannot change a bound compiler. The selected host Python runs in
+isolated mode so target modules on `PYTHONPATH` stay out of the binding's
+imports. The compiler inherits the caller's environment. A binding made by a different
 SDK is not reused; remove it and bind again with the selected SDK.
 
 For a staging probe, an explicit `runtime_root` can select an already
