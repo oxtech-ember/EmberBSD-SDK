@@ -340,6 +340,8 @@ class Emitter:
                 spec = self.slot(path)
                 if spec["type"] == "string":
                     return Value(f"eqml_ui_string(ui, {spec['index']})", "string")
+                if "visible_node" in spec:
+                    return Value(f"eqml_ui_visible(ui, {spec['visible_node']})", "bool")
                 if "code" in spec:
                     return Value(str(spec["code"]), spec["type"])
                 self.fail(f"reading {spec['type']} slots is not supported by the Runtime API")
@@ -552,6 +554,11 @@ class Emitter:
                     self.lines.append(prefix + f"if (eqml_ui_set_coordinate(ui, {spec['node']}, {spec['axis']}, {value.c}, {spec['duration_ms']}) != 0) return -1;")
                     return
                 spec = self.slot(path)
+                if "visible_node" in spec:
+                    if value.type != "bool":
+                        self.fail(f"visibility assignment requires a boolean: {path}")
+                    self.lines.append(prefix + f"if (eqml_ui_set_visible(ui, {spec['visible_node']}, {value.c}) != 0) return -1;")
+                    return
                 if spec["type"] != value.type or spec["type"] != "string":
                     self.fail(f"assignment type does not match writable string slot {path}")
                 self.lines.append(prefix + f"if (eqml_ui_set(ui, {spec['index']}, {value.c}) != 0) return -1;")

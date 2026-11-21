@@ -14,7 +14,7 @@ From the SDK checkout, run the generator with the native SDK Python:
 
 Compile that file for the target with the renderer's `qml/` include directory.
 It exports `const struct eqml_scene eqml_app`; `--name dashboard` exports
-`eqml_dashboard` instead. Generated C checks scene ABI 3 at compile time. The
+`eqml_dashboard` instead. Generated C checks scene ABI 4 at compile time. The
 [weather example](https://github.com/oxtech-ember/EmberBSD-Examples/tree/main/desktop/mosaico-weather)
 exercises cross-linking, model updates and the RGB565 wsdisplay backend.
 
@@ -36,8 +36,9 @@ exercises cross-linking, model updates and the RGB565 wsdisplay backend.
 
 ## Interactive profile
 
-An interactive scene uses the same fixed-size root `Rectangle`, with nested
-`Rectangle`, `Text` and `MouseArea` nodes. The compiler emits nodes in
+An interactive scene uses a fixed-size `Rectangle` or `Item` root with nested
+`Rectangle`, `Item`, `Text` and `MouseArea` nodes. An `Item` positions its
+children without drawing a background. The viewport clears to white. The compiler emits nodes in
 parent-first order and sorts nonnegative sibling `z` values stably; negative
 `z` and `Grid` mixed with interactive nodes are rejected. The Runtime resolves
 supported parent-relative anchors and bottom-to-top/bottom dependencies;
@@ -57,6 +58,12 @@ Local declarations may not shadow QML object ids.
 Mouse input fields, supported Qt button/modifier constants, text slots,
 `containsPress`, and `mapToItem` are type-checked by the host compiler. Text
 labels may be literal strings; mutable labels use stable Runtime string slots.
+Handlers may read and assign `id.visible` as a boolean. Initial visibility
+defaults to true and accepts a boolean literal. Hiding a parent also hides its
+children. Interactive rectangles accept literal opacity from zero through one
+and the existing `containsPress` binding. A transparent visible item can still
+receive pointer events.
+
 Identified `Rectangle` nodes also support `x` and `y` reads and assignments in
 handlers. `+=` uses checked signed 32-bit arithmetic. An axis with no anchor
 updates immediately; `Behavior on x` or `Behavior on y` accepts only

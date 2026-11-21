@@ -13,6 +13,35 @@ from emberbsd_sdk.qml import QmlError, compile_scene
 
 
 class QmlCompilerTest(unittest.TestCase):
+    def test_item_visibility_and_opacity(self):
+        source = """import QtQuick
+Item { width: 320; height: 480
+    Item { id: group; x: 20; y: 30; width: 100; height: 60
+        MouseArea { anchors.fill: parent; onClicked: top.visible = !group.visible }
+        Rectangle { id: top; opacity: 0.5; visible: false }
+    }
+}"""
+        result = compile_scene(source, "overlay")
+        self.assertEqual(result.count("EQML_NODE_ITEM"), 2)
+        self.assertIn("eqml_ui_set_visible(ui, 3, (!(eqml_ui_visible(ui, 1))))", result)
+        self.assertIn(".transparency = 128, .hidden = 1", result)
+        self.assertIn(".background = 0xffff", result)
+        for before, after, error in [
+            ("opacity: 0.5", "opacity: 2", "between zero and one"),
+            ("visible: false", "visible: group.visible", "boolean literal"),
+            ("!group.visible", "4", "requires a boolean"),
+        ]:
+            with self.subTest(after=after), self.assertRaisesRegex(QmlError, error):
+                compile_scene(source.replace(before, after))
+
+    def test_visible_property_cannot_be_redeclared(self):
+        for declaration in ("property int visible: 1", "property bool visible: true",
+                            "MouseArea { property string visible }"):
+            source = f"import QtQuick\nItem {{ width: 4; height: 4; {declaration} }}"
+            with self.subTest(declaration=declaration), self.assertRaisesRegex(QmlError, "built-in"):
+                compile_scene(source)
+        self.assertIn("eqml_app", compile_scene("import QtQuick\nItem { id: visible; width: 4; height: 4 }"))
+
     def test_behavior_and_coordinate_updates_compile_to_runtime_api(self):
         source = '''import QtQuick 2.0
 Rectangle { width: 400; height: 400
@@ -127,7 +156,7 @@ Rectangle { id: root; width: 320; height: 480
 }'''
         result = compile_scene(source, "mousearea")
         self.assertIn('#include "eqml_input.h"', result)
-        self.assertIn("#if EQML_SCENE_ABI != 3", result)
+        self.assertIn("#if EQML_SCENE_ABI != 4", result)
         self.assertIn(".program = &program", result)
         self.assertIn("static const struct eqml_node nodes[]", result)
         self.assertEqual(result.count(".kind = EQML_NODE_AREA"), 2)

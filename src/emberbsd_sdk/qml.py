@@ -259,7 +259,7 @@ class Parser:
                 value = self.binding()
             elif key == "id":
                 value = self.object_id()
-            elif key in ("x", "y"):
+            elif key in ("x", "y", "visible"):
                 value = self.raw_value()
             elif key == "z":
                 value = self.integer(-(2**31), 2**31 - 1)
@@ -293,7 +293,7 @@ class Parser:
             while self.current.text == ".":
                 self.take(".")
                 key += "." + self.name().text
-            if key in ("Text", "Rectangle", "Grid", "Row", "MouseArea"):
+            if key in ("Text", "Rectangle", "Item", "Grid", "Row", "MouseArea"):
                 if kind in ("Grid", "Row") and key != "Rectangle":
                     raise start.error(f"{kind} places fixed-size Rectangle children")
                 item = self.text_item() if key == "Text" else self.container(key, depth + 1, properties)
@@ -309,6 +309,8 @@ class Parser:
                 property_name = token.text
                 if not re.fullmatch(r"[a-z][A-Za-z0-9_]*", property_name):
                     raise token.error(f"invalid property name {property_name}")
+                if property_name == "visible":
+                    raise token.error("visible is a built-in boolean property")
                 if kind == "MouseArea" and type_token.text == "string":
                     if property_name in declared:
                         raise token.error(f"duplicate property {property_name}")
@@ -381,7 +383,8 @@ class Parser:
                     fields[key] = self.color()
                 elif key == "objectName":
                     fields[key] = self.string()
-                elif kind == "Rectangle" and key == "opacity":
+                elif (kind == "Rectangle" and key == "opacity") or (
+                    kind in ("Rectangle", "Item", "MouseArea") and key == "visible"):
                     fields[key] = self.raw_value()
                 elif kind == "Grid" and key == "columns":
                     fields[key] = self.integer(1, 4096)
@@ -404,7 +407,7 @@ class Parser:
                     fields[key] = self.raw_value()
                 elif key in ("x", "y"):
                     fields[key] = self.raw_value()
-                elif depth and key == "z" and kind in ("Rectangle", "MouseArea"):
+                elif depth and key == "z" and kind in ("Rectangle", "Item", "MouseArea"):
                     fields[key] = self.integer(-(2**31), 2**31 - 1)
                 else:
                     raise start.error(f"unsupported {kind} field {key}")
@@ -752,6 +755,33 @@ def _referenced_text_targets(source):
     return targets
 
 
+def _interactive_opacity(raw, nodes, ids):
+    try:
+        tree = ScriptParser(raw.source).expression_source()
+        binding = compile_expression(raw.source, nodes=ids)
+    except QmlScriptError as error:
+        raise raw.token.error(str(error)) from None
+    if tree.op == "literal" and type(tree.value) in (int, float):
+        if not 0 <= tree.value <= 1:
+            raise raw.token.error("opacity must be between zero and one")
+        return -1, 0, int((1 - tree.value) * 255 + 0.5)
+    condition, pressed, unpressed = tree.args if tree.op == "conditional" else (None, None, None)
+    area_name = None
+    if (condition is not None and condition.op == "member" and
+        condition.value == "containsPress" and condition.args[0].op == "name"):
+        area_name = condition.args[0].value
+    if (binding.type != "float" or binding.prelude or area_name not in ids or
+        (area_name in ids and nodes[ids[area_name]].kind != "MouseArea") or
+        pressed.op != "literal" or type(pressed.value) not in (int, float) or
+        unpressed.op != "literal" or type(unpressed.value) not in (int, float) or
+        unpressed.value != 1.0):
+        raise raw.token.error("opacity supports a containsPress ternary with opaque default")
+    opacity = float(pressed.value)
+    if not 0 <= opacity <= 1:
+        raise raw.token.error("opacity must be between zero and one")
+    return ids[area_name], int((1.0 - opacity) * 255 + 0.5), 0
+
+
 def interactive_scene(root, properties, name):
     if properties:
         raise QmlError("integer model properties cannot be combined with an interactive scene")
@@ -812,7 +842,8 @@ def interactive_scene(root, properties, name):
                 dynamic_texts.update(_referenced_text_targets(raw.source))
             except QmlScriptError as error:
                 raise raw.token.error(str(error)) from None
-    slots = {}
+    slots = {f"{ident}.visible": {"type": "bool", "visible_node": index}
+             for ident, index in ids.items()}
     text_slot = {}
     area_slot = {}
     slot_count = 0
@@ -918,8 +949,8 @@ def interactive_scene(root, properties, name):
             if fill != "parent" or item.kind != "MouseArea" or any(
                 value is not None for value in (top, left, center, hcenter, vcenter, bottom)):
                 raise QmlError("anchors.fill supports only MouseArea anchors.fill: parent")
-            if parent.kind != "Rectangle":
-                raise QmlError("anchors.fill requires a fixed-size Rectangle parent")
+            if parent.kind not in ("Rectangle", "Item"):
+                raise QmlError("anchors.fill requires a fixed-size Rectangle or Item parent")
             x = y = 0
             width, height = parent.fields.get("width", 0), parent.fields.get("height", 0)
         if center is not None:
@@ -974,30 +1005,16 @@ def interactive_scene(root, properties, name):
         if item.kind == "Text" and "text" in fields:
             text = _string_expression(fields["text"], ids, slots)
 
-        opacity_area, transparency = -1, 0
+        opacity_area, pressed_transparency, transparency = -1, 0, 0
         if "opacity" in fields:
-            raw_opacity = fields["opacity"]
-            try:
-                tree = ScriptParser(raw_opacity.source).expression_source()
-                binding = compile_expression(raw_opacity.source, nodes=ids)
-            except QmlScriptError as error:
-                raise raw_opacity.token.error(str(error)) from None
-            condition, pressed, unpressed = tree.args if tree.op == "conditional" else (None, None, None)
-            area_name = None
-            if (condition is not None and condition.op == "member" and
-                condition.value == "containsPress" and condition.args[0].op == "name"):
-                area_name = condition.args[0].value
-            if (binding.type != "float" or binding.prelude or area_name not in ids or
-                (area_name in ids and nodes[ids[area_name]].kind != "MouseArea") or
-                pressed.op != "literal" or type(pressed.value) not in (int, float) or
-                unpressed.op != "literal" or type(unpressed.value) not in (int, float) or
-                unpressed.value != 1.0):
-                raise raw_opacity.token.error("opacity supports a containsPress ternary with opaque default")
-            opacity_area = ids[area_name]
-            opacity = float(pressed.value)
-            if not 0 <= opacity <= 1:
-                raise raw_opacity.token.error("opacity must be between zero and one")
-            transparency = int((1.0 - opacity) * 255 + 0.5)
+            opacity_area, pressed_transparency, transparency = _interactive_opacity(
+                fields["opacity"], nodes, ids)
+        hidden = 0
+        if "visible" in fields:
+            value = _raw(fields["visible"])
+            if value not in ("true", "false"):
+                raise fields["visible"].token.error("visible requires a boolean literal")
+            hidden = int(value == "false")
 
         buttons = "EQML_BUTTON_LEFT"
         hover = 0
@@ -1065,24 +1082,24 @@ def interactive_scene(root, properties, name):
             "EQML_RELEASED", "EQML_CLICKED", "EQML_DOUBLE_CLICKED", "EQML_PRESS_AND_HOLD",
             "EQML_TEXT_CHANGED")).index(value))) or "0"
         text_slot_index = text_slot.get(index, -1)
-        node_kind = {"Rectangle": "RECT", "Text": "TEXT", "MouseArea": "AREA"}[item.kind]
+        node_kind = {"Rectangle": "RECT", "Item": "ITEM", "Text": "TEXT", "MouseArea": "AREA"}[item.kind]
         records.append(
             "    { .kind = EQML_NODE_%s, .parent = %d, .x = %d, .y = %d, "
             ".width = %d, .height = %d, .color = 0x%04x, .pixel_size = %d, .anchors = %d, "
             ".bottom_edge = %s, .bottom_target = %d, .bottom_margin = %d, .text = %s, "
             ".text_slot = %d, .opacity_area = %d, .pressed_transparency = %d, "
-            ".buttons = %s, .signals = %s, .hover = %d, .drag_axes = %d, .drag_target = %d, "
+            ".transparency = %d, .hidden = %d, .buttons = %s, .signals = %s, .hover = %d, .drag_axes = %d, .drag_target = %d, "
             ".min_x = %d, .max_x = %d, .min_y = %d, .max_y = %d }," % (
                 node_kind, parent_index, x, y, width, height, color, pixel_size, anchors,
                 bottom_edge, bottom_target, bottom_margin, text or "NULL", text_slot_index,
-                opacity_area, transparency, buttons, signal_bits, hover, drag_axes, drag_target,
+                opacity_area, pressed_transparency, transparency, hidden, buttons, signal_bits, hover, drag_axes, drag_target,
                 min_x, max_x, min_y, max_y))
 
     _check_layout_cycles(parents, bottom_dependencies)
     lines = ['/* Generated by EmberBSD qml-compile. */', '#include "eqml.h"',
              '#include "eqml_input.h"', '#include <errno.h>', '#include <stdio.h>',
              '#include <stdint.h>', '#include <string.h>',
-             '#if EQML_SCENE_ABI != 3', '#error "Expected EmberBSD QML scene ABI 3"', '#endif', '',
+             '#if EQML_SCENE_ABI != 4', '#error "Expected EmberBSD QML scene ABI 4"', '#endif', '',
              "static const struct eqml_node nodes[] = {", *records, "};", ""]
     lines.extend(callbacks)
     if callbacks:
@@ -1101,7 +1118,7 @@ def interactive_scene(root, properties, name):
                   f"    .string_count = {slot_count}, .handler = {handler}", "};", "",
                   f"const struct eqml_scene eqml_{name} = {{",
                   f"    .width = {root.fields['width']}, .height = {root.fields['height']}, "
-                  f".background = 0x{root.fields.get('color', 0xffff):04x},",
+                  ".background = 0xffff,",
                   "    .items = NULL, .item_count = 0, .properties = NULL, .property_count = 0,",
                   "    .program = &program", "};", ""])
     return "\n".join(lines)
@@ -1122,18 +1139,23 @@ def compile_scene(source, name="app"):
     if unused_bools:
         raise QmlError("root boolean properties must select a supported static Row layout direction")
     for item in _walk(root):
+        if item is not root and item.kind == "Item" and any(
+                key.startswith("anchors.") for key in item.fields):
+            raise QmlError("static nested Item supports only explicit geometry")
         if item.behaviors:
             raise QmlError("Behavior requires an interactive scene")
         if item.handlers:
             key, handler = next(iter(item.handlers.items()))
             raise handler.token.error(f"unsupported {item.kind} field {key}")
+        if "visible" in item.fields:
+            raise item.fields["visible"].token.error("visible requires an interactive scene")
         if "opacity" in item.fields:
             raise item.fields["opacity"].token.error("unsupported Rectangle field opacity")
     _resolve_static_items(root)
     fields = root.fields
     items = paint_items(root, {key: i for i, key in enumerate(properties)})
     lines = ['/* Generated by EmberBSD qml-compile. */', '#include "eqml.h"',
-             '#if EQML_SCENE_ABI != 3', '#error "Expected EmberBSD QML scene ABI 3"', '#endif', '']
+             '#if EQML_SCENE_ABI != 4', '#error "Expected EmberBSD QML scene ABI 4"', '#endif', '']
     if properties:
         lines.append("static const struct eqml_int properties[] = {")
         lines.extend(f'    {{ .name = {c_string(key)}, .initial = {value} }},' for key, value in properties.items())
