@@ -33,7 +33,7 @@ def signal_enum(name):
 
 
 TOKEN = re.compile(r"\s+|//[^\n]*|/\*[\s\S]*?\*/|(?:'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\")|"
-                   r"(?:===|!==|==|!=|&&|\|\||=>)|(?:0[xX][0-9a-fA-F]+|(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+))|"
+                   r"(?:\+=|-=|===|!==|==|!=|&&|\|\||=>)|(?:0[xX][0-9a-fA-F]+|(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+))|"
                    r"[A-Za-z_$][A-Za-z0-9_$]*|[{}().,:;?+&|=!<>-]")
 
 
@@ -150,6 +150,9 @@ class Parser:
             self.take("=")
             return Stmt(declaration, name, (self.expression(),))
         expression = self.expression()
+        if self.token in ("+=", "-="):
+            operator = self.take()
+            return Stmt("compound_assign", expression, (operator, self.expression()))
         if self.maybe("="):
             return Stmt("assign", expression, (self.expression(),))
         return Stmt("expr", args=(expression,))
@@ -229,6 +232,7 @@ class Value:
 
 class Emitter:
     def __init__(self, name, current_node, nodes, slots, mouse_name,
+                 coordinates=None,
                  geometry=None, locals_=None, checked_math=True):
         self.checked_math = checked_math
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
@@ -237,6 +241,7 @@ class Emitter:
         self.nodes, self.slots, self.mouse_name = nodes, slots, mouse_name
         self.lines, self.local_types, self.temp = [], {}, 0
         self.geometry = geometry or {}
+        self.coordinates = coordinates or {}
         for key, value in (locals_ or {}).items():
             self.local_types[key] = value if isinstance(value, (dict, str)) else {
                 "type": "int", "code": str(value)}
@@ -321,6 +326,9 @@ class Emitter:
                 if local.type == "point":
                     return Value(f"{local.c}.{expr.value}", "int")
             path = self.member_path(expr)
+            if path in self.coordinates:
+                spec = self.coordinates[path]
+                return Value(f"eqml_ui_coordinate(ui, {spec['node']}, {spec['axis']})", "int")
             if path in self.geometry:
                 value = self.geometry[path]
                 if isinstance(value, dict):
@@ -515,6 +523,8 @@ class Emitter:
                 self.statement(statement.args[2], indent + 1)
             self.lines.append(prefix + "}")
         elif statement.op in ("let", "const"):
+            if statement.value in self.nodes:
+                self.fail(f"local variable shadows QML object id {statement.value}")
             value = self.expression(statement.args[0])
             ctype = {"int": "int32_t", "bool": "int", "string": "const char *", "point": "struct eqml_point"}.get(value.type)
             if ctype is None:
@@ -533,6 +543,14 @@ class Emitter:
             target, value = statement.value, self.expression(statement.args[0])
             if target.op == "member":
                 path = self.member_path(target)
+                if path in self.coordinates:
+                    spec = self.coordinates[path]
+                    if not spec.get("writable", True):
+                        self.fail(spec.get("anchor_error", f"{path} is not writable"))
+                    if value.type != "int":
+                        self.fail(f"coordinate assignment requires an integer: {path}")
+                    self.lines.append(prefix + f"if (eqml_ui_set_coordinate(ui, {spec['node']}, {spec['axis']}, {value.c}, {spec['duration_ms']}) != 0) return -1;")
+                    return
                 spec = self.slot(path)
                 if spec["type"] != value.type or spec["type"] != "string":
                     self.fail(f"assignment type does not match writable string slot {path}")
@@ -554,6 +572,22 @@ class Emitter:
                 self.lines.append(prefix + f"if (eqml_ui_set(ui, {spec['index']}, {value.c}) != 0) return -1;")
             else:
                 self.fail("assignment target must be a string property or local")
+        elif statement.op == "compound_assign":
+            target = statement.value
+            if target.op != "member":
+                self.fail("compound assignment target must be a coordinate property")
+            path = self.member_path(target)
+            if path not in self.coordinates:
+                self.fail(f"unsupported compound assignment target {path}")
+            spec = self.coordinates[path]
+            if not spec.get("writable", True):
+                self.fail(spec.get("anchor_error", f"{path} is not writable"))
+            current = Value(f"eqml_ui_coordinate(ui, {spec['node']}, {spec['axis']})", "int")
+            right = self.expression(statement.args[1])
+            if right.type != "int":
+                self.fail("coordinate arithmetic requires an integer")
+            value = self.integer_math(current, statement.args[0][0], right)
+            self.lines.append(prefix + f"if (eqml_ui_set_coordinate(ui, {spec['node']}, {spec['axis']}, {value.c}, {spec['duration_ms']}) != 0) return -1;")
         elif statement.op == "expr":
             value = self.expression(statement.args[0])
             self.lines.append(prefix + f"(void)({value.c});")
@@ -570,11 +604,13 @@ class Emitter:
         return "\n".join(code)
 
 
-def compile_handler(source, name, *, current_node, nodes, slots, allow_mouse=True):
+def compile_handler(source, name, *, current_node, nodes, slots, allow_mouse=True,
+                    coordinates=None):
     tree, mouse_name = Parser(source).handler()
     if mouse_name is not None and not allow_mouse:
         raise QmlScriptError("this signal has no mouse event parameter")
-    return Emitter(name, current_node, nodes, slots, mouse_name).compile(tree)
+    return Emitter(name, current_node, nodes, slots, mouse_name,
+                   coordinates=coordinates).compile(tree)
 
 
 @dataclass(frozen=True)

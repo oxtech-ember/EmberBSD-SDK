@@ -13,6 +13,85 @@ from emberbsd_sdk.qml import QmlError, compile_scene
 
 
 class QmlCompilerTest(unittest.TestCase):
+    def test_behavior_and_coordinate_updates_compile_to_runtime_api(self):
+        source = '''import QtQuick 2.0
+Rectangle { width: 400; height: 400
+    Rectangle { id: rect; width: 100; height: 100; y: 100; color: "red"
+        Behavior on x { NumberAnimation { duration: 1000 } }
+        MouseArea { anchors.fill: parent; onClicked: rect.x += 50 }
+    }
+}'''
+        result = compile_scene(source, "behavior")
+        self.assertIn("eqml_ui_coordinate(ui, 1, EQML_AXIS_X)", result)
+        self.assertIn("eqml_ui_set_coordinate(ui, 1, EQML_AXIS_X", result)
+        self.assertIn(", 1000) != 0", result)
+        self.assertIn("int64_t _eqml_wide_", result)
+
+    def test_coordinate_assignment_is_immediate_without_behavior(self):
+        source = '''import QtQuick
+Rectangle { width: 40; height: 40
+    Rectangle { id: rect; width: 10; height: 10
+        MouseArea { anchors.fill: parent; onClicked: rect.y = rect.y + 3 }
+    }
+}'''
+        result = compile_scene(source)
+        self.assertIn("eqml_ui_coordinate(ui, 1, EQML_AXIS_Y)", result)
+        self.assertIn("eqml_ui_set_coordinate(ui, 1, EQML_AXIS_Y", result)
+        self.assertIn(", 0) != 0", result)
+
+    def test_rejects_coordinate_writes_on_anchored_axes(self):
+        source = '''import QtQuick
+Rectangle { width: 40; height: 40
+    Rectangle { id: rect; width: 10; height: 10; anchors.horizontalCenter: parent.horizontalCenter
+        MouseArea { anchors.fill: parent; onClicked: rect.x = 4 }
+    }
+}'''
+        with self.assertRaisesRegex(QmlError, "x is controlled by anchors"):
+            compile_scene(source)
+
+    def test_behavior_rejects_unsupported_target_or_anchored_axis(self):
+        cases = [
+            ('''Rectangle { width: 20; height: 20
+                Rectangle { id: box; width: 5; height: 5
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    Behavior on x { NumberAnimation { duration: 200 } }
+                }
+                MouseArea {}
+            }''', "Behavior on x conflicts with anchors"),
+            ('''Rectangle { width: 20; height: 20
+                Rectangle { id: box; width: 5; height: 5
+                    Behavior on width { NumberAnimation { duration: 200 } }
+                }
+            }''', "Behavior supports only x or y"),
+            ('''Rectangle { width: 20; height: 20
+                Rectangle { id: box; width: 5; height: 5
+                    Behavior on x { NumberAnimation { duration: 200; loops: 2 } }
+                }
+                MouseArea {}
+            }''', "NumberAnimation supports only one duration"),
+            ('''Rectangle { width: 20; height: 20
+                Rectangle { id: box; width: 5; height: 5
+                    Behavior on x { NumberAnimation { duration: 2147483648 } }
+                }
+                MouseArea {}
+            }''', "integer outside 0..2147483647"),
+        ]
+        for source, reason in cases:
+            with self.subTest(reason=reason), self.assertRaisesRegex(QmlError, reason):
+                compile_scene("import QtQuick 2.0\n" + source)
+
+    def test_local_handler_name_cannot_shadow_qml_object_id(self):
+        source = '''import QtQuick
+Rectangle { width: 20; height: 20
+    Rectangle { id: rect; width: 5; height: 5
+        MouseArea { anchors.fill: parent
+            onClicked: { let rect = 0; rect.x += 50 }
+        }
+    }
+}'''
+        with self.assertRaisesRegex(QmlError, "local variable shadows QML object id rect"):
+            compile_scene(source)
+
     def test_mousearea_scene_compiles_to_interactive_program(self):
         source = '''import QtQuick
 Rectangle { id: root; width: 320; height: 480

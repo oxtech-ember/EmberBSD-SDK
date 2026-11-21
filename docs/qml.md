@@ -53,9 +53,17 @@ both axes; each enabled axis requires constant minimum and maximum bounds.
 supports `onTextChanged`. `onEntered`, `onExited` and `onTextChanged` do not
 take a mouse event argument. Handler bodies are compiled to C from a bounded
 JavaScript subset (expressions, assignments, local declarations and `if`).
+Local declarations may not shadow QML object ids.
 Mouse input fields, supported Qt button/modifier constants, text slots,
 `containsPress`, and `mapToItem` are type-checked by the host compiler. Text
 labels may be literal strings; mutable labels use stable Runtime string slots.
+Identified `Rectangle` nodes also support `x` and `y` reads and assignments in
+handlers. `+=` uses checked signed 32-bit arithmetic. An axis with no anchor
+updates immediately; `Behavior on x` or `Behavior on y` accepts only
+`NumberAnimation { duration: <integer> }` and animates assignments to that
+axis. Coordinate writes to an anchored axis and behaviors on anchored axes are
+rejected. Other animation properties and animation types are outside this
+profile.
 Unsupported QML or JavaScript constructs fail with a source location instead
 of being emitted as target code.
 

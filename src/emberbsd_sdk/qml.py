@@ -41,6 +41,7 @@ class Item:
     children: list
     handlers: dict
     properties: dict
+    behaviors: dict
 
 
 @dataclass(frozen=True)
@@ -279,13 +280,13 @@ class Parser:
             self.finish_field()
         end = self.take("}")
         check_anchors(fields, end)
-        return Item("Text", fields, [], handlers, {})
+        return Item("Text", fields, [], handlers, {}, {})
 
     def container(self, kind, depth, properties):
         if depth > 64:
             raise self.current.error("at most 64 nested containers are supported")
         self.take("{")
-        fields, children, handlers, declared = {}, [], {}, {}
+        fields, children, handlers, declared, behaviors = {}, [], {}, {}, {}
         while self.current.text != "}":
             start = self.name()
             key = start.text
@@ -331,6 +332,33 @@ class Parser:
                     raise start.error("only root integer/boolean and MouseArea string properties are supported")
             elif key == "anchors" and self.current.text == "{":
                 self.grouped_fields(fields, "anchors")
+                self.finish_field()
+                continue
+            elif key == "Behavior":
+                self.take("on")
+                axis = self.name().text
+                if axis not in ("x", "y"):
+                    raise start.error("Behavior supports only x or y")
+                if axis in behaviors:
+                    raise start.error(f"duplicate Behavior on {axis}")
+                self.take("{")
+                if self.name().text != "NumberAnimation":
+                    raise self.last.error("Behavior requires NumberAnimation")
+                self.take("{")
+                duration = None
+                while self.current.text != "}":
+                    field = self.name()
+                    if field.text != "duration" or duration is not None:
+                        raise field.error("NumberAnimation supports only one duration")
+                    self.take(":")
+                    duration = self.integer(0, 2**31 - 1)
+                    self.finish_field()
+                self.take("}")
+                self.finish_field()
+                self.take("}")
+                if duration is None:
+                    raise start.error("NumberAnimation requires duration")
+                behaviors[axis] = duration
                 self.finish_field()
                 continue
             else:
@@ -393,7 +421,7 @@ class Parser:
             check_anchors(fields, end)
             if kind == "Grid":
                 place_grid(fields, children, end)
-        return Item(kind, fields, children, handlers, declared)
+        return Item(kind, fields, children, handlers, declared, behaviors)
 
     def scene(self):
         self.take("import")
@@ -744,6 +772,35 @@ def interactive_scene(root, properties, name):
                 if isinstance(value, int):
                     geometry[f"{ident}.{dimension}"] = value
 
+    coordinates = {}
+    for index, item in enumerate(nodes):
+        ident = item.fields.get("id")
+        if not ident:
+            if item.behaviors:
+                raise QmlError("Behavior requires an identified Rectangle")
+            continue
+        if item.behaviors and item.kind != "Rectangle":
+            raise QmlError("Behavior is supported only on Rectangle coordinates")
+        if item.kind != "Rectangle":
+            continue
+        fields = item.fields
+        anchored = {
+            "x": any(key in fields for key in ("anchors.fill", "anchors.left", "anchors.right",
+                                                 "anchors.horizontalCenter", "anchors.centerIn")),
+            "y": any(key in fields for key in ("anchors.fill", "anchors.top", "anchors.bottom",
+                                                 "anchors.verticalCenter", "anchors.centerIn")),
+        }
+        for axis in ("x", "y"):
+            if axis in item.behaviors and anchored[axis]:
+                raise QmlError(f"Behavior on {axis} conflicts with anchors")
+            coordinates[f"{ident}.{axis}"] = {
+                "node": index,
+                "axis": "EQML_AXIS_X" if axis == "x" else "EQML_AXIS_Y",
+                "duration_ms": item.behaviors.get(axis, 0),
+                "writable": not anchored[axis],
+                "anchor_error": f"{axis} is controlled by anchors",
+            }
+
     # Find Texts whose values can be changed by handlers before assigning the
     # stable string-slot indices used by both the node and generated callbacks.
     dynamic_texts = set()
@@ -801,7 +858,7 @@ def interactive_scene(root, properties, name):
                 allow_mouse = canonical not in ("onEntered", "onExited", "onTextChanged")
                 callbacks.append(compile_handler(handler.source, function,
                     current_node=index, nodes=ids, slots=local_slots,
-                    allow_mouse=allow_mouse))
+                    allow_mouse=allow_mouse, coordinates=coordinates))
                 dispatch[(index, signal)] = function
                 signal_masks[index].add(signal)
             except QmlScriptError as error:
@@ -1065,6 +1122,8 @@ def compile_scene(source, name="app"):
     if unused_bools:
         raise QmlError("root boolean properties must select a supported static Row layout direction")
     for item in _walk(root):
+        if item.behaviors:
+            raise QmlError("Behavior requires an interactive scene")
         if item.handlers:
             key, handler = next(iter(item.handlers.items()))
             raise handler.token.error(f"unsupported {item.kind} field {key}")
