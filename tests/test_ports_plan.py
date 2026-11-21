@@ -126,6 +126,23 @@ class PlannerTests(unittest.TestCase):
                 for name in self.old['input_keys']:
                     self.assertNotEqual(self.old['input_keys'][name], plan['candidate']['input_keys'][name])
 
+    def test_constraints_belong_to_the_consumer(self):
+        original = graph()
+        consumer = next(n for n in original['nodes'] if n['dependencies'])
+        edge = consumer['dependencies'][0]
+        edge['patterns'] = ['library>=1', 'library<3']
+        first = lock_graph(original)
+        edge['patterns'].reverse()
+        self.assertEqual(lock_graph(original), first)
+        edge['patterns'] = ['library>=2']
+        second = lock_graph(original)
+        self.assertEqual(first['input_keys'][edge['id']], second['input_keys'][edge['id']])
+        self.assertIn(consumer['id'], make_plan(first, second)['impacted'])
+        for invalid in ([], [''], ['same', 'same'], 'library>=1'):
+            with self.subTest(invalid=invalid), self.assertRaises(SDKError):
+                edge['patterns'] = invalid
+                lock_graph(original)
+
     def test_reject_invalid_graphs(self):
         variants = []
         bad = graph(); bad['schema'] = 'future'; variants.append(bad)

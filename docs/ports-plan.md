@@ -41,14 +41,18 @@ real input requires 64 lowercase hexadecimal characters.
       "id": "target:www/curl",
       "version": "8.16.0",
       "input_sha256": "...",
-      "dependencies": [{"id": "target:security/openssl", "kind": "runtime"}]
+      "dependencies": [{"id": "target:security/openssl", "kind": "runtime", "patterns": ["openssl>=3.6.0"]}]
     }
   ]
 }
 ```
 
 Dependency kinds are `build`, `tool`, `runtime`, and `test`. All kinds affect
-input keys and ordering. Multiple kinds may refer to the same node. Duplicate
+input keys and ordering. The collector stores the evaluated pkgsrc requirements in the
+consumer edge’s sorted, nonempty `patterns` list. A change to this requirement affects
+the consumer and its downstream closure. Earlier immutable locks omit the list and keep
+their original checksums. Every provider input change remains conservative when there is
+no evidence for the consumer’s actual compile and link inputs. Multiple kinds may refer to the same node. Duplicate
 nodes and duplicate `(id, kind)` edges fail validation. Missing dependencies,
 cycles, extra fields, and unknown schemas also fail validation. JSON reads
 reject duplicate map keys and use the SDK depth limit. The Ports CLI uses a

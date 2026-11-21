@@ -11,6 +11,7 @@ import re
 import sys
 
 from .errors import SDKError
+from .graph import DependencyCycle, dependency_waves
 from .inventory import sha256_file
 from .jsonio import json_bytes, read_json, write_json
 
@@ -51,29 +52,12 @@ def _sealed(value, field):
 
 
 def _waves(nodes, selected=None):
-    """Kahn traversal. It also detects cycles without recursive Python calls."""
-    selected = set(nodes) if selected is None else set(selected)
-    remaining = {name: {dep['id'] for dep in nodes[name]['dependencies']} & selected
-                 for name in selected}
-    reverse = {}
-    for name, dependencies in remaining.items():
-        for dependency in dependencies:
-            reverse.setdefault(dependency, set()).add(name)
-    ready = sorted(name for name, deps in remaining.items() if not deps)
-    waves = []
-    while ready:
-        waves.append(ready)
-        next_ready = set()
-        for name in ready:
-            del remaining[name]
-            for consumer in reverse.get(name, ()):
-                remaining[consumer].remove(name)
-                if not remaining[consumer]:
-                    next_ready.add(consumer)
-        ready = sorted(next_ready)
-    if remaining:
-        raise SDKError('dependency cycle: ' + _cycle_path(nodes, remaining))
-    return waves
+    dependencies = {name: [edge['id'] for edge in node['dependencies']]
+                    for name, node in nodes.items()}
+    try:
+        return dependency_waves(dependencies, selected)
+    except DependencyCycle as error:
+        raise SDKError('dependency cycle: ' + _cycle_path(nodes, error.remaining)) from None
 
 
 def _cycle_path(nodes, selected):
@@ -148,17 +132,25 @@ def lock_graph(graph):
         _sha(node['input_sha256'])
         if name in nodes:
             raise SDKError(f'duplicate node: {name}')
-        edges = set()
+        edges = {}
         for dep in _list(node['dependencies'], 'dependencies'):
-            _fields(dep, 'id kind', 'dependency')
+            fields = 'id kind patterns' if isinstance(dep, dict) and 'patterns' in dep else 'id kind'
+            _fields(dep, fields, 'dependency')
             _text(dep['id'], 'dependency id')
             if dep['kind'] not in ('build', 'tool', 'runtime', 'test'):
                 raise SDKError('unsupported dependency kind')
             edge = (dep['id'], dep['kind'])
             if edge in edges:
                 raise SDKError(f'duplicate dependency: {name} -> {edge}')
-            edges.add(edge)
-        nodes[name] = dict(node, dependencies=[dict(id=n, kind=k) for n, k in sorted(edges)])
+            item = dict(id=dep['id'], kind=dep['kind'])
+            if 'patterns' in dep:
+                patterns = [_text(value, 'dependency pattern')
+                            for value in _list(dep['patterns'], 'dependency patterns')]
+                if not patterns or len(set(patterns)) != len(patterns):
+                    raise SDKError('expected nonempty unique dependency patterns')
+                item['patterns'] = sorted(patterns)
+            edges[edge] = item
+        nodes[name] = dict(node, dependencies=[edges[key] for key in sorted(edges)])
     for name, node in nodes.items():
         for dep in node['dependencies']:
             if dep['id'] not in nodes:
