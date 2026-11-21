@@ -149,6 +149,20 @@ def _elf_file_offset(loads, address, length, path, label):
     return offsets[0]
 
 
+def is_elf64_executable(path, *, machine=None):
+    """Distinguish position-independent executables from shared objects."""
+    handle, before = open_regular(path)
+    with handle:
+        result, read_at, _, dynamics, _, _ = _elf64_layout(
+            handle, before.st_size, path, machine)
+        executable = result['type'] == 2
+        if result['type'] == 3:
+            tags = _elf_dynamic_tags(read_at, dynamics, path)
+            executable = bool(tags.get(0x6FFFFFFB, [0])[0] & 0x08000000)  # DT_FLAGS_1, DF_1_PIE
+    verify_stable(path, before)
+    return executable
+
+
 def read_elf_dynamic(path, *, machine=None):
     handle, before = open_regular(path)
     with handle:

@@ -208,3 +208,42 @@ Package releases and sysroot publication have a separate directory-rename
 contract.
 Existing adapters keep their SDK snapshot. When upgrading the SDK, use a new
 binding path or remove the old binding after its consumers have finished.
+
+## NetBSD amd64 AddressSanitizer
+
+For native kernel contracts, set `EMBER_NATIVE_ASAN_RESOURCE_DIR` to the
+absolute path of the staged compiler-rt package's `lib/clang/<major>` directory
+before running `ember/check-kernel.sh`. For other owner checks pass the same path
+with `run-native-check.py --netbsd-asan-resource-dir`. Select the amd64
+`lang/compiler-rt` package from the signed SDK catalog. Its resource directory
+major must match the selected native Clang major. This setting uses the
+package's sanitizer headers and archives along with the selected compiler's
+built-in headers. It adds no sanitizer flags by itself.
+
+As of the November 21 catalog, native Clang `23.1.3nb1` and the signed amd64
+`compiler-rt-23.1.4nb15` (NetBSD 11 ABI) passed C and C++ ASan/UBSan checks
+together. The catalog did not have an amd64 Clang package. The recipe below
+stages only the resource directory from that signed artifact in a work
+directory. It requires the SDK trust root and OpenSSL selected for SDK release
+verification.
+
+```sh
+package=compiler-rt-23.1.4nb15.tgz
+stage="$CHECK_WORK/compiler-rt-package"
+mkdir "$stage"
+"$HOST_PREFIX/bin/python3.15" "$SDK_SOURCE/scripts/s3-release.py" \
+  --host-prefix "$OPENSSL_PREFIX" fetch-artifact \
+  --url https://emberbsd-pkg.oxteam.me \
+  --trust-root "$SDK_SOURCE/trust/emberbsd-release-root.pem" \
+  --artifact netbsd-amd64-e4e1bc4c4d9fdb03238bb3a0 \
+  --output "$stage/$package"
+"$HOST_PREFIX/bin/llvm-ar" p "$stage/$package" "$package" > "$stage/payload.tgz"
+tar -xf "$stage/payload.tgz" -C "$stage" lib/clang/23
+export EMBER_NATIVE_ASAN_RESOURCE_DIR="$stage/lib/clang/23"
+```
+
+NetBSD ASan needs its fixed shadow address range. After a successful address
+sanitized executable link, the adapter sets PaX `+a` on that new executable
+using the base system's `paxctl`. Ordinary executables, compile-only commands,
+and shared libraries retain their default PaX policy. Failed compiler or
+`paxctl` commands propagate failure to the check.

@@ -23,6 +23,8 @@ def main(argv=None):
     parser.add_argument('--tool', required=True, help='selected tool role that runs the check')
     parser.add_argument('--cwd', required=True)
     parser.add_argument('--log', required=True)
+    parser.add_argument('--netbsd-asan-resource-dir',
+                        help='selected amd64 compiler-rt Clang resource directory')
     parser.add_argument('--bindings', required=True, help='caller-owned compiler argument adapter directory')
     for name in ('cppflag', 'cflag', 'cxxflag', 'ldflag'):
         parser.add_argument('--' + name, action='append', default=[], help='one explicit native argument; repeat as needed')
@@ -34,6 +36,7 @@ def main(argv=None):
                                   required_roles=roles)
         arguments = args.arguments[1:] if args.arguments[:1] == ['--'] else args.arguments
         native_checks.run_check(native, args.tool, arguments, cwd=args.cwd, log=args.log, bindings=args.bindings,
+            netbsd_asan_resource_dir=args.netbsd_asan_resource_dir,
             extra_flags={name + 's':getattr(args, name) for name in ('cppflag','cflag','cxxflag','ldflag')})
         return 0
     except SDKError as error:

@@ -362,8 +362,36 @@ def _needs_runtime(record, output):
                for name in record['runtime_rpath']['libraries'] for entry in needed)
 
 
+def _address_sanitizer(arguments):
+    enabled = set()
+    for word in _operation_words(arguments):
+        if word == '--':
+            break
+        option, _, names = word.partition('=')
+        if option == '-fsanitize':
+            enabled.update(names.split(','))
+        elif option == '-fno-sanitize':
+            if names == 'all':
+                enabled.clear()
+            else:
+                enabled.difference_update(names.split(','))
+    return 'address' in enabled
+
+
+def _checked_asan_output(output, previous):
+    current = paths.entry(output)
+    if current is None or (previous is not None and
+            (current.st_ino, current.st_dev, current.st_mtime_ns, current.st_ctime_ns) ==
+            (previous.st_ino, previous.st_dev, previous.st_mtime_ns, previous.st_ctime_ns)):
+        return False
+    paths.regular_file(output)
+    if current.st_nlink != 1 or current.st_mode & 0o6000:
+        raise SDKError('refusing to PaX-mark a linked or privileged ASan output')
+    return elf.is_elf64_executable(output, machine=62)
+
+
 def bind_compilers(destination, *, commands, flags, python, aliases=None, link_flags=None,
-                   runtime_rpath=None, native_cxx_runtime=None):
+                   runtime_rpath=None, native_cxx_runtime=None, netbsd_asan=None):
     """Create or reuse caller-owned adapters for a previously selected toolset.
 
     This publishes command routing, not tool qualification. Callers obtain the
@@ -403,6 +431,12 @@ def bind_compilers(destination, *, commands, flags, python, aliases=None, link_f
     paths.real_directory(parent)
     record = dict(format='emberbsd-compiler-binding', version=_FORMAT_VERSION,
                   commands=commands, flags=flags, aliases=aliases)
+    if netbsd_asan is not None:
+        if (not isinstance(netbsd_asan, dict) or
+                set(netbsd_asan) != {'resource_dir', 'builtin_include', 'paxctl'}):
+            raise SDKError('NetBSD ASan requires a resource directory, built-in headers and paxctl')
+        record['netbsd_asan'] = {key:paths.canonical_existing(value)
+                               for key, value in netbsd_asan.items()}
     if native_cxx_runtime is not None:
         if (not isinstance(native_cxx_runtime, dict) or
                 set(native_cxx_runtime) not in ({'include_dir', 'library_dir', 'sysroot', 'targets', 'deployment'},
@@ -539,22 +573,35 @@ def execute(path, role, arguments):
     search path runs as a child: if the written ELF output needs a bound
     runtime library and the predicted link lacks the path, or has it without
     such a need, the same link runs once more with the other choice.
+    A selected NetBSD ASan link marks only the newly produced executable.
     """
     try:
         record = jsonio.read_json(path)
         command = compiler_argv(record, role, arguments)
+        asan = record.get('netbsd_asan') if role in ('cc', 'cxx', 'cpp', 'csa') else None
+        asan = asan if asan and _address_sanitizer(command[1:]) else None
+        asan_flags = (['-resource-dir=' + asan['resource_dir'],
+                       '-isystem', asan['builtin_include']] if asan else [])
+        command[1:1] = asan_flags
         operation = None
-        if 'runtime_rpath' in record and role not in _DIRECT_ROLES:
+        if asan or ('runtime_rpath' in record and role not in _DIRECT_ROLES):
             operation = _link_words(role, _words(arguments))[0]
         output = None if operation is None else _link_output(operation)
-        if output is None:
+        mark = asan and output is not None and not {'-shared', '-dynamiclib'}.intersection(operation)
+        fix_rpath = 'runtime_rpath' in record and output is not None
+        if not (mark or fix_rpath):
             os.execv(command[0], command)
-        predicted = _predicted_runtime_path(role, operation)
+        previous = paths.entry(output) if mark else None
         status = _run(command)
-        if status == 0:
+        if status == 0 and fix_rpath:
+            predicted = _predicted_runtime_path(role, operation)
             needed = _needs_runtime(record, output)
             if needed is not None and needed != predicted:
-                status = _run(compiler_argv(record, role, arguments, runtime_path=needed))
+                retry = compiler_argv(record, role, arguments, runtime_path=needed)
+                retry[1:1] = asan_flags
+                status = _run(retry)
+        if status == 0 and mark and _checked_asan_output(output, previous):
+            status = _run([asan['paxctl'], '+a', os.path.abspath(output)])
     except (SDKError, OSError, ValueError, KeyError, TypeError) as error:
         print('compiler binding: ' + str(error), file=sys.stderr)
         raise SystemExit(1)

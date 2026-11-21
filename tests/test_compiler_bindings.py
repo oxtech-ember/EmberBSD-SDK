@@ -9,8 +9,9 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
-from test_core import TemporaryCase
+from test_core import TemporaryCase, header
 from emberbsd_sdk import compiler_bindings
 from emberbsd_sdk.errors import SDKError
 
@@ -33,6 +34,51 @@ class CompilerBindingTests(TemporaryCase):
             commands=self.commands, flags=self.flags, python=sys.executable)
         result = subprocess.run([tools[role], *arguments], cwd=self.root, capture_output=True, text=True)
         return result, json.loads(result.stdout)
+
+    def test_netbsd_asan_marks_only_a_fresh_address_sanitized_executable(self):
+        paxctl = self.root / 'paxctl'
+        paxctl.touch()
+        output = self.root / 'test elf'
+        tools = compiler_bindings.bind_compilers(self.destination, commands=self.commands,
+            flags=self.flags, python=sys.executable, netbsd_asan={
+                'resource_dir':self.root, 'builtin_include':self.root, 'paxctl':paxctl})
+        binding = Path(tools['cc']).with_name('commands.json')
+        response = self.root / 'flags.rsp'
+        response.write_text('-fsanitize=address,undefined')
+        arguments = ['source.c', '-o', str(output)]
+
+        def link(command):
+            if command[0] != str(paxctl):
+                output.write_bytes(header(62, 2))
+            return 0
+
+        with patch.object(compiler_bindings, '_run', side_effect=link) as invoked:
+            with self.assertRaises(SystemExit) as result:
+                compiler_bindings.execute(binding, 'cc', [*arguments, '@' + str(response)])
+            self.assertEqual(result.exception.code, 0)
+            self.assertEqual(invoked.call_args_list[0].args[0][1:4],
+                             ['-resource-dir=' + str(self.root), '-isystem', str(self.root)])
+            self.assertEqual(invoked.call_args_list[1].args[0],
+                             [str(paxctl), '+a', str(output)])
+
+        for flags in ([], ['-fsanitize=address', '-fno-sanitize=address'],
+                      ['-fsanitize=address', '-c'], ['-fsanitize=address', '-shared'],
+                      ['-fsanitize=address', '-###']):
+            with self.subTest(flags=flags), \
+                    patch.object(compiler_bindings, '_run') as invoked, \
+                    patch.object(compiler_bindings.os, 'execv', side_effect=SystemExit(0)) as direct:
+                with self.assertRaises(SystemExit):
+                    compiler_bindings.execute(binding, 'cc', [*arguments, *flags])
+                invoked.assert_not_called()
+                direct.assert_called_once()
+
+        for status in (0, 17):
+            with self.subTest(status=status), patch.object(compiler_bindings, '_run',
+                                                          return_value=status) as invoked:
+                with self.assertRaises(SystemExit) as result:
+                    compiler_bindings.execute(binding, 'cc', [*arguments, '-fsanitize=address'])
+                self.assertEqual(result.exception.code, status)
+                invoked.assert_called_once()
 
     def test_c_link_preserves_quoting_and_places_libraries_after_inputs(self):
         result, args = self.invoke('cc', ['source with space.c', '-o', 'output name', '-Werror'])

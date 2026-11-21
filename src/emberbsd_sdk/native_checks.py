@@ -3,6 +3,7 @@
 """Run owner checks with one selected native prefix and standard tool variables."""
 
 import os
+from pathlib import Path
 import re
 import shlex
 
@@ -20,7 +21,7 @@ _VARIABLES = dict(CC='cc', CXX='cxx', CPP='cpp', AS='as', LD='ld', AR='ar',
 
 
 def check_environment(native, *, bindings, extra_flags=None, environment=None,
-                      native_cxx_runtime=None):
+                      native_cxx_runtime=None, netbsd_asan_resource_dir=None):
     """Discard ambient compiler/search flags and retain selected native ABI flags.
 
     Compiler adapters retain exact ABI argument words for existing consumers
@@ -68,10 +69,36 @@ def check_environment(native, *, bindings, extra_flags=None, environment=None,
     bindings = command_directory.binding_path(bindings)
     aliases = {role:native.command(role)[0] for role in native.tools if role not in commands}
     aliases.update({'c++':bindings + '/cxx', 'python3':native.command('python')[0]})
+    netbsd_asan = None
+    if netbsd_asan_resource_dir is not None:
+        if (native.host.get('os') != 'NetBSD' or native.host.get('cpu') != 'x86_64' or
+                native.compiler.get('family') != 'clang'):
+            raise SDKError('NetBSD ASan resource selection requires native amd64 Clang')
+        resource = Path(paths.canonical_existing(netbsd_asan_resource_dir))
+        compiler_resource = Path(native.driver_components['resource-dir'])
+        if resource.name != compiler_resource.name:
+            raise SDKError('compiler-rt resource version differs from the selected Clang major')
+        builtin_include = compiler_resource / 'include'
+        runtime = resource / 'lib/netbsd'
+        for filename in ('libclang_rt.asan_static-x86_64.a', 'libclang_rt.asan-x86_64.a',
+                         'libclang_rt.asan_cxx-x86_64.a', 'libclang_rt.ubsan_standalone-x86_64.a'):
+            paths.regular_file(runtime / filename)
+        paths.regular_file(resource / 'include/sanitizer/asan_interface.h')
+        paths.real_directory(builtin_include)
+        paxctl = '/usr/sbin/paxctl'
+        if not os.access(paxctl, os.X_OK):
+            raise SDKError('NetBSD ASan requires /usr/sbin/paxctl')
+        symbolizer = Path(native.tool('cc')).parent / 'llvm-symbolizer'
+        if os.access(symbolizer, os.X_OK):
+            selected = paths.canonical_existing(symbolizer)
+            if paths.relative_inside(selected, native.bundle_root) is not None:
+                result['ASAN_SYMBOLIZER_PATH'] = selected
+        netbsd_asan = dict(resource_dir=str(resource), builtin_include=str(builtin_include),
+                          paxctl=paxctl)
     bound = compiler_bindings.bind_compilers(bindings, commands=commands,
         flags={name:shlex.split(result[name.upper()]) for name in _FLAGS},
         python=native.command('python')[0], aliases=aliases,
-        native_cxx_runtime=native_cxx_runtime)
+        native_cxx_runtime=native_cxx_runtime, netbsd_asan=netbsd_asan)
     result['PATH'] = bindings + os.pathsep + native.path
     for name, role in (('CC','cc'), ('CXX','cxx'), ('CPP','cpp'), ('CSA','csa')):
         if role in bound:
@@ -83,7 +110,7 @@ def check_environment(native, *, bindings, extra_flags=None, environment=None,
 
 
 def run_check(native, role, arguments, *, cwd, log, bindings, extra_flags=None, environment=None,
-              native_cxx_runtime=None):
+              native_cxx_runtime=None, netbsd_asan_resource_dir=None):
     """Execute a selected tool role using the shared owned-process backend."""
     if role not in native.tools:
         raise SDKError('native check selection is missing role: ' + role)
@@ -92,7 +119,7 @@ def run_check(native, role, arguments, *, cwd, log, bindings, extra_flags=None, 
     cwd = paths.canonical_existing(cwd)
     paths.real_directory(cwd)
     env = check_environment(native, bindings=bindings, extra_flags=extra_flags, environment=environment,
-                            native_cxx_runtime=native_cxx_runtime)
+                            native_cxx_runtime=native_cxx_runtime, netbsd_asan_resource_dir=netbsd_asan_resource_dir)
     compiler = {'cc':'CC', 'cxx':'CXX', 'cpp':'CPP', 'clang':'CSA'}.get(role)
     command = [env[compiler]] if compiler else list(native.command(role))
     return process.run_logged([*command, *arguments], log, cwd=cwd, env=env,
