@@ -5,6 +5,10 @@ from dataclasses import dataclass
 import json
 import re
 
+from emberbsd_sdk.qml_script import (Parser as ScriptParser, QmlScriptError,
+                                     canonical_signal, compile_expression,
+                                     compile_handler, emit_dispatch, signal_enum)
+
 
 class QmlError(ValueError):
     pass
@@ -12,8 +16,9 @@ class QmlError(ValueError):
 
 TOKEN = re.compile(
     r'(?P<space>\s+)|(?P<comment>//[^\n]*|/\*[\s\S]*?\*/)'
-    r'|(?P<string>"(?:[^"\\\n\r]|\\.)*")|(?P<int>-?(?:0|[1-9][0-9]*))'
-    r'|(?P<name>[A-Za-z_][A-Za-z0-9_]*)|(?P<punct>[{}.:;+])'
+    r'|(?P<string>"(?:[^"\\\n\r]|\\.)*"|\'(?:[^\'\\\n\r]|\\.)*\')'
+    r'|(?P<int>-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?)'
+    r'|(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)|(?P<punct>.)'
 )
 
 
@@ -22,6 +27,8 @@ class Token:
     text: str
     line: int
     column: int
+    offset: int
+    end: int
 
     def error(self, message):
         return QmlError(f"{self.line}:{self.column}: {message}")
@@ -32,6 +39,14 @@ class Item:
     kind: str
     fields: dict
     children: list
+    handlers: dict
+    properties: dict
+
+
+@dataclass(frozen=True)
+class RawValue:
+    source: str
+    token: Token
 
 
 # The opaque basic SVG color keywords. Qt's "green" is distinct from "lime".
@@ -51,29 +66,34 @@ def tokens(source):
             raise Token("", line, column).error("unexpected or unterminated token")
         value = match.group()
         if match.lastgroup not in ("space", "comment"):
-            yield Token(value, line, column)
+            yield Token(value, line, column, pos, match.end())
         if "\n" in value:
             line += value.count("\n")
             column = len(value.rsplit("\n", 1)[1]) + 1
         else:
             column += len(value)
         pos = match.end()
-    yield Token("", line, column)
+    yield Token("", line, column, len(source), len(source))
 
 
 class Parser:
     def __init__(self, source):
-        self.stream = iter(tokens(source))
-        self.current = next(self.stream)
+        self.source = source
+        self.stream = list(tokens(source))
+        self.index = 0
         self.last = self.current
         self.ids = set()
+
+    @property
+    def current(self):
+        return self.stream[self.index]
 
     def take(self, expected=None):
         token = self.current
         if not token.text or (expected is not None and token.text != expected):
             raise token.error(f"expected {expected or 'a value'}, got {token.text or 'end of input'}")
         self.last = token
-        self.current = next(self.stream)
+        self.index += 1
         return token
 
     def name(self):
@@ -160,21 +180,78 @@ class Parser:
             raise self.last.error("each literal part of a text binding must fit in 4096 bytes")
         return prefix, reference, suffix
 
+    def raw_value(self):
+        start = self.current
+        if not start.text:
+            raise start.error("expected a property value")
+        depths = {"{": 0, "(": 0, "[": 0}
+        pairs = {"}": "{", ")": "(", "]": "["}
+        end = start.end
+        previous = start
+        while self.current.text:
+            token = self.current
+            if not any(depths.values()):
+                if token.text in (";", "}") or token.line != previous.line:
+                    break
+                if (self.index > 0 and
+                    re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) and
+                    self.index + 1 < len(self.stream) and self.stream[self.index + 1].text == ":"):
+                    break
+            if token.text in depths:
+                depths[token.text] += 1
+            elif token.text in pairs:
+                opener = pairs[token.text]
+                if depths[opener] == 0:
+                    break
+                depths[opener] -= 1
+            end = token.end
+            previous = self.take()
+        if end <= start.offset:
+            raise start.error("expected a property value")
+        return RawValue(self.source[start.offset:end].strip(), start)
+
+    def grouped_fields(self, item_fields, prefix):
+        self.take("{")
+        while self.current.text != "}":
+            start = self.current
+            name = self.path()
+            key = f"{prefix}.{name}"
+            if key in item_fields:
+                raise start.error(f"duplicate field {key}")
+            self.take(":")
+            if name in ("top", "left", "right", "bottom", "fill", "horizontalCenter",
+                        "verticalCenter", "centerIn"):
+                item_fields[key] = self.raw_value()
+            elif name == "margins":
+                item_fields[key] = self.raw_value()
+            else:
+                raise start.error(f"unsupported grouped property {key}")
+            self.finish_field()
+        self.take("}")
+
     def text_item(self):
-        fields = {}
+        fields, handlers = {}, {}
         self.take("{")
         while self.current.text != "}":
             start = self.current
             key = self.path()
-            if key in fields:
+            if key in fields or key in handlers:
                 raise start.error(f"duplicate Text field {key}")
+            if key == "anchors" and self.current.text == "{":
+                self.grouped_fields(fields, "anchors")
+                self.finish_field()
+                continue
             self.take(":")
-            if key == "text":
+            if key.startswith("on"):
+                handlers[key] = self.raw_value()
+            elif key == "text" and self.current.text == "qsTr":
+                value = self.raw_value()
+            elif key == "text":
                 value = self.binding()
             elif key == "id":
                 value = self.object_id()
             elif key in ("x", "y"):
-                value = self.integer(-32768, 32767)
+                value = self.raw_value()
             elif key == "z":
                 value = self.integer(-(2**31), 2**31 - 1)
             elif key == "color":
@@ -182,27 +259,32 @@ class Parser:
             elif key == "font.pixelSize":
                 value = self.integer(7, 64)
             elif key in ANCHORS:
-                value = self.parent_anchor(key, start)
+                value = self.raw_value()
+            elif key.startswith("anchors."):
+                fields[key] = self.raw_value()
+                self.finish_field()
+                continue
             else:
                 raise start.error(f"unsupported Text field {key}")
-            fields[key] = value
+            if not key.startswith("on"):
+                fields[key] = value
             self.finish_field()
         end = self.take("}")
         check_anchors(fields, end)
-        return Item("Text", fields, [])
+        return Item("Text", fields, [], handlers, {})
 
     def container(self, kind, depth, properties):
         if depth > 64:
             raise self.current.error("at most 64 nested containers are supported")
         self.take("{")
-        fields, children = {}, []
+        fields, children, handlers, declared = {}, [], {}, {}
         while self.current.text != "}":
             start = self.name()
             key = start.text
             while self.current.text == ".":
                 self.take(".")
                 key += "." + self.name().text
-            if key in ("Text", "Rectangle", "Grid"):
+            if key in ("Text", "Rectangle", "Grid", "MouseArea"):
                 if kind == "Grid" and key != "Rectangle":
                     raise start.error("Grid places fixed-size Rectangle children")
                 item = self.text_item() if key == "Text" else self.container(key, depth + 1, properties)
@@ -213,36 +295,66 @@ class Parser:
                     self.take(";")
                 continue
             if key == "property":
-                if depth:
-                    raise start.error("integer properties belong to the root Rectangle")
-                self.take("int")
+                type_token = self.name()
                 token = self.name()
-                key = token.text
-                if not re.fullmatch(r"[a-z][A-Za-z0-9_]*", key) or key in RESERVED or key in properties:
-                    raise token.error(f"invalid or duplicate integer property {key}")
-                self.take(":")
-                properties[key] = self.integer(-(2**31), 2**31 - 1)
+                property_name = token.text
+                if not re.fullmatch(r"[a-z][A-Za-z0-9_]*", property_name):
+                    raise token.error(f"invalid property name {property_name}")
+                if kind == "MouseArea" and type_token.text == "string":
+                    if property_name in declared:
+                        raise token.error(f"duplicate property {property_name}")
+                    declared[property_name] = "string"
+                    if self.current.text == ":":
+                        self.take(":")
+                        if self.current.text not in ("\n", "}", ";"):
+                            raise self.current.error("initialized MouseArea string properties are unsupported")
+                elif depth == 0 and type_token.text == "int":
+                    if property_name in RESERVED or property_name in properties:
+                        raise token.error(f"invalid or duplicate integer property {property_name}")
+                    self.take(":")
+                    properties[property_name] = self.integer(-(2**31), 2**31 - 1)
+                else:
+                    raise start.error("only root integer and MouseArea string properties are supported")
+            elif key == "anchors" and self.current.text == "{":
+                self.grouped_fields(fields, "anchors")
+                self.finish_field()
+                continue
             else:
-                if key in fields:
+                if key in fields or key in handlers:
                     raise start.error(f"duplicate {kind} field {key}")
+                if self.current.text == "{" and key.startswith("anchors"):
+                    self.grouped_fields(fields, key)
+                    self.finish_field()
+                    continue
                 if self.current.text == "{":
                     raise start.error(f"unsupported object or grouped property {key}")
                 self.take(":")
-                if key == "id":
+                if key.startswith("on"):
+                    handlers[key] = self.raw_value()
+                elif key == "id":
                     fields[key] = self.object_id()
                 elif kind == "Rectangle" and key in ("width", "height"):
                     fields[key] = self.integer(0 if depth else 1, 4096)
                 elif kind == "Rectangle" and key == "color":
                     fields[key] = self.color()
+                elif kind == "Rectangle" and key == "opacity":
+                    fields[key] = self.raw_value()
                 elif kind == "Grid" and key == "columns":
                     fields[key] = self.integer(1, 4096)
                 elif kind == "Grid" and key == "spacing":
                     fields[key] = self.integer(0, 4096)
                 elif kind == "Grid" and key in ANCHORS:
-                    fields[key] = self.parent_anchor(key, start)
-                elif depth and key in ("x", "y"):
-                    fields[key] = self.integer(-32768, 32767)
-                elif depth and key == "z":
+                    fields[key] = self.raw_value()
+                elif (kind == "MouseArea" and key in (
+                    "acceptedButtons", "hoverEnabled", "anchors.fill", "drag.target",
+                    "drag.axis", "drag.minimumX", "drag.maximumX", "drag.minimumY",
+                    "drag.maximumY")):
+                    fields[key] = self.raw_value()
+                elif key.startswith("anchors."):
+                    fields[key] = self.raw_value()
+                elif key in ("x", "y"):
+                    fields[key] = self.raw_value()
+                elif depth and key == "z" and kind in ("Rectangle", "MouseArea"):
                     fields[key] = self.integer(-(2**31), 2**31 - 1)
                 else:
                     raise start.error(f"unsupported {kind} field {key}")
@@ -258,7 +370,7 @@ class Parser:
         if kind == "Grid":
             check_anchors(fields, end)
             place_grid(fields, children, end)
-        return Item(kind, fields, children)
+        return Item(kind, fields, children, handlers, declared)
 
     def scene(self):
         self.take("import")
@@ -371,15 +483,515 @@ def paint_items(root, indices):
     return list(visit(root, 0, 0, 0, 0))
 
 
+def _script_path(expression):
+    parts = []
+    while expression.op == "member":
+        parts.append(expression.value)
+        expression = expression.args[0]
+    if expression.op != "name":
+        return None
+    return ".".join([expression.value, *reversed(parts)])
+
+
+def _constant_expression(expression, geometry=None, locals_=None):
+    geometry = geometry or {}
+    locals_ = locals_ or {}
+    if expression.op == "literal" and type(expression.value) in (int, float):
+        return expression.value
+    if expression.op == "name" and expression.value in locals_:
+        value = locals_[expression.value]
+        return int(value["code"]) if isinstance(value, dict) else int(value)
+    if expression.op == "member":
+        path = _script_path(expression)
+        if path in geometry:
+            value = geometry[path]
+            if isinstance(value, (int, float)):
+                return value
+    if expression.op == "unary" and expression.value in ("+", "-"):
+        value = _constant_expression(expression.args[0], geometry, locals_)
+        return value if expression.value == "+" else -value
+    if expression.op == "binary" and expression.value in ("+", "-"):
+        left, right = (_constant_expression(arg, geometry, locals_) for arg in expression.args)
+        return left + right if expression.value == "+" else left - right
+    raise ValueError("expression is not a constant arithmetic value")
+
+
+def _raw(value):
+    return value.source if isinstance(value, RawValue) else str(value)
+
+
+def _expression_constant(raw, *, nodes=None, geometry=None, locals_=None):
+    try:
+        tree = ScriptParser(_raw(raw)).expression_source()
+        expression = compile_expression(_raw(raw), nodes=nodes, geometry=geometry,
+                                       locals_=locals_)
+        if expression.type != "int" or expression.prelude:
+            raise ValueError("expected a static integer expression")
+        value = _constant_expression(tree, geometry, locals_)
+        if not isinstance(value, int):
+            raise ValueError("expected an integer expression")
+        return value
+    except (QmlScriptError, SyntaxError, ValueError) as error:
+        token = raw.token if isinstance(raw, RawValue) else None
+        raise (token.error(str(error)) if token else QmlError(str(error))) from None
+
+
+def _interactive_nodes(root):
+    nodes = []
+    parents = []
+
+    def visit(item, parent):
+        if item.kind == "Grid":
+            raise QmlError("Grid cannot be combined with interactive scene nodes")
+        index = len(nodes)
+        nodes.append(item)
+        parents.append(parent)
+        children = sorted(item.children, key=lambda child: child.fields.get("z", 0))
+        for child in children:
+            if child.fields.get("z", 0) < 0:
+                raise QmlError("negative z is unsupported in parent-first interactive scene order")
+            visit(child, index)
+
+    visit(root, -1)
+    return nodes, parents
+
+
+def _check_layout_cycles(parents, dependencies):
+    edges = [[] for _ in parents]
+    for index, parent in enumerate(parents):
+        if parent >= 0:
+            edges[parent].append(index)
+    for index, target in dependencies.items():
+        edges[target].append(index)
+    state = [0] * len(edges)
+
+    def visit(index):
+        if state[index] == 1:
+            raise QmlError("interactive anchors form a layout cycle")
+        if state[index] == 2:
+            return
+        state[index] = 1
+        for dependent in edges[index]:
+            visit(dependent)
+        state[index] = 2
+
+    for index in range(len(edges)):
+        visit(index)
+
+
+def _anchor_source(fields, name):
+    value = fields.get("anchors." + name)
+    return _raw(value) if value is not None else None
+
+
+def _string_expression(value, nodes, slots):
+    if value is None:
+        return None
+    if isinstance(value, tuple):
+        prefix, reference, suffix = value
+        if reference is not None:
+            raise QmlError("integer model bindings are not supported in interactive text")
+        literal = prefix + suffix
+        if len(literal) > 255:
+            raise QmlError("interactive Text initial text is limited to 255 printable bytes")
+        return c_string(literal)
+    try:
+        tree = ScriptParser(_raw(value)).expression_source()
+        expression = compile_expression(_raw(value), nodes=nodes, slots=slots)
+    except QmlScriptError as error:
+        token = value.token if isinstance(value, RawValue) else None
+        raise (token.error(str(error)) if token else QmlError(str(error))) from None
+    literal = _constant_string(tree)
+    if expression.type != "string" or expression.prelude or literal is None:
+        token = value.token if isinstance(value, RawValue) else None
+        raise (token.error("interactive labels require static printable text") if token
+               else QmlError("interactive labels require static printable text"))
+    if len(literal) > 255:
+        token = value.token if isinstance(value, RawValue) else None
+        raise (token.error("interactive Text initial text is limited to 255 printable bytes") if token
+               else QmlError("interactive Text initial text is limited to 255 printable bytes"))
+    return c_string(literal)
+
+
+def _constant_string(expression):
+    if expression.op == "literal" and isinstance(expression.value, str):
+        return expression.value
+    if expression.op == "call" and expression.args[0].op == "name" and \
+        expression.args[0].value == "qsTr" and len(expression.args) == 2:
+        return _constant_string(expression.args[1])
+    if expression.op == "binary" and expression.value == "+":
+        left = _constant_string(expression.args[0])
+        right = _constant_string(expression.args[1])
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
+def _referenced_text_targets(source):
+    tree, _ = ScriptParser(source).handler()
+    targets = set()
+
+    def visit(node):
+        if not hasattr(node, "op"):
+            return
+        if node.op == "member":
+            path = _script_path(node)
+            if path and path.endswith(".text"):
+                targets.add(path.rsplit(".", 1)[0])
+        if hasattr(node, "value"):
+            visit(node.value)
+        for child in node.args:
+            visit(child)
+
+    visit(tree)
+    return targets
+
+
+def interactive_scene(root, properties, name):
+    if properties:
+        raise QmlError("integer model properties cannot be combined with an interactive scene")
+    nodes, parents = _interactive_nodes(root)
+    if len(nodes) > 256:
+        raise QmlError("interactive scenes are limited to 256 nodes")
+    ids = {}
+    for index, item in enumerate(nodes):
+        ident = item.fields.get("id")
+        if ident:
+            ids[ident] = index
+    geometry = {}
+    for item in nodes:
+        ident = item.fields.get("id")
+        if ident:
+            for dimension in ("width", "height", "x", "y"):
+                value = item.fields.get(dimension)
+                if isinstance(value, int):
+                    geometry[f"{ident}.{dimension}"] = value
+
+    # Find Texts whose values can be changed by handlers before assigning the
+    # stable string-slot indices used by both the node and generated callbacks.
+    dynamic_texts = set()
+    for item in nodes:
+        if item.kind == "Text" and ("text" not in item.fields or item.handlers):
+            dynamic_texts.add(item.fields.get("id"))
+        for raw in item.handlers.values():
+            try:
+                dynamic_texts.update(_referenced_text_targets(raw.source))
+            except QmlScriptError as error:
+                raise raw.token.error(str(error)) from None
+    slots = {}
+    text_slot = {}
+    area_slot = {}
+    slot_count = 0
+    for index, item in enumerate(nodes):
+        ident = item.fields.get("id")
+        if item.kind == "Text" and ident in dynamic_texts:
+            text_slot[index] = slot_count
+            if ident:
+                slots[f"{ident}.text"] = {"index": slot_count, "type": "string"}
+            slot_count += 1
+        if item.kind == "MouseArea":
+            for property_name, property_type in item.properties.items():
+                if property_type != "string":
+                    raise QmlError(f"unsupported MouseArea property type {property_type}")
+                area_slot[(index, property_name)] = slot_count
+                if ident:
+                    slots[f"{ident}.{property_name}"] = {"index": slot_count, "type": "string"}
+                slot_count += 1
+    if slot_count > 256:
+        raise QmlError("interactive scenes are limited to 256 string slots")
+
+    callbacks = []
+    dispatch = {}
+    signal_masks = [set() for _ in nodes]
+    for index, item in enumerate(nodes):
+        for key, handler in item.handlers.items():
+            try:
+                canonical = canonical_signal(key)
+                signal = signal_enum(canonical)
+                if item.kind == "MouseArea" and canonical == "onTextChanged":
+                    raise QmlScriptError("MouseArea has no textChanged signal")
+                if item.kind == "Text" and canonical != "onTextChanged":
+                    raise QmlScriptError("Text supports only onTextChanged")
+                if item.kind not in ("Text", "MouseArea"):
+                    raise QmlScriptError("this item kind does not support handlers")
+                local_slots = dict(slots)
+                if item.kind == "Text" and index in text_slot:
+                    local_slots["text"] = {"index": text_slot[index], "type": "string"}
+                for property_name in item.properties:
+                    local_slots[property_name] = {
+                        "index": area_slot[(index, property_name)], "type": item.properties[property_name]}
+                function = f"_eqml_handler_{index}_{len(callbacks)}"
+                allow_mouse = canonical not in ("onEntered", "onExited", "onTextChanged")
+                callbacks.append(compile_handler(handler.source, function,
+                    current_node=index, nodes=ids, slots=local_slots,
+                    allow_mouse=allow_mouse))
+                dispatch[(index, signal)] = function
+                signal_masks[index].add(signal)
+            except QmlScriptError as error:
+                raise handler.token.error(str(error)) from None
+
+    # Fill node records after all ids and text slots are known. Geometry used
+    # in arithmetic bindings is static for this profile except drag motion.
+    records = []
+    bottom_dependencies = {}
+    root_fields = root.fields
+    for index, item in enumerate(nodes):
+        fields = item.fields
+        parent_index = parents[index]
+        parent = nodes[parent_index] if parent_index >= 0 else None
+        item_geometry = dict(geometry)
+        item_geometry["parent.width"] = parent.fields.get("width", 0) if parent else 0
+        item_geometry["parent.height"] = parent.fields.get("height", 0) if parent else 0
+        locals_ = {"width": {"type": "int", "code": str(fields.get("width", 0))},
+                   "height": {"type": "int", "code": str(fields.get("height", 0))}}
+
+        width = fields.get("width", 0)
+        height = fields.get("height", 0)
+        x = fields.get("x", 0)
+        y = fields.get("y", 0)
+        if isinstance(x, RawValue):
+            x = _expression_constant(x, nodes=ids, geometry=item_geometry, locals_=locals_)
+        if isinstance(y, RawValue):
+            y = _expression_constant(y, nodes=ids, geometry=item_geometry, locals_=locals_)
+        if not isinstance(x, int) or not isinstance(y, int):
+            raise QmlError("node x and y must resolve to integer coordinates")
+        if not -(2**31) <= x < 2**31 or not -(2**31) <= y < 2**31:
+            raise QmlError("node coordinates must fit signed 32-bit integers")
+
+        anchors = 0
+        bottom_edge = "EQML_EDGE_NONE"
+        bottom_target = -1
+        bottom_margin = 0
+        margin = fields.get("anchors.margins", 0)
+        if isinstance(margin, RawValue):
+            margin = _expression_constant(margin, nodes=ids, geometry=item_geometry)
+        if not isinstance(margin, int) or not 0 <= margin <= 32767:
+            raise QmlError("anchor margins must be an integer in 0..32767")
+        fill = _anchor_source(fields, "fill")
+        top = _anchor_source(fields, "top")
+        left = _anchor_source(fields, "left")
+        center = _anchor_source(fields, "centerIn")
+        hcenter = _anchor_source(fields, "horizontalCenter")
+        vcenter = _anchor_source(fields, "verticalCenter")
+        bottom = _anchor_source(fields, "bottom")
+        right = _anchor_source(fields, "right")
+        if right is not None:
+            raise QmlError("anchors.right is unsupported in the interactive profile")
+        if parent is None and any(value is not None for value in
+                                  (fill, top, left, center, hcenter, vcenter, bottom)):
+            raise QmlError("interactive anchors require a parent item")
+        if fill is not None:
+            if fill != "parent" or item.kind != "MouseArea" or any(
+                value is not None for value in (top, left, center, hcenter, vcenter, bottom)):
+                raise QmlError("anchors.fill supports only MouseArea anchors.fill: parent")
+            if parent.kind != "Rectangle":
+                raise QmlError("anchors.fill requires a fixed-size Rectangle parent")
+            x = y = 0
+            width, height = parent.fields.get("width", 0), parent.fields.get("height", 0)
+        if center is not None:
+            if center != "parent" or any(value is not None for value in (hcenter, vcenter, top, left, bottom)):
+                raise QmlError("anchors.centerIn supports only the immediate parent")
+            anchors = 3
+            x = y = 0
+        if hcenter is not None:
+            if hcenter != "parent.horizontalCenter" or left is not None:
+                raise QmlError("anchors.horizontalCenter supports only the immediate parent")
+            anchors |= 1
+            x = 0
+        if vcenter is not None:
+            if vcenter != "parent.verticalCenter" or top is not None:
+                raise QmlError("anchors.verticalCenter supports only the immediate parent")
+            anchors |= 2
+            y = 0
+        if top is not None:
+            if top != "parent.top" or anchors & 2:
+                raise QmlError("anchors.top supports only an uncentered immediate parent")
+            y = margin
+        if left is not None:
+            if left != "parent.left" or anchors & 1:
+                raise QmlError("anchors.left supports only an uncentered immediate parent")
+            x = margin
+        if bottom is not None:
+            if anchors & 2 or top is not None:
+                raise QmlError("bottom anchors cannot be combined with vertical centering or top anchors")
+            target, dot, edge = bottom.rpartition(".")
+            if dot != "." or edge not in ("top", "bottom"):
+                raise QmlError("bottom anchor target must end in .top or .bottom")
+            if target == "parent":
+                bottom_target = parent_index
+            elif target in ids:
+                bottom_target = ids[target]
+            else:
+                raise QmlError(f"unknown bottom anchor target {target}")
+            if bottom_target < 0 or nodes[bottom_target].kind == "MouseArea":
+                raise QmlError("bottom anchors must target a visual node")
+            if bottom_target == index:
+                raise QmlError("bottom anchor cannot target itself")
+            bottom_dependencies[index] = bottom_target
+            bottom_edge = "EQML_EDGE_TOP" if edge == "top" else "EQML_EDGE_BOTTOM"
+            bottom_margin = margin
+            y = 0
+        if margin and top is None and left is None and bottom is None:
+            raise QmlError("anchors.margins needs a positional anchor")
+
+        color = fields.get("color", 0xffff if item.kind == "Rectangle" else 0)
+        pixel_size = fields.get("font.pixelSize", 14)
+        text = None
+        if item.kind == "Text" and "text" in fields:
+            text = _string_expression(fields["text"], ids, slots)
+
+        opacity_area, transparency = -1, 0
+        if "opacity" in fields:
+            raw_opacity = fields["opacity"]
+            try:
+                tree = ScriptParser(raw_opacity.source).expression_source()
+                binding = compile_expression(raw_opacity.source, nodes=ids)
+            except QmlScriptError as error:
+                raise raw_opacity.token.error(str(error)) from None
+            condition, pressed, unpressed = tree.args if tree.op == "conditional" else (None, None, None)
+            area_name = None
+            if (condition is not None and condition.op == "member" and
+                condition.value == "containsPress" and condition.args[0].op == "name"):
+                area_name = condition.args[0].value
+            if (binding.type != "float" or binding.prelude or area_name not in ids or
+                (area_name in ids and nodes[ids[area_name]].kind != "MouseArea") or
+                pressed.op != "literal" or type(pressed.value) not in (int, float) or
+                unpressed.op != "literal" or type(unpressed.value) not in (int, float) or
+                unpressed.value != 1.0):
+                raise raw_opacity.token.error("opacity supports a containsPress ternary with opaque default")
+            opacity_area = ids[area_name]
+            opacity = float(pressed.value)
+            if not 0 <= opacity <= 1:
+                raise raw_opacity.token.error("opacity must be between zero and one")
+            transparency = int((1.0 - opacity) * 255 + 0.5)
+
+        buttons = "EQML_BUTTON_LEFT"
+        hover = 0
+        drag_axes, drag_target = 0, -1
+        min_x = max_x = min_y = max_y = 0
+        if item.kind == "MouseArea":
+            accepted = fields.get("acceptedButtons")
+            if accepted is not None:
+                accepted_value = _raw(accepted)
+                if accepted_value == "Qt.AllButtons":
+                    buttons = "EQML_BUTTON_ALL"
+                else:
+                    raise accepted.token.error("acceptedButtons supports Qt.AllButtons in this profile")
+            if "hoverEnabled" in fields:
+                value = _raw(fields["hoverEnabled"])
+                if value not in ("true", "false"):
+                    raise fields["hoverEnabled"].token.error("hoverEnabled must be a boolean literal")
+                hover = int(value == "true")
+            target = fields.get("drag.target")
+            axis = fields.get("drag.axis")
+            if target is not None or axis is not None:
+                target_name = _raw(target) if target is not None else ""
+                if target_name not in ids:
+                    raise (target.token.error("drag.target must name an object id") if target else QmlError("drag.axis requires drag.target"))
+                drag_target = ids[target_name]
+                if nodes[drag_target].kind != "Rectangle":
+                    raise (target.token.error("drag.target must name a Rectangle") if target
+                           else QmlError("drag.target must name a Rectangle"))
+                axis_name = _raw(axis) if axis is not None else "Drag.XAndYAxis"
+                axes = {"Drag.XAxis": 1, "Drag.YAxis": 2, "Drag.XAndYAxis": 3}
+                if axis_name not in axes:
+                    raise (axis.token.error("unsupported drag.axis") if axis else QmlError("drag.target requires drag.axis"))
+                drag_axes = axes[axis_name]
+                for key, dest in (("drag.minimumX", "min_x"), ("drag.maximumX", "max_x"),
+                                  ("drag.minimumY", "min_y"), ("drag.maximumY", "max_y")):
+                    raw = fields.get(key)
+                    if raw is not None:
+                        value = _expression_constant(raw, nodes=ids, geometry=item_geometry,
+                                                     locals_=locals_)
+                        if dest == "min_x": min_x = value
+                        elif dest == "max_x": max_x = value
+                        elif dest == "min_y": min_y = value
+                        else: max_y = value
+                if drag_axes & 1:
+                    if "drag.minimumX" not in fields or "drag.maximumX" not in fields:
+                        raise QmlError("horizontal drag requires minimumX and maximumX")
+                    if min_x > max_x:
+                        raise QmlError("drag.minimumX must not exceed drag.maximumX")
+                elif any(key in fields for key in ("drag.minimumX", "drag.maximumX")):
+                    raise QmlError("horizontal drag limits require an X drag axis")
+                if drag_axes & 2:
+                    if "drag.minimumY" not in fields or "drag.maximumY" not in fields:
+                        raise QmlError("vertical drag requires minimumY and maximumY")
+                    if min_y > max_y:
+                        raise QmlError("drag.minimumY must not exceed drag.maximumY")
+                elif any(key in fields for key in ("drag.minimumY", "drag.maximumY")):
+                    raise QmlError("vertical drag limits require a Y drag axis")
+            elif any(key in fields for key in ("drag.minimumX", "drag.maximumX", "drag.minimumY", "drag.maximumY")):
+                raise QmlError("drag limits require drag.target")
+            if any(not -(2**31) <= value < 2**31 for value in (min_x, max_x, min_y, max_y)):
+                raise QmlError("drag limits must fit signed 32-bit integers")
+
+        signal_bits = " | ".join(f"(1U << {signal})" for signal in sorted(
+            signal_masks[index], key=lambda value: list(("EQML_ENTERED", "EQML_EXITED", "EQML_PRESSED",
+            "EQML_RELEASED", "EQML_CLICKED", "EQML_DOUBLE_CLICKED", "EQML_PRESS_AND_HOLD",
+            "EQML_TEXT_CHANGED")).index(value))) or "0"
+        text_slot_index = text_slot.get(index, -1)
+        node_kind = {"Rectangle": "RECT", "Text": "TEXT", "MouseArea": "AREA"}[item.kind]
+        records.append(
+            "    { .kind = EQML_NODE_%s, .parent = %d, .x = %d, .y = %d, "
+            ".width = %d, .height = %d, .color = 0x%04x, .pixel_size = %d, .anchors = %d, "
+            ".bottom_edge = %s, .bottom_target = %d, .bottom_margin = %d, .text = %s, "
+            ".text_slot = %d, .opacity_area = %d, .pressed_transparency = %d, "
+            ".buttons = %s, .signals = %s, .hover = %d, .drag_axes = %d, .drag_target = %d, "
+            ".min_x = %d, .max_x = %d, .min_y = %d, .max_y = %d }," % (
+                node_kind, parent_index, x, y, width, height, color, pixel_size, anchors,
+                bottom_edge, bottom_target, bottom_margin, text or "NULL", text_slot_index,
+                opacity_area, transparency, buttons, signal_bits, hover, drag_axes, drag_target,
+                min_x, max_x, min_y, max_y))
+
+    _check_layout_cycles(parents, bottom_dependencies)
+    lines = ['/* Generated by EmberBSD qml-compile. */', '#include "eqml.h"',
+             '#include "eqml_input.h"', '#include <errno.h>', '#include <stdio.h>',
+             '#include <stdint.h>', '#include <string.h>',
+             '#if EQML_SCENE_ABI != 3', '#error "Expected EmberBSD QML scene ABI 3"', '#endif', '',
+             "static const struct eqml_node nodes[] = {", *records, "};", ""]
+    lines.extend(callbacks)
+    if callbacks:
+        lines.append("")
+    if callbacks:
+        try:
+            lines.append(emit_dispatch("_eqml_dispatch", dispatch))
+        except QmlScriptError as error:
+            raise QmlError(str(error)) from None
+        handler = "_eqml_dispatch"
+        lines.append("")
+    else:
+        handler = "NULL"
+    lines.extend(["static const struct eqml_program program = {",
+                  "    .nodes = nodes, .node_count = sizeof(nodes) / sizeof(nodes[0]),",
+                  f"    .string_count = {slot_count}, .handler = {handler}", "};", "",
+                  f"const struct eqml_scene eqml_{name} = {{",
+                  f"    .width = {root.fields['width']}, .height = {root.fields['height']}, "
+                  f".background = 0x{root.fields.get('color', 0xffff):04x},",
+                  "    .items = NULL, .item_count = 0, .properties = NULL, .property_count = 0,",
+                  "    .program = &program", "};", ""])
+    return "\n".join(lines)
+
+
 def compile_scene(source, name="app"):
     """Return a complete C99 translation unit; raise QmlError for unsupported input."""
     if not re.fullmatch(r"[a-z][A-Za-z0-9_]*", name):
         raise QmlError("scene name must begin with a lowercase ASCII letter and contain only identifier characters")
     root, properties = Parser(source).scene()
+    interactive = any(item.kind == "MouseArea" for item in _walk(root))
+    if interactive:
+        return interactive_scene(root, properties, name)
+    for item in _walk(root):
+        if item.handlers:
+            key, handler = next(iter(item.handlers.items()))
+            raise handler.token.error(f"unsupported {item.kind} field {key}")
+        if "opacity" in item.fields:
+            raise item.fields["opacity"].token.error("unsupported Rectangle field opacity")
+    _resolve_static_items(root)
     fields = root.fields
     items = paint_items(root, {key: i for i, key in enumerate(properties)})
     lines = ['/* Generated by EmberBSD qml-compile. */', '#include "eqml.h"',
-             '#if EQML_SCENE_ABI != 2', '#error "Expected EmberBSD QML scene ABI 2"', '#endif', '']
+             '#if EQML_SCENE_ABI != 3', '#error "Expected EmberBSD QML scene ABI 3"', '#endif', '']
     if properties:
         lines.append("static const struct eqml_int properties[] = {")
         lines.extend(f'    {{ .name = {c_string(key)}, .initial = {value} }},' for key, value in properties.items())
@@ -392,6 +1004,44 @@ def compile_scene(source, name="app"):
                   f'    .width = {fields["width"]}, .height = {fields["height"]}, '
                   f'.background = 0x{fields.get("color", 0xffff):04x},',
                   f'    .items = {"items" if items else "NULL"}, .item_count = {len(items)},',
-                  f'    .properties = {"properties" if properties else "NULL"}, .property_count = {len(properties)}',
+                  f'    .properties = {"properties" if properties else "NULL"}, .property_count = {len(properties)},',
+                  '    .program = NULL',
                   "};", ""])
     return "\n".join(lines)
+
+
+def _walk(root):
+    yield root
+    for child in root.children:
+        yield from _walk(child)
+
+
+def _resolve_static_items(root):
+    for item in _walk(root):
+        for key in ("x", "y"):
+            value = item.fields.get(key)
+            if isinstance(value, RawValue):
+                try:
+                    tree = ScriptParser(value.source).expression_source()
+                    expression = compile_expression(value.source)
+                    if expression.type != "int" or expression.prelude:
+                        raise ValueError("expected a constant integer")
+                    coordinate = _constant_expression(tree)
+                    if not -32768 <= coordinate <= 32767:
+                        raise ValueError("coordinate is outside -32768..32767")
+                    item.fields[key] = coordinate
+                except (QmlScriptError, SyntaxError, ValueError) as error:
+                    raise value.token.error(str(error)) from None
+        text = item.fields.get("text")
+        if isinstance(text, RawValue):
+            try:
+                tree = ScriptParser(text.source).expression_source()
+                expression = compile_expression(text.source)
+                if expression.type != "string" or expression.prelude:
+                    raise ValueError("expected constant text")
+                literal = _constant_string(tree)
+                if literal is None:
+                    raise ValueError("expected constant text")
+                item.fields["text"] = (literal, None, "")
+            except (QmlScriptError, SyntaxError, ValueError) as error:
+                raise text.token.error(str(error)) from None

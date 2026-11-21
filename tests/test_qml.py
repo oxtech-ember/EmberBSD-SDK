@@ -13,6 +13,127 @@ from emberbsd_sdk.qml import QmlError, compile_scene
 
 
 class QmlCompilerTest(unittest.TestCase):
+    def test_mousearea_scene_compiles_to_interactive_program(self):
+        source = '''import QtQuick
+Rectangle { id: root; width: 320; height: 480
+    Rectangle { id: square; width: 120; height: 120
+        anchors { top: parent.top; left: parent.left; margins: 10 }
+        color: "red"; opacity: area.containsPress ? 0.6 : 1.0
+        Text { text: qsTr('Tap'); font.pixelSize: 16; anchors.centerIn: parent }
+        MouseArea { id: area; anchors.fill: parent; hoverEnabled: true
+            property string buttonID
+            acceptedButtons: Qt.AllButtons
+            onPressed: (mouse) => {
+                if (mouse.button == Qt.LeftButton) buttonID = qsTr('LeftButton')
+                label . text = "Pressed: " + buttonID
+                const p = square.mapToItem(root, mouse.x, mouse.y)
+                coords.text = + p.x + "," + p.y
+            }
+            onReleased: (mouse) => { label.text = "Released " + mouse.isClick }
+            onDoubleClicked: label.text = "Double clicked"
+        }
+    }
+    Rectangle { id: dragItem; width: 120; height: 120
+        x: root.width - width - 10; y: 10
+        MouseArea { anchors.fill: parent; drag.target: dragItem
+            drag.axis: Drag.XAndYAxis; drag.minimumX: 0
+            drag.maximumX: root.width - parent.width
+            drag.minimumY: 0; drag.maximumY: root.height - parent.width
+        }
+    }
+    Text { id: label; anchors { bottom: coords.top; horizontalCenter: parent.horizontalCenter; margins: 20 }
+        onTextChanged: console.log(text)
+    }
+    Text { id: coords; anchors { bottom: parent.bottom; horizontalCenter: parent.horizontalCenter; margins: 20 } }
+}'''
+        result = compile_scene(source, "mousearea")
+        self.assertIn('#include "eqml_input.h"', result)
+        self.assertIn("#if EQML_SCENE_ABI != 3", result)
+        self.assertIn(".program = &program", result)
+        self.assertIn("static const struct eqml_node nodes[]", result)
+        self.assertEqual(result.count(".kind = EQML_NODE_AREA"), 2)
+        self.assertIn("EQML_EDGE_TOP", result)
+        self.assertIn("EQML_EDGE_BOTTOM", result)
+        self.assertIn("EQML_BUTTON_ALL", result)
+        self.assertIn(".drag_target = 4", result)
+        self.assertIn(".opacity_area = 3", result)
+        self.assertIn("EQML_TEXT_CHANGED", result)
+        self.assertIn("eqml_ui_map(ui, 1, 0", result)
+
+    def test_interactive_z_sibling_order_and_default_drag_axes(self):
+        source = '''import QtQuick
+Rectangle { width: 40; height: 40
+    Rectangle { id: low; width: 20; height: 20; z: 0; color: "red" }
+    Rectangle { id: high; width: 20; height: 20; z: 4; color: "blue"
+        MouseArea { anchors.fill: parent; drag.target: high
+            drag.minimumX: 0; drag.maximumX: 20
+            drag.minimumY: 0; drag.maximumY: 20
+        }
+    }
+}'''
+        result = compile_scene(source)
+        self.assertLess(result.index(".color = 0xf800"), result.index(".color = 0x001f"))
+        self.assertIn(".drag_axes = 3", result)
+
+    def test_interactive_rejects_invalid_z_drag_and_layout(self):
+        cases = [
+            ('Rectangle { width: 10; height: 10; Rectangle { width: 1; height: 1; z: -1 } MouseArea {} }', 'negative z'),
+            ('''Rectangle { width: 20; height: 20
+                Rectangle { id: box; width: 10; height: 10
+                    MouseArea { drag.target: box; drag.minimumX: 0; drag.maximumX: 5 }
+                }
+            }''', 'vertical drag requires minimumY'),
+            ('''Rectangle { width: 20; height: 20
+                Text { id: first; anchors.bottom: second.top; text: "a" }
+                Text { id: second; anchors.bottom: first.top; text: "b" }
+                MouseArea { }
+            }''', 'layout cycle'),
+            ('''Rectangle { width: 20; height: 20
+                Text { id: label; anchors.bottom: label.top; text: "a" }
+                MouseArea { }
+            }''', 'cannot target itself'),
+            ('''Rectangle { width: 20; height: 20
+                MouseArea { onEntered: (mouse) => { console.log(mouse.x) } }
+            }''', 'no mouse event parameter'),
+            ('''Rectangle { width: 20; height: 20
+                Text { onTextChanged: (mouse) => { console.log(mouse.x) } }
+                MouseArea { }
+            }''', 'no mouse event parameter'),
+        ]
+        for body, reason in cases:
+            with self.subTest(reason=reason), self.assertRaisesRegex(QmlError, reason):
+                compile_scene("import QtQuick\n" + body)
+
+    def test_interactive_text_slots_follow_assignments_not_source_patterns(self):
+        source = '''import QtQuick
+Rectangle { width: 20; height: 20
+    Text { id: label; text: "ready" }
+    MouseArea { onClicked: { // label.text = fake
+        console.log("label.text = also fake")
+    } }
+}'''
+        result = compile_scene(source)
+        self.assertIn('.text = "ready", .text_slot = -1', result)
+        referenced = source.replace(
+            'console.log("label.text = also fake")',
+            'if (label.text == "ready") console.log("still ready")')
+        result = compile_scene(referenced)
+        self.assertIn('.text = "ready", .text_slot = 0', result)
+
+    def test_interactive_runtime_limits_fail_during_compilation(self):
+        too_many_nodes = "\n".join(
+            "Rectangle { width: 0; height: 0 }" for _ in range(255)) + "\nMouseArea {}"
+        with self.assertRaisesRegex(QmlError, "256 nodes"):
+            compile_scene("import QtQuick\nRectangle { width: 1; height: 1\n" +
+                          too_many_nodes + "\n}")
+        with self.assertRaisesRegex(QmlError, "255 printable bytes"):
+            compile_scene("import QtQuick\nRectangle { width: 1; height: 1\n" +
+                          'Text { text: "' + "x" * 256 + '" }\nMouseArea {}\n}')
+        properties = "\n".join(f"property string value{i}" for i in range(257))
+        with self.assertRaisesRegex(QmlError, "256 string slots"):
+            compile_scene("import QtQuick\nRectangle { width: 1; height: 1\n" +
+                          "MouseArea {\n" + properties + "\n}\n}")
+
     def test_model_and_layout_from_source(self):
         scene = '''import QtQuick
 Rectangle { id: board; width: 80; height: 32; color: "#ff0000"
@@ -85,6 +206,7 @@ Rectangle { width: 30; height: 20
             ('Text { onClicked: run() }', 'unsupported Text'),
             ('Text { text: value + value }', 'single integer'),
             ('Text { anchors.centerIn: parent; x: 0 }', 'overlapping'),
+            ('Text { x: 32768 }', 'outside -32768..32767'),
             ('Text { color: "#fed" }', 'opaque'),
             ('Text { font.pixelSize: 0 }', 'outside'),
             ('property int width: 3', 'invalid or duplicate'),
@@ -95,7 +217,7 @@ Rectangle { width: 30; height: 20
             ('Rectangle { id: part } Text { id: part }', 'duplicate object id'),
             ('property int part: 3; Rectangle { id: part }', 'id also names an integer property'),
             ('Rectangle { opacity: 0 }', 'unsupported Rectangle field opacity'),
-            ('MouseArea {}', 'unsupported object or grouped property MouseArea'),
+            ('Image {}', 'unsupported object or grouped property Image'),
             ('Rectangle {' * 65 + '}' * 65, 'at most 64 nested'),
             ('Grid { Text { text: "item" } }', 'Grid places fixed-size'),
             ('Grid { Rectangle { x: 1 } }', 'Grid determines'),
