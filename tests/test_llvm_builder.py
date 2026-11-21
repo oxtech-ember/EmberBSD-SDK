@@ -779,6 +779,20 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         self.assertEqual(command[-2:], ['tools', 'bootstrap-c'])
         for flag in ('MKPIC=no', 'MKPICINSTALL=no', 'MKPIE=no', 'LDSTATIC=-static'):
             self.assertIn(flag, command)
+        self.assertNotIn('USE_JEMALLOC=no', command)
+
+    def test_compact_libc_isolates_foundation_and_selects_os_allocator(self):
+        builder, _, _ = self.bootstrap_base()
+        builder.options.update({'c-foundation': True, 'no-jemalloc': True})
+        self.assertIn('USE_JEMALLOC=no', builder.preflight()['plan'][0])
+        options = {'sdk': str(self.root / 'sdk'), 'runtime-work': str(self.root / 'sdk/obj/runtime'),
+                   'target': 'riscv32', 'c-foundation': True}
+        normal = LLVMCoordinator(options, SysrootBuilder)
+        compact = LLVMCoordinator(options | {'no-jemalloc': True}, SysrootBuilder)
+        self.assertNotEqual(normal.object_root, compact.object_root)
+        self.assertNotEqual(normal.stage_root, compact.stage_root)
+        self.assertNotEqual(normal.runtime_root, compact.runtime_root)
+        self.assertTrue(compact.stage_options('base')['no-jemalloc'])
 
     def test_c_foundation_inspects_static_libc_and_crt_without_loader(self):
         from test_core import archive, header

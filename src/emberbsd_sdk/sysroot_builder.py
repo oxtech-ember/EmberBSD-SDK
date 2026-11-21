@@ -1684,6 +1684,8 @@ class SysrootBuilder:
             self.flags += gettext_target_host_flags(self.native_selection)
         if self.options.get('c-foundation'):
             self.flags += ['MKPIC=no', 'MKPICINSTALL=no', 'MKPIE=no', 'LDSTATIC=-static']
+            if self.options.get('no-jemalloc'):
+                self.flags.append('USE_JEMALLOC=no')
             if self.options.get('target') == 'riscv32':
                 self.flags += ['MKSOFTFLOAT=yes']
         self.signature = dict(host=self.host, target=self.target, compiler=self.compiler_record, libedit=self.libedit_record, runtime=self.runtime_record, runtime_prefix=prefix, flags=self.flags, host_tools=self.host_tools, native_toolset=self.native_selection, environment=self.environment, objects=self.paths['objects'], tools=self.paths['tools'], python=self.python, process_backend=self.process_inspector.describe())

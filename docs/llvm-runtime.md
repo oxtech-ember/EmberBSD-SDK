@@ -316,6 +316,17 @@ intermediate route; its ABI is little-endian RV32 soft-float `ilp32`. Inspect
 `--plan`, the actual compiler commands, and the produced artifacts before use.
 The target's startup, filesystem and physical execution remain separate work.
 
+For a small static appliance such as ESP-Mosaico, add `--no-jemalloc` to
+`--c-foundation`. This passes `USE_JEMALLOC=no` to the OS and links libc
+with its BSD page-and-bucket allocator (phkmalloc). The SDK uses separate
+default object, stage and runtime directories for the selection. If passing
+explicit `--llvm-objects`, `--llvm-stages` or `--tools`, give this build
+its own directories. A build without the option follows the OS default.
+Link each static consumer against the selected base sysroot. Programs that
+call jemalloc-specific interfaces such as `mallctl` require the jemalloc
+foundation. The compact allocator supports over-aligned allocations used
+by the BSD ACL interfaces.
+
 The additive `application_toolchain.clang_c_foundation_commands` and
 `bind_clang_c_foundation_commands` API binds C target commands to this explicit
 result. `FOUNDATION_TOOLCHAIN_API` identifies the interface version. The

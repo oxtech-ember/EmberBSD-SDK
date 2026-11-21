@@ -196,12 +196,15 @@ class LLVMCoordinator:
         # Without an explicit --llvm-stages, stages are keyed by their content
         # inputs, so an OS change selects a new stage instead of refusing the old one.
         self.keyed = 'llvm-stages' not in self.options
-        stem = 'llvm-c-foundation-' if self.options.get('c-foundation') else 'llvm-bootstrap-'
+        cohort = 'llvm-c-foundation' if self.options.get('c-foundation') else 'llvm-bootstrap'
+        if self.options.get('no-jemalloc'):
+            cohort += '-phkmalloc'
+            self.work = os.path.join(self.work, 'phkmalloc')
         # llvm-stage-root moves the keyed stages into another directory below
         # SDK/stages; they stay keyed and can restart.
         self.stage_root = self.options.get('llvm-stages', os.path.join(
             self.options.get('llvm-stage-root', os.path.join(self.options['sdk'], 'stages')),
-            stem + self.options['target']))
+            cohort + '-' + self.options['target']))
         self.runtime_root = self.work
         self.stage_inputs = None
         # Set by prepare(): whether this run found the tools directory new.
@@ -209,7 +212,7 @@ class LLVMCoordinator:
         # Only SDK-named stages restart; explicit stage directories are left as they are.
         self.resume = self.keyed and builder_type.RESUMES_FAILED_STAGES
         self.object_root = self.options.get('llvm-objects', os.path.join(
-            self.options['sdk'], 'obj', 'llvm-c-foundation' if self.options.get('c-foundation') else 'llvm-bootstrap', self.options['target']))
+            self.options['sdk'], 'obj', cohort, self.options['target']))
         self.tools = self.options.get('tools', os.path.join(self.object_root, 'tools'))
 
     def stage_options(self, phase):

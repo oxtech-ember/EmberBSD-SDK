@@ -56,11 +56,15 @@ def main():
         parser.add_argument('--host-abi-' + name, action=UniqueOption,
                             help='explicit native-only ABI flags for OS host programs')
     parser.add_argument('--c-foundation', action='store_true', help='build an intermediate static C foundation, not a complete SDK')
+    parser.add_argument('--no-jemalloc', action='store_true',
+                        help='select the OS page-and-bucket allocator for this static C foundation')
     parser.add_argument('--compatible-target-tool', action='append', metavar='ROLE:OLD_SHA256:NEW_SHA256',
                         help='one-run reviewed ELF object-tool transition; objcopy or strip only')
     parser.add_argument('--update-stage', action='store_true', help='incrementally update an existing completed matching work stage')
     parser.add_argument('--plan', action='store_true', help='inspect inputs and emit commands without creating outputs')
     arguments = parser.parse_args()
+    if arguments.no_jemalloc and not arguments.c_foundation:
+        parser.error('--no-jemalloc requires --c-foundation')
     try:
         source = Path(arguments.sdk_source).resolve(strict=True)
         sys.path.insert(0, str(source / 'src'))
