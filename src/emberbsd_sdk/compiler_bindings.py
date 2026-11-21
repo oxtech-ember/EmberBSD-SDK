@@ -371,10 +371,11 @@ def _address_sanitizer(arguments):
         if option == '-fsanitize':
             enabled.update(names.split(','))
         elif option == '-fno-sanitize':
-            if names == 'all':
+            removed = names.split(',')
+            if 'all' in removed:
                 enabled.clear()
             else:
-                enabled.difference_update(names.split(','))
+                enabled.difference_update(removed)
     return 'address' in enabled
 
 

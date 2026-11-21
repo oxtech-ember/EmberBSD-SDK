@@ -62,6 +62,7 @@ class CompilerBindingTests(TemporaryCase):
                              [str(paxctl), '+a', str(output)])
 
         for flags in ([], ['-fsanitize=address', '-fno-sanitize=address'],
+                      ['-fsanitize=address', '-fno-sanitize=all,undefined'],
                       ['-fsanitize=address', '-c'], ['-fsanitize=address', '-shared'],
                       ['-fsanitize=address', '-###']):
             with self.subTest(flags=flags), \
