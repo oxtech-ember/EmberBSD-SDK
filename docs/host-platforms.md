@@ -130,18 +130,19 @@ confirms PID/UID/state offsets 116/136/360, prefix 368 and full record size 680.
 These checks qualify `process.run_logged` and its owned-session mechanism.
 They do not qualify a real SDK compiler producer or target cross-build.
 
-The complete native SDK suite does not pass: 310 tests report one failure,
-16 errors and 28 skips. Fifteen errors and the failure reach unsupported
+The earlier 310-test native NetBSD run reported one failure, 16 errors
+and 28 skips. Fifteen errors and the failure reached unsupported
 directory publication or sysroot import. The remaining stream test expects
 `OSError` for a missing executable; the gated launcher instead exits 127,
 which the stream reports as `CommandError`. The complete stream interface
-is not qualified on NetBSD. These tests remain enabled and failing there.
+remains unqualified on NetBSD.
 
-Exclusive directory publication has no qualified NetBSD implementation. `publication._native_rename` supports Darwin `renamex_np` and
-Linux `renameat2` only. It refuses NetBSD; no check-then-rename fallback replaces
-its atomic no-replace contract. Sysroot import requires that operation and is
-unsupported on NetBSD. A successful process backend does not qualify sysroot
-publication, transfer/import or the complete SDK host profile.
+Exclusive directory publication on EmberBSD requires native libc and kernel
+support for `renameat2(RENAME_NOREPLACE)`. Sysroot import requires that
+operation. The adapter checks both the libc symbol and the running kernel
+feature before publication. FFS, tmpfs, and null mounts over supporting
+filesystems implement the flag in EmberBSD. An unsupported filesystem
+returns `EOPNOTSUPP`, and cross-filesystem moves return `EXDEV`.
 
 ## Windows through WSL2
 

@@ -205,11 +205,13 @@ the source leaf must not be a symlink. An existing file, directory or symlink at
 the destination is never replaced. A destination created after path validation
 is also protected by the native operation.
 
-Darwin uses `renamex_np` with `RENAME_EXCL`. Linux uses libc `renameat2` with
-`AT_FDCWD` and `RENAME_NOREPLACE`. A missing symbol or another host is unsupported.
-Native errors retain their errno. A filesystem that refuses the operation, or a
-cross-filesystem move, does not cause an ordinary rename or copy fallback.
-The availability check cannot qualify each destination filesystem.
+Darwin uses `renamex_np` with `RENAME_EXCL`. Linux and EmberBSD use libc
+`renameat2` with `AT_FDCWD` and `RENAME_NOREPLACE`. EmberBSD needs both libc and
+kernel support. The availability check verifies the libc symbol and reads the
+running kernel's `vfs.generic.renameat2_flags` before making a system call.
+The destination filesystem can still reject the operation.
+Native errors retain their errno, including `ENOSYS`, `EOPNOTSUPP`, and `EXDEV`.
+The wrapper never falls back to ordinary rename or copy.
 
 The caller must own the source and both parent directories throughout the call.
 The API does not lock those paths against another writer. It does not validate
@@ -221,12 +223,11 @@ The wrapper derives from the BSD-licensed Ports
 The fixed native ABI follows Darwin `sys/stdio.h`, Linux UAPI
 [`fs.h`](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fs.h) and
 [`fcntl.h`](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fcntl.h),
-and the libc `renameat2` declaration.
+and the matching EmberBSD `sys/fcntl.h` constants and libc declaration.
 
 Run `python3 -m unittest discover -s tests -p 'test_publication.py'`.
 The filesystem cases execute the current host's native operation. Separate ABI
-fixtures check Darwin and Linux arguments and injected failures. Darwin results
-do not establish an actual Linux filesystem run or native Windows support.
+fixtures check Darwin, Linux, and EmberBSD arguments and injected failures.
 
 ## Read a binary producer stream
 

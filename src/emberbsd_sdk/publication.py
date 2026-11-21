@@ -21,21 +21,38 @@ from . import paths
 DIRECTORY_PUBLICATION_API = 1
 
 
+def _require_emberbsd_kernel(library):
+    # Calling a syscall missing from a NetBSD kernel can deliver SIGSYS.
+    # Check the running kernel independently of the selected userland.
+    query = library.sysctlbyname
+    query.argtypes = (ctypes.c_char_p, ctypes.c_void_p,
+                      ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t)
+    query.restype = ctypes.c_int
+    flags = ctypes.c_int()
+    size = ctypes.c_size_t(ctypes.sizeof(flags))
+    result = query(b'vfs.generic.renameat2_flags', ctypes.byref(flags),
+                   ctypes.byref(size), None, 0)
+    if result != 0 or size.value != ctypes.sizeof(flags) or not flags.value & 1:
+        raise SDKError('atomic directory publication is unavailable in the running EmberBSD kernel')
+
+
 def _native_rename():
     if sys.platform == 'darwin':
         symbol = 'renamex_np'
         arguments = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint)
         relative = False
-    elif sys.platform.startswith('linux'):
+    elif sys.platform.startswith(('linux', 'netbsd')):
         symbol = 'renameat2'
         arguments = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
                      ctypes.c_char_p, ctypes.c_uint)
         relative = True
     else:
-        raise SDKError('atomic directory publication requires Darwin or Linux')
+        raise SDKError('atomic directory publication requires Darwin, Linux, or EmberBSD')
     try:
         library = ctypes.CDLL(None, use_errno=True)
         function = getattr(library, symbol)
+        if sys.platform.startswith('netbsd'):
+            _require_emberbsd_kernel(library)
         function.argtypes = arguments
         function.restype = ctypes.c_int
     except (OSError, AttributeError) as exc:
@@ -81,7 +98,7 @@ def publish_directory_noreplace(source, destination):
         raise SDKError('publication destination is inside the source directory')
     ctypes.set_errno(0)
     if relative:
-        # Linux AT_FDCWD and RENAME_NOREPLACE; libc declares unsigned flags.
+        # Linux and EmberBSD share these AT_FDCWD and RENAME_NOREPLACE values.
         result = function(-100, os.fsencode(source), -100,
                           os.fsencode(destination), 1)
     else:

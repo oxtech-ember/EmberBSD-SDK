@@ -6,6 +6,8 @@
 import ctypes
 import errno
 import os
+import subprocess
+import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -24,6 +26,17 @@ class NativeFunction:
         self.calls.append(args)
         ctypes.set_errno(self.error)
         return -1 if self.error else 0
+
+
+class KernelFlags:
+    def __init__(self, flags=1, result=0):
+        self.flags = flags
+        self.result = result
+
+    def __call__(self, name, buffer, size, new, length):
+        assert name == b'vfs.generic.renameat2_flags' and new is None and length == 0
+        ctypes.cast(buffer, ctypes.POINTER(ctypes.c_int))[0] = self.flags
+        return self.result
 
 
 class PublicationTests(TemporaryCase):
@@ -87,14 +100,23 @@ class PublicationTests(TemporaryCase):
                 source = self.source('source-' + str(empty))
                 destination = self.root / ('race-' + str(empty))
                 function, relative = publication._native_rename()
+                created = None
+
                 def race(*args):
-                    destination.mkdir()
+                    nonlocal created
+                    subprocess.run([sys.executable, '-c',
+                                    'import os, sys\nos.mkdir(sys.argv[1])',
+                                    str(destination)], check=True)
                     if not empty:
                         (destination / 'sentinel').write_bytes(b'keep')
+                    created = destination.lstat()
                     return function(*args)
                 with patch.object(publication, '_native_rename', return_value=(race, relative)):
-                    with self.assertRaises(OSError):
+                    with self.assertRaises(OSError) as caught:
                         publication.publish_directory_noreplace(source, destination)
+                self.assertEqual(caught.exception.errno, errno.EEXIST)
+                after = destination.lstat()
+                self.assertEqual((after.st_dev, after.st_ino), (created.st_dev, created.st_ino))
                 self.assert_source(source)
                 self.assertEqual([p.name for p in destination.iterdir()],
                                  [] if empty else ['sentinel'])
@@ -143,10 +165,12 @@ class PublicationTests(TemporaryCase):
             ('darwin', 'renamex_np', (os.fsencode(source), os.fsencode(destination), 4),
              (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint)),
             ('linux', 'renameat2', (-100, os.fsencode(source), -100, os.fsencode(destination), 1),
+             (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)),
+            ('netbsd11', 'renameat2', (-100, os.fsencode(source), -100, os.fsencode(destination), 1),
              (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint))):
             with self.subTest(platform=platform):
                 function = NativeFunction()
-                library = SimpleNamespace(**{symbol: function})
+                library = SimpleNamespace(sysctlbyname=KernelFlags(), **{symbol: function})
                 with patch.object(publication.sys, 'platform', platform), \
                         patch.object(publication.ctypes, 'CDLL', return_value=library) as loader:
                     publication.require_directory_publication()
@@ -158,12 +182,28 @@ class PublicationTests(TemporaryCase):
                 loader.assert_called_with(None, use_errno=True)
         self.assert_source(source)
 
+    def test_emberbsd_new_libc_with_older_kernel_fails_before_syscall(self):
+        for query in (KernelFlags(result=-1), KernelFlags(flags=0)):
+            function = NativeFunction()
+            library = SimpleNamespace(renameat2=function, sysctlbyname=query)
+            with patch.object(publication.sys, 'platform', 'netbsd11'), \
+                    patch.object(publication.ctypes, 'CDLL', return_value=library):
+                with self.assertRaisesRegex(SDKError, 'running EmberBSD kernel'):
+                    publication.publish_directory_noreplace('absent', 'target')
+            self.assertEqual(function.calls, [])
+
     def test_missing_symbol_and_library_fail_before_mutation(self):
-        for platform in ('darwin', 'linux'):
+        for platform in ('darwin', 'linux', 'netbsd11'):
             with self.subTest(platform=platform), patch.object(publication.sys, 'platform', platform):
                 with patch.object(publication.ctypes, 'CDLL', return_value=SimpleNamespace()):
                     with self.assertRaisesRegex(SDKError, 'unavailable'):
                         publication.require_directory_publication()
+                    source = self.source('missing-symbol-' + platform)
+                    destination = self.root / 'output'
+                    with self.assertRaisesRegex(SDKError, 'unavailable'):
+                        publication.publish_directory_noreplace(source, destination)
+                    self.assert_source(source)
+                    self.assertFalse(os.path.lexists(destination))
                 with patch.object(publication.ctypes, 'CDLL', side_effect=OSError('missing loader')):
                     with self.assertRaisesRegex(SDKError, 'unavailable'):
                         publication.require_directory_publication()
@@ -171,7 +211,7 @@ class PublicationTests(TemporaryCase):
     def test_unsupported_host_refuses_before_native_loader_or_path_access(self):
         with patch.object(publication.sys, 'platform', 'win32'), \
                 patch.object(publication.ctypes, 'CDLL') as loader:
-            with self.assertRaisesRegex(SDKError, 'Darwin or Linux'):
+            with self.assertRaisesRegex(SDKError, 'Darwin, Linux, or EmberBSD'):
                 publication.publish_directory_noreplace('absent', 'output')
             loader.assert_not_called()
 
