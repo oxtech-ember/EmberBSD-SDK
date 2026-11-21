@@ -481,16 +481,10 @@ class SysrootBuilder:
                 if (self.llvm_phase == 'base' or (self.llvm_phase == 'final' and base is not None)) and record['base']['os_revision'] != self.sources['os']['commit']:
                     if base is None:
                         raise SDKError('LLVM runtime base OS differs from selection')
-                    # A measured foundation permits a descendant OS source while
+                    # A measured foundation permits another OS source while
                     # preserving the runtime's original recorded revision.
-                    try:
-                        self.git(self.sources['os']['path'], 'merge-base', '--is-ancestor',
-                                 record['base']['os_revision'], self.sources['os']['commit'])
-                    except CommandError as exc:
-                        if exc.returncode != 1:
-                            raise
-                        raise SDKError('the LLVM runtime base needs an OS commit that is a descendant of '
-                                       + record['base']['os_revision'] + '; select a new runtime') from exc
+                    self.require_os_history(record['base']['os_revision'], 'the LLVM runtime base ' + base,
+                                            'select a new runtime')
                 # The stage manifest is the input key of the reused runtime; its
                 # recorded digests stand for the bytes under the runtime prefix.
                 prefix = record['prefix'] + '/'
@@ -903,23 +897,39 @@ class SysrootBuilder:
                 except CommandError as exc:
                     raise SDKError(f'the recorded {name} commit {old} of {path} is not in {root}; '
                                    'fetch it or select new objects') from exc
-                if name != 'os' or old == current:
-                    continue
-                try:
-                    self.git(root, 'merge-base', '--is-ancestor', old, current)
-                    continue
-                except CommandError as exc:
-                    # Only the normal non-ancestor result goes on; Git errors fail.
-                    if exc.returncode != 1:
-                        raise
-                removed = [item for item in self.git(root, 'diff-tree', '-r', '--no-renames', '--name-only',
-                                                     '-z', '--diff-filter=DT', old, current, '--').split('\0')
-                           if item and not self.removal_is_document(item)]
-                if removed:
-                    raise SDKError(f'the OS commit {current} removes files of the kept objects {path} '
-                                   f'({", ".join(removed[:5])}); select new objects')
+                if name == 'os':
+                    self.require_os_history(old, 'the kept objects ' + path, 'select new objects')
         except (KeyError, TypeError) as exc:
             raise SDKError(f'invalid source history: {path}: {exc}') from exc
+
+    def require_os_history(self, old, what, remedy):
+        """Refuse an OS commit that is not a descendant of OLD and removes its files.
+
+        Make does not see a removed file: an object of a removed source can
+        stay, and a removed file can have shadowed another one. A descendant
+        commit is accepted; another commit only if it removes or changes the
+        type of no file of OLD other than documents. WHAT names the user of
+        OLD, and REMEDY says what to do when it is refused."""
+        root, current = self.sources['os']['path'], self.sources['os']['commit']
+        if old == current:
+            return
+        try:
+            self.git(root, 'cat-file', '-e', old + '^{commit}')
+        except CommandError as exc:
+            raise SDKError(f'the OS commit {old} of {what} is not in {root}; fetch it or {remedy}') from exc
+        try:
+            self.git(root, 'merge-base', '--is-ancestor', old, current)
+            return
+        except CommandError as exc:
+            # Only the normal non-ancestor result goes on; Git errors fail.
+            if exc.returncode != 1:
+                raise
+        removed = [item for item in self.git(root, 'diff-tree', '-r', '--no-renames', '--name-only',
+                                             '-z', '--diff-filter=DT', old, current, '--').split('\0')
+                   if item and not self.removal_is_document(item)]
+        if removed:
+            raise SDKError(f'the OS commit {current} does not have the OS files of {what} '
+                           f'({", ".join(removed[:5])}); {remedy}')
 
     def reuse_signature(self, signature):
         """Compare compiled payload, keeping provenance in the saved context."""

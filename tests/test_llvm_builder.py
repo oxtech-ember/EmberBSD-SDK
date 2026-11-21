@@ -1534,15 +1534,29 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         with self.assertRaisesRegex(SDKError, 'base OS differs'):
             builder.preflight()
 
-    def test_bootstrap_runtime_rejects_unrelated_os_even_with_matching_headers(self):
+    def test_bootstrap_runtime_accepts_other_os_history_that_removes_no_file(self):
         builder, runtime, _ = self.bootstrap_base()
         source = builder.options['os']
+        # Other history with the same files: make sees each changed file.
         unrelated = git(source, '-c', 'user.name=SDK fixture',
             '-c', 'user.email=fixture@example.invalid', 'commit-tree',
             git(source, 'rev-parse', 'HEAD^{tree}'), '-m', 'Unrelated OS history')
         runtime.record['base']['os_revision'] = unrelated
         runtime.save()
-        with self.assertRaises(SDKError):
+        builder.preflight()
+
+    def test_bootstrap_runtime_refuses_an_os_commit_that_removes_a_base_file(self):
+        builder, runtime, _ = self.bootstrap_base()
+        source = builder.options['os']
+        # The runtime base comes from a later commit with extra.c; the
+        # selected commit is earlier and has no extra.c.
+        current = git(source, 'rev-parse', 'HEAD')
+        write(Path(source) / 'extra.c', 'int extra;\n')
+        commit(source)
+        runtime.record['base']['os_revision'] = git(source, 'rev-parse', 'HEAD')
+        runtime.save()
+        git(source, 'reset', '-q', '--hard', current)
+        with self.assertRaisesRegex(SDKError, 'does not have the OS files of the LLVM runtime base .*extra.c.*select a new runtime'):
             builder.preflight()
         self.assertFalse(Path(builder.options['destination']).exists())
 

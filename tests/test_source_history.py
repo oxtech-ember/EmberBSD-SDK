@@ -69,7 +69,7 @@ class SourceHistoryTests(unittest.TestCase):
         self.git('add', '-A')
         self.git('commit', '-qm', 'add x.c')
         self.record['sources']['os']['commit'] = self.git('rev-parse', 'HEAD')
-        with self.assertRaisesRegex(SDKError, 'removes files of the kept objects .*x.c.*select new objects'):
+        with self.assertRaisesRegex(SDKError, 'does not have the OS files of the kept objects .*x.c.*select new objects'):
             self.check(self.old)
         # A later commit that removes the file still uses the objects, as before.
         self.git('rm', '-q', 'x.c')

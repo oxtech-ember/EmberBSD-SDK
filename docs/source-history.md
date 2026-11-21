@@ -17,7 +17,7 @@ commit is accepted as before.
 
 The other reuse rules do not change: the clean-source admission, the
 comparison of the compiled-input signature, the scoped refresh rules and the
-artifact checks. Saved source pins still record provenance. The LLVM runtime
-base still needs a descendant OS commit.
+artifact checks. Saved source pins still record provenance. A reused LLVM
+runtime base has the same rule for the OS commit that it records.
 
 The tests use real Git histories only, not a target build.
