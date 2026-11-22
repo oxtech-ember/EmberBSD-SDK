@@ -109,7 +109,14 @@ for the target runtime and build-time C++ support. Its explicit
 records the common POSIX GCC16 without rebuilding compiler frontends.
 A recorded seed remains an input, not a new build result.
 
-## Build the sysroot
+## Build kernels and development OS sets
+
+Use a [build profile](build-profile.md) for Clang kernels and development sets.
+`profile-build` runs the OS kernel and release builders with the selected tools
+and prepared sources. It reuses each stage whose input key matches. A release
+kit uses the [OS release procedure](os-release.md).
+
+## Build an application sysroot
 
 Use the [SDK sysroot procedure](sysroot.md). It calls the fork's own build rules
 and selects the verified Ports runtime stage and [prepared libedit source](libedit.md). Keep source revisions, compiler

@@ -24,6 +24,9 @@ The `--host-binutils` work directory selects the matching common BFD and
 
 ## Build inputs and commands
 
+For a development build of kernels and sets, use a [build profile](build-profile.md).
+The commands below build a release kit for verification and publication.
+
 Read [sysroot inputs](sysroot.md#required-inputs) and
 [host requirements](host-platforms.md). Use CPython 3.15+, Git, the OS host
 build prerequisites and an ISO-capable libarchive `tar`. Each source checkout

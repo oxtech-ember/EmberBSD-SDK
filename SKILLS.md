@@ -6,7 +6,8 @@ Read [README.md](README.md) and the selected procedure before changing inputs.
 | Task | Canonical skill or procedure |
 | --- | --- |
 | Create, inspect or reuse a Prebuild SDK workspace | [emberbsd-prebuild-sdk](https://github.com/oxtech-ember/Ember-Agent-Skills/blob/main/skills/emberbsd-prebuild-sdk/SKILL.md), [workspace contract](docs/prebuild-sdk.md) |
-| Build the EmberBSD sysroot | [Sysroot procedure](docs/sysroot.md), `emberbsd-prebuild-sdk` |
+| Build development OS sets | [Build profile](docs/build-profile.md), `emberbsd-prebuild-sdk` |
+| Build an application sysroot | [Sysroot procedure](docs/sysroot.md), `emberbsd-prebuild-sdk` |
 | Select package roots for one SDK task | [Package selection CLI](docs/package-selection.md) |
 | Export or import a sysroot through a shared store | [Sysroot transfer procedure](docs/sysroot-transfer.md) |
 | Prepare the cross compiler or cross-build a kernel | [emberbsd-build-kernel](https://github.com/oxtech-ember/Ember-Agent-Skills/blob/main/skills/emberbsd-build-kernel/SKILL.md) |

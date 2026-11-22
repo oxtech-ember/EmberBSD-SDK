@@ -53,7 +53,17 @@ name, alias or build-host architecture does not declare them. The sysroot builde
 refuses a legacy or version 1 workspace whose target is unknown. These tools do
 not migrate an active build tree or change its existing producer commands.
 
-The sysroot builder uses clean OS/Ports sources and the common Clang/LLVM
+Build Clang kernels and development OS sets with a [build profile](docs/build-profile.md).
+`profile-plan` prints the work still needed. `profile-build` runs it with Ninja
+and reuses each stage whose input key matches:
+
+```sh
+python3 scripts/packages.py --config /absolute/client.json profile-build --profile /absolute/profile.json
+```
+
+A release kit uses the [OS release procedure](docs/os-release.md).
+
+For an application sysroot, the sysroot builder uses clean OS/Ports sources and the common Clang/LLVM
 toolchain. It builds headers, the initial runtime, OS libc/CRT and the full C++
 runtime in dependency order. GCC is an explicit platform alternative.
 Start with its help and the documented preflight:
