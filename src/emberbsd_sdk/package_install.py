@@ -15,8 +15,7 @@ from .binary_release import _arch, _package_payload
 from .errors import SDKError
 from .host_identity import native_cpu
 from .paths import open_regular, verify_stable
-from . import package_relocation
-from .package_cache import directory_lock
+from . import package_relocation, prefix_lock
 from .release_signing import read_bytes
 
 PORTABLE_PREFIX = package_relocation.INDEPENDENT
@@ -240,7 +239,7 @@ class PackageInstaller:
             return set()
         if (recover and installation_root(config) is None and not config.get('target') and
                 list(package_relocation.pending(prefix, database))):
-            with directory_lock(database.parent / (database.name + '.sdk-lock')):
+            with prefix_lock.writing(database):
                 for name in package_relocation.pending(prefix, database):
                     package_relocation.finish(prefix, database, name)
         result = subprocess.run([self.crypto.prefix.tool('pkg_info'), '-K', str(database), '-e', '*'],

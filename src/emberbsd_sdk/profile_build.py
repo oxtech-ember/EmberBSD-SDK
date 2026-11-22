@@ -413,8 +413,11 @@ def ninja_version(ninja):
         raise SDKError(f'cannot read the version of {ninja}') from exc
 
 
-def build(plan, *, work, command, ninja, jobs, explain=False):
-    """Write the plan and build.ninja into WORK and run Ninja. Return its status."""
+def build(plan, *, work, command, ninja, jobs, explain=False, pass_fds=()):
+    """Write the plan and build.ninja into WORK and run Ninja. Return its status.
+
+    Ninja and its edges keep the descriptors of PASS_FDS open.
+    """
     work = Path(work)
     work.mkdir(parents=True, exist_ok=True)
     with open(work / '.lock', 'a') as lock:
@@ -442,4 +445,4 @@ def build(plan, *, work, command, ninja, jobs, explain=False):
         with jobserver.budget(work / '.jobserver', jobs, os.environ.get('MAKEFLAGS')) as makeflags:
             env = dict(os.environ, MAKEFLAGS=makeflags)
             env.pop('MFLAGS', None)
-            return subprocess.run(argv, env=env, check=False).returncode
+            return subprocess.run(argv, env=env, check=False, pass_fds=pass_fds).returncode

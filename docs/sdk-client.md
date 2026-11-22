@@ -511,7 +511,13 @@ This supports in-place component and package revision updates. It deliberately
 refuses transitions which require removing library providers or replacing an
 installed consumer before its dependency can change. Such coordinated ABI
 transitions, sysroot replacement and updating tools during an active build remain
-separate work. Keep a prefix unchanged until builds using it finish. A configured Ports
+separate work. A build that uses a prefix reads it: the supervised Ports
+stage and `profile-build` with the host prefix. A writer of the prefix, an SDK
+install or a Ports `pkg_add`, waits for other writers. It stops before it
+changes a file when another build reads the prefix (`prefix-lock.py` exits
+with 75). The installs of the reading build itself continue. The locks are
+`<pkgdb>.writer` and the files in `<pkgdb>.readers`
+([prefix locks](../src/emberbsd_sdk/prefix_lock.py)). A configured Ports
 source build and binary installation share the existing build lock. Existing
 Ports source builds retain their owner-defined replacement rules.
 An exact runtime/devel dependency can require such a coordinated transition

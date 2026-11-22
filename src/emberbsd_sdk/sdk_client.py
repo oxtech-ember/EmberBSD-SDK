@@ -16,7 +16,7 @@ import sys
 import tarfile
 import tempfile
 
-from . import sysroot_package, package_automatic, package_runtime
+from . import sysroot_package, package_automatic, package_runtime, prefix_lock
 from .binary_catalog import load_release_catalogs, select_packages
 from .desktop_apps import bind_installed_desktops
 from .binary_release import _arch, _matches
@@ -496,7 +496,7 @@ def apply_plan(plan, config, installer, cache, store, *, source_locked=False):
     def lock_repositories(locks, repositories):
         for repository in repositories:
             _, database = install_paths(config['repositories'][repository])
-            locks.enter_context(directory_lock(database.parent / (database.name + '.sdk-lock')))
+            locks.enter_context(prefix_lock.writing(database))
 
     def retain_installed(repositories):
         for repository in repositories:
@@ -1030,9 +1030,11 @@ def build_profile_command(config, config_path, profile_path, *, explain=False):
     print('Plan: ' + build_profile.summary(plan), file=sys.stderr)
     command = [sys.executable, '-B', str(Path(__file__).resolve().parents[2] / 'scripts/packages.py'),
                '--config', str(Path(config_path).resolve()), 'profile-node']
-    return profile_build.build(plan, work=options['work'], command=command,
-                               ninja=os.path.join(config['host_prefix'], 'bin/ninja'),
-                               jobs=resolve_jobs(None), explain=explain)
+    # The OS stages run the tools of the host prefix: keep it unchanged meanwhile.
+    with prefix_lock.reading([os.path.join(config['host_prefix'], 'pkgdb')]) as readers:
+        return profile_build.build(plan, work=options['work'], command=command,
+                                   ninja=os.path.join(config['host_prefix'], 'bin/ninja'),
+                                   jobs=resolve_jobs(None), explain=explain, pass_fds=readers)
 
 
 def run_profile_node(config, node, key):

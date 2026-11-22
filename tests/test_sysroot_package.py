@@ -2,6 +2,7 @@
 """Delivery fixtures test transfer and selection, not real target execution."""
 
 import copy
+import fcntl
 import hashlib
 import io
 from pathlib import Path
@@ -86,11 +87,15 @@ class SysrootPackageTests(TemporaryCase):
         def install(path, config, *, checked, configure=True):
             self.assertTrue((destination / sysroot_package.RECEIPT).is_file())
             self.assertTrue((destination / 'usr/include/stdio.h').is_file())
-            self.assertTrue((destination / 'usr/pkg/pkgdb.sdk-lock').is_dir())
+            # The installer holds the writer lock of the new package database.
+            with open(destination / 'usr/pkg/pkgdb.writer', 'rb') as lock:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         installer.install = install
         apply_plan(plan, self.config, installer, self.cache, Store(self.archive.read_bytes()))
         self.assertEqual(self.select()['action'], 'installed')
-        self.assertFalse((destination / 'usr/pkg/pkgdb.sdk-lock').exists())
+        with open(destination / 'usr/pkg/pkgdb.writer', 'rb') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     def test_signed_package_runtime_mismatch_precedes_new_and_existing_base_mutation(self):
         from emberbsd_sdk.package_install import PackageInstaller
