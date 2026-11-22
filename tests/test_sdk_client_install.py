@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: BSD-2-Clause
-from contextlib import redirect_stdout, redirect_stderr
+from contextlib import contextmanager, redirect_stdout, redirect_stderr
 import gzip
 import io
 import os
@@ -83,23 +83,108 @@ class ClientInstallTests(install_fixture.InstallTests):
         self.assertEqual(status, 1, output)
         self.assertFalse(self.destination.exists())
 
-    def test_online_update_uses_pkgdb_and_reuses_updated_package(self):
-        status, output = self.run_client()
-        self.assertEqual(status, 0, output)
+    def publish_package(self, name, payload):
         shutil.rmtree(self.work / 'stage')
-        replacement = self.package(package_name='fixture-2.0', payload='updated data')
-        shutil.copyfile(replacement, self.repository / 'native/fixture-2.0.tgz')
+        replacement = self.package(package_name=name, payload=payload)
+        shutil.copyfile(replacement, self.repository / f'native/{name}.tgz')
         catalog_path = self.repository / 'native/catalog.json'
         catalog = read_json(catalog_path)
-        catalog['packages'][0]['pkgname'] = 'fixture-2.0'
+        catalog['packages'][0]['pkgname'] = name
         catalog_path.write_bytes(json_bytes(catalog))
-        (self.repository / 'native/pkg_summary.gz').write_bytes(gzip.compress(b'PKGNAME=fixture-2.0\n\n'))
-        self.draft['release_id'] = 'fixture-update'
-        self.draft['artifacts'][0]['path'] = 'native/fixture-2.0.tgz'
-        envelope = self.repository / 'update.p7m'
+        (self.repository / 'native/pkg_summary.gz').write_bytes(gzip.compress(f'PKGNAME={name}\n\n'.encode()))
+        self.draft['release_id'] = name
+        self.draft['artifacts'][0]['path'] = f'native/{name}.tgz'
+        envelope = self.repository / f'{name}.p7m'
         seal_release(self.crypto, json_bytes(self.draft), self.repository,
                      self.signer, self.ca.certificate, envelope)
         publish_release(self.crypto, self.store, self.public, envelope, self.signer, self.ca.certificate)
+
+    @contextmanager
+    def archive_responses(self, statuses, *, replacement=None):
+        """Switch the served snapshot when the first archive request arrives."""
+        requests = []
+        serve = http_fixture.ObjectHandler.get
+
+        def get(handler, head=False):
+            if not head and handler.path.endswith('.tgz'):
+                requests.append(handler.path)
+                if len(requests) == 1 and replacement is not None:
+                    handler.server.objects = replacement
+                if len(requests) <= len(statuses):
+                    handler.send_error(statuses[len(requests) - 1])
+                    return
+            return serve(handler, head)
+
+        with patch.object(http_fixture.ObjectHandler, 'get', get):
+            yield requests
+
+    def prepare_rotation(self, name):
+        previous = self.server.objects.copy()
+        self.publish_package(name, 'replacement payload')
+        replacement = self.server.objects
+        self.server.objects = previous
+        return replacement
+
+    def test_install_replans_after_forbidden_displaced_archive(self):
+        replacement = self.prepare_rotation('fixture-2.0')
+        with self.archive_responses([403], replacement=replacement) as requests:
+            status, output = self.run_client()
+        self.assertEqual(status, 0, output)
+        self.assertEqual(len(requests), 2)
+        self.assertNotEqual(requests[0], requests[1])
+        self.assertTrue((self.destination / 'pkgdb/fixture-2.0').is_dir())
+        self.assertEqual((self.destination / 'payload').read_text(), 'replacement payload')
+
+    def test_update_replans_after_missing_displaced_archive(self):
+        status, output = self.run_client()
+        self.assertEqual(status, 0, output)
+        self.publish_package('fixture-2.0', 'intermediate payload')
+        replacement = self.prepare_rotation('fixture-3.0')
+        with self.archive_responses([404], replacement=replacement) as requests:
+            status, output = self.run_client('update')
+        self.assertEqual(status, 0, output)
+        self.assertEqual(len(requests), 2)
+        self.assertNotEqual(requests[0], requests[1])
+        self.assertTrue((self.destination / 'pkgdb/fixture-3.0').is_dir())
+        self.assertFalse((self.destination / 'pkgdb/fixture-2.0').exists())
+
+    def test_unchanged_release_preserves_forbidden_error(self):
+        earlier = self.server.objects.copy()
+        publish_release(self.crypto, self.store, self.public, self.repository / 'release.p7m',
+                        self.signer, self.ca.certificate, refresh=True, ttl=8 * 86400)
+        renewed = self.server.objects
+        self.assertNotEqual(earlier['/bucket/current.p7m'], renewed['/bucket/current.p7m'])
+        self.server.objects = earlier
+        with self.archive_responses([403], replacement=renewed) as requests:
+            status, output = self.run_client()
+        self.assertEqual(status, 1, output)
+        self.assertIn('HTTP 403', output)
+        self.assertEqual(len(requests), 1)
+        self.assertFalse(self.destination.exists())
+
+    def test_second_archive_failure_stops_the_install(self):
+        replacement = self.prepare_rotation('fixture-2.0')
+        with self.archive_responses([403, 403], replacement=replacement) as requests:
+            status, output = self.run_client()
+        self.assertEqual(status, 1, output)
+        self.assertIn('HTTP 403', output)
+        self.assertEqual(len(requests), 2)
+        self.assertFalse(self.destination.exists())
+
+    def test_replan_rejects_invalid_current_signature(self):
+        replacement = self.prepare_rotation('fixture-2.0')
+        replacement['/bucket/current.p7m'] = b'invalid CMS'
+        with self.archive_responses([403], replacement=replacement) as requests:
+            status, output = self.run_client()
+        self.assertEqual(status, 1, output)
+        self.assertIn('CMS signature/certificate verification failed', output)
+        self.assertEqual(len(requests), 1)
+        self.assertFalse(self.destination.exists())
+
+    def test_online_update_uses_pkgdb_and_reuses_updated_package(self):
+        status, output = self.run_client()
+        self.assertEqual(status, 0, output)
+        self.publish_package('fixture-2.0', 'updated data')
         # Saved selections do not determine which packages are updated.
         (self.work / 'state/selection.json').unlink()
         status, output = self.run_client('update')

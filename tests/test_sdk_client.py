@@ -22,7 +22,7 @@ from emberbsd_sdk.package_cache import directory_lock
 from emberbsd_sdk.release_catalog import parse_channel
 from emberbsd_sdk.release_s3 import HTTPStatusError, HTTPStore
 from emberbsd_sdk.sdk_client import (
-    _ready_wave, installation_plan, apply_plan, include_source_dependencies, install_selection)
+    ArchiveUnavailable, _ready_wave, installation_plan, apply_plan, include_source_dependencies, install_selection)
 from emberbsd_sdk.source_wave import SourceWaveLock
 from emberbsd_sdk.package_cache import PackageCache
 from emberbsd_sdk.package_install import PackageInstaller
@@ -666,13 +666,23 @@ class ClientTests(unittest.TestCase):
         errors = io.StringIO()
         with patch('emberbsd_sdk.sdk_client.run_source', side_effect=source), redirect_stderr(errors):
             install_selection(plan, self.cfg, self.installer, self.cache, self.store,
-                              refresh_current=refresh, accepted_channel=accepted)
+                              refresh_current=refresh, accepted_release=accepted)
         calls = [json.loads(line) for line in call_log.read_text().splitlines()] if call_log.exists() else []
         self.assertEqual((state / 'order').read_bytes(), original_order)
         self.assertEqual((state / 'order').stat().st_ino, order_inode)
         self.assertEqual((state / 'edges').read_bytes(), original_edges)
         self.assertFalse((state / 'build.lock').exists())
         return calls, errors.getvalue()
+
+    def test_adopted_archive_error_identifies_the_release_that_supplied_it(self):
+        app = 'net/app@native'
+        published = self._channel([('app', app, 'app-1', [])])
+        with patch.object(self.store, 'verify', side_effect=HTTPStatusError(403, 'GET', 'app-1.tgz')):
+            with self.assertRaises(ArchiveUnavailable) as failure:
+                self._waves([app], [(app, app)], {app: 'app-1'},
+                            lambda: (*published, 'new-release'), accepted='initial-release')
+        self.assertEqual(failure.exception.release_digest, 'new-release')
+        self.assertFalse(self.installer.actions)
 
     def test_running_install_adopts_new_current_between_source_waves(self):
         lib, app = 'devel/lib@native', 'net/app@native'
@@ -916,7 +926,7 @@ class ClientTests(unittest.TestCase):
                 patch('emberbsd_sdk.package_automatic.finish'), \
                 patch('emberbsd_sdk.sdk_client.run_source', side_effect=lambda *_args, **_kwargs: built.append(_args)):
             install_selection(plan, self.cfg, installer, self.cache, store,
-                              refresh_current=lambda: (release, catalogs, 'newer'), accepted_channel='same')
+                              refresh_current=lambda: (release, catalogs, 'newer'), accepted_release='same')
         self.assertEqual(built, [])
         self.assertEqual(len(installer.installed_paths), 1)
         provider_row = next(item for item in installer.checked_updates if item['root'] == provider_root)
@@ -972,7 +982,7 @@ class ClientTests(unittest.TestCase):
                 patch('emberbsd_sdk.sdk_client.run_source') as source:
             install_selection(plan, self.cfg, self.installer, self.cache, self.store,
                               refresh_current=lambda: (self.release, self.catalogs, 'same'),
-                              accepted_channel='same')
+                              accepted_release='same')
         build.assert_called_once()
         self.assertEqual(build.call_args.args[1], ['devel/missing@native'])
         source.assert_not_called()
@@ -998,7 +1008,7 @@ class ClientTests(unittest.TestCase):
             with self.assertRaisesRegex(SDKError, 'Ports build failed'):
                 install_selection(plan, self.cfg, self.installer, self.cache, self.store,
                                   refresh_current=lambda: (*self._channel([]), 'same'),
-                                  accepted_channel='same')
+                                  accepted_release='same')
         self.assertEqual((state / 'order').read_bytes(), original)
         self.assertEqual((state / 'order').stat().st_ino, inode)
         self.assertFalse((state / 'build.lock').exists())

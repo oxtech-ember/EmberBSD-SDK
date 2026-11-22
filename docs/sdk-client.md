@@ -436,9 +436,10 @@ repository and checks the base sysroot before the first installation. Installati
 then follows the dependency order. A fetch failure stops scheduling new archives.
 Active transfers finish under the cache lock.
 Sizes and SHA256 come from the signed release; pkg_admin also authenticates each
-package. A displaced current archive causes one metadata reread/replan, only
-when the current release changed. Corruption and an unchanged missing archive
-are errors, never source fallbacks. Separately, a source install rereads the
+package. If an archive GET returns HTTP 403 or 404, the client reads signed metadata again.
+It replans once only if the verified release digest changed. With the same
+release, it reports the original HTTP error. Invalid signatures and corrupt
+archives stop the installation. Separately, a source install rereads the
 authenticated current pointer between build waves and installs a newly
 published exact package without starting the client again.
 

@@ -440,6 +440,14 @@ def include_source_dependencies(plan, release, catalogs, config, installer, cach
     return result
 
 
+class ArchiveUnavailable(SDKError):
+    """An archive GET returned HTTP 403 or 404 for this verified release."""
+
+    def __init__(self, release_digest, error):
+        super().__init__(str(error))
+        self.release_digest = release_digest
+
+
 def _fetch_archives(items, cache, store, prefix):
     """One writer per SHA256 under the client's shared cache lock."""
     unique = {}
@@ -469,7 +477,7 @@ def _fetch_archives(items, cache, store, prefix):
         pool.shutdown(wait=True, cancel_futures=True)
 
 
-def apply_plan(plan, config, installer, cache, store, *, source_locked=False):
+def apply_plan(plan, config, installer, cache, store, *, source_locked=False, release_digest=None):
     _source_config(config, plan['build_roots'])
     pending = [p for p in plan['packages'] if p['action'] != 'installed']
     selected_repositories = {p['repository'] for p in plan['packages']}
@@ -489,7 +497,12 @@ def apply_plan(plan, config, installer, cache, store, *, source_locked=False):
     if new_sysroot:
         check_space(Path(sysroot['destination']).parent, sysroot['artifact']['unpacked_size'])
         items.append(sysroot['artifact'])
-    paths = _fetch_archives(items, cache, store, config.get('url_prefix', ''))
+    try:
+        paths = _fetch_archives(items, cache, store, config.get('url_prefix', ''))
+    except HTTPStatusError as exc:
+        if exc.status not in (403, 404):
+            raise
+        raise ArchiveUnavailable(release_digest, exc) from exc
     next_root = Path(sysroot['destination']).resolve() if new_sysroot else None
     archives = {}
 
@@ -749,7 +762,7 @@ def _replacement_is_upgrade(installer, graph_name, installed):
 
 
 def _adopt_published(config, installer, cache, store, release, catalogs, names, order, pending, binaries,
-                     *, roots, dependencies):
+                     *, roots, dependencies, release_digest):
     """Download exact not-yet-started packages, including an older installed package.
 
     A newer installed package stays on the source wave. An installer that cannot
@@ -788,7 +801,7 @@ def _adopt_published(config, installer, cache, store, release, catalogs, names, 
     reused = []
     if fresh:
         with directory_lock(cache.root / '.lock'):
-            apply_plan(merged, config, installer, cache, store, source_locked=True)
+            apply_plan(merged, config, installer, cache, store, source_locked=True, release_digest=release_digest)
         reused = list(merged.get('compatible_reuse') or [])
         binaries = list(binaries) + [(package['root'], package['pkgname'])
                                      for package in merged['packages'] if package.get('pkgname')]
@@ -883,7 +896,7 @@ def _accept_built_wave(config, installer, names, ready, pending, receipts):
         raise SDKError('Ports build finished without installing ' + ', '.join(missing))
 
 
-def _install_source_waves(plan, config, installer, cache, store, refresh_current, accepted_channel, binaries):
+def _install_source_waves(plan, config, installer, cache, store, refresh_current, accepted_release, binaries):
     """Re-read current between waves. Return reuse rows, or None to keep one selected build."""
     source = config.get('source')
     names = plan.get('source_packages')
@@ -904,7 +917,7 @@ def _install_source_waves(plan, config, installer, cache, store, refresh_current
         handled = {package['root'] for package in plan['packages']}
         nodes = set(order)
         pending = (nodes - handled) & _required_source_inputs(plan['build_roots'], deps, handled)
-        reused, seen = [], accepted_channel
+        reused, seen = [], accepted_release
         while pending:
             snapshot = _refresh_channel(refresh_current)
             scheduled = set(pending)
@@ -922,7 +935,7 @@ def _install_source_waves(plan, config, installer, cache, store, refresh_current
                     seen = identity
                 binaries, extra = _adopt_published(config, installer, cache, store, release, catalogs,
                                                    names, order, pending, binaries,
-                                                   roots=plan['build_roots'], dependencies=deps)
+                                                   roots=plan['build_roots'], dependencies=deps, release_digest=identity)
                 reused.extend(extra)
                 pending.intersection_update(_required_source_inputs(plan['build_roots'], deps, nodes - pending))
             if not pending:
@@ -941,18 +954,18 @@ def _read_channel(crypto, store, trust, state, prefix, metadata):
     """Load one authenticated current into memory. The snapshot directory does not outlive this call."""
     with release_snapshot(crypto, store, trust, state, prefix=prefix, cache=metadata) as (release, snapshot):
         catalogs = load_release_catalogs(release, snapshot, ())
-        identity = hashlib.sha256((snapshot / 'current.p7m').read_bytes()).hexdigest()
+        identity = hashlib.sha256((snapshot / 'release.p7m').read_bytes()).hexdigest()
         return release, catalogs, identity
 
 
-def install_selection(plan, config, installer, cache, store, *, refresh_current=None, accepted_channel=None):
+def install_selection(plan, config, installer, cache, store, *, refresh_current=None, accepted_release=None):
     with directory_lock(cache.root / '.lock'):
-        apply_plan(plan, config, installer, cache, store)
+        apply_plan(plan, config, installer, cache, store, release_digest=accepted_release)
     # Compilation may be long; it must not monopolize another target's downloads.
     binaries = [(package['root'], package['pkgname']) for package in plan['packages'] if package.get('pkgname')]
     reused = list(plan.get('compatible_reuse') or [])
     extra = _install_source_waves(plan, config, installer, cache, store, refresh_current,
-                                  accepted_channel, binaries) if plan['build_roots'] else None
+                                  accepted_release, binaries) if plan['build_roots'] else None
     if extra is None:
         build_missing(config, plan['build_roots'], binaries)
     else:
@@ -1161,7 +1174,7 @@ def main(argv=None, *, default_config=None):
             store = temporary.enter_context(HTTPStore(config.get('url', DEFAULT_URL),
                                                       ca_file=config.get('https_ca'), proxy_url=config.get('https_proxy')))
             installer = PackageInstaller(crypto, trust)
-            previous = None
+            archive_error = None
             # Signed release and index bytes are immutable per digest; only the
             # channel pointer is read from the network when nothing changed.
             metadata = MetadataCache(cache.root / 'metadata')
@@ -1169,9 +1182,8 @@ def main(argv=None, *, default_config=None):
                 with release_snapshot(crypto, store, trust, state, prefix=config.get('url_prefix', ''),
                                       cache=metadata) as (release, snapshot):
                     identity = hashlib.sha256((snapshot / 'release.p7m').read_bytes()).hexdigest()
-                    channel = hashlib.sha256((snapshot / 'current.p7m').read_bytes()).hexdigest()
-                    if previous == identity:
-                        raise SDKError('published package is missing from unchanged current; retry after publisher repair')
+                    if archive_error is not None and archive_error.release_digest == identity:
+                        raise archive_error
                     catalogs = load_release_catalogs(release, snapshot, ())
                     if args.command == 'catalog':
                         sys.stdout.buffer.write(json_bytes(catalog_index(
@@ -1210,11 +1222,11 @@ def main(argv=None, *, default_config=None):
                             plan, config, installer, cache, store,
                             refresh_current=lambda: _read_channel(
                                 crypto, store, trust, state, config.get('url_prefix', ''), metadata),
-                            accepted_channel=channel)
-                    except HTTPStatusError as exc:
-                        if exc.status != 404 or attempt:
+                            accepted_release=identity)
+                    except ArchiveUnavailable as exc:
+                        if attempt:
                             raise
-                        previous = identity
+                        archive_error = exc
                         continue
                     for package in compatible_reuse:
                         print(f"Reuse compatible installed {package['pkgname']} for "
