@@ -188,10 +188,24 @@ def _native_fat_archive(path, host):
         return True
 
 
+def _relocate_cmake_sonames(exports, identities):
+    """Keep CMake's generated import properties consistent with the packaged dylibs."""
+    property_line = re.compile(
+        rb'(?m)^([ \t]*IMPORTED_SONAME(?:_[A-Za-z0-9_.+-]+)?[ \t]+")([^"\r\n]+)"')
+    for path in exports:
+        original = path.read_bytes()
+        updated = property_line.sub(
+            lambda match: match[1] + identities.get(match[2], match[2]) + b'"', original)
+        if updated != original:
+            _replace_file(path, updated)
+
+
 def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency_root=None,
                   dependency_files=None, verified_rpaths=None):
     """Rewrite native load commands before release signing, never on a client."""
     changed = []
+    cmake_exports = []
+    identities = {}
     dependency_root = dependency_root or root
     for path in sorted(root.rglob('*')):
         if path.is_symlink() or not path.is_file():
@@ -200,6 +214,8 @@ def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency
             header = stream.read(16)
             magic = header[:4]
         if magic not in _MACHO:
+            if path.suffix == '.cmake':
+                cmake_exports.append(path)
             continue
         if magic in _FAT_ARCHIVES and _native_fat_archive(path, host):
             continue  # Static archives have no runtime load commands to relocate.
@@ -262,6 +278,9 @@ def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency
             # Keep a declared stable alias such as libfoo.1.dylib instead of
             # exposing the versioned implementation filename to new clients.
             install_name = '@rpath/' + basename
+            library = relative.parent / basename
+            identities[os.fsencode(Path(prefix) / library)] = os.fsencode(install_name)
+            identities[b'${_IMPORT_PREFIX}/' + os.fsencode(library)] = os.fsencode(install_name)
             if image['install_name'] != install_name:
                 options += ['-id', install_name]
         for rpath in image['rpaths']:
@@ -288,6 +307,8 @@ def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency
         result = read_macho_runtime(path, host)
         if any(not load['name'].startswith(('@loader_path/', *_SYSTEM)) for load in result['loads']):
             raise SDKError('native library remains outside the runtime: ' + str(relative))
+    if identities:
+        _relocate_cmake_sonames(cmake_exports, identities)
     return changed
 
 

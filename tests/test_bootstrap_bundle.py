@@ -227,6 +227,11 @@ class BootstrapTests(unittest.TestCase):
         real = lib/'libexample.1.2.dylib'
         real.write_bytes(b'\xcf\xfa\xed\xfe' + b'\0'*28)
         (lib/'libexample.1.dylib').symlink_to(real.name)
+        export = lib/'targets-release.cmake'
+        export.write_bytes(b'  IMPORTED_SONAME_RELEASE "/producer/sdk/lib/libexample.1.dylib"\r\n'
+                           b'  IMPORTED_SONAME "${_IMPORT_PREFIX}/lib/libexample.1.dylib"\r\n'
+                           b'  IMPORTED_LOCATION_RELEASE "/producer/sdk/lib/libexample.1.2.dylib"\r\n'
+                           b'  IMPORTED_SONAME_DEBUG "/elsewhere/libexample.1.dylib"\r\n')
         before = dict(loads=[], install_name='/producer/sdk/lib/libexample.1.dylib', rpaths=[])
         after = dict(loads=[], install_name='@rpath/libexample.1.dylib', rpaths=[])
         with patch('emberbsd_sdk.bootstrap_bundle.read_macho_runtime', side_effect=[before, after]), \
@@ -234,6 +239,11 @@ class BootstrapTests(unittest.TestCase):
             make_relative(self.root, '/producer/sdk', {'os':'Darwin', 'cpu':'arm64'},
                           '/usr/bin/install_name_tool', '/usr/bin/codesign')
         self.assertIn('@rpath/libexample.1.dylib', run.call_args_list[0].args[0])
+        self.assertEqual(export.read_bytes(),
+                         b'  IMPORTED_SONAME_RELEASE "@rpath/libexample.1.dylib"\r\n'
+                         b'  IMPORTED_SONAME "@rpath/libexample.1.dylib"\r\n'
+                         b'  IMPORTED_LOCATION_RELEASE "/producer/sdk/lib/libexample.1.2.dylib"\r\n'
+                         b'  IMPORTED_SONAME_DEBUG "/elsewhere/libexample.1.dylib"\r\n')
 
     def test_make_relative_refuses_foreign_or_dangling_install_id(self):
         lib = self.root/'lib'; lib.mkdir()

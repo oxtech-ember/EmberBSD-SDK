@@ -107,7 +107,8 @@ The tool adjusts Mach-O references, validates their dependency
 closure against the selected prefix, rejects unqualified hooks and packing-list commands, and rejects
 payloads still containing the producer prefix by default. Prefix-local `REQUIRES` are replaced
 by the existing package dependencies only after checking library ownership;
-system requirements stay unchanged. It then uses native pkg_create to
+system requirements stay unchanged. CMake import files record the same install name as each packaged dylib.
+CMake can then add the installed library directory to a consumer's build RPATH. It then uses native pkg_create to
 preserve metadata (including protection and display notices) and regenerate
 checksums. Changing already-published package bytes requires a new Ports package
 revision; the first publication can qualify an existing recipe's package.
