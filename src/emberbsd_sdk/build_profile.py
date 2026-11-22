@@ -56,7 +56,8 @@ HOST_MODULES = (
 SOURCE_MODULES = (*HOST_MODULES, 'archive_metadata', 'provenance', 'sourceprep')
 OS_MODULES = (
     *HOST_MODULES, 'build_profile', 'command_directory', 'compiler_bindings', 'graph', 'jobserver', 'native_checks',
-    'native_os', 'native_os_routing', 'prepared_sources', 'profile_build', 'sdk_client', 'targets', 'workspace')
+    'native_os', 'native_os_routing', 'prefix_lock', 'prepared_sources', 'profile_build', 'sdk_client', 'targets',
+    'workspace')
 # Extra producers for the release traversal, including the SDK API used by
 # the Ports LLVM runtime and target libtool producers.
 SETS_MODULES = (
