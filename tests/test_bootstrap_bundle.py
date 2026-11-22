@@ -186,6 +186,52 @@ class BootstrapTests(unittest.TestCase):
                         make_relative(*args, **options)
                         self.assertEqual(verified, {name: {'lib/libsample.dylib'}})
 
+    def test_equivalent_rpaths_retain_search_order_and_one_declared_provider(self):
+        image = self.root / 'bin' / 'amdgpu-arch'
+        image.parent.mkdir()
+        image.write_bytes(bytes.fromhex('cffaedfe') + bytes(28))
+        (self.root / 'lib').mkdir()
+        (self.root / 'lib/libLLVM.dylib').write_text('fixture')
+        name = '@rpath/libLLVM.dylib'
+        absolute = '/producer/sdk/lib'
+        loader = '@loader_path/../lib'
+        other = '@loader_path/other'
+        info = dict(loads=[dict(name=name)], install_name=None, filetype=2,
+                    rpaths=[absolute, other, loader])
+        final = dict(info, loads=[dict(name='@loader_path/../lib/libLLVM.dylib')],
+                     rpaths=[loader, other])
+        verified = {}
+        with patch('emberbsd_sdk.bootstrap_bundle.read_macho_runtime', side_effect=[info, final]), \
+             patch('emberbsd_sdk.bootstrap_bundle.subprocess.run') as run:
+            make_relative(self.root, '/producer/sdk', {'os': 'Darwin', 'cpu': 'arm64'},
+                          'install_name_tool', 'codesign', verified_rpaths=verified)
+        self.assertEqual(verified, {name: {'lib/libLLVM.dylib'}})
+        self.assertEqual(run.call_args_list[0].args[0],
+                         ['install_name_tool', '-delete_rpath', absolute, '-delete_rpath', other,
+                          '-delete_rpath', loader, str(image)])
+        self.assertEqual(run.call_args_list[1].args[0],
+                         ['install_name_tool', '-change', name, '@loader_path/../lib/libLLVM.dylib',
+                          '-add_rpath', loader, '-add_rpath', other, str(image)])
+
+    def test_rpath_parent_after_a_symlink_keeps_its_provider_identity(self):
+        image = self.root / 'bin/example'
+        image.parent.mkdir()
+        image.write_bytes(bytes.fromhex('cffaedfe') + bytes(28))
+        (self.root / 'other/nested').mkdir(parents=True)
+        (self.root / 'other/lib').mkdir()
+        (self.root / 'lib').mkdir()
+        (self.root / 'lib/sample.dylib').write_text('expected')
+        (self.root / 'other/lib/sample.dylib').write_text('different')
+        (image.parent / 'via').symlink_to('../other/nested')
+        info = dict(loads=[dict(name='@rpath/sample.dylib')], install_name=None, filetype=2,
+                    rpaths=['/producer/sdk/lib', '@loader_path/via/../lib'])
+        with patch('emberbsd_sdk.bootstrap_bundle.read_macho_runtime', return_value=info), \
+             patch('emberbsd_sdk.bootstrap_bundle.subprocess.run') as run:
+            with self.assertRaisesRegex(SDKError, 'traverses a directory link'):
+                make_relative(self.root, '/producer/sdk', {'os': 'Darwin', 'cpu': 'arm64'},
+                              'install_name_tool', 'codesign')
+            run.assert_not_called()
+
     def test_native_rpath_refuses_escaping_directory_link(self):
         image = self.root / 'bin' / 'example'
         image.parent.mkdir()

@@ -229,14 +229,22 @@ def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency
             if name.startswith(_SYSTEM):
                 continue
             if name.startswith('@rpath/'):
-                candidates = [_local_reference(r, relative, prefix, image) / name[len('@rpath/'):]
-                              for r in image['rpaths']]
-                candidates = [p for p in candidates if p.is_relative_to(prefix) and
-                              ((root / p.relative_to(prefix)).is_file() or
-                               (dependency_root / p.relative_to(prefix)).is_file())]
-                if len(set(candidates)) != 1:
+                candidates = set()
+                for rpath in image['rpaths']:
+                    reference = _local_reference(rpath, relative, prefix, image) / name[len('@rpath/'):]
+                    normalized = Path(os.path.normpath(reference))
+                    if not reference.is_relative_to(prefix) or not normalized.is_relative_to(prefix):
+                        continue
+                    for directory in (root, dependency_root):
+                        provider = directory / reference.relative_to(prefix)
+                        if provider.is_file():
+                            if provider.resolve() != (directory / normalized.relative_to(prefix)).resolve():
+                                raise SDKError('runtime RPATH traverses a directory link: ' + str(relative))
+                            candidates.add(normalized)
+                            break
+                if len(candidates) != 1:
                     raise SDKError('ambiguous or missing runtime RPATH: ' + str(relative))
-                dependency = candidates[0]
+                dependency = candidates.pop()
             else:
                 dependency = _local_reference(name, relative, prefix, image)
             dependency = Path(os.path.normpath(dependency))
@@ -283,8 +291,10 @@ def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency
             identities[b'${_IMPORT_PREFIX}/' + os.fsencode(library)] = os.fsencode(install_name)
             if image['install_name'] != install_name:
                 options += ['-id', install_name]
+        relocated_rpaths = []
         for rpath in image['rpaths']:
             if rpath.startswith(_SYSTEM):
+                relocated_rpaths.append(rpath)
                 continue
             reference = _local_reference(rpath, relative, prefix, image)
             local = Path(os.path.normpath(reference))
@@ -294,8 +304,23 @@ def make_relative(root, prefix, host, install_name_tool, codesign, *, dependency
             if not anchor.resolve().is_relative_to(root.resolve()):
                 raise SDKError('escaping native RPATH: ' + rpath)
             if rpath.startswith('/'):
-                options += ['-rpath', rpath, '@loader_path/' + os.path.relpath(
-                    anchor.resolve(), path.parent.resolve())]
+                rpath = '@loader_path/' + os.path.relpath(anchor.resolve(), path.parent.resolve())
+            relocated_rpaths.append(rpath)
+        originals = image['rpaths']
+        if relocated_rpaths != originals:
+            ordered = list(dict.fromkeys(relocated_rpaths))
+            if len(ordered) < len(relocated_rpaths):
+                # install_name_tool rejects replacing a path with an existing one.
+                # Restore the original search precedence after removing equivalent entries.
+                remove = [arg for entry in dict.fromkeys(originals) for arg in ('-delete_rpath', entry)]
+                subprocess.run([str(install_name_tool), *remove, str(path)], check=True,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                for entry in ordered:
+                    options += ['-add_rpath', entry]
+            else:
+                for before, after in zip(originals, relocated_rpaths):
+                    if before != after:
+                        options += ['-rpath', before, after]
         if options:
             subprocess.run([str(install_name_tool), *options, str(path)], check=True,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
