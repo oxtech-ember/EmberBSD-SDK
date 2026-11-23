@@ -27,8 +27,8 @@ come from the client configuration. Start from an example:
   `platform.compiler` selects the `host` and `target` families, `clang` or
   `gcc`.
 - `os.kernels` names kernel configurations of the target machine: a
-  general-purpose configuration of the OS, or a trial configuration in a
-  directory of `build.kernel_configs`. `os.sets`
+  general-purpose configuration of the OS, or a local trial configuration in
+  a directory of `build.kernel_configs`. `os.sets`
   names installation sets: the OS release builder makes `base`, `comp` and
   `etc` together, so the plan accepts exactly these three, for the aarch64
   target with Clang (the `aarch64-sysroot` release). With sets, the plan
@@ -69,10 +69,9 @@ Add the OS checkout and the common Binutils build to the
 `work` holds the plan, `build.ninja`, the node records and the build outputs.
 `distfiles` holds the archives of the Ports recipes. `sources` selects prepared
 trees that the plan uses as they are; the common LLVM source is such an input.
-`kernel_configs` lists directories of kernel configurations outside the OS,
-for example a trial `boards/<id>/configs/<scenario>` of DevBoards. A name
-there must not be the name of an OS configuration. The kernel key binds the
-configurations of that directory, not its manifest or README.
+`kernel_configs` lists local directories of trial kernel configurations. A
+name there must not be the name of an OS configuration. The kernel key binds
+the configurations of that directory, not its other files.
 
 ```sh
 python3 scripts/packages.py --config /work/client.json profile-plan --profile /work/kernel.json > plan.json

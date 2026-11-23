@@ -618,7 +618,7 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
     current recipe and the distfiles of each source. REQUIRED_SOURCES(traversals,
     flags) -> {VARIABLE: directory} can replace the bmake guard walk;
     NATIVE can replace the loaded host prefix. KERNEL_CONFIGS lists directories
-    of kernel configurations outside the OS, for example trials in DevBoards."""
+    of local trial kernel configurations."""
     profile = validate_profile(profile)
     compiler = profile['platform']['compiler']
     _require(compiler['target'] == 'clang', 'the build plan supports the Clang target toolchain only')
