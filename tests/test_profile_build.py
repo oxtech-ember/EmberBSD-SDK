@@ -36,8 +36,8 @@ open(os.environ['TEST_LOG'], 'a').write('prepare ' + archive + '\\n')
 '''
 # ember/build-kernel.sh: record the selected sources, then write the outputs.
 KERNEL = '''set -eu
-out=$1; config=$2
-echo "kernel $config byacc=$EMBER_BYACC_SOURCE llvm=$EMBER_LLVM_SOURCE jobs=$NETBSD2_JOBS" >> LOG
+out=$1; config=${2##*/}
+echo "kernel $2 byacc=$EMBER_BYACC_SOURCE llvm=$EMBER_LLVM_SOURCE jobs=$NETBSD2_JOBS" >> LOG
 # The builder runs in a clean environment; a file selects the failure.
 [ ! -e LOG.fail ] || exit 1
 : > "$out/netbsd-$config"; : > "$out/netbsd-$config.img"
@@ -287,6 +287,23 @@ class ProfileBuildTests(ProfileFixture):
         status, plan, log = self.build()
         self.assertEqual(status, 0)
         self.assertEqual([line.split()[0:2] for line in log], [['prepare', 'byacc-1.tgz'], ['kernel', 'EMBER64']])
+
+    def test_a_kernel_configuration_outside_the_os_is_built_by_its_path(self):
+        trials = self.root / 'devboards/kernels'
+        self.write('devboards/kernels/EMBER64_TRIAL', 'include "arch/evbarm/conf/EMBER64"\n')
+        self.config['kernel_configs'] = [str(trials)]
+        self.write('config.json', json.dumps(self.config))
+        profile = copy.deepcopy(PROFILE)
+        profile['os']['kernels'] = ['EMBER64_TRIAL']
+        plan = self.plan(profile, state=self.work, selected_sources=self.config['selected_sources'],
+                         kernel_configs=[str(trials)])
+        self.log.write_text('')
+        with redirect_stderr(io.StringIO()):
+            status = profile_build.build(plan, work=self.work, command=self.command, ninja=NINJA, jobs=2)
+        self.assertEqual(status, 0)
+        kernel = [line for line in self.log.read_text().splitlines() if line.startswith('kernel')]
+        self.assertEqual([line.split()[1] for line in kernel], [str(trials / 'EMBER64_TRIAL')])
+        self.assertTrue((self.work / 'kernels/netbsd-EMBER64_TRIAL.img').is_file())
 
     def test_a_missing_output_runs_just_its_producer_with_the_same_key(self):
         status, plan, _ = self.build()

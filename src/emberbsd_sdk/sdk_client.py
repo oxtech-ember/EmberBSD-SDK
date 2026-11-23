@@ -988,7 +988,7 @@ def include_sysroot(plan, release, config, cache, target):
 
 
 BUILD_REQUIRED = {'os_source', 'host_bfd_config'}
-BUILD_OPTIONAL = {'work', 'distfiles', 'sources'}
+BUILD_OPTIONAL = {'work', 'distfiles', 'sources', 'kernel_configs'}
 
 
 def build_options(config):
@@ -996,14 +996,18 @@ def build_options(config):
     build, source = config.get('build'), config.get('source')
     if not isinstance(build, dict) or not BUILD_REQUIRED <= set(build) <= BUILD_REQUIRED | BUILD_OPTIONAL:
         raise SDKError('the build section needs os_source and host_bfd_config, '
-                       'and accepts work, distfiles and sources')
+                       'and accepts work, distfiles, sources and kernel_configs')
     if not isinstance(source, dict) or not isinstance(source.get('ports_root'), str):
         raise SDKError('builds need the Ports checkout in source.ports_root')
     sources = build.get('sources', {})
     if not isinstance(sources, dict):
         raise SDKError('build.sources maps EMBER_*_SOURCE to prepared trees')
-    paths = [(key, value) for key, value in build.items() if key != 'sources']
+    kernel_configs = build.get('kernel_configs', [])
+    if not isinstance(kernel_configs, list):
+        raise SDKError('build.kernel_configs lists directories of kernel configurations')
+    paths = [(key, value) for key, value in build.items() if key not in ('sources', 'kernel_configs')]
     paths += [('ports_root', source['ports_root'])] + [(f'sources.{key}', value) for key, value in sources.items()]
+    paths += [('kernel_configs entry', value) for value in kernel_configs]
     for key, value in paths:
         if not isinstance(value, str) or not Path(value).is_absolute():
             raise SDKError(f'build needs an absolute {key}')
@@ -1019,7 +1023,8 @@ def make_profile_plan(config, profile_path):
         ports_root=options['ports_root'], sdk_root=options['sdk_root'], host_prefix=options['host_prefix'],
         host_bfd_config=options['host_bfd_config'],
         state=options.get('work', os.path.join(config['state_dir'], 'build')),
-        cache=os.path.join(config['cache_dir'], 'plan'), selected_sources=options['selected_sources'])
+        cache=os.path.join(config['cache_dir'], 'plan'), selected_sources=options['selected_sources'],
+        kernel_configs=options.get('kernel_configs', ()))
 
 
 def plan_profile(config, profile_path):

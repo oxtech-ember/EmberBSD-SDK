@@ -582,8 +582,32 @@ def _require_make_options(os_root, mk):
     _require(not unknown, 'profile os.mk names options that the OS does not have (share/mk): ' + ', '.join(unknown))
 
 
+def kernel_config(os_root, machine, directories, name):
+    """Return the path of kernel configuration NAME in DIRECTORIES, or None
+    when it is a configuration of the OS. Refuse a name in both: the kernel
+    objects and outputs are named by it."""
+    in_os = Path(os_root, 'sys/arch', machine, 'conf', name).is_file()
+    found = [Path(directory, name) for directory in directories or () if Path(directory, name).is_file()]
+    _require(not (in_os and found), f'kernel configuration {name} is in the OS and in {found[0].parent if found else ""}: '
+             'give the trial another name')
+    _require(len(found) <= 1, f'kernel configuration {name} is in more than one of build.kernel_configs')
+    _require(in_os or found, f'kernel configuration {name} is missing for {machine}' +
+             (' and in build.kernel_configs' if directories else ''))
+    return found[0] if found else None
+
+
+def _directory_digest(directory):
+    """SHA256 of the names and bytes of the kernel configurations in DIRECTORY.
+    Its other files, such as a manifest or a README, do not change the kernel."""
+    digest = hashlib.sha256()
+    for path in sorted(Path(directory).iterdir()):
+        if path.is_file() and _CONFIG.match(path.name):
+            digest.update(path.name.encode() + b'\0' + hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
+
+
 def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_config, state=None, cache=None,
-              selected_sources=None, required_sources=None, native=None, jobs=None):
+              selected_sources=None, required_sources=None, native=None, jobs=None, kernel_configs=()):
     """Return the build-graph-v2 plan of PROFILE. Build nothing.
 
     The CACHE directory keeps the results of the bmake guard walks and the
@@ -593,7 +617,8 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
     configuration selects; the plan does not prepare it. Ports names the
     current recipe and the distfiles of each source. REQUIRED_SOURCES(traversals,
     flags) -> {VARIABLE: directory} can replace the bmake guard walk;
-    NATIVE can replace the loaded host prefix."""
+    NATIVE can replace the loaded host prefix. KERNEL_CONFIGS lists directories
+    of kernel configurations outside the OS, for example trials in DevBoards."""
     profile = validate_profile(profile)
     compiler = profile['platform']['compiler']
     _require(compiler['target'] == 'clang', 'the build plan supports the Clang target toolchain only')
@@ -650,11 +675,12 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
     tools_stage = stage('os:tools', dict(stage='tools'), prepared_sources.TOOLS_TRAVERSALS,
                         [*KERNEL_TOOLS_FLAGS, *mk], [], ['tools'], None, os_inputs)
     for config in profile['os']['kernels']:
-        _require(Path(os_identity['root'], 'sys/arch', target['machine'], 'conf', config).is_file(),
-                 f'kernel configuration {config} is missing for {target["machine"]}')
+        path = kernel_config(os_identity['root'], target['machine'], kernel_configs, config)
+        # A configuration outside the OS can include the other configurations of its directory.
+        inputs = release_inputs if path is None else dict(release_inputs, kernel_config=_directory_digest(path.parent))
         stage('os:kernel:' + config, dict(stage='kernel', config=config), (), [*KERNEL_TOOLS_FLAGS, *mk],
               kernel_sources(shared, config), [f'netbsd-{config}', f'netbsd-{config}.img'],
-              'profile os.kernels', release_inputs)
+              'profile os.kernels', inputs)
     if profile['os']['sets']:
         from .os_release_builder import flags_for, release_sets
         names = sorted(name.removesuffix('.tar.xz') for name in release_sets())

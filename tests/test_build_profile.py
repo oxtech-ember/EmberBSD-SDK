@@ -382,6 +382,25 @@ class BuildProfileTests(ProfileFixture):
         with self.assertRaisesRegex(SDKError, 'prepares devel/bison, not devel/byacc'):
             self.plan()
 
+    def test_a_kernel_configuration_outside_the_os_is_keyed_by_its_directory(self):
+        trials = Path(self.root, 'devboards/kernels')
+        trials.mkdir(parents=True)
+        (trials / 'EMBER64_TRIAL').write_text('include "arch/evbarm/conf/EMBER64"\n')
+        profile = copy.deepcopy(PROFILE)
+        profile['os']['kernels'] = ['EMBER64_TRIAL']
+        before = self.nodes(self.plan(profile, kernel_configs=[str(trials)]))['os:kernel:EMBER64_TRIAL']
+        (trials / 'README.md').write_text('A trial.\n')
+        same = self.nodes(self.plan(profile, kernel_configs=[str(trials)]))['os:kernel:EMBER64_TRIAL']
+        self.assertEqual(before['input_key'], same['input_key'])
+        (trials / 'TRIAL_OPTIONS').write_text('options TRIAL\n')
+        after = self.nodes(self.plan(profile, kernel_configs=[str(trials)]))['os:kernel:EMBER64_TRIAL']
+        self.assertNotEqual(before['input_key'], after['input_key'])
+        with self.assertRaisesRegex(SDKError, 'EMBER64_TRIAL is missing for evbarm'):
+            self.plan(profile)
+        (trials / 'EMBER64').write_text('include "arch/evbarm/conf/GENERIC64"\n')
+        with self.assertRaisesRegex(SDKError, 'EMBER64 is in the OS and in .*: give the trial another name'):
+            self.plan(kernel_configs=[str(trials)])
+
     def test_missing_kernel_configuration_is_refused(self):
         profile = copy.deepcopy(PROFILE)
         profile['os']['kernels'] = ['EMBER64', 'MISSING']
