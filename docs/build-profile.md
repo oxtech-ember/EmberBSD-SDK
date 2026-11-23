@@ -71,7 +71,8 @@ Add the OS checkout and the common Binutils build to the
 trees that the plan uses as they are; the common LLVM source is such an input.
 `kernel_configs` lists local directories of trial kernel configurations. A
 name there must not be the name of an OS configuration. The kernel key binds
-the configurations of that directory, not its other files.
+the files of that directory whose names are configuration names, such as
+`EMBER64_TRIAL`, not files with an extension.
 
 ```sh
 python3 scripts/packages.py --config /work/client.json profile-plan --profile /work/kernel.json > plan.json

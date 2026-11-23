@@ -308,10 +308,8 @@ def run_node(work, node_id, key, config):
         # bmake has its own job pool: take the free jobserver tokens for it.
         with jobserver.slots(os.environ.get('MAKEFLAGS'), config['jobs']) as jobs:
             env['NETBSD2_JOBS'] = str(jobs)
-            machine = build_profile.target_definition(plan['profile']['platform']['target'])['machine']
-            path = build_profile.kernel_config(config['os_source'], machine, config.get('kernel_configs'), config_name)
             _run([os.path.join(prefix, 'bin/mksh'), os.path.join(config['os_source'], KERNEL_BUILDER),
-                  str(out), str(path) if path else config_name], env=env)
+                  str(out), node.get('kernel_config', config_name)], env=env)
         _write_record(work, node, {name: str(out / name) for name in node['outputs']})
     elif node['identity'].get('stage') == 'sets':
         _write_record(work, node, _release(work, node, nodes, plan, config, prefix))

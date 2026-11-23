@@ -289,8 +289,8 @@ class ProfileBuildTests(ProfileFixture):
         self.assertEqual([line.split()[0:2] for line in log], [['prepare', 'byacc-1.tgz'], ['kernel', 'EMBER64']])
 
     def test_a_kernel_configuration_outside_the_os_is_built_by_its_path(self):
-        trials = self.root / 'devboards/kernels'
-        self.write('devboards/kernels/EMBER64_TRIAL', 'include "arch/evbarm/conf/EMBER64"\n')
+        trials = self.root / 'trials'
+        self.write('trials/EMBER64_TRIAL', 'include "arch/evbarm/conf/EMBER64"\n')
         self.config['kernel_configs'] = [str(trials)]
         self.write('config.json', json.dumps(self.config))
         profile = copy.deepcopy(PROFILE)

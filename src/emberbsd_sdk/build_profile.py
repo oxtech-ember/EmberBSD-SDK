@@ -588,11 +588,11 @@ def kernel_config(os_root, machine, directories, name):
     objects and outputs are named by it."""
     in_os = Path(os_root, 'sys/arch', machine, 'conf', name).is_file()
     found = [Path(directory, name) for directory in directories or () if Path(directory, name).is_file()]
-    _require(not (in_os and found), f'kernel configuration {name} is in the OS and in {found[0].parent if found else ""}: '
+    _require(not (in_os and found), f'kernel configuration {name} is in the OS and in {found and found[0].parent}: '
              'give the trial another name')
     _require(len(found) <= 1, f'kernel configuration {name} is in more than one of build.kernel_configs')
-    _require(in_os or found, f'kernel configuration {name} is missing for {machine}' +
-             (' and in build.kernel_configs' if directories else ''))
+    _require(in_os or found, f'kernel configuration {name} is missing: not in the OS for {machine}' +
+             (' or build.kernel_configs' if directories else ''))
     return found[0] if found else None
 
 
@@ -678,9 +678,12 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
         path = kernel_config(os_identity['root'], target['machine'], kernel_configs, config)
         # A configuration outside the OS can include the other configurations of its directory.
         inputs = release_inputs if path is None else dict(release_inputs, kernel_config=_directory_digest(path.parent))
-        stage('os:kernel:' + config, dict(stage='kernel', config=config), (), [*KERNEL_TOOLS_FLAGS, *mk],
-              kernel_sources(shared, config), [f'netbsd-{config}', f'netbsd-{config}.img'],
-              'profile os.kernels', inputs)
+        node = stage('os:kernel:' + config, dict(stage='kernel', config=config), (), [*KERNEL_TOOLS_FLAGS, *mk],
+                     kernel_sources(shared, config), [f'netbsd-{config}', f'netbsd-{config}.img'],
+                     'profile os.kernels', inputs)
+        if path is not None:
+            # The build uses the file that the key was computed from.
+            nodes[node]['kernel_config'] = str(path)
     if profile['os']['sets']:
         from .os_release_builder import flags_for, release_sets
         names = sorted(name.removesuffix('.tar.xz') for name in release_sets())
