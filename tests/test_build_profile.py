@@ -77,6 +77,7 @@ class ProfileFixture(TemporaryCase):
         super().setUp()
         table = ' \\\n    '.join(f'{name} /usr/src/external/x' for name in SOURCES)
         self.os = self.repository('os', {
+            'share/mk/bsd.own.mk': 'MKCXX?= yes\nMKLINT?= no\nMKNTP?= yes\nMKX11?= no\n',
             'share/mk/bsd.sys.mk': f'.for _var _path in {table} \\\n    EXTERNAL_TOOLCHAIN /usr/toolchain\n.if 1\n.endif\n',
             'ember/shared-sources.json': json.dumps({
                 'schema': 'emberbsd.os-shared-sources.v1', 'sources': SOURCES,
@@ -332,6 +333,22 @@ class BuildProfileTests(ProfileFixture):
             with self.subTest(change=change), self.assertRaisesRegex(SDKError, message):
                 self.plan(profile)
 
+    def test_documented_profiles_are_valid(self):
+        for path in sorted(Path(__file__).resolve().parents[1].glob('docs/profiles/*.json')):
+            with self.subTest(path=path.name):
+                build_profile.load_profile(path)
+
+    def test_summary_names_each_node_to_build_and_its_reason(self):
+        lines = build_profile.summary(self.plan()).splitlines()
+        self.assertRegex(lines[0], r'\Abuild \d+; ready \d+\Z')
+        self.assertIn('  build os:kernel:EMBER64: no recorded result has this input key', lines)
+
+    def test_profile_refuses_make_options_that_the_os_does_not_have(self):
+        profile = copy.deepcopy(PROFILE)
+        profile['os'].update(mk={'MKNTP': 'no', 'MKNPT': 'no'})
+        with self.assertRaisesRegex(SDKError, 'does not have \\(share/mk\\): MKNPT\\Z'):
+            self.plan(profile)
+
     def test_profile_make_options_replace_the_release_options_of_the_sets(self):
         profile = copy.deepcopy(PROFILE)
         profile['os'].update(sets=['base', 'comp', 'etc'], mk={'MKNTP': 'no', 'MKLINT': 'yes'})
@@ -344,7 +361,8 @@ class BuildProfileTests(ProfileFixture):
                 (lambda p: p['platform'].update(prefix='/opt/x'), 'needs target and compiler'),
                 (lambda p: p['os'].update(kernels=['../EMBER64']), 'os.kernels'),
                 (lambda p: p['os'].update(mk={'MKX11': '1.2'}), 'os.mk'),
-                (lambda p: p['ports'].update(packages=['devel/example@native']), 'stage 4'),
+                (lambda p: p['ports'].update(packages=['devel/example@native']), 'ports must be empty'),
+                (lambda p: p['platform'].update(board='a133'), 'needs target and compiler'),
                 (lambda p: p['os'].update(kernels=[]), 'no kernel and no set'),
                 (lambda p: p.update(extra=1), 'platform, os and ports')):
             profile = copy.deepcopy(PROFILE)

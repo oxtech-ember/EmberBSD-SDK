@@ -181,15 +181,13 @@ def validate_profile(value):
     _require(isinstance(value, dict) and set(value) == {'schema', 'platform', 'os', 'ports'} and
              value['schema'] == PROFILE_SCHEMA, f'profile must be {PROFILE_SCHEMA} with platform, os and ports')
     platform, system, ports = value['platform'], value['os'], value['ports']
-    _require(isinstance(platform, dict) and set(platform) <= {'target', 'board', 'compiler'} and
-             {'target', 'compiler'} <= set(platform), 'profile platform needs target and compiler')
+    _require(isinstance(platform, dict) and set(platform) == {'target', 'compiler'},
+             'profile platform needs target and compiler')
     target_definition(platform['target'])
     compiler = platform['compiler']
     _require(isinstance(compiler, dict) and set(compiler) == {'host', 'target'} and
              compiler['host'] in COMPILERS and compiler['target'] in COMPILERS,
              'profile compiler needs host and target families: clang or gcc')
-    if 'board' in platform:
-        _require(isinstance(platform['board'], str) and _SET.match(platform['board']), 'invalid profile board')
     _require(isinstance(system, dict) and set(system) <= {'kernels', 'sets', 'mk', 'buildinfo'},
              'profile os accepts kernels, sets, mk and buildinfo')
     kernels = _names(system.get('kernels', []), _CONFIG, 'os.kernels')
@@ -203,7 +201,8 @@ def validate_profile(value):
     _require(kernels or sets, 'profile os selects no kernel and no set')
     _require(isinstance(ports, dict) and set(ports) <= {'sets', 'packages'}, 'profile ports accepts sets and packages')
     _require(not ports.get('sets') and not ports.get('packages'),
-             'Ports roots join the build plan in stage 4 (E17); plan Ports with "plan" or "source-plan"')
+             'profile ports must be empty: select Ports roots with --set or --package of the package '
+             'client (plan, source-plan or install)')
     return dict(schema=PROFILE_SCHEMA, platform=dict(platform, compiler=dict(compiler)),
                 os=dict(kernels=kernels, sets=sets, mk=dict(sorted(mk.items())), buildinfo=buildinfo),
                 ports={})
@@ -570,6 +569,19 @@ def source_plan(*, os_root, ports_root, sdk_root, host_prefix, host_compiler, ta
     return planner.document(dict(platform=dict(target=target), os=dict(flags=list(flags))))
 
 
+def _require_make_options(os_root, mk):
+    """Refuse an MK* name that no OS file of share/mk names. make ignores
+    an unknown name, but it changes the options of the build: the build then
+    uses new object directories and builds all again."""
+    if not mk:
+        return
+    known = set()
+    for path in Path(os_root, 'share/mk').glob('*.mk'):
+        known.update(re.findall(r'\bMK[A-Z0-9_]+\b', path.read_text(errors='replace')))
+    unknown = sorted(set(mk) - known)
+    _require(not unknown, 'profile os.mk names options that the OS does not have (share/mk): ' + ', '.join(unknown))
+
+
 def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_config, state=None, cache=None,
               selected_sources=None, required_sources=None, native=None, jobs=None):
     """Return the build-graph-v2 plan of PROFILE. Build nothing.
@@ -591,6 +603,7 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
                        jobs=jobs, cache=cache)
     native, prefix, shared, target = planner.native, planner.prefix, planner.shared, planner.target
     os_identity, add, nodes = planner.found['os'], planner.add, planner.nodes
+    _require_make_options(os_identity['root'], profile['os']['mk'])
     mk = [f'{name}={value}' for name, value in profile['os']['mk'].items()]
     tools = [native.tool(role) for role in sorted(native.tools)]
     host = add('runtime:host-prefix', 'runtime', dict(compiler=compiler['host']),
@@ -678,7 +691,10 @@ def load_profile(path):
 
 
 def summary(plan):
+    """Return the node counts of each action, then one line for each node to build, with its reason."""
     actions = {}
     for node in plan['nodes']:
-        actions.setdefault(node['decision']['action'], []).append(node['id'])
-    return '; '.join(f'{action} {len(ids)}' for action, ids in sorted(actions.items()))
+        actions.setdefault(node['decision']['action'], []).append(node)
+    lines = ['; '.join(f'{action} {len(nodes)}' for action, nodes in sorted(actions.items()))]
+    lines += [f'  build {node["id"]}: {node["decision"]["why"]}' for node in actions.get('build', [])]
+    return '\n'.join(lines)

@@ -11,7 +11,8 @@ or [build the sysroot](sysroot.md).
 
 The profile is JSON with three independent inputs. It contains no paths, no
 package versions and no recipes: versions come from the Ports recipes, paths
-come from the client configuration.
+come from the client configuration. Start from an example:
+[kernel](profiles/kernel.json) or [release sets](profiles/sets.json).
 
 ```json
 {
@@ -24,14 +25,16 @@ come from the client configuration.
 
 - `platform.target` is a [target](../src/emberbsd_sdk/targets.py) name.
   `platform.compiler` selects the `host` and `target` families, `clang` or
-  `gcc`. `platform.board` is an optional board name.
+  `gcc`.
 - `os.kernels` names kernel configurations of the target machine. `os.sets`
   names installation sets: the OS release builder makes `base`, `comp` and
   `etc` together, so the plan accepts exactly these three, for the aarch64
   target with Clang (the `aarch64-sysroot` release). With sets, the plan
   refuses `os.buildinfo` for now: the release builder sets `BUILDINFO` (from
   the OS commit) itself.
-  `os.mk` maps `MK*` options to `yes` or `no`. With sets, they replace the
+  `os.mk` maps `MK*` options to `yes` or `no`. The plan refuses a name that
+  no file of the OS `share/mk` has: make ignores such a name, but the changed
+  options would build all again in new directories. With sets, they replace the
   options of the release profile; the release builder sets `MKCXX`,
   `MKLIBCXX`, `MKLLVM`, `MKLLVMRT`, `MKX11` and `MKREPRO` itself. A release
   with other `MK*` options uses other object, tools and LLVM directories,
@@ -69,7 +72,9 @@ trees that the plan uses as they are; the common LLVM source is such an input.
 python3 scripts/packages.py --config /work/client.json profile-plan --profile /work/kernel.json > plan.json
 ```
 
-The command prints the plan on standard output and a summary on standard error.
+The command prints the plan on standard output. On standard error it prints
+the node count of each decision and one line for each node to build, with
+the reason.
 
 The plan keeps the results of its slow queries in `CACHE_DIR/plan`: the walks
 of the OS make guards and the output of the Ports tools (recipe identities and

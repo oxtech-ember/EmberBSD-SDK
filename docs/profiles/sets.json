@@ -1,0 +1,6 @@
+{
+  "schema": "emberbsd.build-profile.v1",
+  "platform": {"target": "aarch64", "compiler": {"host": "clang", "target": "clang"}},
+  "os": {"sets": ["base", "comp", "etc"]},
+  "ports": {}
+}
