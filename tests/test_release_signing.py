@@ -32,6 +32,35 @@ class ToolTimeoutTests(unittest.TestCase):
             crypto.run(['version'])
         self.assertEqual([c.kwargs['timeout'] for c in run.call_args_list], [900, 120, 120])
 
+    def test_sign_and_verify_use_the_size_of_each_archive(self):
+        crypto = ReleaseCrypto(Mock())
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            root = directory / 'root.pem'
+            root.write_bytes(b'trust fixture')
+            source = directory / 'source.tgz'
+            output = directory / 'published.tgz'
+            with source.open('wb') as handle:
+                handle.truncate(64 * 1024 * 1024)
+            identity = Mock(key=directory / 'key.pem', certificate=directory / 'signer.pem')
+            calls = []
+
+            def package_tool(role, argv, *, timeout):
+                calls.append((role, argv[2], timeout))
+                if argv[2] == 'x509-sign-package':
+                    with argv[4].open('wb') as handle:
+                        handle.truncate(64 * 1024 * 1024 + 1)
+                    self.assertFalse(output.exists())
+
+            with patch.object(crypto, '_leaf_profile'), patch.object(
+                    crypto, 'run_package', side_effect=package_tool):
+                crypto.sign_package(source, output, identity, root)
+                crypto.verify_package(root, root)
+        self.assertEqual(calls, [('pkg_admin', 'x509-sign-package', 512),
+                                 ('pkg_admin', 'check-signature', 513),
+                                 ('pkg_admin', 'check-signature', 120)])
+        self.assertEqual(crypto._package_signature_timeout(10 * 1024**3), 3600)
+
 
 class PackageOutputTests(unittest.TestCase):
     def test_failed_create_can_retry_without_exposing_partial_output(self):

@@ -212,6 +212,13 @@ class ReleaseCrypto:
         self.run(['verify', *self._trust(root.certificate), identity.certificate])
         return identity
 
+    @classmethod
+    def _package_signature_timeout(cls, archive_size):
+        # pkg_admin streams the full archive, including when checking a signature.
+        bytes_per_second = 128 * 1024
+        seconds = (archive_size + bytes_per_second - 1) // bytes_per_second
+        return min(3600, max(cls.DEFAULT_TOOL_TIMEOUT, seconds))
+
     def verify_package(self, package, root):
         # pkg_admin versions with permissive missing-file handling must not accept it.
         handle, before = open_regular(package)
@@ -222,7 +229,8 @@ class ReleaseCrypto:
             config = Path(directory) / 'pkg_install.conf'
             config.write_text(f'CERTIFICATE_ANCHOR_PKGS={anchor}\nVERIFIED_INSTALLATION=always\n'
                               f'GPG_KEYRING_VERIFY={os.devnull}\n', encoding='utf-8')
-            self.run_package('pkg_admin', ['-C', config, 'check-signature', Path(package).absolute()])
+            self.run_package('pkg_admin', ['-C', config, 'check-signature', Path(package).absolute()],
+                             timeout=self._package_signature_timeout(before.st_size))
         verify_stable(package, before)
 
     def sign_package(self, source, output, identity, root):
@@ -235,7 +243,8 @@ class ReleaseCrypto:
             config = Path(directory) / 'pkg_install.conf'
             config.write_bytes(b'')
             self.run_package('pkg_admin', ['-C', config, 'x509-sign-package', Path(source).absolute(), signed,
-                                          identity.key, identity.certificate])
+                                          identity.key, identity.certificate],
+                             timeout=self._package_signature_timeout(before.st_size))
             verify_stable(source, before)
             self.verify_package(signed, root)
             _publish_archive(signed, output)

@@ -31,6 +31,9 @@ package with explicit `CERTIFICATE_ANCHOR_PKGS`. A valid manifest does not
 replace package verification. Installer integration must also configure
 `VERIFIED_INSTALLATION=always`; pkgin alone does not verify channel metadata.
 
+Package signing and verification each allow one second per 128 KiB of the
+input archive, with a minimum of two minutes and a maximum of one hour.
+
 Example layout, relative to the repository HTTPS base:
 
 ```text
