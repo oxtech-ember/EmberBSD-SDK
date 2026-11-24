@@ -21,7 +21,7 @@ from . import paths
 DIRECTORY_PUBLICATION_API = 1
 
 
-def _require_emberbsd_kernel(library):
+def _require_emberbsd_kernel(library, required_flag=1, operation='publication'):
     # Calling a syscall missing from a NetBSD kernel can deliver SIGSYS.
     # Check the running kernel independently of the selected userland.
     query = library.sysctlbyname
@@ -32,11 +32,11 @@ def _require_emberbsd_kernel(library):
     size = ctypes.c_size_t(ctypes.sizeof(flags))
     result = query(b'vfs.generic.renameat2_flags', ctypes.byref(flags),
                    ctypes.byref(size), None, 0)
-    if result != 0 or size.value != ctypes.sizeof(flags) or not flags.value & 1:
-        raise SDKError('atomic directory publication is unavailable in the running EmberBSD kernel')
+    if result != 0 or size.value != ctypes.sizeof(flags) or flags.value & required_flag != required_flag:
+        raise SDKError(f'atomic directory {operation} is unavailable in the running EmberBSD kernel')
 
 
-def _native_rename():
+def _native_rename(required_flag=1, operation='publication'):
     if sys.platform == 'darwin':
         symbol = 'renamex_np'
         arguments = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint)
@@ -52,7 +52,7 @@ def _native_rename():
         library = ctypes.CDLL(None, use_errno=True)
         function = getattr(library, symbol)
         if sys.platform.startswith('netbsd'):
-            _require_emberbsd_kernel(library)
+            _require_emberbsd_kernel(library, required_flag, operation)
         function.argtypes = arguments
         function.restype = ctypes.c_int
     except (OSError, AttributeError) as exc:
@@ -66,6 +66,10 @@ def require_directory_publication():
     A filesystem can still reject the actual rename. There is no fallback.
     """
     _native_rename()
+
+
+def _native_exchange():
+    return _native_rename(2, 'exchange')
 
 
 def _entry_path(value):
@@ -107,3 +111,32 @@ def publish_directory_noreplace(source, destination):
     if result != 0:
         number = ctypes.get_errno() or errno.EIO
         raise OSError(number, os.strerror(number), destination)
+
+
+def require_directory_exchange():
+    """Check native atomic directory-exchange support without filesystem writes."""
+    _native_exchange()
+
+
+def exchange_directories(first, second):
+    """Atomically exchange two existing real directories on one filesystem.
+
+    Callers own both entries and their parent directories for the whole
+    operation. This does not provide a writer lock or durability protocol.
+    """
+    function, relative = _native_exchange()
+    first, second = _entry_path(first), _entry_path(second)
+    first_info, second_info = paths.real_directory(first), paths.real_directory(second)
+    if (first_info.st_dev, first_info.st_ino) == (second_info.st_dev, second_info.st_ino):
+        raise SDKError('directory exchange entries name the same directory')
+    if paths.relative_inside(first, second) is not None or paths.relative_inside(second, first) is not None:
+        raise SDKError('directory exchange entries must not contain one another')
+    ctypes.set_errno(0)
+    if relative:
+        result = function(-100, os.fsencode(first), -100, os.fsencode(second), 2)
+    else:
+        # Darwin RENAME_SWAP from sys/stdio.h.
+        result = function(os.fsencode(first), os.fsencode(second), 0x00000002)
+    if result != 0:
+        number = ctypes.get_errno() or errno.EIO
+        raise OSError(number, os.strerror(number), second)

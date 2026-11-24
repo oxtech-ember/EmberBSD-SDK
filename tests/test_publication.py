@@ -51,6 +51,43 @@ class PublicationTests(TemporaryCase):
         self.assertEqual((source / 'payload').read_bytes(), b'original\x00bytes')
         self.assertEqual(os.readlink(source / 'alias'), 'payload')
 
+    def test_native_exchange_swaps_existing_directory_entries(self):
+        first = self.source('first')
+        second = self.source('second')
+        (first / 'payload').write_bytes(b'first')
+        (second / 'payload').write_bytes(b'second')
+        first_inode, second_inode = first.stat().st_ino, second.stat().st_ino
+        publication.require_directory_exchange()
+        self.assertIsNone(publication.exchange_directories(first, second))
+        self.assertEqual(first.stat().st_ino, second_inode)
+        self.assertEqual(second.stat().st_ino, first_inode)
+        self.assertEqual((first / 'payload').read_bytes(), b'second')
+        self.assertEqual((second / 'payload').read_bytes(), b'first')
+        self.assertEqual(os.readlink(first / 'alias'), 'payload')
+        self.assertEqual(os.readlink(second / 'alias'), 'payload')
+
+    def test_exchange_rejects_same_nested_and_non_directory_entries(self):
+        source = self.source()
+        nested = source / 'nested'
+        nested.mkdir()
+        file = self.write('file', 'keep')
+        for first, second in ((source, source), (source, nested), (file, self.source('other')),
+                              (source, self.root / 'missing')):
+            with self.subTest(first=first, second=second), self.assertRaises((SDKError, OSError)):
+                publication.exchange_directories(first, second)
+        self.assert_source(source)
+        self.assertEqual(file.read_text(), 'keep')
+
+    def test_emberbsd_exchange_capability_is_checked_before_native_call(self):
+        for query in (KernelFlags(flags=1), KernelFlags(result=-1)):
+            function = NativeFunction()
+            library = SimpleNamespace(renameat2=function, sysctlbyname=query)
+            with patch.object(publication.sys, 'platform', 'netbsd11'), \
+                    patch.object(publication.ctypes, 'CDLL', return_value=library):
+                with self.assertRaisesRegex(SDKError, 'exchange.*running EmberBSD kernel'):
+                    publication.exchange_directories('absent', 'target')
+            self.assertEqual(function.calls, [])
+
     def test_native_success_preserves_inode_bytes_modes_and_links(self):
         source = self.source('source space пример')
         source.chmod(0o750)
@@ -180,6 +217,29 @@ class PublicationTests(TemporaryCase):
                 self.assertEqual(tuple(function.argtypes), types)
                 self.assertIs(function.restype, ctypes.c_int)
                 loader.assert_called_with(None, use_errno=True)
+        for platform, symbol, arguments, types, flags in (
+            ('darwin', 'renamex_np', (os.fsencode(source), os.fsencode(destination), 2),
+             (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint), 0),
+            ('linux', 'renameat2', (-100, os.fsencode(source), -100, os.fsencode(destination), 2),
+             (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint), 0),
+            ('netbsd11', 'renameat2', (-100, os.fsencode(source), -100, os.fsencode(destination), 2),
+             (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint), 3)):
+            with self.subTest(exchange_platform=platform):
+                exchange_source = self.source('exchange-source-' + platform)
+                exchange_destination = self.source('exchange-destination-' + platform)
+                if platform == 'darwin':
+                    arguments = (os.fsencode(exchange_source), os.fsencode(exchange_destination), 2)
+                else:
+                    arguments = (-100, os.fsencode(exchange_source), -100,
+                                 os.fsencode(exchange_destination), 2)
+                function = NativeFunction()
+                library = SimpleNamespace(sysctlbyname=KernelFlags(flags=flags), **{symbol: function})
+                with patch.object(publication.sys, 'platform', platform), \
+                        patch.object(publication.ctypes, 'CDLL', return_value=library):
+                    publication.require_directory_exchange()
+                    publication.exchange_directories(exchange_source, exchange_destination)
+                self.assertEqual(function.calls, [arguments])
+                self.assertEqual(tuple(function.argtypes), types)
         self.assert_source(source)
 
     def test_emberbsd_new_libc_with_older_kernel_fails_before_syscall(self):
