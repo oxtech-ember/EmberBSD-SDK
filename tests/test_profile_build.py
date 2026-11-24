@@ -37,7 +37,7 @@ open(os.environ['TEST_LOG'], 'a').write('prepare ' + archive + '\\n')
 # ember/build-kernel.sh: record the selected sources, then write the outputs.
 KERNEL = '''set -eu
 out=$1; config=${2##*/}
-echo "kernel $2 byacc=$EMBER_BYACC_SOURCE llvm=$EMBER_LLVM_SOURCE jobs=$NETBSD2_JOBS" >> LOG
+echo "kernel $2 byacc=$EMBER_BYACC_SOURCE llvm=$EMBER_LLVM_SOURCE jobs=$NETBSD2_JOBS target=$EMBER_KERNEL_TARGET" >> LOG
 # The builder runs in a clean environment; a file selects the failure.
 [ ! -e LOG.fail ] || exit 1
 : > "$out/netbsd-$config"; : > "$out/netbsd-$config.img"
@@ -276,6 +276,8 @@ class ProfileBuildTests(ProfileFixture):
         self.assertIn(f'byacc={prepared}/EMBER_BYACC_SOURCE-', kernel[0])
         # The kernel runs alone: it gets its own slot and the one free token.
         self.assertIn(f'llvm={self.llvm} jobs=2', kernel[0])
+        # The OS kernel builder takes the target of the profile.
+        self.assertIn('target=aarch64', kernel[0])
         self.assertTrue((self.work / 'kernels/netbsd-EMBER64.img').is_file())
         # Nothing changed: the plan is ready and Ninja does not run.
         status, plan, log = self.build()

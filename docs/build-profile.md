@@ -28,7 +28,11 @@ come from the client configuration. Start from an example:
   `gcc`.
 - `os.kernels` names kernel configurations of the target machine: a
   general-purpose configuration of the OS, or a local trial configuration in
-  a directory of `build.kernel_configs`. `os.sets`
+  a directory of `build.kernel_configs`. The OS kernel builder
+  `ember/build-kernel.sh` receives the target in `EMBER_KERNEL_TARGET`. It
+  builds `aarch64` kernels (`netbsd-CONFIG` and `netbsd-CONFIG.img`) and
+  `amd64` kernels (`netbsd-CONFIG`), each with the modules of its target; the
+  plan refuses kernels of another target. `os.sets`
   names installation sets: the OS release builder makes `base`, `comp` and
   `etc` together, so the plan accepts exactly these three, for the aarch64
   target with Clang (the `aarch64-sysroot` release). With sets, the plan

@@ -84,6 +84,7 @@ class ProfileFixture(TemporaryCase):
                 'kernel': {'default': ['EMBER_LLVM_SOURCE'], 'configs': {}},
                 'release': {'select': ['EMBER_LIBEDIT_SOURCE', 'EMBER_LLVM_SOURCE']}}),
             'sys/arch/evbarm/conf/EMBER64': 'include "arch/evbarm/conf/std"\n',
+            'sys/arch/amd64/conf/GENERIC_ARL': 'include "arch/amd64/conf/std.amd64"\n',
             'tools/native-tools/contract': 'EmberBSD-native-tools 2\ncmp cmp -\nreadlink readlink -\n'
                                            'make make -\nsh sh -\n',
             'ember/tools/shared-sources.py': self.os_tool()})
@@ -400,6 +401,24 @@ class BuildProfileTests(ProfileFixture):
         (trials / 'EMBER64').write_text('include "arch/evbarm/conf/GENERIC64"\n')
         with self.assertRaisesRegex(SDKError, 'EMBER64 is in the OS and in .*: give the trial another name'):
             self.plan(kernel_configs=[str(trials)])
+
+    def test_an_amd64_kernel_has_no_kernel_image(self):
+        profile = copy.deepcopy(PROFILE)
+        profile['platform']['target'] = 'amd64'
+        profile['os']['kernels'] = ['GENERIC_ARL']
+        kernel = self.nodes(self.plan(profile))['os:kernel:GENERIC_ARL']
+        self.assertEqual(kernel['outputs'], ['netbsd-GENERIC_ARL'])
+        self.assertEqual(kernel['inputs']['target']['machine'], 'amd64')
+        # The OS kernel builder takes a configuration of the target machine only.
+        profile['os']['kernels'] = ['EMBER64']
+        with self.assertRaisesRegex(SDKError, 'EMBER64 is missing: not in the OS for amd64'):
+            self.plan(profile)
+
+    def test_a_kernel_of_a_target_without_a_kernel_builder_is_refused(self):
+        profile = copy.deepcopy(PROFILE)
+        profile['platform']['target'] = 'riscv32'
+        with self.assertRaisesRegex(SDKError, 'os.kernels needs the aarch64 or amd64 target'):
+            self.plan(profile)
 
     def test_missing_kernel_configuration_is_refused(self):
         profile = copy.deepcopy(PROFILE)

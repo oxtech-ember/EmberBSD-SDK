@@ -295,6 +295,7 @@ def run_node(work, node_id, key, config):
                    EMBER_HOST_COMPILER_FAMILY=plan['profile']['platform']['compiler']['host'],
                    EMBER_COMPILER_FAMILY=plan['profile']['platform']['compiler']['target'],
                    EMBER_BUILD_MODE='cross', EMBER_EXTERNAL_TOOLCHAIN=prefix,
+                   EMBER_KERNEL_TARGET=plan['profile']['platform']['target'],
                    EMBER_HOST_BFD_CONFIG=config['host_bfd_config'],
                    MKREPRO_TIMESTAMP=str(node['inputs']['repro_timestamp']))
         if plan['profile']['os']['buildinfo']:
