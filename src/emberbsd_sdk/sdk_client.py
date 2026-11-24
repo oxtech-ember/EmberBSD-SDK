@@ -576,6 +576,7 @@ def apply_plan(plan, config, installer, cache, store, *, source_locked=False, re
                 automatic_states[repository] = package_automatic.plan(cfg,
                     [p for p in selected if p['action'] != 'installed'], plan['roots'])
         removed = set()
+        coordinated = []
         try:
             for package in pending:
                 cfg = config['repositories'][package['repository']]
@@ -592,11 +593,19 @@ def apply_plan(plan, config, installer, cache, store, *, source_locked=False, re
                                             automatic_states[package['repository']], removed)
                     automatic = automatic_states[package['repository']][package['pkgname']]
                     package_automatic.prepare(cfg, package['pkgname'], automatic)
+                    follow = {'dependents_follow': True} if package.get('coordinated') else {}
                     installer.install(archives[package['artifact']['id']], cfg, checked=True,
-                                      configure=False, automatic=automatic == 'yes')
+                                      configure=False, automatic=automatic == 'yes', **follow)
+                    if package.get('coordinated'):
+                        coordinated.append(package['pkgname'])
                     package_automatic.finish(installer.crypto, cfg, package['pkgname'])
                 else:
                     installer.install(archives[package['artifact']['id']], cfg, checked=True, configure=False)
+        except SDKError as exc:
+            if coordinated:
+                raise SDKError(f"{exc}; coordinated update of {', '.join(coordinated)} is incomplete: "
+                               'its dependents still have the old version; run the same install again') from exc
+            raise
         finally:
             # Dependents of a removed package keep their files; the dependency
             # tree is rebuilt even when a later package of the batch failed.

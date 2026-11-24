@@ -248,6 +248,51 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(sum(event[0] == 'install' for event in events), 3)
         self.assertEqual(sum(event[0] == 'remove' for event in events), 1)
 
+    def test_coordinated_package_is_installed_with_its_dependents_following(self):
+        with self._with_conflicting_split(installed_old=1, catalog_old=2):
+            plan = self.plan(sets=['task'])
+        for fail in (False, True):
+            events = []
+
+            class RealInstaller(PackageInstaller):
+                def __init__(self):
+                    self.crypto = object()
+                def installed(self, _config, *, recover=True):
+                    return {'old-1'}
+                def check(self, _path, _config):
+                    pass
+                def check_updates(self, packages, _archives, _config):
+                    pending = [p for p in packages if p['action'] != 'installed']
+                    pending[0]['coordinated'] = True
+                def remove(self, name, _config):
+                    pass
+                def install(self, path, _config, *, checked=False, configure=True, automatic=False,
+                            dependents_follow=False):
+                    events.append((path.name, dependents_follow))
+                    if fail and len(events) == 2:
+                        raise SDKError('pkg_add failed: fixture')
+                def rebuild_tree(self, _config):
+                    pass
+                def configure(self, _config):
+                    pass
+
+            with self.subTest(fail=fail), patch('emberbsd_sdk.sdk_client.check_space'), \
+                 patch('emberbsd_sdk.package_install.inspect_install_paths'), \
+                 patch('emberbsd_sdk.sdk_client.reuse_compatible_dependencies', return_value=[]), \
+                 patch('emberbsd_sdk.package_automatic.recover'), \
+                 patch('emberbsd_sdk.package_automatic.plan', return_value={'lib-1': 'yes', 'old-2': 'no', 'app-1': 'no'}), \
+                 patch('emberbsd_sdk.package_automatic.prepare'), \
+                 patch('emberbsd_sdk.package_automatic.finish'):
+                if fail:
+                    with self.assertRaisesRegex(SDKError, 'fixture; coordinated update of .* is incomplete'):
+                        apply_plan(plan, self.cfg, RealInstaller(), self.cache, self.store)
+                else:
+                    apply_plan(plan, self.cfg, RealInstaller(), self.cache, self.store)
+                    # Only the marked package lets its dependents follow (pkg_add -D).
+                    self.assertEqual([follow for _, follow in events], [True, False, False])
+                    for package in plan['packages']:
+                        package.pop('coordinated', None)
+
     def test_removal_is_skipped_when_the_successor_already_replaced_the_old_package(self):
         with self._with_conflicting_split(installed_old=1, catalog_old=2):
             plan = self.plan(sets=['task'])

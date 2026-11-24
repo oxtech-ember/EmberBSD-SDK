@@ -152,6 +152,10 @@ def check_updates(crypto, config, packages, archives, installed):
     def matches(pattern, name):
         return _matches(crypto, pattern, name)
 
+    # Installed packages that this batch replaces, and the install order.
+    replaced_by = {old: other for other in packages for old in other['replaces']}
+    position = {id(item): index for index, item in enumerate(packages)}
+
     for package in packages:
         if not package['replaces']:
             continue
@@ -184,5 +188,25 @@ def check_updates(crypto, config, packages, archives, installed):
         for dependent in sorted(dependents):
             for pattern in metadata(dependent)['depends']:
                 if matches(pattern, old_name) and not matches(pattern, new['name']):
-                    raise SDKError(f"{dependent}: dependency {pattern} does not accept {new['name']}; "
-                                   'a coordinated component update is required')
+                    if not _coordinated(matches, archives, package, new, old_name,
+                                        replaced_by.get(dependent), position):
+                        raise SDKError(f"{dependent}: dependency {pattern} does not accept {new['name']}; "
+                                       'a coordinated component update is required')
+                    # pkg_add -D: the dependent's own replacement follows in this batch.
+                    package['coordinated'] = True
+
+
+def _coordinated(matches, archives, package, new, old_name, successor, position):
+    """True when SUCCESSOR, later in the batch, replaces the dependent and accepts NEW.
+
+    The provider check above already proved that the old dependent's images
+    load no removed library, so it stays usable until its replacement. Only
+    its recorded dependency is unsatisfied between the two pkg_add calls and
+    after a failure of the second; installing the same selection again
+    replaces it.
+    """
+    if successor is None or position[id(successor)] < position[id(package)]:
+        return False
+    requirements = _archive(archives[successor['artifact']['id']])['depends']
+    return all(matches(pattern, new['name']) for pattern in requirements
+               if matches(pattern, old_name) or matches(pattern, new['name']))

@@ -126,6 +126,57 @@ class PackageUpdateTests(unittest.TestCase):
                     else:
                         self.check([self.package('lib-2')], {'lib-1', 'consumer-1'})
 
+    def coordinated_batch(self, *, successor_depends=('lib-2{,nb*}',), successor_first=False,
+                          successor=True):
+        """lib-1 -> lib-2 while consumer-1 pins lib-1 exactly; consumer-2 may follow."""
+        self.installed('lib-1', providers=('lib/libexample.so.1',), dependents=('consumer-1',))
+        self.installed('consumer-1', depends=('lib-1{,nb*}',))
+        lib = self.make_archive(self.root / 'lib-2.tgz', 'lib-2', providers=('lib/libexample.so.1',))
+        consumer = self.make_archive(self.root / 'consumer-2.tgz', 'consumer-2', depends=successor_depends)
+        provider = dict(pkgname='lib-2', replaces=['lib-1'], artifact={'id': 'lib'}, action='download')
+        packages = [provider]
+        if successor:
+            follower = dict(pkgname='consumer-2', replaces=['consumer-1'], artifact={'id': 'consumer'},
+                            action='download')
+            packages = [follower, provider] if successor_first else [provider, follower]
+        return packages, provider, {'lib': lib, 'consumer': consumer}
+
+    @staticmethod
+    def exact(_crypto, pattern, name):
+        if pattern.endswith('{,nb*}'):
+            return name == pattern[:-6]
+        base, version = pattern.split('>=')
+        return name.rsplit('-', 1)[0] == base and name.rsplit('-', 1)[1] >= version
+
+    def test_exact_dependency_with_its_dependent_following_is_coordinated(self):
+        packages, provider, archives = self.coordinated_batch()
+        with patch('emberbsd_sdk.package_updates._matches', side_effect=self.exact):
+            check_updates(self.crypto, self.cfg, packages, archives, {'lib-1', 'consumer-1'})
+        self.assertTrue(provider['coordinated'])
+        self.assertNotIn('coordinated', packages[1])
+
+    def test_exact_dependency_without_a_following_replacement_is_refused(self):
+        cases = (dict(successor=False), dict(successor_first=True),
+                 dict(successor_depends=('lib-1{,nb*}',)))
+        for case in cases:
+            with self.subTest(case=case):
+                self.setUp()
+                packages, provider, archives = self.coordinated_batch(**case)
+                installed = {'lib-1', 'consumer-1'}
+                with patch('emberbsd_sdk.package_updates._matches', side_effect=self.exact):
+                    with self.assertRaisesRegex(SDKError, 'consumer-1: dependency lib-1{,nb\\*} does not accept lib-2'):
+                        check_updates(self.crypto, self.cfg, packages, archives, installed)
+                self.assertNotIn('coordinated', provider)
+
+    def test_coordinated_update_keeps_the_provider_guard(self):
+        # The old dependent must stay usable until its replacement: a removed
+        # provider without proof is still refused.
+        packages, provider, archives = self.coordinated_batch()
+        self.make_archive(self.root / 'lib-2.tgz', 'lib-2', providers=('lib/libexample.so.2',))
+        with patch('emberbsd_sdk.package_updates._matches', side_effect=self.exact):
+            with self.assertRaisesRegex(SDKError, 'removes library providers'):
+                check_updates(self.crypto, self.cfg, packages, archives, {'lib-1', 'consumer-1'})
+
     def test_dependency_constraint_rejects_incompatible_replacement(self):
         self.installed('lib-1', dependents=('consumer-1',))
         self.installed('consumer-1', depends=('lib<2',))

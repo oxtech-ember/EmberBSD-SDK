@@ -304,7 +304,10 @@ class PackageInstaller:
         from .package_updates import check_updates
         check_updates(self.crypto, config, packages, archives, self.installed(config, recover=False))
 
-    def install(self, package, config, *, checked=False, configure=True, automatic=False):
+    def install(self, package, config, *, checked=False, configure=True, automatic=False,
+                dependents_follow=False):
+        """Install PACKAGE. DEPENDENTS_FOLLOW: dependents that the new package does not
+        satisfy are replaced next in the same batch (pkg_add -D); see check_updates."""
         if not checked:
             self.check(package, config)
         key = self._check_key(package, config)
@@ -330,6 +333,8 @@ class PackageInstaller:
                 args.append('-I')
             if automatic:
                 args.append('-A')
+            if dependents_follow:
+                args.append('-D')
             args.append(str(Path(package).absolute()))
             # Native package hooks use the running OS's base utilities. This
             # does not change explicitly selected crypto or pkg_tools paths.
