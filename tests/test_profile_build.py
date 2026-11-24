@@ -41,7 +41,9 @@ out=$1; config=${2##*/}
 echo "kernel $2 byacc=$EMBER_BYACC_SOURCE llvm=$EMBER_LLVM_SOURCE jobs=$NETBSD2_JOBS target=$EMBER_KERNEL_TARGET" >> LOG
 # The builder runs in a clean environment; a file selects the failure.
 [ ! -e LOG.fail ] || exit 1
-: > "$out/netbsd-$config"; : > "$out/netbsd-$config.img"
+# Like the OS builder, only an aarch64 build makes a kernel image.
+: > "$out/netbsd-$config"
+[ "$EMBER_KERNEL_TARGET" != aarch64 ] || : > "$out/netbsd-$config.img"
 '''
 
 
@@ -270,8 +272,8 @@ class ProfileBuildTests(ProfileFixture):
         os.environ['TEST_LOG'] = str(self.log)
         self.addCleanup(os.environ.pop, 'TEST_LOG', None)
 
-    def build(self):
-        plan = self.plan(state=self.work,
+    def build(self, profile=PROFILE):
+        plan = self.plan(profile, state=self.work,
                          selected_sources=self.config['selected_sources'])
         self.log.write_text('')
         with redirect_stderr(io.StringIO()):
@@ -302,6 +304,24 @@ class ProfileBuildTests(ProfileFixture):
         status, plan, log = self.build()
         self.assertEqual(status, 0)
         self.assertEqual([line.split()[0:2] for line in log], [['prepare', 'byacc-1.tgz'], ['kernel', 'EMBER64']])
+
+    def test_an_amd64_kernel_is_built_once_without_a_kernel_image(self):
+        profile = copy.deepcopy(PROFILE)
+        profile['platform']['target'] = 'amd64'
+        profile['os']['kernels'] = ['GENERIC_ARL']
+        status, plan, log = self.build(profile)
+        self.assertEqual(status, 0)
+        kernel = [line for line in log if line.startswith('kernel')]
+        self.assertEqual([line.split()[1] for line in kernel], ['GENERIC_ARL'])
+        self.assertIn('target=amd64', kernel[0])
+        self.assertTrue((self.work / 'kernels/netbsd-GENERIC_ARL').is_file())
+        self.assertFalse((self.work / 'kernels/netbsd-GENERIC_ARL.img').exists())
+        record = json.loads((self.work / profile_build.record_name('os:kernel:GENERIC_ARL')).read_text())
+        self.assertEqual(sorted(record['outputs']), ['netbsd-GENERIC_ARL'])
+        # The record has all outputs of the node: the next build is ready.
+        status, plan, log = self.build(profile)
+        self.assertEqual((status, log), (0, []))
+        self.assertEqual({node['decision']['action'] for node in plan['nodes']}, {'ready'})
 
     def test_a_kernel_configuration_outside_the_os_is_built_by_its_path(self):
         trials = self.root / 'trials'
