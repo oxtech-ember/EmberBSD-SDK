@@ -5,6 +5,7 @@
 from contextlib import contextmanager
 import hashlib
 import os
+import re
 from pathlib import Path
 import shutil
 import tarfile
@@ -60,7 +61,7 @@ def open_bundle(archive_path, *, target, max_bytes):
         yield bundle, pin, manifest
 
 
-def selection(release, config, cache, target):
+def selection(release, config, cache, target, *, update=False):
     """Select exactly one published target/ABI, independently of the host."""
     definition = target_definition(target)
     candidates = [a for a in release['artifacts'] if a['kind'] == 'sysroot' and
@@ -93,10 +94,22 @@ def selection(release, config, cache, target):
         raise SDKError('SDK sysroot destination must not be a symlink')
     destination = destination.resolve()
     if destination.exists():
-        if not receipt.is_file() or jsonio.read_json(receipt) != identity:
+        if not receipt.is_file() or receipt.is_symlink():
             raise SDKError('another sysroot is installed; use a coherent component update before replacing it')
+        previous = jsonio.read_json(receipt)
+        if previous != identity:
+            if not update:
+                raise SDKError('another sysroot is installed; use a coherent component update before replacing it')
+            if (not isinstance(previous, dict) or set(previous) != {'sha256', 'target'} or
+                    previous['target'] != artifact['target'] or not isinstance(previous['sha256'], str)
+                    or not re.fullmatch('[0-9a-f]{64}', previous['sha256'])):
+                raise SDKError('installed sysroot has an unrecognized receipt or incompatible target')
+            return dict(artifact=artifact, destination=str(destination), target=target,
+                        action='replace', previous=previous)
         action = 'installed'
     else:
+        if update:
+            raise SDKError('target sysroot is not installed; use install --target')
         action = 'cache' if cache.path(artifact).exists() else 'download'
     return dict(artifact=artifact, destination=str(destination), target=target, action=action)
 
@@ -135,8 +148,8 @@ def install(archive, selected):
         publish_install(tree, selected)
 
 
-def bind_compiler(config, selected):
-    """Expose the SDK's operation-aware compiler commands after installation."""
+def compiler_binding(config, selected):
+    """Identify the SDK command directory and check its public aliases."""
     prefix = Path(config['host_prefix'])
     if not (prefix / 'bin/clang').is_file():
         return  # A sysroot can be acquired before its compiler.
@@ -148,14 +161,27 @@ def bind_compiler(config, selected):
     for role, link in links.items():
         if os.path.lexists(link) and (not link.is_symlink() or link.resolve() != (destination / role).resolve()):
             raise SDKError('compiler command already belongs to another provider: ' + str(link))
+    return destination, links, triplet
+
+
+def prepare_compiler_binding(config, selected, destination, triplet, runtime):
+    native = load_host_prefix(config['host_prefix'], required_roles=('python',))
+    compiler = target_toolchain.clang_compiler(config['host_prefix'], triplet, host=native.host,
+                                              env={'PATH': native.path, 'LC_ALL': 'C'})
+    application_toolchain.bind_clang_application_commands(destination, compiler, selected['destination'],
+        runtime, python=native.tool('python'), include_auxiliary=True)
+
+
+def bind_compiler(config, selected):
+    """Expose the SDK's operation-aware compiler commands after installation."""
+    binding = compiler_binding(config, selected)
+    if binding is None:
+        return
+    destination, links, triplet = binding
     if not destination.exists():
-        native = load_host_prefix(prefix, required_roles=('python',))
-        compiler = target_toolchain.clang_compiler(prefix, triplet, host=native.host,
-                                                  env={'PATH': native.path, 'LC_ALL': 'C'})
-        runtime = application_toolchain.load_clang_runtime(selected['destination'], target=target)
+        runtime = application_toolchain.load_clang_runtime(selected['destination'], target=selected['target'])
         destination.parent.mkdir(parents=True, exist_ok=True)
-        application_toolchain.bind_clang_application_commands(destination, compiler, selected['destination'],
-            runtime, python=native.tool('python'), include_auxiliary=True)
+        prepare_compiler_binding(config, selected, destination, triplet, runtime)
     for role, link in links.items():
         if not os.path.lexists(link):
             link.symlink_to(os.path.relpath(destination / role, link.parent))

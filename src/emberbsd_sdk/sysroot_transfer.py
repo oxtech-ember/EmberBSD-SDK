@@ -455,6 +455,19 @@ def validate_manifest(m, *, target, max_bytes=MAX_BYTES):
     return m
 
 
+def read_import_manifest(root, target):
+    """Validate the saved transfer inventory before using it as a merge base."""
+    receipt = jsonio.read_json(os.path.join(root, '.prebuild-sdk-import.json'))
+    if (not isinstance(receipt, dict) or set(receipt) != {'format', 'version', 'manifest_sha256', 'manifest'} or
+            receipt['format'] != 'emberbsd-sysroot-import' or
+            type(receipt['version']) is not int or receipt['version'] != 1):
+        raise SDKError('invalid sysroot import record')
+    manifest = validate_manifest(receipt['manifest'], target=target)
+    if _hash_json(manifest) != receipt['manifest_sha256']:
+        raise SDKError('sysroot import manifest digest changed')
+    return manifest
+
+
 def _copy_payload(source, destination, metadata):
     handle = _open_transport(source)
     digest, count = hashlib.sha256(), 0

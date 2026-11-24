@@ -106,7 +106,7 @@ def reading(databases):
         release(descriptors, names)
 
 
-def acquire_writer(database):
+def acquire_writer(database, *, allow_own_readers=True):
     """Hold the writer lock of DATABASE. Return its descriptor.
 
     Stop before any change when another process tree reads the prefix.
@@ -115,7 +115,7 @@ def acquire_writer(database):
     descriptor = _open_writer(writer)
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX)
-        own = _own()
+        own = _own() if allow_own_readers else set()
         entries = sorted(readers.iterdir()) if readers.is_dir() else []
         for entry in entries:
             if str(entry) in own:
@@ -141,8 +141,8 @@ def acquire_writer(database):
 
 
 @contextmanager
-def writing(database):
-    descriptor = acquire_writer(database)
+def writing(database, *, allow_own_readers=True):
+    descriptor = acquire_writer(database, allow_own_readers=allow_own_readers)
     try:
         yield
     finally:

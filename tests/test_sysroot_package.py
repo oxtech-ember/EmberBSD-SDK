@@ -5,6 +5,7 @@ import copy
 import fcntl
 import hashlib
 import io
+import os
 from pathlib import Path
 import sys
 import tarfile
@@ -13,7 +14,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from test_core import TemporaryCase
 import test_llvm_builder as llvm_tests
-from emberbsd_sdk import application_toolchain, jsonio, sysroot_package, sysroot_transfer
+from emberbsd_sdk import application_toolchain, jsonio, prefix_lock, sysroot_package, sysroot_transfer, sysroot_update
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.package_cache import PackageCache
 from emberbsd_sdk.sdk_client import include_sysroot
@@ -70,6 +71,75 @@ class SysrootPackageTests(TemporaryCase):
                          dict(sha256='0'*64, target=self.target))
         with self.assertRaisesRegex(SDKError, 'another sysroot'):
             self.select()
+
+    def replacement(self):
+        destination = self.root / 'target'
+        cfg = dict(target=self.target, prefix='/usr/pkg', pkgdb='/usr/pkg/pkgdb',
+                   sysroot=str(destination))
+        self.config['repositories'] = {'target': cfg}
+        self.release['release_id'] = 'fixture'
+        sysroot_package.install(self.archive, self.select())
+        # A distinct valid tar envelope around the same signed-transfer payload.
+        payload = self.archive.read_bytes() + bytes(512)
+        self.artifact.update(size=len(payload), sha256=hashlib.sha256(payload).hexdigest())
+        self.cache.path(self.artifact).write_bytes(payload)
+        installer = Mock()
+        installer.inventory.return_value = []
+        plan = sysroot_update.plan_update(self.release, [], self.config, installer, self.cache,
+                                          'aarch64', ())
+        return destination, plan, installer
+
+    def test_sysroot_exchange_keeps_files_and_serializes_waiting_writers(self):
+        from emberbsd_sdk.sdk_client import apply_plan
+        destination, plan, installer = self.replacement()
+        writer = destination / 'usr/pkg/pkgdb.writer'
+        writer.touch()
+        with writer.open('rb') as waiting:
+            marker = destination / 'personal.h'
+            marker.write_text('local')
+            apply_plan(plan, self.config, installer, self.cache, None)
+            self.assertEqual(self.select()['action'], 'installed')
+            self.assertEqual(marker.read_text(), 'local')
+            self.assertEqual(os.fstat(waiting.fileno()).st_ino, writer.stat().st_ino)
+            self.assertTrue((destination / 'usr/pkg/pkgdb.readers').is_dir())
+
+    def test_failed_verification_or_exchange_leaves_the_installed_prefix(self):
+        from emberbsd_sdk.sdk_client import apply_plan
+        destination, plan, installer = self.replacement()
+        before = (destination / sysroot_package.RECEIPT).read_bytes()
+        writer = destination / 'usr/pkg/pkgdb.writer'
+        writer.touch()
+        identity = writer.stat().st_ino
+        marker = destination / 'personal.h'
+        marker.write_text('local')
+        for target in ('sysroot_update.verify_packages', 'publication.exchange_directories'):
+            with self.subTest(target=target), patch('emberbsd_sdk.' + target, side_effect=SDKError('fixture')):
+                with self.assertRaisesRegex(SDKError, 'fixture'):
+                    apply_plan(plan, self.config, installer, self.cache, None)
+                self.assertEqual((destination / sysroot_package.RECEIPT).read_bytes(), before)
+                self.assertEqual(marker.read_text(), 'local')
+                self.assertEqual(writer.stat().st_ino, identity)
+                self.assertFalse(list(destination.parent.glob('.sysroot-install-*')))
+
+    def test_source_state_inside_target_is_refused_before_taking_its_lock(self):
+        from emberbsd_sdk.sdk_client import apply_plan
+        destination, plan, installer = self.replacement()
+        state = destination / 'ports-state'
+        self.config['source'] = {'state': str(state)}
+        with self.assertRaisesRegex(SDKError, 'Ports state must be outside'):
+            apply_plan(plan, self.config, installer, self.cache, None)
+        self.assertFalse(state.exists())
+        self.assertEqual(jsonio.read_json(destination / sysroot_package.RECEIPT),
+                         plan['sysroot']['previous'])
+
+    def test_update_refuses_a_reading_build_even_in_the_same_process_tree(self):
+        from emberbsd_sdk.sdk_client import apply_plan
+        destination, plan, installer = self.replacement()
+        with prefix_lock.reading([destination / 'usr/pkg/pkgdb']):
+            with self.assertRaisesRegex(SDKError, 'another build uses the prefix'):
+                apply_plan(plan, self.config, installer, self.cache, None)
+        self.assertEqual(jsonio.read_json(destination / sysroot_package.RECEIPT),
+                         plan['sysroot']['previous'])
 
     def test_target_packages_use_configured_sysroot_after_base_publication(self):
         from emberbsd_sdk.sdk_client import apply_plan

@@ -25,11 +25,12 @@ def installed_state(config, installer):
     return dict(repositories=repositories)
 
 
-def update_plan(release, catalogs, config, installer, cache, *, roots=()):
+def update_plan(release, catalogs, config, installer, cache, *, roots=(), inventory=None):
     """Select each pkgdb independently; never expand package sets or saved roots."""
     from .sdk_client import installation_plan
     requested = {_parse_root(root, 'update') for root in roots}
-    inventory = {name: installer.inventory(cfg) for name, cfg in config['repositories'].items()}
+    if inventory is None:
+        inventory = {name: installer.inventory(cfg) for name, cfg in config['repositories'].items()}
     present = {package['root'] for packages in inventory.values() for package in packages}
     if requested - present:
         raise SDKError('update root is not installed: ' + ', '.join(sorted(requested - present)))

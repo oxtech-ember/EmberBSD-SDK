@@ -478,6 +478,9 @@ def _fetch_archives(items, cache, store, prefix):
 
 
 def apply_plan(plan, config, installer, cache, store, *, source_locked=False, release_digest=None):
+    if plan.get('sysroot', {}).get('action') == 'replace':
+        from . import sysroot_update
+        return sysroot_update.apply(plan, config, installer, cache, store, release_digest)
     _source_config(config, plan['build_roots'])
     pending = [p for p in plan['packages'] if p['action'] != 'installed']
     selected_repositories = {p['repository'] for p in plan['packages']}
@@ -970,7 +973,7 @@ def install_selection(plan, config, installer, cache, store, *, refresh_current=
         build_missing(config, plan['build_roots'], binaries)
     else:
         reused.extend(extra)
-    if plan.get('sysroot'):
+    if plan.get('sysroot') and plan['sysroot']['action'] != 'replace':
         sysroot_package.bind_compiler(config, plan['sysroot'])
     return reused
 
@@ -1117,8 +1120,10 @@ def main(argv=None, *, default_config=None):
         if args.installed and args.command != 'plan':
             raise SDKError('--installed requires plan')
         updating = args.command in ('update', 'auto-update') or args.installed
-        if updating and (args.sets or args.target):
-            raise SDKError('package updates accept only installed --package roots; use install to add sets or a sysroot')
+        if updating and args.sets:
+            raise SDKError('package updates accept only installed --package roots; use install to add sets')
+        if args.command == 'auto-update' and args.target:
+            raise SDKError('use update --target for an explicit target sysroot update')
         if args.command == 'installed' and (args.sets or args.roots or args.target):
             raise SDKError('installed lists all configured package databases without a selection')
         if args.interval is not None and args.command != 'auto-update':
@@ -1204,7 +1209,12 @@ def main(argv=None, *, default_config=None):
                         return 0
                     if updating:
                         from .package_state import update_plan
-                        plan = update_plan(release, catalogs, config, installer, cache, roots=args.roots)
+                        if args.target:
+                            from . import sysroot_update
+                            plan = sysroot_update.plan_update(release, catalogs, config, installer, cache,
+                                                             args.target, args.roots)
+                        else:
+                            plan = update_plan(release, catalogs, config, installer, cache, roots=args.roots)
                     else:
                         plan = installation_plan(release, catalogs, config, installer, cache,
                                                  sets=args.sets, roots=args.roots)

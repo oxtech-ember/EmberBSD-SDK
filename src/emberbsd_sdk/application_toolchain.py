@@ -168,13 +168,7 @@ def recorded_clang_runtime(root, *, target, required=False):
             return (receipt['signature']['runtime']['manifest'],
                     llvm_runtime_install.base_cxx_enabled(receipt['signature'].get('flags', [])))
     elif os.path.isfile(imported):
-        receipt = jsonio.read_json(imported)
-        if (not isinstance(receipt, dict) or set(receipt) != {'format','version','manifest_sha256','manifest'} or
-                receipt['format'] != 'emberbsd-sysroot-import' or type(receipt['version']) is not int or receipt['version'] != 1):
-            raise SDKError('invalid sysroot import record')
-        manifest = sysroot_transfer.validate_manifest(receipt['manifest'], target=target)
-        if sysroot_transfer._hash_json(manifest) != receipt['manifest_sha256']:
-            raise SDKError('sysroot import manifest digest changed')
+        manifest = sysroot_transfer.read_import_manifest(root, target)
         if manifest['version'] == 2:
             return manifest['runtime']['manifest'], manifest['provenance'].get('base_cxx') == 'libcxx'
     elif required or (target == 'amd64' and os.path.basename(root) == 'dest' and os.path.isfile(

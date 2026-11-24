@@ -164,9 +164,25 @@ The archive contains the existing [sysroot transfer](sysroot-transfer.md) bundle
 All downloads are verified before installation. The base is restored at a new
 path before target packages populate its pkgdb. An existing matching artifact
 is reused without downloading or hashing the entire tree. A different or
-unrecognized sysroot is preserved; replacing it requires the component update
-path. The signed target runtime is part of the sysroot, with no external artifact
-dependencies.
+unrecognized sysroot is preserved. To update an installed SDK sysroot, inspect
+the target plan and run the component update:
+
+```sh
+ember-sdk plan --installed --target aarch64
+ember-sdk update --target aarch64
+```
+
+The update selects that target's installed packages from the authenticated
+catalog. It imports the signed base in a sibling directory, preserves package
+registrations and local changes, and applies package revisions there. It checks
+required target libraries and the LLVM runtime before it exchanges the two
+directories. A conflicting local file, missing required library, incompatible
+compiler binding, or active build leaves the original installation available.
+The update preserves configured compiler commands and checks their runtime selection.
+Use the matching host compiler for that target. Use `install --target` to add
+compiler commands to a prefix that does not have a target binding.
+The host kernel and filesystem must support atomic directory exchange.
+The signed target runtime is part of the sysroot, with no external artifact dependencies.
 
 Once Clang is present, installation creates the existing SDK's operation-aware
 `TRIPLET-cc`, `TRIPLET-c++`, `TRIPLET-cpp`, `TRIPLET-as` and `TRIPLET-ld` bindings
@@ -511,8 +527,8 @@ apply; the client does not infer ABI compatibility from version numbers alone.
 This supports in-place component and package revision updates. It deliberately
 refuses transitions which require removing library providers or replacing an
 installed consumer before its dependency can change. Such coordinated ABI
-transitions, sysroot replacement and updating tools during an active build remain
-separate work. A build that uses a prefix reads it: the supervised Ports
+transitions require a compatible package selection. Use an explicit target update
+for a sysroot replacement. Update tools after active builds stop. A build that uses a prefix reads it: the supervised Ports
 stage and `profile-build` with the host prefix. A writer of the prefix, an SDK
 install or a Ports `pkg_add`, waits for other writers. It stops before it
 changes a file when another build reads the prefix (`prefix-lock.py` exits
