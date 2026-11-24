@@ -23,6 +23,7 @@ from .darwin_runtime import read_macho_runtime
 from .errors import SDKError
 from .package_install import _relative, inspect_install_paths, install_paths
 from .paths import open_regular, verify_stable
+from .release_signing import read_bytes
 
 
 def _identity(path, config, prefix, name):
@@ -220,4 +221,85 @@ Missing or unsupported evidence leaves the original strict guard in force.
             new.verify()
             return True
     except (SDKError, OSError, ValueError, RuntimeError, tarfile.TarError):
+        return False
+
+
+_ELF_MAGIC = b'\x7fELF'
+_MACHO_MAGIC = b'\xcf\xfa\xed\xfe'
+# Other Mach-O forms (32-bit, byte-swapped, universal) are not read here.
+_OTHER_MACHO = (b'\xfe\xed\xfa\xce', b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xcf',
+                b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca')
+
+
+def _loads(path, config):
+    """Return the library names that the ELF or Mach-O file PATH loads, or None."""
+    stream, before = open_regular(path)
+    with stream:
+        magic = stream.read(4)
+    verify_stable(path, before)
+    if magic == _ELF_MAGIC:
+        return read_elf_dynamic(path).get('needed') or []
+    if magic == _MACHO_MAGIC:
+        host = config.get('host', {})
+        if host.get('os') != 'Darwin':
+            raise SDKError('Mach-O consumer requires a Darwin host repository')
+        image = read_macho_runtime(path, {'cpu': host.get('arch')})
+        return [item['name'] for item in image['loads'] + image['implicit_loads']]
+    if magic in _OTHER_MACHO:
+        raise SDKError('unsupported Mach-O consumer format')
+    return None
+
+
+def consumers_unbound(config, database, consumers, removed):
+    """Prove that no file of the installed CONSUMERS loads a REMOVED provider.
+
+    The consumers stay installed while their dependency changes, also between
+    the individual package updates and after a partial failure. Each regular
+    ELF and Mach-O file of each consumer is read. A load of a library with the
+    basename of a removed provider binds the consumer to it. dlopen users are
+    not seen, as for REQUIRES. A consumer without a readable image, a missing
+    listed file and unreadable evidence keep the strict guard.
+    """
+    names = {PurePosixPath(name).name for name in removed}
+    if not names:
+        return True
+    try:
+        prefix, _ = install_paths(config)
+        root, logical = prefix.resolve(strict=True), PurePosixPath(config['prefix'])
+        for consumer in consumers:
+            if Path(consumer).name != consumer or consumer in ('.', '..'):
+                return False
+            contents = read_bytes(Path(database) / consumer / '+CONTENTS', 8 * 1024 * 1024)
+            directory, images, ignore = None, 0, False
+            for line in contents.decode('utf-8').splitlines():
+                if line.startswith('@cwd '):
+                    directory = PurePosixPath(line[5:].rstrip('/') or '/')
+                    continue
+                if line == '@ignore':
+                    ignore = True  # The next entry is package metadata, not a file.
+                    continue
+                if not line or line.startswith('@'):
+                    continue
+                if ignore:
+                    ignore = False
+                    continue
+                # Installed packages record the logical prefix of this host.
+                if directory is None or not directory.is_relative_to(logical):
+                    return False
+                relative = _relative((directory / line).relative_to(logical).as_posix())
+                path = root / str(relative)
+                if path.is_symlink():
+                    continue
+                if not path.is_file():
+                    return False
+                loads = _loads(path, config)
+                if loads is None:
+                    continue
+                if names & {PurePosixPath(name).name for name in loads}:
+                    return False
+                images += 1
+            if not images:
+                return False
+        return True
+    except (SDKError, OSError, ValueError, RuntimeError, UnicodeDecodeError, KeyError):
         return False

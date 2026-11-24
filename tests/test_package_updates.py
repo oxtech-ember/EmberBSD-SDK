@@ -71,6 +71,61 @@ class PackageUpdateTests(unittest.TestCase):
             with self.assertRaisesRegex(SDKError, 'removes library providers'):
                 self.check([self.package('lib-2')], {'lib-1', 'consumer-1'})
 
+    def consumer_files(self, name, files):
+        """Install CONSUMER with FILES (relative path to bytes, or None for a missing file)."""
+        directory = self.database / name
+        directory.mkdir()
+        (directory / '+CONTENTS').write_text('@cwd ' + str(self.root) + '\n@name ' + name + '\n'
+            '@pkgdep lib>=1\n' + ''.join(path + '\n' for path in files) +
+            '@ignore\n+COMMENT\n@ignore\n+BUILD_INFO\n')
+        (directory / '+BUILD_INFO').write_text('')
+        for path, data in files.items():
+            if data is not None:
+                (self.root / path).parent.mkdir(parents=True, exist_ok=True)
+                (self.root / path).write_bytes(data)
+
+    def removal(self, removed, files):
+        self.installed('lib-1', providers=(removed,), dependents=('consumer-1',))
+        self.consumer_files('consumer-1', files)
+        self.replacement_archive('lib-2')
+        with patch('emberbsd_sdk.package_updates._matches', return_value=True):
+            self.check([self.package('lib-2')], {'lib-1', 'consumer-1'})
+
+    def test_provider_removal_is_allowed_when_no_consumer_image_loads_it(self):
+        # dynamic_elf() has the SONAME libfixture.so.1 and loads libc.so.12.
+        self.removal('lib/libremoved.so.1', {'bin/tool': dynamic_elf(), 'share/tool.txt': b'text'})
+
+    def test_consumer_image_loading_the_removed_provider_is_refused(self):
+        with self.assertRaisesRegex(SDKError, 'removes library providers'):
+            self.removal('lib/libc.so.12', {'bin/tool': dynamic_elf()})
+
+    def test_consumer_without_an_image_or_with_a_missing_file_is_refused(self):
+        for files in ({'bin/script': b'#!/bin/sh\n'}, {'bin/tool': dynamic_elf(), 'bin/gone': None}):
+            with self.subTest(files=sorted(files)):
+                self.setUp()
+                with self.assertRaisesRegex(SDKError, 'removes library providers'):
+                    self.removal('lib/libremoved.so.1', files)
+
+    def test_macho_consumer_of_the_retained_name_allows_versioned_removal(self):
+        # lz4 1.10 -> 1.11: the old dylib had its versioned file as install ID,
+        # and the consumer loads the retained name.
+        self.cfg['host'] = {'os': 'Darwin', 'arch': 'arm64', 'abi': 'native', 'runtime': 'native'}
+        for load, refused in (('@loader_path/../lib/libexample.1.dylib', False),
+                              ('@rpath/libexample.1.0.dylib', True)):
+            with self.subTest(load=load):
+                self.setUp()
+                self.cfg['host'] = {'os': 'Darwin', 'arch': 'arm64', 'abi': 'native', 'runtime': 'native'}
+                self.installed('lib-1', providers=('lib/libexample.1.0.dylib', 'lib/libexample.1.dylib'),
+                               dependents=('consumer-1',))
+                self.consumer_files('consumer-1', {'bin/tool': macho(0x100000000, loads=((0xc, load),))})
+                self.replacement_archive('lib-2', providers=('lib/libexample.1.1.dylib', 'lib/libexample.1.dylib'))
+                with patch('emberbsd_sdk.package_updates._matches', return_value=True):
+                    if refused:
+                        with self.assertRaisesRegex(SDKError, 'removes library providers'):
+                            self.check([self.package('lib-2')], {'lib-1', 'consumer-1'})
+                    else:
+                        self.check([self.package('lib-2')], {'lib-1', 'consumer-1'})
+
     def test_dependency_constraint_rejects_incompatible_replacement(self):
         self.installed('lib-1', dependents=('consumer-1',))
         self.installed('consumer-1', depends=('lib<2',))

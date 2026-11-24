@@ -9,7 +9,7 @@ import tarfile
 from .binary_release import _matches, _package_payload
 from .errors import SDKError
 from .package_install import install_paths
-from .package_abi import providers_preserved
+from .package_abi import consumers_unbound, providers_preserved
 from .release_signing import read_bytes
 
 
@@ -174,9 +174,11 @@ def check_updates(crypto, config, packages, archives, installed):
             if old_name in other.get('removes', ()):
                 providers |= set(_archive(archives[other['artifact']['id']])['providers'])
         if dependents and not providers_preserved(config, archives[package['artifact']['id']],
-                                                 old['providers'], providers):
+                                                 old['providers'], providers) and \
+                not consumers_unbound(config, database, sorted(dependents), old['providers'] - providers):
             # REQUIRES omits dlopen users. Preserve exact providers unless the
-            # payloads prove a versioned implementation of the retained SONAME.
+            # payloads prove a versioned implementation of the retained SONAME,
+            # or no file of an installed consumer loads a removed provider.
             raise SDKError(f'{old_name}: replacement removes library providers used by installed consumers; '
                            'a coordinated ABI update is required')
         for dependent in sorted(dependents):
