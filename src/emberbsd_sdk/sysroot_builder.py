@@ -31,6 +31,18 @@ NATIVE_ALIASES = (('host-cc', 'cc'), ('host-cxx', 'cxx'), ('python', 'python'))
 OPENSSH_LOCAL_GENERATOR_ROLES = ('autoconf', 'autom4te', 'gm4')
 
 
+def apply_os_make_options(flags, options):
+    """Replace the selected OS make options and preserve the other flags."""
+    flags = list(flags)
+    for value in options:
+        if not isinstance(value, str) or not re.fullmatch(r'MK[A-Z0-9_]+=(yes|no)', value):
+            raise SDKError(f'invalid OS make option {value}')
+        name = value.split('=', 1)[0]
+        flags = [flag for flag in flags if flag.split('=', 1)[0] != name]
+        flags.append(value)
+    return flags
+
+
 def _canonicalize_unique_flag_assignments(flags):
     """Sort unique make assignments for comparison; keep duplicates ordered."""
     if not isinstance(flags, list):

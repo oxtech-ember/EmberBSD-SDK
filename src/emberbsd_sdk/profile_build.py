@@ -341,7 +341,7 @@ def _source_option(variable):
 def _release(work, node, nodes, plan, config, prefix):
     """Build the sets of NODE with the OS release builder; return the set files."""
     from .os_release_builder import OSReleaseBuilder
-    from .sysroot_builder import SOURCE_OPTIONS
+    from .sysroot_builder import SOURCE_OPTIONS, SysrootBuilder
 
     class Release(OSReleaseBuilder):
         # A development build restarts the SDK-named LLVM stages that an
@@ -368,7 +368,9 @@ def _release(work, node, nodes, plan, config, prefix):
     material = [nodes[item]['input_key'] for item in RUNTIME_NODES]
     material += [f'{variable}={path}={build_profile.source_manifest_digest(path)}' for variable, path in sorted(sources.items())]
     # Other MK* options build other objects: make does not see a changed option.
-    material += mk
+    # Older contexts applied these options only to the final OS. Keep their
+    # keys when the LLVM stage defaults already select the requested values.
+    material += [flag if flag in SysrootBuilder.FLAGS else 'os+llvm:' + flag for flag in mk]
     tools_key = hashlib.sha256('\n'.join(material).encode()).hexdigest()[:16]
     # The release of the kept objects has one directory: the compiler flags
     # name the install directory (--sysroot and the prefix maps), and other

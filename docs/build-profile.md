@@ -40,8 +40,9 @@ come from the client configuration. Start from an example:
   the OS commit) itself.
   `os.mk` maps `MK*` options to `yes` or `no`. The plan refuses a name that
   no file of the OS `share/mk` has: make ignores such a name, but the changed
-  options would build all again in new directories. With sets, they replace the
-  options of the release profile; the release builder sets `MKCXX`,
+  options would build all again in new directories. For OS sets, the LLVM
+  headers, base libraries and final release use the selected options. For
+  example, `MKLDAP=no` omits OpenLDAP from the build. The release builder sets `MKCXX`,
   `MKLIBCXX`, `MKLLVM`, `MKLLVMRT`, `MKX11` and `MKREPRO` itself. A release
   with other `MK*` options uses other object, tools and LLVM directories,
   because make does not see a changed option in the kept objects: the first

@@ -17,6 +17,7 @@ from test_build_profile import PROFILE, ProfileFixture, git
 from emberbsd_sdk import profile_build, workspace
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.jsonio import write_json
+from emberbsd_sdk.sysroot_builder import SysrootBuilder
 
 NINJA = shutil.which('ninja')
 NEW_NINJA = bool(NINJA) and profile_build.ninja_version(NINJA) >= profile_build.NINJA_MINIMUM
@@ -152,11 +153,23 @@ class ReleaseNodeTests(ProfileFixture):
         self.plan_data = self.plan(profile, state=self.work, selected_sources=self.config['selected_sources'])
         self.nodes = {node['id']: node for node in self.plan_data['nodes']}
         write_json(self.work / profile_build.PLAN_FILE, self.plan_data, exclusive=False)
+        # If the stage defaults already supply this value, its key is the old
+        # final-only key. Leave existing objects there when the stages change.
+        with mock.patch.object(SysrootBuilder, 'FLAGS', [*SysrootBuilder.FLAGS, 'MKNTP=no']):
+            self.run_sets()
+        legacy = Path(self.calls[-1][0]['llvm-objects'])
+        legacy.mkdir(parents=True)
+        marker = legacy / 'kept'
+        marker.touch()
         self.run_sets()
         after = self.calls[-1][0]
         self.assertEqual(after['mk'], ['MKNTP=no'])
         for name in ('objects', 'tools', 'llvm-objects'):
             self.assertNotEqual(after[name], before[name], name)
+        self.assertNotEqual(Path(after['llvm-objects']), legacy)
+        self.assertTrue(marker.is_file())
+        self.run_sets()
+        self.assertEqual(self.calls[-1][0]['llvm-objects'], after['llvm-objects'])
 
     def test_a_new_os_commit_installs_to_the_same_release_directory(self):
         # The compiler flags name the install directory: the same directory

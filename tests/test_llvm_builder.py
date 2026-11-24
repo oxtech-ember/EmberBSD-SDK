@@ -685,6 +685,16 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
         with self.assertRaisesRegex(SDKError, 'resource directory'):
             runtime_paths(stage, bad)
 
+    def test_bootstrap_phases_use_os_make_options(self):
+        for phase in ('headers', 'base'):
+            with self.subTest(phase=phase):
+                options = {'mk': ['MKLDAP=no', 'MKMAN=yes']}
+                flags = LLVMPhaseBuilder(options, phase).FLAGS
+                self.assertIn('MKLDAP=no', flags)
+                self.assertIn('MKMAN=yes', flags)
+                self.assertNotIn('MKMAN=no', flags)
+                self.assertNotIn('MKLDAP=no', LLVMPhaseBuilder({}, phase).FLAGS)
+
     def test_base_and_final_have_distinct_runtime_policies(self):
         selected = {'compiler': '/compiler', 'llvm-source': '/source',
                     **runtime_paths('/stage', self.manifest())}

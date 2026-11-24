@@ -14,7 +14,7 @@ import shutil
 from .errors import SDKError
 from . import inventory, jsonio, libedit, llvm_runtime, llvm_runtime_install, native_toolset, prepared_refresh, process
 from .target_toolchain import validate_clang_identity
-from .sysroot_builder import (SysrootBuilder, native_host_flags,
+from .sysroot_builder import (SysrootBuilder, apply_os_make_options, native_host_flags,
                               gettext_target_host_flags, gnu_target_host_flags,
                               check_native_command_identity, validate_native_binding)
 from .targets import target_definition
@@ -76,11 +76,7 @@ def flags_for(target, compiler_family=None, x11=False, mk=()):
     if compiler_family == 'clang':
         replacements.pop('MKLIBSTDCXX')
     flags = common + [f'{k}={v}' for k, v in replacements.items()]
-    for value in mk:
-        name, _, setting = value.partition('=')
-        check(re.fullmatch(r'MK[A-Z0-9_]+', name) and setting in ('yes', 'no'), f'invalid OS make option {value}')
-        flags = [flag for flag in flags if flag.split('=', 1)[0] != name] + [value]
-    return flags
+    return apply_os_make_options(flags, mk)
 
 
 def gettext_libtool_command(paths, git, target, jobs, compiler_family, host_family):

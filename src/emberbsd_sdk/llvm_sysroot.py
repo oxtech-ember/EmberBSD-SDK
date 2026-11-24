@@ -10,7 +10,7 @@ import stat
 from . import inventory, jsonio, llvm_runtime, llvm_stage_inputs, paths, prepared_sources, process, workspace
 from .errors import SDKError
 from .elf import read_archive, read_elf_header
-from .sysroot_builder import SysrootBuilder
+from .sysroot_builder import SysrootBuilder, apply_os_make_options
 from .verification_receipts import RunReceipts
 from .llvm_runtime import runtime_paths
 
@@ -43,6 +43,7 @@ class LLVMPhaseBuilder(SysrootBuilder):
                  stage_inputs=None):
         if phase not in ('headers', 'base'):
             raise SDKError('unsupported LLVM OS bootstrap phase')
+        self.FLAGS = apply_os_make_options(self.FLAGS, options.get('mk', ()))
         super().__init__(options, receipts=receipts)
         self.llvm_phase = phase
         # Selects the stage key from the inputs; its destination is not used.
