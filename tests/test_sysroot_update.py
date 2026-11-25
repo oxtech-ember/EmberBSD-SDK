@@ -89,6 +89,20 @@ class SysrootUpdateTests(TemporaryCase):
         self.library('libfixture.so.1.4', soname=b'libfixturX.so.1')
         self.assertFalse(sysroot_update._required_target_file(self.new, '/lib/libfixture.so.1.3'))
 
+    def test_the_soname_link_target_decides_the_minor(self):
+        # The loader loads what libfixture.so.1 points to, not any newer file nearby.
+        self.library('libfixture.so.1.2')
+        self.library('libfixture.so.1.9')
+        (self.new / 'lib/libfixture.so.1').symlink_to('libfixture.so.1.2')
+        self.assertFalse(sysroot_update._required_target_file(self.new, '/lib/libfixture.so.1.3'))
+        # An absolute link is resolved inside the target, not on the build host.
+        (self.new / 'lib/libfixture.so.1').unlink()
+        (self.new / 'lib/libfixture.so.1').symlink_to('/lib/libfixture.so.1.9')
+        self.assertTrue(sysroot_update._required_target_file(self.new, '/lib/libfixture.so.1.3'))
+        # Malformed evidence refuses instead of failing the update.
+        (self.new / 'lib/libfixture.so.1.9').write_bytes(b'\x7fELF\x02\x01')
+        self.assertFalse(sysroot_update._required_target_file(self.new, '/lib/libfixture.so.1.3'))
+
     def test_verify_packages_accepts_a_newer_libc_minor_only(self):
         self.library('libfixture.so.1.225')
         (self.new / 'lib/libfixture.so.1').symlink_to('libfixture.so.1.225')

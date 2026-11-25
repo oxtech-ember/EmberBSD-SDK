@@ -105,6 +105,11 @@ def preserve_local_files(old, stage, original, updated, exclude):
 
 def _target_file(root, name):
     """Resolve absolute and relative target symlinks within the target root."""
+    return _resolve_target(root, name) is not None
+
+
+def _resolve_target(root, name):
+    """Return the regular file that target path NAME resolves to inside ROOT, or None."""
     path = PurePosixPath(name)
     if not path.is_absolute() or '..' in path.parts:
         raise SDKError(f'invalid required target path: {name}')
@@ -119,11 +124,11 @@ def _target_file(root, name):
         try:
             mode = item.lstat().st_mode
         except (FileNotFoundError, NotADirectoryError):
-            return False
+            return None
         if stat.S_ISLNK(mode):
             links += 1
             if links > 40:
-                return False
+                return None
             link = PurePosixPath(os.readlink(item))
             if link.is_absolute():
                 resolved, todo = [], list(link.parts[1:]) + todo
@@ -131,9 +136,10 @@ def _target_file(root, name):
                 todo = list(link.parts) + todo
         else:
             if todo and not stat.S_ISDIR(mode):
-                return False
+                return None
             resolved.append(part)
-    return root.joinpath(*resolved).is_file()
+    target = root.joinpath(*resolved)
+    return target if target.is_file() else None
 
 
 # A NetBSD shared library file: lib*.so.MAJOR.MINOR[.TEENY]; its SONAME is lib*.so.MAJOR.
@@ -145,9 +151,10 @@ def _required_target_file(root, name):
 
     pkgsrc records the full file name of each needed shared library, for
     example /lib/libc.so.12.224, while the dynamic linker loads its SONAME
-    libc.so.12. A minor version keeps the ABI of its major version, so a newer
-    minor satisfies the requirement when the SONAME link resolves in the
-    target and the library file declares that SONAME. Other files must exist.
+    libc.so.12. A minor version keeps the ABI of its major version, so the
+    requirement is met when the SONAME link resolves in the target to a file
+    of that major with an equal or newer minor that declares the SONAME.
+    Other files must exist.
     """
     if _target_file(root, name):
         return True
@@ -156,23 +163,15 @@ def _required_target_file(root, name):
     if match is None:
         return False
     stable, required = match.group(1), _minor(match.group(2))
-    if not _target_file(root, str(path.parent / stable)):
+    # The file that the dynamic linker loads, resolved inside the target.
+    target = _resolve_target(root, str(path.parent / stable))
+    loaded = _VERSIONED_LIBRARY.fullmatch(target.name) if target is not None else None
+    if loaded is None or loaded.group(1) != stable or _minor(loaded.group(2)) < required:
         return False
-    directory = root.joinpath(*path.parent.parts[1:])
-    if directory.is_symlink() or not directory.is_dir():
+    try:
+        return read_elf_dynamic(target).get('soname') == stable
+    except Exception:  # Unreadable or malformed evidence keeps the refusal.
         return False
-    for entry in os.listdir(directory):
-        candidate = _VERSIONED_LIBRARY.fullmatch(entry)
-        if (candidate is None or candidate.group(1) != stable or
-                _minor(candidate.group(2)) < required or
-                not _target_file(root, str(path.parent / entry))):
-            continue
-        try:
-            if read_elf_dynamic(directory / entry).get('soname') == stable:
-                return True
-        except (SDKError, OSError, ValueError):
-            continue
-    return False
 
 
 def _minor(text):
@@ -183,11 +182,16 @@ def verify_packages(installer, config):
     root = Path(config['sysroot'])
     _, db = install_paths(config)
     installed = installer.inventory(config)
+    provided = {}
     for row in installed:
         name = row['pkgname']
         info = db / name / '+BUILD_INFO'
         for line in info.read_text().splitlines():
-            if line.startswith('REQUIRES=') and not _required_target_file(root, line[9:]):
+            if not line.startswith('REQUIRES='):
+                continue
+            if line[9:] not in provided:
+                provided[line[9:]] = _required_target_file(root, line[9:])
+            if not provided[line[9:]]:
                 raise SDKError(f'{name}: new sysroot lacks required file {line[9:]}')
     return installed
 
