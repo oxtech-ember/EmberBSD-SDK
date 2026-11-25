@@ -188,12 +188,14 @@ def check_updates(crypto, config, packages, archives, installed):
         for dependent in sorted(dependents):
             for pattern in metadata(dependent)['depends']:
                 if matches(pattern, old_name) and not matches(pattern, new['name']):
-                    if not _coordinated(matches, archives, package, new, old_name,
-                                        replaced_by.get(dependent), position):
+                    successor = replaced_by.get(dependent)
+                    if not _coordinated(matches, archives, package, new, old_name, successor, position):
                         raise SDKError(f"{dependent}: dependency {pattern} does not accept {new['name']}; "
                                        'a coordinated component update is required')
                     # pkg_add -D: the dependent's own replacement follows in this batch.
-                    package['coordinated'] = True
+                    following = package.setdefault('coordinated', [])
+                    if successor['pkgname'] not in following:
+                        following.append(successor['pkgname'])
 
 
 def _coordinated(matches, archives, package, new, old_name, successor, position):
@@ -207,6 +209,9 @@ def _coordinated(matches, archives, package, new, old_name, successor, position)
     """
     if successor is None or position[id(successor)] < position[id(package)]:
         return False
+    base = new['name'].rsplit('-', 1)[0]
     requirements = _archive(archives[successor['artifact']['id']])['depends']
+    # Every requirement of this package, also one that matches neither version.
     return all(matches(pattern, new['name']) for pattern in requirements
-               if matches(pattern, old_name) or matches(pattern, new['name']))
+               if matches(pattern, old_name) or matches(pattern, new['name']) or
+               (pattern.startswith(base) and pattern[len(base):len(base) + 1] in tuple('-<>=[{')))

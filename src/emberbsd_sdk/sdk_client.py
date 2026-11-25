@@ -576,7 +576,7 @@ def apply_plan(plan, config, installer, cache, store, *, source_locked=False, re
                 automatic_states[repository] = package_automatic.plan(cfg,
                     [p for p in selected if p['action'] != 'installed'], plan['roots'])
         removed = set()
-        coordinated = []
+        coordinated = {}  # coordinated package -> its dependents still to install
         try:
             for package in pending:
                 cfg = config['repositories'][package['repository']]
@@ -596,14 +596,17 @@ def apply_plan(plan, config, installer, cache, store, *, source_locked=False, re
                     follow = {'dependents_follow': True} if package.get('coordinated') else {}
                     installer.install(archives[package['artifact']['id']], cfg, checked=True,
                                       configure=False, automatic=automatic == 'yes', **follow)
+                    for waiting in coordinated.values():
+                        waiting.discard(package['pkgname'])
                     if package.get('coordinated'):
-                        coordinated.append(package['pkgname'])
+                        coordinated[package['pkgname']] = set(package['coordinated'])
                     package_automatic.finish(installer.crypto, cfg, package['pkgname'])
                 else:
                     installer.install(archives[package['artifact']['id']], cfg, checked=True, configure=False)
-        except SDKError as exc:
-            if coordinated:
-                raise SDKError(f"{exc}; coordinated update of {', '.join(coordinated)} is incomplete: "
+        except (SDKError, OSError) as exc:
+            incomplete = sorted(name for name, waiting in coordinated.items() if waiting)
+            if incomplete:
+                raise SDKError(f"{exc}; coordinated update of {', '.join(incomplete)} is incomplete: "
                                'its dependents still have the old version; run the same install again') from exc
             raise
         finally:

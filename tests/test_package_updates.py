@@ -152,12 +152,26 @@ class PackageUpdateTests(unittest.TestCase):
         packages, provider, archives = self.coordinated_batch()
         with patch('emberbsd_sdk.package_updates._matches', side_effect=self.exact):
             check_updates(self.crypto, self.cfg, packages, archives, {'lib-1', 'consumer-1'})
-        self.assertTrue(provider['coordinated'])
+        self.assertEqual(provider['coordinated'], ['consumer-2'])
+        self.assertNotIn('coordinated', packages[1])
+
+    def test_rerun_after_an_interrupted_coordinated_update_replaces_the_dependent(self):
+        # lib-2 is installed with -D; consumer-1 still pins lib-1 exactly.
+        self.installed('lib-2', providers=('lib/libexample.so.1',), dependents=('consumer-1',))
+        self.installed('consumer-1', depends=('lib-1{,nb*}',))
+        consumer = self.make_archive(self.root / 'consumer-2.tgz', 'consumer-2', depends=('lib-2{,nb*}',))
+        packages = [dict(pkgname='lib-2', replaces=[], artifact={'id': 'lib'}, action='installed'),
+                    dict(pkgname='consumer-2', replaces=['consumer-1'], artifact={'id': 'consumer'},
+                         action='download')]
+        with patch('emberbsd_sdk.package_updates._matches', side_effect=self.exact):
+            check_updates(self.crypto, self.cfg, packages, {'consumer': consumer}, {'lib-2', 'consumer-1'})
         self.assertNotIn('coordinated', packages[1])
 
     def test_exact_dependency_without_a_following_replacement_is_refused(self):
         cases = (dict(successor=False), dict(successor_first=True),
-                 dict(successor_depends=('lib-1{,nb*}',)))
+                 dict(successor_depends=('lib-1{,nb*}',)),
+                 # A requirement that matches neither version is not satisfied by lib-2.
+                 dict(successor_depends=('lib>=3',)))
         for case in cases:
             with self.subTest(case=case):
                 self.setUp()

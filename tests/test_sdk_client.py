@@ -251,7 +251,7 @@ class ClientTests(unittest.TestCase):
     def test_coordinated_package_is_installed_with_its_dependents_following(self):
         with self._with_conflicting_split(installed_old=1, catalog_old=2):
             plan = self.plan(sets=['task'])
-        for fail in (False, True):
+        for fail in (None, 2, 3):
             events = []
 
             class RealInstaller(PackageInstaller):
@@ -263,13 +263,13 @@ class ClientTests(unittest.TestCase):
                     pass
                 def check_updates(self, packages, _archives, _config):
                     pending = [p for p in packages if p['action'] != 'installed']
-                    pending[0]['coordinated'] = True
+                    pending[0]['coordinated'] = [pending[1]['pkgname']]
                 def remove(self, name, _config):
                     pass
                 def install(self, path, _config, *, checked=False, configure=True, automatic=False,
                             dependents_follow=False):
                     events.append((path.name, dependents_follow))
-                    if fail and len(events) == 2:
+                    if len(events) == fail:
                         raise SDKError('pkg_add failed: fixture')
                 def rebuild_tree(self, _config):
                     pass
@@ -283,9 +283,15 @@ class ClientTests(unittest.TestCase):
                  patch('emberbsd_sdk.package_automatic.plan', return_value={'lib-1': 'yes', 'old-2': 'no', 'app-1': 'no'}), \
                  patch('emberbsd_sdk.package_automatic.prepare'), \
                  patch('emberbsd_sdk.package_automatic.finish'):
-                if fail:
+                if fail == 2:
+                    # The dependent that follows failed: the coordinated update is incomplete.
                     with self.assertRaisesRegex(SDKError, 'fixture; coordinated update of .* is incomplete'):
                         apply_plan(plan, self.cfg, RealInstaller(), self.cache, self.store)
+                elif fail == 3:
+                    # The dependent is installed: a later failure has no coordination note.
+                    with self.assertRaises(SDKError) as raised:
+                        apply_plan(plan, self.cfg, RealInstaller(), self.cache, self.store)
+                    self.assertNotIn('coordinated', str(raised.exception))
                 else:
                     apply_plan(plan, self.cfg, RealInstaller(), self.cache, self.store)
                     # Only the marked package lets its dependents follow (pkg_add -D).
