@@ -21,7 +21,8 @@ def main():
     parser.add_argument('--stage', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--package', type=Path, action='append', required=True)
-    parser.add_argument('--repository', required=True)
+    parser.add_argument('--repository', required=True,
+                        help='native repository ID from the signed release (for example, darwin-arm64)')
     parser.add_argument('--abi', required=True)
     parser.add_argument('--https-ca', default='etc/openssl/certs/ca-certificates.crt')
     parser.add_argument('--client-pyz', type=Path,

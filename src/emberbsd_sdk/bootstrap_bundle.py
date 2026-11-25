@@ -19,6 +19,7 @@ import zipfile
 from .binary_release import _package_payload
 from .darwin_runtime import read_macho_runtime
 from .errors import SDKError
+from .release_catalog import _pattern, _SLUG
 from .jsonio import read_json, write_json
 from .package_cache import directory_lock
 
@@ -740,6 +741,7 @@ def client_main(argv=None):
 def prepare(root, archives, crypto, *, trust, host, repository, install_name_tool, codesign, https_ca,
             client_pyz=None, client_sha256=None):
     """Assemble a fresh bundle; keep whole packages and one package database."""
+    _pattern(repository, _SLUG, 'repository id')
     # Verify and consume the same private copies throughout all three passes.
     # Copying before verification also rejects a source changed during copying.
     root = Path(root)

@@ -79,6 +79,10 @@ Then remove the unconfigured package and install its replacement. The
 
 ## Producing the archive
 
+Pass the native catalog ID from the signed release with `--repository`.
+For the public Darwin arm64 channel, use `--repository darwin-arm64`.
+The installed client uses this ID to select packages from the native catalog.
+
 `scripts/package-bootstrap.py --help` accepts complete Ports package archives,
 a selected native prefix, trusted release root and explicit Mach-O editing/ad-hoc
 signing tools. Every archive must have a verified signature and the current

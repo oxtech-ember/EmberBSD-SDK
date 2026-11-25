@@ -35,6 +35,14 @@ def fake_client(path, **kwargs):
 
 
 class BootstrapTests(unittest.TestCase):
+    def test_producer_rejects_a_url_as_the_catalog_id(self):
+        stage = self.work / 'bundle'
+        with self.assertRaisesRegex(SDKError, 'repository id'):
+            prepare(stage, [], None, trust=None, host={'os': 'Darwin', 'arch': 'arm64'},
+                    repository='https://packages.example.org', install_name_tool=None,
+                    codesign=None, https_ca='etc/ca.pem')
+        self.assertFalse(stage.exists())
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='ember-bootstrap-')
         self.addCleanup(self.temporary.cleanup)
