@@ -8,7 +8,7 @@ import shutil
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from test_core import TemporaryCase
+from test_core import TemporaryCase, dynamic_elf
 from emberbsd_sdk import inventory, sysroot_update
 from emberbsd_sdk.errors import SDKError
 
@@ -62,6 +62,50 @@ class SysrootUpdateTests(TemporaryCase):
         self.assertFalse(sysroot_update._target_file(self.new, '/etc/lib'))
         (self.new / 'etc/loop').symlink_to('loop')
         self.assertFalse(sysroot_update._target_file(self.new, '/etc/loop'))
+
+    def library(self, name, *, soname=b'libfixture.so.1'):
+        """Write lib/NAME: an ELF shared library fixture with SONAME."""
+        image = bytearray(dynamic_elf())
+        offset = image.index(b'libfixture.so.1')
+        image[offset:offset + len(soname)] = soname
+        (self.new / 'lib').mkdir(exist_ok=True)
+        (self.new / 'lib' / name).write_bytes(bytes(image))
+
+    def test_newer_minor_of_the_same_library_satisfies_requires(self):
+        self.library('libfixture.so.1.4')
+        (self.new / 'lib/libfixture.so.1').symlink_to('libfixture.so.1.4')
+        self.assertTrue(sysroot_update._required_target_file(self.new, '/lib/libfixture.so.1.3'))
+        self.assertTrue(sysroot_update._required_target_file(self.new, '/lib/libfixture.so.1.4'))
+        # A newer minor never satisfies a later one, and other files stay exact.
+        self.assertFalse(sysroot_update._required_target_file(self.new, '/lib/libfixture.so.1.5'))
+        self.assertFalse(sysroot_update._required_target_file(self.new, '/lib/libfixture.so.2.1'))
+        self.assertFalse(sysroot_update._required_target_file(self.new, '/etc/missing'))
+
+    def test_minor_substitution_needs_the_soname_link_and_soname(self):
+        self.library('libfixture.so.1.4')
+        # The dynamic linker loads the SONAME: without its link the library is not found.
+        self.assertFalse(sysroot_update._required_target_file(self.new, '/lib/libfixture.so.1.3'))
+        (self.new / 'lib/libfixture.so.1').symlink_to('libfixture.so.1.4')
+        self.library('libfixture.so.1.4', soname=b'libfixturX.so.1')
+        self.assertFalse(sysroot_update._required_target_file(self.new, '/lib/libfixture.so.1.3'))
+
+    def test_verify_packages_accepts_a_newer_libc_minor_only(self):
+        self.library('libfixture.so.1.225')
+        (self.new / 'lib/libfixture.so.1').symlink_to('libfixture.so.1.225')
+        package = self.new / 'usr/pkg/pkgdb/app-1'
+        package.mkdir(parents=True)
+        config = dict(sysroot=str(self.new), target={'arch': 'aarch64'}, prefix='/usr/pkg',
+                      pkgdb='/usr/pkg/pkgdb')
+
+        class Installer:
+            def inventory(self, _config):
+                return [{'pkgname': 'app-1'}]
+
+        (package / '+BUILD_INFO').write_text('REQUIRES=/lib/libfixture.so.1.224\n')
+        self.assertEqual(sysroot_update.verify_packages(Installer(), config), [{'pkgname': 'app-1'}])
+        (package / '+BUILD_INFO').write_text('REQUIRES=/lib/libfixture.so.1.226\n')
+        with self.assertRaisesRegex(SDKError, 'app-1: new sysroot lacks required file /lib/libfixture.so.1.226'):
+            sysroot_update.verify_packages(Installer(), config)
 
     def test_pkg_add_can_replace_original_payload_and_must_keep_local_files(self):
         prefix = self.old / 'usr/pkg'

@@ -6,11 +6,13 @@ from contextlib import ExitStack
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import stat
 import tempfile
 
 from . import application_toolchain, inventory, jsonio, prefix_lock, publication, sysroot_package, sysroot_transfer
+from .elf import read_elf_dynamic
 from .errors import SDKError
 from .release_delivery import _key, artifact_key
 from .release_s3 import HTTPStatusError
@@ -134,6 +136,49 @@ def _target_file(root, name):
     return root.joinpath(*resolved).is_file()
 
 
+# A NetBSD shared library file: lib*.so.MAJOR.MINOR[.TEENY]; its SONAME is lib*.so.MAJOR.
+_VERSIONED_LIBRARY = re.compile(r'(lib[^/]+\.so\.[0-9]+)\.([0-9]+(?:\.[0-9]+)*)')
+
+
+def _required_target_file(root, name):
+    """True when the target provides the REQUIRES file NAME.
+
+    pkgsrc records the full file name of each needed shared library, for
+    example /lib/libc.so.12.224, while the dynamic linker loads its SONAME
+    libc.so.12. A minor version keeps the ABI of its major version, so a newer
+    minor satisfies the requirement when the SONAME link resolves in the
+    target and the library file declares that SONAME. Other files must exist.
+    """
+    if _target_file(root, name):
+        return True
+    path = PurePosixPath(name)
+    match = _VERSIONED_LIBRARY.fullmatch(path.name)
+    if match is None:
+        return False
+    stable, required = match.group(1), _minor(match.group(2))
+    if not _target_file(root, str(path.parent / stable)):
+        return False
+    directory = root.joinpath(*path.parent.parts[1:])
+    if directory.is_symlink() or not directory.is_dir():
+        return False
+    for entry in os.listdir(directory):
+        candidate = _VERSIONED_LIBRARY.fullmatch(entry)
+        if (candidate is None or candidate.group(1) != stable or
+                _minor(candidate.group(2)) < required or
+                not _target_file(root, str(path.parent / entry))):
+            continue
+        try:
+            if read_elf_dynamic(directory / entry).get('soname') == stable:
+                return True
+        except (SDKError, OSError, ValueError):
+            continue
+    return False
+
+
+def _minor(text):
+    return tuple(int(part) for part in text.split('.'))
+
+
 def verify_packages(installer, config):
     root = Path(config['sysroot'])
     _, db = install_paths(config)
@@ -142,7 +187,7 @@ def verify_packages(installer, config):
         name = row['pkgname']
         info = db / name / '+BUILD_INFO'
         for line in info.read_text().splitlines():
-            if line.startswith('REQUIRES=') and not _target_file(root, line[9:]):
+            if line.startswith('REQUIRES=') and not _required_target_file(root, line[9:]):
                 raise SDKError(f'{name}: new sysroot lacks required file {line[9:]}')
     return installed
 

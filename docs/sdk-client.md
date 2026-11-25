@@ -196,8 +196,12 @@ The update selects that target's installed packages from the authenticated
 catalog. It imports the signed base in a sibling directory, preserves package
 registrations and local changes, and applies package revisions there. It checks
 required target libraries and the LLVM runtime before it exchanges the two
-directories. A conflicting local file, missing required library, incompatible
-compiler binding, or active build leaves the original installation available.
+directories. A required shared library `lib*.so.MAJOR.MINOR` is also provided by
+a newer minor of the same major version when its SONAME `lib*.so.MAJOR` resolves
+in the new base: pkgsrc records the full file name, for example
+`/lib/libc.so.12.224`, while the dynamic linker loads the SONAME. A conflicting
+local file, missing required library, incompatible compiler binding, or active
+build leaves the original installation available.
 The update preserves configured compiler commands and checks their runtime selection.
 Use the matching host compiler for that target. Use `install --target` to add
 compiler commands to a prefix that does not have a target binding.
