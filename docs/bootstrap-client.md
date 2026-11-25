@@ -97,7 +97,9 @@ do not then rewrite the installed cache files; `-B` is not an installation rule.
 
 Publish the archive as a `bootstrap` artifact in the same signed release as its
 component catalog; [S3 publication](s3-distribution.md) replaces the previous
-current. The bootstrap archive currently occupies approximately 39 MB.
+current. Read the Darwin `bootstrap` record in the signed release to plan disk
+space. `size` gives the download size in bytes. `unpacked_size` gives the total
+size of regular files in the archive.
 
 ## Prefix-independent component packages
 

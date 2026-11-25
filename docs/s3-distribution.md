@@ -302,16 +302,17 @@ Callers close the transport after its requests complete.
 The current native catalog contains fetch, OpenSSL, mksh, digest, nawk, nbsed,
 nbpatch, mktools and cwrappers for Darwin arm64, alongside the
 [self-contained initial SDK](bootstrap-client.md). Select `host-fetch` or
-`sdk-source-tools`; existing bootstrap dependencies are reused. On a fresh
-bootstrap, source tools add seven packages with a 402,470-byte download and
-1,513,876 unpacked bytes. Repeating the installation downloads nothing.
-The bootstrap archive is 38,862,758 bytes (117,540,506 bytes of regular files),
-including 16 whole runtime packages and the client. It requires macOS 27+,
+`sdk-source-tools` to reuse installed bootstrap dependencies. In the validation
+run with 16 bootstrap packages, source tools added seven packages with a
+402,470-byte download and 1,513,876 unpacked bytes. Repeating the installation
+downloaded nothing. That bootstrap archive was 38,862,758 bytes and contained
+117,540,506 bytes of regular files. The Darwin arm64 bootstrap requires macOS 27+,
 with no preinstalled Python, compiler or SDK. First installation, signed fetch
 addition and HTTPS execution are checked with producer-prefix reads denied.
 Compiler acquisition, target sysroot delivery and EmberBSD execution remain
 separate acceptance work. The [current pointer](https://emberbsd-pkg.oxteam.me/current.p7m)
-selects this one release; displaced packages and previous metadata are removed.
+selects the active release. Its signed artifact records give the sizes. The publisher removes
+displaced packages and previous metadata.
 
 Tests cover conditional publication, interrupted upload and cleanup, version
 replacement, unchanged archive reuse, competing writers, current changing
