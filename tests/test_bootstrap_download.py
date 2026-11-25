@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 EmberBSD contributors.
 """Exercise the bootstrap downloader against interrupted HTTPS transfers."""
+import json
 import os
 from pathlib import Path
 import re
 import socket
 import ssl
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -18,6 +20,31 @@ PAYLOAD = b'EmberBSD bootstrap retry\x00payload\n'
 
 
 class BootstrapDownloadTest(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'darwin', 'the first installer uses macOS tools')
+    def test_select_one_bootstrap_from_the_verified_manifest(self):
+        source = INSTALLER.read_text()
+        helper = source[source.index('bootstrap_index() {'):source.index('verify() {')]
+        host = dict(os='Darwin', arch='arm64', abi='macos-27.0', runtime='libSystem')
+        archive = dict(kind='bootstrap', host=host, path='bootstrap/host.tar.gz')
+        others = [dict(archive, kind='package'), dict(archive, path='bootstrap/client.pyz')]
+        for key in host:
+            others.append(dict(archive, host={**host, key: 'other'}))
+        cases = [(others, 'no self-contained bootstrap'), (others + [archive], None),
+                 ([archive, *others, archive], 'ambiguous bootstrap selection')]
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / 'release.json'
+            for entries, error in cases:
+                with self.subTest(error=error):
+                    manifest.write_text(json.dumps({'artifacts': entries}))
+                    result = subprocess.run(['/bin/sh', '-c', helper + 'bootstrap_index "$1"',
+                                             'sh', str(manifest)], capture_output=True, text=True)
+                    if error:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(error, result.stderr)
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout.strip(), str(len(others)))
+
     def test_installer_uses_only_current_channel_contract(self):
         source = INSTALLER.read_text()
         self.assertIn('emberbsd.channel.v2', source)

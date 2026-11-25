@@ -43,6 +43,27 @@ get_archive() {
     return "$status"
 }
 field() { /usr/bin/plutil -extract "$2" raw -o - "$1"; }
+bootstrap_index() {
+    /usr/bin/osascript -l JavaScript - "$1" <<'JAVASCRIPT'
+ObjC.import('Foundation');
+function run(args) {
+    const data = $.NSString.stringWithContentsOfFileEncodingError(args[0], $.NSUTF8StringEncoding, null);
+    const artifacts = JSON.parse(ObjC.unwrap(data)).artifacts;
+    if (!Array.isArray(artifacts)) throw Error('invalid release artifact list');
+    let selected = -1;
+    for (const [index, artifact] of artifacts.entries()) {
+        const host = artifact.host;
+        if (artifact.kind !== 'bootstrap' || !host || host.os !== 'Darwin' ||
+            host.arch !== 'arm64' || host.abi !== 'macos-27.0' || host.runtime !== 'libSystem' ||
+            typeof artifact.path !== 'string' || !artifact.path.endsWith('.tar.gz')) continue;
+        if (selected !== -1) throw Error('ambiguous bootstrap selection');
+        selected = index;
+    }
+    if (selected === -1) throw Error('current has no self-contained bootstrap for this host');
+    return String(selected);
+}
+JAVASCRIPT
+}
 verify() {
     /usr/bin/openssl cms -verify -binary -inform DER -in "$1" -CAfile "$temporary/root.pem" \
         -CApath "$temporary/empty-ca" -purpose smimesign -verify_depth 1 -x509_strict -check_ss_sig \
@@ -89,19 +110,7 @@ check_file "$temporary/release.p7m" "$(field "$temporary/current.json" release.s
 verify "$temporary/release.p7m" "$temporary/release.json"
 [ "$(field "$temporary/release.json" schema)" = emberbsd.release.v1 ] || fail "unsupported release format"
 [ "$(field "$temporary/release.json" release_id)" = "$(field "$temporary/current.json" release.id)" ] || fail "release identity differs"
-index=0; selected=
-while kind=$(field "$temporary/release.json" "artifacts.$index.kind" 2>/dev/null); do
-    if [ "$kind" = bootstrap ] && \
-        [ "$(field "$temporary/release.json" "artifacts.$index.host.os")" = Darwin ] && \
-        [ "$(field "$temporary/release.json" "artifacts.$index.host.arch")" = arm64 ] && \
-        [ "$(field "$temporary/release.json" "artifacts.$index.host.abi")" = macos-27.0 ] && \
-        [ "$(field "$temporary/release.json" "artifacts.$index.host.runtime")" = libSystem ]; then
-        path=$(field "$temporary/release.json" "artifacts.$index.path")
-        case "$path" in *.tar.gz) [ -z "$selected" ] || fail "ambiguous bootstrap selection"; selected=$index ;; esac
-    fi
-    index=$((index + 1))
-done
-[ -n "$selected" ] || fail "current has no self-contained bootstrap for this host"
+selected=$(bootstrap_index "$temporary/release.json") || fail "cannot select the bootstrap archive"
 path=$(field "$temporary/release.json" "artifacts.$selected.path")
 case "$path" in /*|*../*) fail "invalid bootstrap path" ;; esac
 get_archive "$base/current/host/darwin-arm64/${path##*/}" "$temporary/sdk.tar.gz"

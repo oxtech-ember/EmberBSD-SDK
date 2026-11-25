@@ -21,7 +21,8 @@ sh install-sdk.sh "$HOME/Downloads/ember-sdk"
 "$HOME/Downloads/ember-sdk/bin/ember-sdk" install --set sdk-source-tools
 ```
 
-The first installer uses macOS curl, LibreSSL, plutil and tar. Each initial
+The first installer uses macOS curl, LibreSSL, plutil, osascript and tar.
+It selects the host archive in one pass over the verified manifest. Each initial
 HTTPS transfer has finite connection and transfer timeouts and allows up to
 three curl retries for transient network failures. If an archive transfer ends
 with a partial file, the installer makes up to three further requests. It resumes
