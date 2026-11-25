@@ -6,6 +6,7 @@ from copy import deepcopy
 import gzip
 import hashlib
 import io
+import os
 from pathlib import Path
 import re
 import shutil
@@ -81,12 +82,41 @@ def _package_payload(stream):
             return _PayloadReader(stream, size)
 
 
-def inspect_package(path, target, *, require_native_relocation=False):
+def _producer_paths(prefixes):
+    values = set()
+    for value in prefixes:
+        path = Path(value)
+        if not path.is_absolute() or path == Path('/') or '..' in path.parts:
+            raise SDKError('forbidden prefix must be a non-root absolute path')
+        values.update((os.fsencode(path), os.fsencode(path.resolve())))
+    if not values:
+        return None, 0
+    # A sibling directory can start with the same characters.
+    pattern = b'(?:' + b'|'.join(map(re.escape, sorted(values))) + rb''')(?=[/\x00-\x20"'=:;,])'''
+    return re.compile(pattern), max(map(len, values))
+
+
+def _check_member_paths(stream, initial, pattern, overlap, name):
+    if pattern is None:
+        return
+    tail = initial
+    while True:
+        chunk = stream.read(1024 * 1024)
+        data = tail + (chunk or b'\0')
+        if pattern.search(data):
+            raise SDKError(f'package member contains a producer path: {name}')
+        if not chunk:
+            return
+        tail = data[-overlap:]
+
+
+def inspect_package(path, target, *, require_native_relocation=False, forbidden_prefixes=()):
     """Inspect producer tar payloads without extracting or executing them.
 
     Header checks catch foreign dynamic payloads. They do not replace the recipe's
     target linkage/ABI checks or inspect objects nested in static archives.
     """
+    pattern, overlap = _producer_paths(forbidden_prefixes)
     handle, before = open_regular(path)
     payload_size = 0
     contents_seen = False
@@ -94,12 +124,17 @@ def inspect_package(path, target, *, require_native_relocation=False):
         with handle, tarfile.open(fileobj=_package_payload(handle), mode='r|*') as archive:
             for member in archive:
                 name = member.name.removeprefix('./')
+                if pattern and pattern.search(os.fsencode(name + '\0' + member.linkname) + b'\0'):
+                    raise SDKError(f'package header contains a producer path: {name}')
                 if require_native_relocation and name == '+CONTENTS':
                     if contents_seen or not member.isfile() or member.size > 8 * 1024 * 1024:
                         raise SDKError('invalid or duplicate native package packing list')
                     contents_seen = True
                     from . import package_relocation
-                    lines = archive.extractfile(member).read().decode('utf-8').splitlines()
+                    stream = archive.extractfile(member)
+                    data = stream.read()
+                    _check_member_paths(stream, data, pattern, overlap, name)
+                    lines = data.decode('utf-8').splitlines()
                     independent = lines.count(package_relocation.INDEPENDENT)
                     markers = lines.count(package_relocation.MARKER)
                     declaration = package_relocation.declaration(lines)
@@ -109,10 +144,12 @@ def inspect_package(path, target, *, require_native_relocation=False):
                 if not member.isfile():
                     continue
                 stream = archive.extractfile(member)
+                initial = b''
                 if name == '+BUILD_INFO':
                     if member.size > 1024 * 1024:
                         raise SDKError('package build info exceeds size limit')
-                    fields = stream.read().decode('utf-8').splitlines()
+                    initial = stream.read()
+                    fields = initial.decode('utf-8').splitlines()
                     for line in fields:
                         key, separator, value = line.partition('=')
                         if (separator and key in ('CONFIGURE_ENV', 'CONFIGURE_ARGS', 'CMAKE_CONFIGURE_ARGS')
@@ -127,6 +164,7 @@ def inspect_package(path, target, *, require_native_relocation=False):
                     payload_size += member.size
                     if target:
                         header = stream.read(64)
+                        initial = header
                         if header[:4] in _MACHO or header.startswith(b'MZ'):
                             raise SDKError(f'foreign host binary in target package: {name}')
                         if header.startswith(b'\x7fELF'):
@@ -134,6 +172,7 @@ def inspect_package(path, target, *, require_native_relocation=False):
                             if machine is None:
                                 raise SDKError('target binary inspection does not support this architecture yet')
                             parse_elf_header(header, label=name, machine=machine)
+                _check_member_paths(stream, initial, pattern, overlap, name)
     except (tarfile.TarError, UnicodeError) as exc:
         raise SDKError(f'expected a pkg_tools producer archive: {path}: {exc}') from exc
     if require_native_relocation and not contents_seen:
@@ -165,7 +204,7 @@ def _package_license(record):
 
 
 def _prepare_repository(crypto, spec, ports_root, sources, trust, previous=None, *, additions=False,
-                        checksums=None):
+                        checksums=None, forbidden_prefixes=()):
     fields = ('id', 'host', 'target', 'graph', 'packages', 'sets')
     _object(spec, (*fields, 'roots') if isinstance(spec, dict) and 'roots' in spec else fields,
             'package repository')
@@ -301,7 +340,8 @@ def _prepare_repository(crypto, spec, ports_root, sources, trust, previous=None,
             signed = stream.read(8) == b'!<arch>\n'
         if signed:
             crypto.verify_package(path, trust)
-        if inspect_package(path, spec['target'], require_native_relocation=role == 'host') > size:
+        if inspect_package(path, spec['target'], require_native_relocation=role == 'host',
+                           forbidden_prefixes=forbidden_prefixes) > size:
             raise SDKError('package payload exceeds its declared unpacked size')
         verify_stable(path, before)
         old = previous.get(node['root'])
@@ -397,7 +437,7 @@ def _summary_bytes(records):
 
 
 def compose(crypto, spec, ports_root, output, identity, trust, *, current=None,
-            additions=False, statistics=None, checksums=None):
+            additions=False, statistics=None, checksums=None, forbidden_prefixes=()):
     """Sign selected packages, generate pkg_summary, then seal their release."""
     _object(spec, ('schema', 'release_id', 'created_at', 'sources', 'repositories'), 'package build')
     if spec['schema'] != 'emberbsd.package-build.v1' or not isinstance(spec['repositories'], list):
@@ -412,7 +452,8 @@ def compose(crypto, spec, ports_root, output, identity, trust, *, current=None,
         if old and (repo['host'], repo['target']) != (old['host'], old['target']):
             raise SDKError('current repository platform cannot change: ' + repo['id'])
         prepared.append(_prepare_repository(crypto, repo, ports_root, spec['sources'], trust,
-                                           old['entries'] if old else None, additions=additions, checksums=checksums))
+                                           old['entries'] if old else None, additions=additions,
+                                           checksums=checksums, forbidden_prefixes=forbidden_prefixes))
     names = [repo['id'] for repo, _, _ in prepared]
     if len(names) != len(set(names)):
         raise SDKError('duplicate repository identity')

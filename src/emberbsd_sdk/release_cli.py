@@ -143,6 +143,9 @@ def parser():
     for command in ('sign-package', 'verify-package', 'seal-release', 'verify-release',
                     'seal-channel', 'verify-channel'):
         sub = commands.add_parser(command)
+        if command == 'sign-package':
+            sub.add_argument('--forbid-prefix', action='append', default=[], metavar='DIRECTORY',
+                             help='reject an archive that contains this absolute producer path')
         sub.add_argument('--trust-root', type=Path, required=True,
                          help='previously provisioned root PEM; never trust a root from the channel')
         if command.startswith(('sign-', 'seal-')):
@@ -177,7 +180,7 @@ def main(argv=None):
             print(f'Created release certificate: {identity.certificate}')
         elif args.command == 'sign-package':
             from .binary_release import inspect_package
-            inspect_package(args.input, None)
+            inspect_package(args.input, None, forbidden_prefixes=args.forbid_prefix)
             crypto.sign_package(args.input, args.output, _identity(args.signer_directory), args.trust_root)
             print(f'Signed package: {args.output}')
         elif args.command == 'verify-package':

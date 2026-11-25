@@ -90,7 +90,7 @@ def packages_from_state(spec, state, packages):
 
 
 def update_packages(crypto, store, public, spec, ports_root, workdir, identity, trust,
-                    *, prefix='', ttl=7 * 86400, checksums=None):
+                    *, prefix='', ttl=7 * 86400, checksums=None, forbidden_prefixes=()):
     """Fetch, merge, seal and publish; resume a prepared release without signing again.
 
     A prepared operation is frozen until success. Use a new release_id for a
@@ -109,6 +109,8 @@ def update_packages(crypto, store, public, spec, ports_root, workdir, identity, 
         request = dict(schema='emberbsd.package-publication.v1', build=spec,
                        ports_root=str(Path(ports_root).absolute()), prefix=prefix,
                        checksums=checksums or {})
+        if forbidden_prefixes:
+            request['forbidden_prefixes'] = sorted(set(map(str, forbidden_prefixes)))
         request_path, result_path = workdir / 'request.json', workdir / 'result.json'
         previous_request = read_json(request_path) if request_path.exists() else None
         if previous_request is not None:
@@ -138,7 +140,8 @@ def update_packages(crypto, store, public, spec, ports_root, workdir, identity, 
             channel = parse_channel(crypto.verify_cms(read_bytes(snapshot / 'current.p7m'), trust), 'current')
             statistics = {}
             release = compose(crypto, spec, ports_root, output, identity, trust, current=snapshot,
-                              additions=True, statistics=statistics, checksums=checksums)
+                              additions=True, statistics=statistics, checksums=checksums,
+                              forbidden_prefixes=forbidden_prefixes)
             if not (output / 'release.p7m').is_file():
                 result = dict(channel=channel, statistics=statistics)
                 write_json(result_path, result, exclusive=False)

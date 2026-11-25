@@ -190,6 +190,28 @@ class BinaryReleaseTests(BinaryReleaseFixture):
                 with self.assertRaisesRegex(SDKError, key):
                     inspect_package(path, None)
 
+    def test_checks_package_payload_for_explicit_build_paths(self):
+        from emberbsd_sdk.binary_release import inspect_package
+        root = '/build/private'
+        # Split the offending path across two reads of a regular member.
+        payload = b'x' * (1024 * 1024 - 5) + b'/build/private/work/library.c'
+        bad = self.package('devel/library', payload=payload)
+        with self.assertRaisesRegex(SDKError, 'producer path'):
+            inspect_package(bad, None, forbidden_prefixes=[root])
+        good = self.package('devel/other', payload=b'/build/private-other/library.c')
+        inspect_package(good, None, forbidden_prefixes=[root])
+        with self.assertRaisesRegex(SDKError, 'absolute'):
+            inspect_package(good, None, forbidden_prefixes=['relative'])
+
+    def test_composition_rejects_build_path_before_signing(self):
+        from emberbsd_sdk.binary_release import compose
+        self.repository(app_options={'payload': b'panic at /producer/work/vendor/src/lib.rs'})
+        with patch.object(self.crypto, 'sign_package', wraps=self.crypto.sign_package) as sign:
+            with self.assertRaisesRegex(SDKError, 'producer path'):
+                compose(self.crypto, self.spec, self.ports, self.work / 'release',
+                        self.leaf, self.ca.certificate, forbidden_prefixes=['/producer/work'])
+            sign.assert_not_called()
+
     def test_sign_package_command_checks_public_metadata(self):
         from emberbsd_sdk import release_cli
         archive = self.package('devel/cli', extra_build_info='CONFIGURE_ENV=CC=cc\n')

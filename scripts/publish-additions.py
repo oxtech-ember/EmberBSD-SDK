@@ -36,6 +36,8 @@ def main(argv=None):
     parser.add_argument('--bucket', help='defaults to EMBERBSD_S3_BUCKET')
     parser.add_argument('--tls-ca-file', type=Path)
     parser.add_argument('--ttl', type=int, default=7 * 86400)
+    parser.add_argument('--forbid-prefix', action='append', default=[], metavar='DIRECTORY',
+                        help='reject new archives that contain this absolute producer path')
     args = parser.parse_args(argv)
     if bool(args.state) != bool(args.packages):
         parser.error('--state and --packages must be supplied together')
@@ -50,7 +52,8 @@ def main(argv=None):
             crypto = ReleaseCrypto(load_host_prefix(args.host_prefix, required_roles=('openssl', 'pkg_admin', 'pkg_info')))
             identity = SigningIdentity(args.signer_directory / 'certificate.pem', args.signer_directory / 'private-key.pem')
             result = update_packages(crypto, store, public, spec, args.ports_root, args.workdir,
-                                     identity, args.trust_root, prefix=args.prefix, ttl=args.ttl, checksums=checksums)
+                                     identity, args.trust_root, prefix=args.prefix, ttl=args.ttl,
+                                     checksums=checksums, forbidden_prefixes=args.forbid_prefix)
         counts = result['statistics']
         print('Packages: {added} added, {replaced} replaced, {reused} reused; '
               '{uploaded_packages} upload candidates ({upload_bytes} bytes); {built} built.'.format(**counts), file=sys.stderr)
