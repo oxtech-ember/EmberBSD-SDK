@@ -354,6 +354,17 @@ class DeliveryTests(unittest.TestCase):
         self.assertNotIn('generation', publish_release(self.crypto, self.store, self.public, new, self.signer,
                                        self.ca.certificate, expected_current=self.current_digest()))
 
+    def test_sparse_publish_checks_remote_size_before_changing_current(self):
+        first = self.release()
+        self.publish(first)
+        sparse = self.sparse_release('bad-reused-size', first)
+        expected = self.current_digest()
+        self.server.objects['/bucket/current/host/darwin-arm64/payload'] = b'x'
+        with self.assertRaisesRegex(SDKError, 'reused current object size differs'):
+            publish_release(self.crypto, self.store, self.public, sparse, self.signer,
+                            self.ca.certificate, expected_current=expected, reuse_current=True)
+        self.assertEqual(self.current_digest(), expected)
+
     def test_sparse_publish_reuses_exact_current_without_reading_payloads(self):
         first = self.release()
         self.publish(first)

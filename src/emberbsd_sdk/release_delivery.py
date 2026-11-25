@@ -2,6 +2,7 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Keep one signed current repository, replacing obsolete packages after publication."""
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 import hashlib
 import io
@@ -196,6 +197,8 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
     else:
         reusable_ids = set()
     keep = {release_key}
+    reused = []
+    uploads = []
     # Packages precede indexes. The release envelope is always uploaded last.
     for artifact in sorted(release['artifacts'], key=lambda item: item['kind'] == 'package-index'):
         key = _key(prefix, artifact_key(artifact, base))
@@ -204,10 +207,11 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
         if path is None:
             if artifact['id'] not in reusable_ids:
                 raise SDKError(f'local artifact disappeared before upload: {artifact["id"]}')
-            headers = public.head(key)
-            if int(headers['content-length']) != artifact['size']:
-                raise SDKError(f'reused current object size differs: {key}')
-            continue
+            reused.append((key, artifact['size']))
+        else:
+            uploads.append((artifact, key, path))
+    _check_reused_sizes(public, reused)
+    for artifact, key, path in uploads:
         handle, before = open_regular(path)
         with handle:
             content_type = 'application/json' if path.suffix == '.json' else 'application/octet-stream'
@@ -245,6 +249,21 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
     public.verify(channel_key, **_digest(signed))
     _clean_current(store, prefix, keep)
     return pointer
+
+
+def _check_reused_sizes(public, objects):
+    def check(key, size):
+        headers = public.head(key)
+        if int(headers['content-length']) != size:
+            raise SDKError(f'reused current object size differs: {key}')
+
+    pool = ThreadPoolExecutor(max_workers=8)
+    try:
+        pending = [pool.submit(check, key, size) for key, size in objects]
+        for request in as_completed(pending):
+            request.result()
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 def _local_if_present(root, relative):
