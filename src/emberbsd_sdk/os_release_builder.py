@@ -629,9 +629,27 @@ class OSReleaseBuilder(SysrootBuilder):
               type(result.get('reused')) is bool, 'pkgsrc export stage differs from the selected fingerprint')
         self.receipt['pkgsrc_export'] = dict(fingerprint=result['fingerprint'], reused=result['reused'])
 
+    @staticmethod
+    def check_release_host_tools(builder):
+        if 'gettext-source' not in builder.paths:
+            return
+        paths = builder.paths
+        family = builder.native_selection['compiler']['family']
+        tools = Path(paths['ports'], 'profiles/common-build-tools/cross/prepare-native-tools.py')
+
+        def verify():
+            with tempfile.TemporaryDirectory(prefix='ember-host-tools-') as work:
+                builder.capture(paths['python'], '-B', str(tools), '--sdk-source', paths['sdk-source'],
+                                'write', '--host-prefix', paths['host-prefix'], '--compiler-family',
+                                family, '--output', os.path.join(work, 'native.mk'))
+
+        builder.verification.once(('release-host-tools', str(tools), paths['sdk-source'],
+                                   paths['host-prefix'], family), verify)
+
     def preflight(self):
         check('destination' in self.options, 'OS release requires an explicit destination stage')
         super().preflight()
+        self.check_release_host_tools(self)
         if self.object_mode == 'fresh':
             # A published release is built once from new trees.
             check(self.contexts['objects'] is None,

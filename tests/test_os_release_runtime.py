@@ -3,12 +3,41 @@
 """Check where release producers import the common base C++ runtime."""
 
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from test_core import SDK_SOURCE
+from emberbsd_sdk.errors import SDKError
+from emberbsd_sdk.llvm_sysroot import LLVMCoordinator
 from emberbsd_sdk.os_release_builder import OSReleaseBuilder, producer_commands
+from emberbsd_sdk.sysroot_builder import SysrootBuilder
 
 
 class ReleaseRuntimeSequenceTests(unittest.TestCase):
+    def test_gettext_preflight_checks_the_ports_host_tools_before_building_libs(self):
+        builder = OSReleaseBuilder({'target': 'aarch64', 'compiler-family': 'clang', 'sdk': '/sdk',
+                                    'runtime-work': '/work/runtime', 'destination': '/stage'})
+        builder.paths = {'gettext-source': '/gettext', 'python': '/host/bin/python',
+                         'ports': '/ports', 'sdk-source': '/sdk', 'host-prefix': '/host'}
+        builder.native_selection = {'compiler': {'family': 'clang'}}
+        def prepared(coordinator):
+            coordinator.headers = builder
+
+        with patch.object(SysrootBuilder, 'preflight'), patch.object(LLVMCoordinator, 'prepare', prepared), \
+                patch.object(builder, 'capture', side_effect=SDKError('missing native tool: gsed')) as capture:
+            with self.assertRaisesRegex(SDKError, 'missing native tool: gsed'):
+                builder.preflight()
+            for plan in (False, True):
+                with self.subTest(plan=plan), self.assertRaisesRegex(SDKError, 'missing native tool: gsed'):
+                    builder.options['plan'] = plan
+                    builder.run()
+        args = capture.call_args.args
+        self.assertEqual(args[:-1], ('/host/bin/python', '-B',
+                         '/ports/profiles/common-build-tools/cross/prepare-native-tools.py',
+                         '--sdk-source', '/sdk', 'write', '--host-prefix', '/host',
+                         '--compiler-family', 'clang', '--output'))
+        self.assertFalse(Path(args[-1]).parent.exists())
+
     def test_release_reuse_normalizes_prepared_source_metadata(self):
         builder = object.__new__(OSReleaseBuilder)
         record = {'format': 'emberbsd-prepared-source', 'version': 1,

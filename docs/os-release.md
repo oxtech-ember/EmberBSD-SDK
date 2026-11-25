@@ -109,7 +109,9 @@ Completed LLVM bootstrap stages are keyed by their recorded inputs (see
 `native-os-routing.md`) and are reused in both modes.
 
 A profile that needs `EMBER_GETTEXT_SOURCE` builds the common cross-libtool from a
-pkgsrc export. When the selected Ports checkout has
+pkgsrc export. Before building the OS libraries, the SDK checks the host prefix
+with the same Ports tool that prepares cross-libtool. Install any missing host
+tool in that prefix. When the selected Ports checkout has
 `scripts/pkgsrc-export-stage.py`, preflight takes that export's Git fingerprint
 and selects `stages/pkgsrc-export/FINGERPRINT` under the SDK work root. The
 stage is created or verified as its own step before the first OS build

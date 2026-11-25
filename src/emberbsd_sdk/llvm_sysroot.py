@@ -405,6 +405,9 @@ class LLVMCoordinator:
 
     def run(self):
         self.prepare()
+        check_host = getattr(self.builder_type, 'check_release_host_tools', None)
+        if check_host and not self.options.get('c-foundation'):
+            check_host(self.headers)
         if self.options.get('plan'):
             phases = [
                 self.headers.receipt,
