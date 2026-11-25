@@ -221,7 +221,7 @@ class PackageInstaller:
         if not database.exists():
             return []
         result = subprocess.run([self.crypto.prefix.tool('pkg_info'), '-K', str(database), '-X', '-a'],
-            env={'PATH': self.crypto.prefix.path, 'LC_ALL': 'C'}, capture_output=True, timeout=60)
+            env={'PATH': self.crypto.prefix.path, 'LC_ALL': 'C'}, capture_output=True, timeout=600)
         if result.returncode and not (result.returncode == 1 and not result.stdout and not result.stderr):
             raise SDKError('cannot read installed package inventory: ' + result.stderr.decode('utf-8', 'replace'))
         packages = []
