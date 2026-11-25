@@ -3,7 +3,7 @@
 """Keep one signed current repository, replacing obsolete packages after publication."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import hashlib
 import io
 import os
@@ -17,7 +17,7 @@ import time
 from .binary_catalog import load_release_catalogs
 from .errors import SDKError
 from .jsonio import json_bytes, loads_json
-from .paths import open_regular, verify_stable
+from .paths import open_regular, stable_identity, verify_stable
 from .package_cache import directory_lock
 from .publication import publish_directory_noreplace
 from .release_catalog import (MAX_ENVELOPE, _relative, _pattern, _SLUG, _SHA256, CHANNEL_SCHEMA,
@@ -468,12 +468,43 @@ def _fetch_snapshot(crypto, public, trust, snapshot, prefix, repositories, chann
     return release
 
 
+def _artifact_directory(path, links=0):
+    """Resolve an absolute path through entries controlled by root or this user."""
+    directory = Path(path.anchor)
+    for part in path.parts[1:]:
+        entry = directory / part
+        info = entry.lstat()
+        if info.st_uid not in (0, os.geteuid()):
+            raise SDKError(f'untrusted artifact directory owner: {entry}')
+        if stat.S_ISLNK(info.st_mode):
+            if links >= 40:
+                raise SDKError('too many artifact directory links')
+            directory = _artifact_directory(directory / os.readlink(entry), links + 1)
+        elif not stat.S_ISDIR(info.st_mode) or (info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX):
+            raise SDKError(f'untrusted artifact directory: {entry}')
+        else:
+            directory = directory.parent if part == '..' else entry
+    return directory
+
+
 def fetch_artifact(crypto, public, trust, output, artifact_id, *, prefix=''):
     """Download one artifact from authenticated current and atomically replace output."""
     _pattern(artifact_id, _SLUG, 'artifact id')
     output = Path(output).absolute()
-    with directory_lock(output.parent / (output.name + '.sdk-lock')):
-        with release_snapshot(crypto, public, trust, output.parent, prefix=prefix) as (release, snapshot):
+    if output.name in ('', '..'):
+        raise SDKError('select an artifact output file')
+    # A privileged caller must select a path controlled by trusted owners.
+    parent = _artifact_directory(output.parent) if os.geteuid() == 0 else output.parent
+    with ExitStack() as opened:
+        directory = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        opened.callback(os.close, directory)
+        info = os.fstat(directory)
+        if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            raise SDKError('artifact output directory must be owned by the caller and writable only by its owner')
+        opened.enter_context(directory_lock(output.name + '.sdk-lock', parent_fd=directory))
+        # Metadata uses a private temporary directory. All destination access
+        # stays relative to the opened directory, including cleanup.
+        with release_snapshot(crypto, public, trust, None, prefix=prefix) as (release, snapshot):
             selected = [item for item in release['artifacts'] if item['id'] == artifact_id]
             if len(selected) != 1:
                 raise SDKError('artifact id is absent or ambiguous in current')
@@ -482,36 +513,36 @@ def fetch_artifact(crypto, public, trust, output, artifact_id, *, prefix=''):
             base = current['release']['path'].removesuffix('/release.p7m')
             key = _key(prefix, artifact_key(artifact, base))
             try:
-                before = output.lstat()
+                before = os.stat(output.name, dir_fd=directory, follow_symlinks=False)
                 if not stat.S_ISREG(before.st_mode):
                     raise SDKError('artifact output must be a regular file or absent')
             except FileNotFoundError:
                 before = None
-            fd, temporary = tempfile.mkstemp(prefix='.artifact-', dir=output.parent)
+            temporary = '.artifact-' + secrets.token_hex(16)
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=directory)
             try:
                 with os.fdopen(fd, 'wb') as stream:
                     public.verify(key, artifact['size'], artifact['sha256'], sink=stream)
-                    os.fchmod(stream.fileno(), stat.S_IMODE(before.st_mode) if before else 0o644)
+                    os.fchmod(stream.fileno(), before.st_mode & 0o777 if before else 0o644)
                     stream.flush()
                     os.fsync(stream.fileno())
                 try:
-                    after = output.lstat()
+                    after = os.stat(output.name, dir_fd=directory, follow_symlinks=False)
                 except FileNotFoundError:
                     after = None
                 if ((before is None) != (after is None) or
-                        (before is not None and (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) !=
-                         (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns))):
+                        (before is not None and stable_identity(before) != stable_identity(after))):
                     raise SDKError('artifact output changed during download')
-                directory = os.open(output.parent, os.O_RDONLY)
+                if not os.path.samestat(info, parent.stat()):
+                    raise SDKError('artifact output directory changed during download')
+                os.replace(temporary, output.name, src_dir_fd=directory, dst_dir_fd=directory)
                 try:
-                    os.replace(temporary, output)
-                    try:
-                        os.fsync(directory)
-                    except OSError as exc:
-                        raise SDKError(f'artifact installed, but output directory sync failed: {exc}') from exc
-                finally:
-                    os.close(directory)
+                    os.fsync(directory)
+                except OSError as exc:
+                    raise SDKError(f'artifact installed, but output directory sync failed: {exc}') from exc
             finally:
-                if os.path.lexists(temporary):
-                    os.unlink(temporary)
+                try:
+                    os.unlink(temporary, dir_fd=directory)
+                except FileNotFoundError:
+                    pass
             return artifact

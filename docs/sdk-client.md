@@ -99,6 +99,26 @@ Successful installs remember the union of
 explicit roots in `selection.json`; pkg_tools remains the version/file owner.
 No packages are removed merely because a later task selects fewer roots.
 
+### Download one release artifact
+
+On an EmberBSD device with the client zipapp installed, set `artifact_id` to
+the exact artifact ID from the release instructions for your board. On FFS,
+a private directory under your home is a suitable download location.
+
+```sh
+mkdir -m 700 "$HOME/os-download"
+/usr/pkg/bin/python3.15 /usr/local/libexec/ember-sdk.pyz \
+  --config /usr/local/etc/ember-sdk.json fetch-artifact \
+  --artifact "$artifact_id" --output "$HOME/os-download/boot-set.tar.xz"
+```
+
+The ID selects one file from the signed current release across all platforms.
+The command verifies the channel signature and expiry, the release signature,
+and the file size and SHA256. It then creates the output file or atomically
+replaces an existing regular file and prints the signed artifact record as JSON.
+Download and verification failures preserve an existing file. Installation and
+activation are separate steps.
+
 ## Installed versions and updates
 
 `installed` reads each configured pkgdb with one `pkg_info -X -a` query.

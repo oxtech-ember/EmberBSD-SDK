@@ -5,6 +5,7 @@
 import hashlib
 import importlib.util
 import io
+import json
 import os
 import stat
 from pathlib import Path
@@ -22,6 +23,7 @@ from emberbsd_sdk.jsonio import json_bytes
 from emberbsd_sdk.release_cli import seal_release
 from emberbsd_sdk.release_catalog import parse_release
 import emberbsd_sdk.release_delivery as release_delivery
+from emberbsd_sdk import sdk_client
 from emberbsd_sdk.release_signing import ReleaseCrypto
 from emberbsd_sdk.release_delivery import publish_release, fetch_release, fetch_artifact, release_snapshot
 
@@ -62,9 +64,9 @@ class DeliveryTests(unittest.TestCase):
     def setUp(self):
         http_fixture.HTTPTests.setUp(self)
         self.work = self.root / self._testMethodName
-        self.work.mkdir()
+        self.work.mkdir(mode=0o700)
 
-    def release(self, name='one', payload=b'payload' * 1000, index=b'index fixture'):
+    def release(self, name='one', payload=b'payload' * 1000, index=b'index fixture', *, target=None):
         directory = self.work / name
         directory.mkdir()
         (directory / 'payload').write_bytes(payload)
@@ -76,6 +78,8 @@ class DeliveryTests(unittest.TestCase):
                      for identity, path, kind, size in (
                          ('bootstrap', 'payload', 'bootstrap', len(payload)),
                          ('index', 'host/pkg_summary.gz', 'package-index', len(index)))]
+        if target is not None:
+            artifacts[0].update(id='os-boot', kind='os-set', host=None, target=target)
         draft = dict(schema='emberbsd.release.v1', release_id=name, created_at=int(time.time()),
                      sources={key: 'a' * 40 for key in ('os', 'ports', 'sdk')}, artifacts=artifacts)
         seal_release(self.crypto, json_bytes(draft), directory, self.signer, self.ca.certificate,
@@ -261,11 +265,13 @@ class DeliveryTests(unittest.TestCase):
         self.publish(self.release())
         output = self.work / 'client.pyz'
         output.write_bytes(b'old-client')
+        output.chmod(0o6750)
         old_inode = output.stat().st_ino
         result = fetch_artifact(self.crypto, self.public, self.ca.certificate, output, 'bootstrap')
         self.assertEqual(result['id'], 'bootstrap')
         self.assertEqual(output.read_bytes(), b'payload' * 1000)
         self.assertNotEqual(output.stat().st_ino, old_inode)
+        self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o750)
         output.write_bytes(b'preserve-me')
         original = self.server.objects['/bucket/current/host/darwin-arm64/payload']
         for corrupt in (b'bad', b'x' * len(original)):
@@ -289,6 +295,70 @@ class DeliveryTests(unittest.TestCase):
             fetch_artifact(self.crypto, self.public, self.ca.certificate, link, 'bootstrap')
         self.assertEqual(output.read_bytes(), b'preserve-me')
         self.assertTrue(link.is_symlink())
+
+    def test_fetch_artifact_in_an_image_build_directory(self):
+        self.publish(self.release())
+        # OS ember/image/package-updates.py installs the client in a 0755
+        # libexec below a private work directory on the build volume.
+        volume = self.work / 'build'
+        volume.mkdir()
+        volume.chmod(0o775 if os.geteuid() else 0o755)
+        work = volume / 'private'
+        work.mkdir(mode=0o700)
+        libexec = work / 'root/usr/local/libexec'
+        libexec.mkdir(parents=True)
+        libexec.chmod(0o755)
+        output = libexec / 'ember-sdk.pyz'
+        fetch_artifact(self.crypto, self.public, self.ca.certificate, output, 'bootstrap')
+        self.assertEqual(output.read_bytes(), b'payload' * 1000)
+        libexec.chmod(0o777)
+        with self.assertRaisesRegex(SDKError, 'artifact.*directory'):
+            fetch_artifact(self.crypto, self.public, self.ca.certificate, output, 'bootstrap')
+        self.assertFalse((libexec / 'ember-sdk.pyz.sdk-lock').exists())
+
+    def test_fetch_artifact_detects_a_moved_destination_directory(self):
+        self.publish(self.release())
+        destination = self.work / 'download'
+        destination.mkdir()
+        previous = self.work / 'previous'
+        verify = self.public.verify
+        def move_after_download(key, *args, **kwargs):
+            value = verify(key, *args, **kwargs)
+            if key.endswith('/payload'):
+                destination.rename(previous)
+                destination.mkdir()
+            return value
+        with patch.object(self.public, 'verify', side_effect=move_after_download), self.assertRaisesRegex(
+                SDKError, 'directory changed'):
+            fetch_artifact(self.crypto, self.public, self.ca.certificate, destination / 'out', 'bootstrap')
+        self.assertEqual(list(previous.iterdir()), [])
+        self.assertEqual(list(destination.iterdir()), [])
+
+    def test_client_fetches_one_os_set_without_package_state(self):
+        target = dict(arch='aarch64', triplet='aarch64--netbsd', abi='netbsd-11', runtime='libc++')
+        payload = b'boot set'
+        publish_release(self.crypto, self.store, self.public, self.release(payload=payload, target=target),
+                        self.signer, self.ca.certificate, prefix='device')
+        config = dict(schema='emberbsd.sdk-client.v1', host_prefix=os.environ['EMBERBSD_TEST_HOST_PREFIX'],
+                      url=self.url + '/bucket', url_prefix='device', trust_root=str(self.ca.certificate),
+                      state_dir=str(self.work / 'state'), cache_dir=str(self.work / 'cache'),
+                      repositories={'netbsd-aarch64': dict(target=target, os_version='11.0',
+                          sysroot=str(self.work / 'sysroot'), prefix='/usr/pkg', pkgdb='/usr/pkg/pkgdb')})
+        output = self.work / 'boot.tar.xz'
+        args = ['fetch-artifact', '--artifact', 'os-boot', '--output', str(output)]
+        stdout = io.BytesIO()
+        with patch.object(sys, 'stdout', SimpleNamespace(buffer=stdout)):
+            self.assertEqual(sdk_client.main(args, default_config=config), 0)
+        self.assertEqual(json.loads(stdout.getvalue())['target'], target)
+        self.assertEqual(output.read_bytes(), payload)
+        self.server.objects['/bucket/device/current/target/aarch64/payload'] = b'corrupt!'
+        for extra, error in (([], 'bytes differ'), (['--target', 'amd64'], 'takes only')):
+            with self.subTest(extra=extra), patch.object(sys, 'stderr', io.StringIO()) as stderr:
+                self.assertEqual(sdk_client.main(args + extra, default_config=config), 1)
+                self.assertIn(error, stderr.getvalue())
+                self.assertEqual(output.read_bytes(), payload)
+        for name in ('sysroot', 'state', 'cache'):
+            self.assertFalse((self.work / name).exists())
 
     def test_fetch_artifact_busy_lock_preserves_output(self):
         self.publish(self.release())

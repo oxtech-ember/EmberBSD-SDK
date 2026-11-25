@@ -2,10 +2,11 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Shared archive cache. Callers hold its directory lock through installation."""
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import fcntl
 import hashlib
 import os
+import stat
 from pathlib import Path
 import re
 import shutil
@@ -15,62 +16,81 @@ from .paths import open_regular, verify_stable
 from .release_s3 import remaining_ranges
 
 
-def _hold(path, flags):
+def _hold(directory, flags, private):
     """Hold the kernel lock on the owner file; the kernel drops it with a dead owner."""
     try:
-        descriptor = os.open(path / 'held', flags | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        descriptor = os.open('held', flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory)
     except FileNotFoundError:
         return None
     try:
+        info = os.fstat(descriptor)
+        if private and (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1):
+            raise SDKError('invalid artifact writer lock file')
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         # A released lock unlinks this file before it closes the descriptor.
-        if os.fstat(descriptor).st_ino != os.stat(path / 'held').st_ino:
+        if not os.path.samestat(info, os.stat('held', dir_fd=directory, follow_symlinks=False)):
             raise FileNotFoundError
     except OSError:
         os.close(descriptor)
         return None
+    except BaseException:
+        os.close(descriptor)
+        raise
     return descriptor
 
 
 @contextmanager
-def directory_lock(path):
+def directory_lock(path, *, parent_fd=None):
     """Directory lock shared with other owners; only a dead owner's own lock is reclaimed.
 
     A foreign owner (cross-bulk, a source-wave controller) records its identity
-    without ``held``; such a lock is never removed here.
+    without ``held``; such a lock is never removed here. For artifact outputs,
+    lock a single entry of the already open destination directory.
     """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    held = None
-    for _ in range(2):
-        try:
-            path.mkdir()
-        except FileExistsError:
-            held = _hold(path, os.O_RDWR)
-            if held is not None or path.exists():
+    if parent_fd is None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    elif path.name != str(path):
+        raise SDKError('an anchored lock needs a single name')
+    with ExitStack() as stack:
+        for _ in range(2):
+            try:
+                os.mkdir(path, 0o700 if parent_fd is not None else 0o777, dir_fd=parent_fd)
+                flags = os.O_RDWR | os.O_CREAT
+            except FileExistsError:
+                flags = os.O_RDWR
+            try:
+                directory = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+            except FileNotFoundError:
+                continue
+            stack.callback(os.close, directory)
+            info = os.fstat(directory)
+            if parent_fd is not None and (info.st_uid != os.geteuid() or info.st_mode & 0o022):
+                raise SDKError('untrusted artifact writer lock directory')
+            held = _hold(directory, flags, parent_fd is not None)
+            if held is not None:
                 break
-            continue
-        held = _hold(path, os.O_RDWR | os.O_CREAT)
-        break
-    if held is None:
-        raise SDKError(f'writer is busy: {path}; a build owns this lock and its controller is recorded there')
-    try:
-        (path / 'pid').write_text(str(os.getpid()) + '\n')
-        yield
-    finally:
-        _release(path, held)
-
-
-def _release(path, held):
-    """Remove owner files only while holding their kernel lock."""
-    if held is None:
-        return
-    try:
-        (path / 'held').unlink(missing_ok=True)
-        (path / 'pid').unlink(missing_ok=True)
-    finally:
-        os.close(held)
-    path.rmdir()
+            raise SDKError(f'writer is busy: {path}; a build owns this lock and its controller is recorded there')
+        else:
+            raise SDKError(f'writer is busy: {path}')
+        stack.callback(os.close, held)
+        try:
+            # Replace a stale PID entry without following or writing its old inode.
+            try:
+                os.unlink('pid', dir_fd=directory)
+            except FileNotFoundError:
+                pass
+            descriptor = os.open('pid', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644, dir_fd=directory)
+            with os.fdopen(descriptor, 'w') as stream:
+                stream.write(str(os.getpid()) + '\n')
+            yield
+        finally:
+            for name in ('pid', 'held'):
+                try:
+                    os.unlink(name, dir_fd=directory)
+                except FileNotFoundError:
+                    pass
+            os.rmdir(path, dir_fd=parent_fd)
 
 
 def check_space(path, required):

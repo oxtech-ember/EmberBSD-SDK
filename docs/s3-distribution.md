@@ -243,13 +243,17 @@ An ordinary missing file, invalid signature or corrupt bytes is an error. Public
 snapshot export uses atomic no-replace directory publication; client reads and
 artifact downloads use private temporary metadata cleaned up after the operation.
 
-Download one artifact selected by its exact ID from authenticated current:
+Download one artifact by its exact ID from authenticated current. Use a
+directory owned by the calling user. Only its owner may write to it. For a
+privileged download, select a path controlled by root. On EmberBSD, a private
+work directory on FFS is suitable.
 
 ```sh
+mkdir -m 700 "$HOME/client-download"
 python3 scripts/s3-release.py --host-prefix /work/host-pkg-llvm fetch-artifact \
   --url https://emberbsd-pkg.oxteam.me \
   --trust-root trust/emberbsd-release-root.pem \
-  --artifact bootstrap-netbsd-amd64-client --output /work/ember-sdk.pyz
+  --artifact bootstrap-netbsd-amd64-client --output "$HOME/client-download/ember-sdk.pyz"
 ```
 
 For an EmberBSD aarch64 device, select `bootstrap-netbsd-aarch64-client`.

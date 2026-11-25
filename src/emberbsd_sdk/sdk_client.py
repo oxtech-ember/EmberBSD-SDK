@@ -28,7 +28,7 @@ from .package_cache import PackageCache, check_space, directory_lock
 from .package_install import PackageInstaller, install_mode, install_paths, target_sysroot
 from .package_updates import reuse_compatible_dependencies
 from .package_selection import _package_sets, _parse_root, _read_roots
-from .release_delivery import MetadataCache, artifact_key, release_snapshot, _key
+from .release_delivery import MetadataCache, artifact_key, fetch_artifact, release_snapshot, _key
 from .release_signing import ReleaseCrypto
 from .release_s3 import HTTPStore, HTTPStatusError
 
@@ -1115,7 +1115,9 @@ def main(argv=None, *, default_config=None):
     parser.add_argument('--config', type=Path, required=default_config is None)
     parser.add_argument('command', choices=('list', 'show', 'plan', 'source-plan', 'profile-plan', 'profile-build',
                                             'profile-node', 'catalog', 'install', 'installed', 'update',
-                                            'auto-update', 'cache-clean'))
+                                            'auto-update', 'cache-clean', 'fetch-artifact'))
+    parser.add_argument('--artifact', help='fetch-artifact: exact signed artifact ID in current')
+    parser.add_argument('--output', type=Path, help='fetch-artifact: local output file')
     parser.add_argument('--profile', type=Path, help='build profile for profile-plan and profile-build')
     parser.add_argument('--explain', action='store_true', help='profile-build: let Ninja explain each rebuild')
     parser.add_argument('--node', help=argparse.SUPPRESS)
@@ -1129,6 +1131,14 @@ def main(argv=None, *, default_config=None):
     parser.add_argument('--cache-dir', type=Path, help='read-only command cache directory; does not change the configuration')
     args = parser.parse_args(argv)
     try:
+        fetching = args.command == 'fetch-artifact'
+        if fetching:
+            if not args.artifact or args.output is None:
+                raise SDKError('fetch-artifact requires --artifact and --output')
+            if args.sets or args.roots or args.target is not None or args.state_dir or args.cache_dir:
+                raise SDKError('fetch-artifact takes only --artifact and --output')
+        elif args.artifact is not None or args.output is not None:
+            raise SDKError('--artifact and --output require fetch-artifact')
         if args.installed and args.command != 'plan':
             raise SDKError('--installed requires plan')
         updating = args.command in ('update', 'auto-update') or args.installed
@@ -1170,10 +1180,12 @@ def main(argv=None, *, default_config=None):
                 raise SDKError('source-plan uses configured source.state and target; no binary state/cache/sysroot options')
             return plan_source_selection(config, sets=args.sets, roots=args.roots)
         config = _read_only_directories(config, args.state_dir, args.cache_dir, args.command)
-        state = Path(config['state_dir'])
-        state.mkdir(parents=True, exist_ok=True)
-        cache = PackageCache(config['cache_dir'])
-        with directory_lock(state / 'client.lock'), ExitStack() as temporary:
+        with ExitStack() as temporary:
+            if not fetching:
+                state = Path(config['state_dir'])
+                state.mkdir(parents=True, exist_ok=True)
+                cache = PackageCache(config['cache_dir'])
+                temporary.enter_context(directory_lock(state / 'client.lock'))
             if args.command == 'cache-clean':
                 with directory_lock(cache.root / '.lock'):
                     MetadataCache(cache.root / 'metadata').keep(())
@@ -1183,6 +1195,8 @@ def main(argv=None, *, default_config=None):
                 print('Nothing selected; no download, install or build requested.')
                 return 0
             roles = ('pkg_info',) if args.command == 'installed' else ('openssl', 'pkg_info', 'pkg_admin', 'pkg_add', 'pkg_delete')
+            if fetching:
+                roles = ('openssl',)
             crypto = ReleaseCrypto(load_host_prefix(config['host_prefix'], required_roles=roles))
             trust = Path(config.get('trust_root', Path(__file__).resolve().parents[2] / 'trust/emberbsd-release-root.pem'))
             if args.command == 'installed':
@@ -1195,6 +1209,11 @@ def main(argv=None, *, default_config=None):
                     resources.files('emberbsd_sdk').joinpath('emberbsd-release-root.pem')))
             store = temporary.enter_context(HTTPStore(config.get('url', DEFAULT_URL),
                                                       ca_file=config.get('https_ca'), proxy_url=config.get('https_proxy')))
+            if fetching:
+                artifact = fetch_artifact(crypto, store, trust, args.output, args.artifact,
+                                          prefix=config.get('url_prefix', ''))
+                sys.stdout.buffer.write(json_bytes(artifact))
+                return 0
             installer = PackageInstaller(crypto, trust)
             archive_error = None
             # Signed release and index bytes are immutable per digest; only the
