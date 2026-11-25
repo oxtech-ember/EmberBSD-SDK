@@ -54,6 +54,49 @@ class BinaryCatalogUpdateTests(BinaryReleaseFixture):
         self.assertEqual(artifact['depends'], [next(item['artifact'] for item in catalogs[0]['packages']
                                                     if item['root'] == 'devel/lib')])
 
+    def test_compose_keeps_withdrawal_indexes_and_admits_only_clean_replacements(self):
+        import hashlib
+        repo, draft, current = self.baseline()
+        app = next(a for a in draft['artifacts'] if a['path'].endswith('/app-1.0.tgz'))
+        rejected_dir = self.work / 'withdrawn-input'
+        rejected_dir.mkdir()
+        rejected = rejected_dir / 'app-2.0.tgz'
+        raw = self.package('net/app', version='2.0', depends=('lib>=1',))
+        self.crypto.sign_package(raw, rejected, self.leaf, self.ca.certificate)
+        digest = hashlib.sha256(rejected.read_bytes()).hexdigest()
+        data = json_bytes(dict(schema='emberbsd.withdrawals.v1',
+                               artifacts=[dict(id=app['id'], sha256=digest)]))
+        paths = []
+        for name in ('arm64', 'other-target', 'third-target', 'host'):
+            path = name + '/withdrawals.json'
+            (current / name).mkdir(exist_ok=True)
+            (current / path).write_bytes(data)
+            paths.append(path)
+            draft['artifacts'].append(dict(app, id=name + '-withdrawals', kind='package-index',
+                                           path=path, depends=[], unpacked_size=len(data)))
+        sealed = current / 'with-withdrawals.p7m'
+        seal_release(self.crypto, json_bytes(draft), current, self.leaf, self.ca.certificate, sealed)
+        sealed.replace(current / 'release.p7m')
+        self.spec['release_id'] = 'replacement'
+        repo.update(sets=[], roots=['net/app'])
+        for version, package in [('2.0', rejected), ('3.0', self.package('net/app', version='3.0',
+                                                                          depends=('lib>=1',)))]:
+            value = graph()
+            next(node for node in value['nodes'] if node['id'] == 'target:net/app')['version'] = version
+            self.graph_path.write_bytes(json_bytes(value))
+            repo['packages'] = {'target:net/app': str(package)}
+            if version == '2.0':
+                with self.assertRaisesRegex(SDKError, 'withdrawn package bytes'):
+                    self.compose(current=current, output=self.work / 'rejected')
+            else:
+                output = self.work / 'clean-replacement'
+                release = self.compose(current=current, output=output)
+        hashes = {a['path']: a['sha256'] for a in release['artifacts']}
+        for path in paths:
+            self.assertEqual((output / path).read_bytes(), data)
+            self.assertEqual(hashes[path], hashlib.sha256(data).hexdigest())
+        self.assertIn('arm64/app-3.0.tgz', hashes)
+
     def _add_bootstrap_artifact(self, directory, release):
         from emberbsd_sdk.binary_release import _artifact
         host = dict(os='Darwin', arch='arm64', abi='macos-27', runtime='libSystem')

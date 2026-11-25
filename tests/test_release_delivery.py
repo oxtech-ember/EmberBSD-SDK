@@ -50,6 +50,43 @@ class S3CLIProxyTests(unittest.TestCase):
         self.assertEqual(store_factory.call_args.kwargs['proxy_url'], proxy)
 
 
+class WithdrawalTests(unittest.TestCase):
+    def setUp(self):
+        self.identity = 'netbsd-aarch64-0123456789abcdef01234567'
+        self.digest = 'a' * 64
+        self.package = dict(id=self.identity, kind='target-package', sha256=self.digest)
+        self.release = dict(artifacts=[self.package])
+        self.catalogs = [dict(packages=[])]
+
+    def test_exact_unselectable_current_package_is_authorized(self):
+        result = release_delivery._authorize_withdrawals(
+            self.release, self.release, self.catalogs, {self.identity: self.digest})
+        self.assertEqual(result, {self.identity})
+
+    def test_wrong_digest_is_rejected(self):
+        with self.assertRaisesRegex(SDKError, 'exact current package record'):
+            release_delivery._authorize_withdrawals(
+                self.release, self.release, self.catalogs, {self.identity: 'b' * 64})
+
+    def test_changed_candidate_record_is_rejected(self):
+        candidate = dict(artifacts=[dict(self.package, sha256='b' * 64)])
+        with self.assertRaisesRegex(SDKError, 'exact current package record'):
+            release_delivery._authorize_withdrawals(
+                candidate, self.release, self.catalogs, {self.identity: self.digest})
+
+    def test_package_index_cannot_be_withdrawn(self):
+        index = dict(artifacts=[dict(self.package, kind='package-index')])
+        with self.assertRaisesRegex(SDKError, 'exact current package record'):
+            release_delivery._authorize_withdrawals(
+                index, index, self.catalogs, {self.identity: self.digest})
+
+    def test_still_selectable_package_cannot_be_withdrawn(self):
+        catalogs = [dict(packages=[dict(artifact=self.identity)])]
+        with self.assertRaisesRegex(SDKError, 'remains selectable'):
+            release_delivery._authorize_withdrawals(
+                self.release, self.release, catalogs, {self.identity: self.digest})
+
+
 @unittest.skipUnless(os.environ.get('EMBERBSD_TEST_HOST_PREFIX'), 'select native Ports OpenSSL')
 class DeliveryTests(unittest.TestCase):
     @classmethod
@@ -110,6 +147,69 @@ class DeliveryTests(unittest.TestCase):
         seal_release(self.crypto, json_bytes(draft), directory, self.signer, self.ca.certificate,
                      output, reuse_current=snapshot)
         return output
+
+    @patch.object(ReleaseCrypto, 'verify_package')
+    def test_withdrawal_survives_normal_publications_and_repeated_replacements(self, _verify_package):
+        original = self.release('seed')
+        self.publish(original)
+        package = self.sparse_release('demo', original, extra=('demo-1.tgz', b'first'))
+        def publish(path, **kwargs):
+            return publish_release(self.crypto, self.store, self.public, path, self.signer,
+                                   self.ca.certificate, expected_current=self.current_digest(),
+                                   reuse_current=True, **kwargs)
+        publish(package)
+        first = hashlib.sha256(b'first').hexdigest()
+        second = hashlib.sha256(b'second').hexdigest()
+        package_key = '/bucket/current/host/darwin-arm64/demo-{}.tgz'
+
+        def generation(name, previous, digests, *, replacement=None, unrelated=False):
+            draft = parse_release(self.crypto.verify_cms(previous.read_bytes(), self.ca.certificate))
+            draft['release_id'] = name
+            root = self.work / name
+            (root / 'host').mkdir(parents=True)
+            (root / 'host/pkg_summary.gz').write_bytes(b'index fixture')
+            artifacts = {item['id']: item for item in draft['artifacts']}
+            template = artifacts['new-package']
+            if replacement is not None:
+                filename, payload = replacement
+                (root / filename).write_bytes(payload)
+                template.update(path=filename, unpacked_size=len(payload))
+            if unrelated:
+                (root / 'other-1.tgz').write_bytes(b'other')
+                artifacts['other'] = dict(template, id='other', path='other-1.tgz', unpacked_size=5)
+            data = json_bytes(dict(schema='emberbsd.withdrawals.v1',
+                                   artifacts=[dict(id='new-package', sha256=h) for h in digests]))
+            (root / 'host/withdrawals.json').write_bytes(data)
+            artifacts['withdrawals'] = dict(template, id='withdrawals', kind='package-index',
+                                            path='host/withdrawals.json', unpacked_size=len(data))
+            draft['artifacts'] = list(artifacts.values())
+            out = root / 'release.p7m'
+            seal_release(self.crypto, json_bytes(draft), root, self.signer, self.ca.certificate,
+                         out, reuse_current=previous)
+            return out
+
+        withdrawn = generation('withdraw-one', package, [first])
+        publish(withdrawn, withdrawals={'new-package': first})
+        self.assertNotIn(package_key.format(1), self.server.objects)
+        normal = generation('add-other', withdrawn, [first], unrelated=True)
+        publish(normal)
+        self.assertIn('/bucket/current/host/darwin-arm64/other-1.tgz', self.server.objects)
+        restored = generation('clean', normal, [first], replacement=('demo-2.tgz', b'second'))
+        publish(restored)
+        self.assertEqual(self.server.objects[package_key.format(2)], b'second')
+        again = generation('withdraw-two', restored, [first, second])
+        publish(again, withdrawals={'new-package': second})
+        self.assertNotIn(package_key.format(2), self.server.objects)
+        forgotten = generation('forget-old', again, [second])
+        before = self.current_digest()
+        with self.assertRaisesRegex(SDKError, 'withdrawal'):
+            publish(forgotten)
+        self.assertEqual(before, self.current_digest())
+        # A complete, older-policy release must also respect the channel's withdrawal history.
+        with self.assertRaisesRegex(SDKError, 'withdrawal'):
+            publish_release(self.crypto, self.store, self.public, original, self.signer,
+                            self.ca.certificate, expected_current=before)
+        self.assertEqual(before, self.current_digest())
 
     def current_digest(self):
         return hashlib.sha256(self.server.objects['/bucket/current.p7m']).hexdigest()

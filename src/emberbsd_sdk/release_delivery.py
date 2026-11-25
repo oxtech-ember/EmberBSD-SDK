@@ -20,10 +20,11 @@ from .errors import SDKError
 from .jsonio import json_bytes, loads_json
 from .paths import open_regular, stable_identity, verify_stable
 from .package_cache import directory_lock
+from .package_withdrawals import parse_withdrawals
 from .publication import publish_directory_noreplace
 from .release_catalog import (MAX_ENVELOPE, _relative, _pattern, _SLUG, _SHA256, CHANNEL_SCHEMA,
                               file_reference, local_artifact, parse_channel, parse_release)
-from .release_cli import verify_release
+from .release_cli import verify_release_with_catalogs
 from .release_signing import read_bytes, write_new
 from .release_s3 import HTTPStatusError
 
@@ -116,19 +117,23 @@ def _clean_current(store, prefix, keep):
 
 def publish_release(crypto, store, public, envelope_path, identity, trust,
                     *, prefix='', ttl=7 * 86400, refresh=False, previous_channel_time=None,
-                    expected_current=None, reuse_current=False):
+                    expected_current=None, reuse_current=False, withdrawals=None):
     if type(ttl) is not int or ttl <= 0:
         raise SDKError('channel lifetime must be a positive number of seconds')
     if expected_current is not None and expected_current != 'absent':
         _pattern(expected_current, _SHA256, 'expected current SHA256')
     if reuse_current and expected_current is None:
         raise SDKError('--reuse-current requires --expected-current')
+    withdrawals = {} if withdrawals is None else dict(withdrawals)
+    if withdrawals and (not reuse_current or expected_current in (None, 'absent')):
+        raise SDKError('withdrawals require --reuse-current and an existing --expected-current')
     envelope_path = Path(envelope_path)
     envelope = read_bytes(envelope_path)
-    release = (parse_release(crypto.verify_cms(envelope, trust)) if reuse_current else
-               verify_release(crypto, envelope, envelope_path.parent, trust))
     if reuse_current:
-        load_release_catalogs(release, envelope_path.parent)
+        release = parse_release(crypto.verify_cms(envelope, trust))
+        catalogs = load_release_catalogs(release, envelope_path.parent)
+    else:
+        release, catalogs = verify_release_with_catalogs(crypto, envelope, envelope_path.parent, trust)
     base = 'current/metadata/' + hashlib.sha256(envelope).hexdigest()
     keys = [artifact_key(item, base) for item in release['artifacts']]
     if len({key.casefold() for key in keys}) != len(keys):
@@ -146,12 +151,12 @@ def publish_release(crypto, store, public, envelope_path, identity, trust,
     with _publisher_lock(store, prefix):
         return _publish_current(crypto, store, public, envelope_path, envelope, release,
                                 base, identity, trust, prefix, ttl, refresh, previous_channel_time,
-                                expected_current, reuse_current)
+                                expected_current, reuse_current, withdrawals, catalogs)
 
 
 def _publish_current(crypto, store, public, envelope_path, envelope, release, base,
                      identity, trust, prefix, ttl, refresh, previous_channel_time, expected_current,
-                     reuse_current):
+                     reuse_current, withdrawals, catalogs):
     release_key = _key(prefix, base + '/release.p7m')
     reference = dict(id=release['release_id'], path=base + '/release.p7m', **_digest(envelope))
     channel_key = _key(prefix, 'current.p7m')
@@ -186,17 +191,37 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
                        'merge the latest current before publishing')
     previous_release = None
     has_os_updates = any(a['id'].startswith(os_update.PREFIX) for a in release['artifacts'])
-    if reuse_current or (previous and has_os_updates):
-        if previous is None:
-            raise SDKError('--reuse-current requires an existing authenticated current release')
+    if reuse_current and previous is None:
+        raise SDKError('--reuse-current requires an existing authenticated current release')
+    inherited = set()
+    index_cache = {}
+    if previous:
         old = previous['release']
         previous_release_envelope, _ = public.read(_key(prefix, old['path']), MAX_ENVELOPE)
         _check(previous_release_envelope, old)
         previous_release = parse_release(crypto.verify_cms(previous_release_envelope, trust))
         if previous_release['release_id'] != old['id']:
             raise SDKError('current channel and authenticated release identities differ')
+        old_base = old['path'].rsplit('/', 1)[0]
+        def read_previous_index(artifact):
+            key = _key(prefix, artifact_key(artifact, old_base))
+            return public.read(key, MAX_ENVELOPE)[0]
+        inherited = _withdrawal_history(previous_release, read_previous_index, index_cache)
+    def read_local_index(artifact):
+        return read_bytes(local_artifact(envelope_path.parent, artifact['path']))
+    declared = _withdrawal_history(release, read_local_index, index_cache)
+    if previous and declared != inherited | set(withdrawals.items()):
+        raise SDKError('signed withdrawal history must retain all previous records and match new requests')
+    if withdrawals:
+        fresh = {i: h for i, h in withdrawals.items() if (i, h) not in inherited}
+        _authorize_withdrawals(release, previous_release, catalogs, fresh)
+    withdrawn_ids = {a['id'] for a in release['artifacts'] if (a['id'], a['sha256']) in declared}
+    for catalog in catalogs:
+        if any(p['artifact'] in withdrawn_ids for p in catalog['packages']):
+            raise SDKError('withdrawn package remains selectable in a current catalog')
     if reuse_current:
-        reusable_ids = _verify_sparse_local(crypto, release, previous_release, envelope_path.parent, trust)
+        reusable_ids = _verify_sparse_local(crypto, release, previous_release, envelope_path.parent, trust,
+                                            withdrawn_ids)
         _require_current_coverage(release, previous_release)
     else:
         reusable_ids = set()
@@ -207,6 +232,8 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
     uploads = []
     # Packages precede indexes. The release envelope is always uploaded last.
     for artifact in sorted(release['artifacts'], key=lambda item: item['kind'] == 'package-index'):
+        if artifact['id'] in withdrawn_ids:
+            continue
         key = _key(prefix, artifact_key(artifact, base))
         keep.add(key)
         path = _local_if_present(envelope_path.parent, artifact['path'])
@@ -306,10 +333,46 @@ def _require_current_coverage(candidate, current):
         raise SDKError('candidate release drops current artifacts; preserve each artifact ID and platform')
 
 
-def _verify_sparse_local(crypto, candidate, current, directory, trust):
+def _withdrawal_history(release, read_index, cache):
+    records = set()
+    for artifact in release['artifacts']:
+        if artifact['kind'] != 'package-index' or not artifact['path'].endswith('/withdrawals.json'):
+            continue
+        key = (artifact['sha256'], artifact['size'])
+        if key not in cache:
+            data = read_index(artifact)
+            _check(data, artifact)
+            cache[key] = parse_withdrawals(data)
+        records.update(cache[key])
+    return records
+
+
+def _authorize_withdrawals(candidate, current, catalogs, withdrawals):
+    """Keep exact revoked package records signed while removing them from selection."""
+    if not withdrawals:
+        return set()
+    old = {item['id']: item for item in current['artifacts']}
+    new = {item['id']: item for item in candidate['artifacts']}
+    selectable = {package['artifact'] for catalog in catalogs for package in catalog['packages']}
+    for identity, digest in withdrawals.items():
+        _pattern(identity, _SLUG, 'withdrawn artifact id')
+        _pattern(digest, _SHA256, 'withdrawn artifact sha256')
+        previous, replacement = old.get(identity), new.get(identity)
+        if (previous is None or replacement is None or
+                previous['kind'] not in ('host-package', 'target-package') or
+                previous['sha256'] != digest or replacement != previous):
+            raise SDKError(f'withdrawal must match an exact current package record: {identity}')
+        if identity in selectable:
+            raise SDKError(f'withdrawn package remains selectable in a current catalog: {identity}')
+    return set(withdrawals)
+
+
+def _verify_sparse_local(crypto, candidate, current, directory, trust, withdrawn_ids=()):
     old_by_slot = {_slot(item): item for item in current['artifacts']}
     reusable_ids = set()
     for artifact in candidate['artifacts']:
+        if artifact['id'] in withdrawn_ids:
+            continue
         path = _local_if_present(directory, artifact['path'])
         if path is None:
             if artifact['kind'] == 'package-index':

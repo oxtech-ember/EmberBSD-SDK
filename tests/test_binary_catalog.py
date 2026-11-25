@@ -20,6 +20,38 @@ from emberbsd_sdk import binary_catalog as catalog
 from emberbsd_sdk.jsonio import json_bytes
 
 
+class WithdrawalIndexTests(unittest.TestCase):
+    def test_signed_withdrawal_index_loads_exact_hashes(self):
+        from emberbsd_sdk.binary_release import _withdrawn_artifacts
+        identity = 'netbsd-aarch64-0123456789abcdef01234567'
+        digest = 'a' * 64
+        data = json_bytes(dict(schema='emberbsd.withdrawals.v1',
+                               artifacts=[dict(id=identity, sha256=digest)]))
+        self.assertEqual(_withdrawn_artifacts({'netbsd-aarch64/withdrawals.json': data}),
+                         {identity: {digest}})
+
+    def test_remembers_multiple_withdrawn_hashes_for_one_package(self):
+        from emberbsd_sdk.binary_release import _withdrawn_artifacts
+        identity = 'netbsd-aarch64-0123456789abcdef01234567'
+        one = json_bytes(dict(schema='emberbsd.withdrawals.v1',
+                              artifacts=[dict(id=identity, sha256='a' * 64)]))
+        two = json_bytes(dict(schema='emberbsd.withdrawals.v1',
+                              artifacts=[dict(id=identity, sha256='b' * 64)]))
+        self.assertEqual(_withdrawn_artifacts({'a/withdrawals.json': one, 'b/withdrawals.json': two}),
+                         {identity: {'a' * 64, 'b' * 64}})
+
+    def test_exact_withdrawn_archive_bytes_cannot_be_republished(self):
+        from emberbsd_sdk.binary_release import _reject_withdrawn_bytes
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'archive.tgz'
+            path.write_bytes(b'old exact package')
+            import hashlib
+            identity = 'netbsd-aarch64-0123456789abcdef01234567'
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            with self.assertRaisesRegex(SDKError, 'cannot be republished'):
+                _reject_withdrawn_bytes(path, identity, {identity: {digest}})
+
+
 def graph():
     def node(name, dependencies=()):
         return dict(id=name, version='1.0', input_sha256='a' * 64,

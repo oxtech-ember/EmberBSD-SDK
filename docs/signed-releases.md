@@ -157,6 +157,29 @@ under the same generation. For a new generation, update the descriptor, its
 filename and its signed dependency list together. Publish a current compatible
 client before enabling [profile downloads](sdk-client.md#download-an-os-update-for-the-installed-profile).
 
+### Withdraw a package from the current channel
+
+Use the package artifact ID and SHA-256 from an authenticated current
+snapshot. Keep the original snapshot for restoration. Remove the package
+and its reverse runtime dependents from the selectable catalog, summary and
+sets. Keep their artifact records and dependency edges in the release.
+
+Store the denied pairs in a signed `package-index` ending in
+`/withdrawals.json`. Its schema is `emberbsd.withdrawals.v1`. Its
+`artifacts` array contains objects with `id` and `sha256` strings.
+Keep earlier pairs when replacing an index. One package ID can have
+several withdrawn hashes.
+
+Publish the sealed candidate with `--reuse-current`,
+`--expected-current CURRENT_POINTER_SHA256`, and one
+`--withdraw-artifact ID=SHA256` per new withdrawal. The publisher removes
+the exact package objects. Dependent archives remain available at their
+existing paths. Check the old public URLs and an unrelated installation.
+
+Later publications inherit the signed withdrawal history. Restore a
+corrected package with its new Ports revision and hash. Restore selectable
+dependents and sets when their whole runtime closure is available again.
+
 ## Channel: `emberbsd.channel.v2`
 
 ```json

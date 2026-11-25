@@ -24,12 +24,17 @@ def _check_packages(crypto, release, directory, trust):
 
 
 def verify_release(crypto, envelope, directory, trust):
+    release, _ = verify_release_with_catalogs(crypto, envelope, directory, trust)
+    return release
+
+
+def verify_release_with_catalogs(crypto, envelope, directory, trust):
     release = parse_release(crypto.verify_cms(envelope, trust))
     verify_payloads(release, directory)
-    load_release_catalogs(release, directory)
+    catalogs = load_release_catalogs(release, directory)
     _check_packages(crypto, release, directory, trust)
     os_update.check_publication(release, directory)
-    return release
+    return release, catalogs
 
 
 def seal_release(crypto, draft, directory, identity, trust, output, *, reuse_current=None):

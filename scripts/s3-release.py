@@ -40,6 +40,8 @@ def main(argv=None):
                                  help='refuse a changed current before uploading; SHA256 of current.p7m, or absent for an empty repository')
             command.add_argument('--reuse-current', action='store_true',
                                  help='reuse exact missing records from authenticated current (requires --expected-current)')
+            command.add_argument('--withdraw-artifact', action='append', default=[], metavar='ID=SHA256',
+                                 help='mark an exact current package record unavailable and remove its current object')
             command.add_argument('--previous-channel-time', type=int,
                                  help='publisher recovery only: authenticate the old channel at this past Unix time')
         elif name == 'fetch':
@@ -58,11 +60,17 @@ def main(argv=None):
                     endpoint=args.endpoint, region=args.region, bucket=args.bucket, ca_file=args.tls_ca_file, proxy_url=args.https_proxy))
                 identity = SigningIdentity(args.signer_directory / 'certificate.pem',
                                            args.signer_directory / 'private-key.pem')
+                withdrawals = {}
+                for value in args.withdraw_artifact:
+                    artifact_id, separator, digest = value.partition('=')
+                    if not separator or not artifact_id or not digest or artifact_id in withdrawals:
+                        parser.error('--withdraw-artifact requires unique ID=SHA256 values')
+                    withdrawals[artifact_id] = digest
                 value = publish_release(crypto, store, public, args.release, identity, args.trust_root,
                                         prefix=args.prefix, ttl=args.ttl, refresh=args.refresh,
                                         previous_channel_time=args.previous_channel_time,
                                         expected_current=args.expected_current,
-                                        reuse_current=args.reuse_current)
+                                        reuse_current=args.reuse_current, withdrawals=withdrawals)
             elif args.command == 'fetch':
                 value = fetch_release(crypto, public, args.trust_root, args.output,
                                       prefix=args.prefix, repositories=args.repository)

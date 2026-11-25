@@ -20,9 +20,11 @@ from .elf import parse_elf_header
 from .errors import SDKError
 from .jsonio import json_bytes, read_json
 from .package_selection import _package_sets, _parse_root, _read_roots
+from .package_withdrawals import parse_withdrawals
 from .paths import open_regular, regular_file, verify_stable
 from .publication import publish_directory_noreplace
-from .release_catalog import (_object, _pattern, _SLUG, local_artifact, parse_release)
+from .release_catalog import (_object, _pattern, _SLUG, file_reference, local_artifact,
+                              parse_release)
 from .release_cli import seal_release
 from .release_signing import read_bytes, write_new
 
@@ -436,6 +438,23 @@ def _summary_bytes(records):
                            for value in values) + '\n' for record in records).encode('utf-8')
 
 
+def _withdrawn_artifacts(indexes):
+    """Read signed withdrawal records carried in a repository package index."""
+    withdrawn = {}
+    for path, data in indexes.items():
+        if not path.endswith('/withdrawals.json'):
+            continue
+        for identity, digest in parse_withdrawals(data):
+            withdrawn.setdefault(identity, set()).add(digest)
+    return withdrawn
+
+
+def _reject_withdrawn_bytes(path, identity, withdrawn):
+    denied = withdrawn.get(identity)
+    if denied and file_reference(path)['sha256'] in denied:
+        raise SDKError(f'withdrawn package bytes cannot be republished: {identity}')
+
+
 def compose(crypto, spec, ports_root, output, identity, trust, *, current=None,
             additions=False, statistics=None, checksums=None, forbidden_prefixes=()):
     """Sign selected packages, generate pkg_summary, then seal their release."""
@@ -446,6 +465,7 @@ def compose(crypto, spec, ports_root, output, identity, trust, *, current=None,
     if output.exists() or output.is_symlink():
         raise SDKError('release output already exists')
     previous, repositories, indexes = _snapshot(crypto, current, trust) if current else (None, {}, {})
+    withdrawn = _withdrawn_artifacts(indexes)
     prepared = []
     for repo in spec['repositories']:
         old = repositories.get(repo['id'])
@@ -498,6 +518,7 @@ def compose(crypto, spec, ports_root, output, identity, trust, *, current=None,
                 else:
                     crypto.sign_package(item['path'], destination, identity, trust)
                 verify_stable(item['path'], item['before'])
+                _reject_withdrawn_bytes(destination, item['artifact'], withdrawn)
                 signed_paths.append((item['node']['root'], destination))
                 artifacts[item['artifact']] = _artifact(repo, item['artifact'], repo['id'] + '/' + name,
                     ('host' if repo['host'] else 'target') + '-package', size=item['size'],
