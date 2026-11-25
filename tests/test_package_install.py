@@ -763,3 +763,47 @@ class InstallTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PkgAddArgumentTests(unittest.TestCase):
+    """The pkg_add command of one install, without pkg_tools or a package."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.config = {'prefix': str(root / 'prefix'), 'pkgdb': str(root / 'prefix/pkgdb'), 'host': {}}
+        trust = root / 'root.pem'
+        trust.write_text('fixture root\n')
+
+        class Prefix:
+            path = '/fixture/bin'
+
+            def tool(self, name):
+                return '/fixture/sbin/' + name
+
+        class Crypto:
+            prefix = Prefix()
+
+        self.installer = PackageInstaller(Crypto(), trust)
+        self.package = root / 'lib-2.tgz'
+        # A checked package without relocation metadata: only pkg_add runs.
+        self.installer._checked[PackageInstaller._check_key(self.package, self.config)] = None
+
+    def arguments(self, **options):
+        with patch('emberbsd_sdk.package_install.subprocess.run',
+                   return_value=subprocess.CompletedProcess([], 0, b'', b'')) as run:
+            self.installer.install(self.package, self.config, checked=True, configure=False, **options)
+        return run.call_args.args[0]
+
+    def test_coordinated_package_lets_its_dependents_follow(self):
+        args = self.arguments(dependents_follow=True)
+        self.assertEqual(args[0], '/fixture/sbin/pkg_add')
+        self.assertIn('-U', args)
+        # -D is an option: it comes before the package operand.
+        self.assertEqual(args[-1], str(self.package.absolute()))
+        self.assertIn('-D', args[:-1])
+
+    def test_ordinary_package_keeps_the_dependency_check(self):
+        self.assertNotIn('-D', self.arguments())
+        self.assertNotIn('-D', self.arguments(automatic=True))

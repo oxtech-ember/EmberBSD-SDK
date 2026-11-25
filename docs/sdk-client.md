@@ -544,7 +544,9 @@ dependencies may allow a newer revision than the artifact selected by that
 catalog. For a transitive dependency, the client reuses the newer installed
 package when every selected direct consumer's authenticated `@pkgdep` pattern
 accepts it and its installed providers satisfy the same provider retention or
-proven ELF implementation substitution rule against the selected artifact.
+proven ELF implementation substitution rule against the selected artifact. When
+every direct consumer is already installed, it is also enough that none of their
+ELF or Mach-O files loads a provider that only the catalog artifact has.
 Explicitly requested roots are not elided. If metadata
 is missing, ambiguous, or incompatible, the normal replacement checks still
 apply; the client does not infer ABI compatibility from version numbers alone.

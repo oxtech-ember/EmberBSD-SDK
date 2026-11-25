@@ -263,6 +263,32 @@ class PackageUpdateTests(unittest.TestCase):
             return name == 'libxml2-2.15.4nb4'
         return False
 
+    def installed_consumer_reuse(self, missing):
+        """An installed consumer whose image loads libc.so.12; MISSING is the catalog-only provider."""
+        packages, archives = self.compatible_packages(candidate_providers=(missing,),
+                                                      installed_providers=())
+        directory = self.database / 'consumer-1'
+        directory.mkdir()
+        (directory / '+CONTENTS').write_text('@cwd ' + str(self.root) + '\n@name consumer-1\n'
+                                             '@pkgdep libxml2>=2.14.6nb2\nbin/tool\n')
+        (directory / '+BUILD_INFO').write_text('')
+        (self.root / 'bin').mkdir(exist_ok=True)
+        (self.root / 'bin/tool').write_bytes(dynamic_elf())  # loads libc.so.12
+        packages[1]['action'] = 'installed'
+        with patch('emberbsd_sdk.package_updates._matches', side_effect=self.pmatch):
+            return packages, reuse_compatible_dependencies(self.crypto, self.cfg, packages, archives,
+                {'libxml2-2.15.4nb5', 'consumer-1'}, roots=('cad/consumer@native',))
+
+    def test_installed_consumer_without_the_missing_provider_allows_reuse(self):
+        packages, reused = self.installed_consumer_reuse('lib/libxml2.so.2')
+        self.assertEqual([item['pkgname'] for item in reused], ['libxml2-2.15.4nb5'])
+        self.assertEqual(packages[0]['action'], 'installed')
+
+    def test_installed_consumer_loading_the_missing_provider_prevents_reuse(self):
+        packages, reused = self.installed_consumer_reuse('lib/libc.so.12')
+        self.assertEqual(reused, [])
+        self.assertEqual(packages[0]['pkgname'], 'libxml2-2.15.4nb4')
+
     def test_compatible_newer_installed_dependency_is_reused(self):
         packages, archives = self.compatible_packages()
         with patch('emberbsd_sdk.package_updates._matches', side_effect=self.pmatch):

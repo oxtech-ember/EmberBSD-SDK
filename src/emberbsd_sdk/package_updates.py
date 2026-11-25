@@ -99,12 +99,19 @@ def reuse_compatible_dependencies(crypto, config, packages, archives, installed,
         if not matches(base + '>=' + version, installed_name):
             continue
         candidate_metadata = archive_metadata(identity)
-        if not providers_preserved(config, archives[identity], candidate_metadata['providers'],
-                                   metadata(installed_name)['providers'], installed_is_old=False):
-            continue
         consumers = incoming[identity]
         if not consumers:
             continue
+        installed_providers = metadata(installed_name)['providers']
+        if not providers_preserved(config, archives[identity], candidate_metadata['providers'],
+                                   installed_providers, installed_is_old=False):
+            # The same proof as for a replacement: installed consumers whose
+            # images load none of the catalog providers that the installed
+            # package lacks. A consumer from an archive keeps the strict rule.
+            if any(consumer['action'] != 'installed' for consumer in consumers) or \
+                    not consumers_unbound(config, database, sorted(c['pkgname'] for c in consumers),
+                                          candidate_metadata['providers'] - installed_providers):
+                continue
         compatible = True
         for consumer in consumers:
             if consumer['action'] == 'installed':
