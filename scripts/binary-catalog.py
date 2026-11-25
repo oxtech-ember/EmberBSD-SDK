@@ -12,6 +12,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.binary_catalog import select_packages
 from emberbsd_sdk.binary_release import compose, load_catalogs
+from emberbsd_sdk.catalog_recovery import recover
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.host_prefix import load_host_prefix
 from emberbsd_sdk.jsonio import json_bytes, read_json
@@ -32,6 +33,16 @@ def main(argv=None):
                           help='reject new archives that contain this absolute producer path')
     producer.add_argument('--current', type=Path,
                           help='authenticated snapshot directory; reuse its packages by metadata and merge additions')
+    recovery = commands.add_parser('recover-selections', help='restore available catalogs after a withdrawal')
+    recovery.add_argument('--current', required=True, type=Path)
+    recovery.add_argument('--withdrawal', action='append', nargs=2, type=Path, required=True,
+                          metavar=('BEFORE', 'AFTER'), help='signed snapshots on both sides of the withdrawal')
+    recovery.add_argument('--target-sysroot', action='append', nargs=2, default=[],
+                          metavar=('REPOSITORY', 'DIRECTORY'), help='check exact target base library paths')
+    recovery.add_argument('--release-id', required=True)
+    recovery.add_argument('--output', required=True, type=Path)
+    recovery.add_argument('--signer-directory', required=True, type=Path)
+    recovery.add_argument('--trust-root', required=True, type=Path)
     for name in ('list', 'show', 'plan'):
         command = commands.add_parser(name)
         command.add_argument('--release', required=True, type=Path)
@@ -44,10 +55,18 @@ def main(argv=None):
             command.add_argument('--package', action='append', default=[], dest='roots')
     args = parser.parse_args(argv)
     try:
-        roles = ('openssl', 'pkg_admin', 'pkg_info') if args.command == 'compose' else ('openssl',)
+        roles = {'compose': ('openssl', 'pkg_admin', 'pkg_info'),
+                 'recover-selections': ('openssl', 'pkg_admin')}.get(args.command, ('openssl',))
         crypto = ReleaseCrypto(load_host_prefix(args.host_prefix, required_roles=roles))
-        if args.command == 'compose':
+        if args.command in ('compose', 'recover-selections'):
             signer = SigningIdentity(args.signer_directory / 'certificate.pem', args.signer_directory / 'private-key.pem')
+        if args.command == 'recover-selections':
+            sysroots = {name: Path(root) for name, root in args.target_sysroot}
+            if len(sysroots) != len(args.target_sysroot):
+                raise SDKError('select each target sysroot once')
+            value = recover(crypto, args.current, args.withdrawal, sysroots, args.output, signer,
+                            args.trust_root, args.release_id)
+        elif args.command == 'compose':
             value = compose(crypto, read_json(args.input), args.ports_root, args.output, signer, args.trust_root,
                             current=args.current, forbidden_prefixes=args.forbid_prefix)
         else:

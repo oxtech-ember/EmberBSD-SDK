@@ -147,6 +147,29 @@ checks. Target packages are unaffected.
 Nested static archives, universal Mach-O, foreign ELF OS ABI, linkage and
 runtime behavior remain package-producer checks, not catalog guarantees.
 
+## Recover selections after a package withdrawal
+
+Use `recover-selections` after you publish clean replacements. Supply the
+signed metadata snapshots immediately before and after each withdrawal.
+The command restores hidden consumers whose exact archive records remain in
+the current release. It preserves newer packages and current set choices.
+It checks dependency patterns and package libraries against the available
+closure. Supply a sysroot for each target repository to restore. The producer
+checks the exact base library paths that a fresh `pkg_add` requires.
+Target repositories without a selected sysroot keep their current selections. This operation reuses signed archive bytes.
+
+```sh
+python3 scripts/binary-catalog.py --host-prefix "$HOST_PREFIX" recover-selections \
+  --current "$CURRENT" --withdrawal "$BEFORE" "$AFTER" \
+  --target-sysroot netbsd-amd64 "$AMD64_SYSROOT" \
+  --release-id "$RELEASE_ID" --output "$OUTPUT" \
+  --signer-directory "$SIGNER" --trust-root "$TRUST_ROOT"
+```
+
+The command returns the current release if every remaining consumer still has
+a missing dependency. In that case it creates no output directory. Publish a
+changed candidate with the current channel digest as the precondition.
+
 ## Read and select
 
 ```sh

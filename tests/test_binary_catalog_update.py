@@ -27,6 +27,66 @@ class BinaryCatalogUpdateTests(BinaryReleaseFixture):
         return load_catalogs(self.crypto, directory / 'release.p7m', directory,
                              self.ca.certificate, ())
 
+    def test_recover_only_signed_indexes_after_a_clean_provider_replacement(self):
+        import gzip
+        import json
+        import shutil
+        from emberbsd_sdk.catalog_recovery import recover
+
+        repo, draft, before = self.baseline()
+        after = self.work / 'withdrawn'
+        shutil.copytree(before, after)
+        provider = next(item for item in draft['artifacts'] if item['path'].endswith('/lib-1.0.tgz'))
+        catalog_file = after / 'arm64/catalog.json'
+        catalog = json.loads(catalog_file.read_bytes())
+        catalog.update(packages=[], sets={name: [] for name in catalog['sets']})
+        catalog_file.write_bytes(json_bytes(catalog))
+        (after / 'arm64/pkg_summary.gz').write_bytes(gzip.compress(b'', mtime=0))
+        index = json_bytes(dict(schema='emberbsd.withdrawals.v1', artifacts=[
+            dict(id=provider['id'], sha256=provider['sha256'])]))
+        (after / 'arm64/withdrawals.json').write_bytes(index)
+        catalog_art = next(item for item in draft['artifacts'] if item['id'] == 'arm64-catalog')
+        catalog_art['unpacked_size'] = catalog_file.stat().st_size
+        draft['artifacts'].append(dict(catalog_art, id='arm64-withdrawals', path='arm64/withdrawals.json',
+                                       depends=[], unpacked_size=len(index)))
+        draft.update(release_id='withdrawn', created_at=2)
+        (after / 'release.p7m').unlink()
+        seal_release(self.crypto, json_bytes(draft), after, self.leaf, self.ca.certificate, after / 'release.p7m')
+        for directory in (before, after):
+            for package in (directory / 'arm64').glob('*.tgz'):
+                package.unlink()
+
+        self.spec.update(release_id='replacement', created_at=3)
+        value = graph()
+        next(node for node in value['nodes'] if node['id'] == 'target:devel/lib')['version'] = '2.0'
+        self.graph_path.write_bytes(json_bytes(value))
+        repo.update(sets=[], roots=['devel/lib'], packages={'target:devel/lib': self.package('devel/lib', version='2.0')})
+        current = self.work / 'replacement'
+        self.compose(current=after, output=current)
+        output = self.work / 'recovered'
+        sysroot = self.work / 'target-root'
+        sysroot.mkdir()
+        roots = {'arm64': sysroot}
+        recover(self.crypto, current, [(before, after)], roots, output, self.leaf, self.ca.certificate, 'recovered')
+        release, catalogs = self.load(output)
+        self.assertEqual(release['release_id'], 'recovered')
+        self.assertEqual(catalogs[0]['sets']['app'], ['net/app'])
+        self.assertIn('lib-2.0', [item['pkgname'] for item in catalogs[0]['packages']])
+        self.assertEqual(len(catalogs[0]['packages']), 4)
+        self.assertFalse(list(output.rglob('*.tgz')))
+        self.assertEqual((output / 'arm64/withdrawals.json').read_bytes(), index)
+        untouched = self.work / 'unchanged'
+        result = recover(self.crypto, output, [(before, after)], roots, untouched,
+                         self.leaf, self.ca.certificate, 'no-change')
+        self.assertEqual(result['release_id'], 'recovered')
+        self.assertFalse(untouched.exists())
+        with (before / 'arm64/pkg_summary.gz').open('ab') as stream:
+            stream.write(b'changed')
+        with self.assertRaises(SDKError):
+            recover(self.crypto, output, [(before, after)], roots, untouched,
+                    self.leaf, self.ca.certificate, 'tampered')
+        self.assertFalse(untouched.exists())
+
     def test_addition_reuses_old_packages_without_old_payload_bodies(self):
         repo, _, current = self.baseline()
         for package in (current / 'arm64').glob('*.tgz'):

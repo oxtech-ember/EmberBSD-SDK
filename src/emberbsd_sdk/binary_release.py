@@ -358,8 +358,17 @@ def _prepare_repository(crypto, spec, ports_root, sources, trust, previous=None,
 
 
 def _check_runtime(crypto, entries, role, changed_archives, affected):
+    errors = runtime_issues(crypto, entries, role, changed_archives, affected)
+    if errors:
+        raise SDKError(next(iter(errors.values())))
+
+
+def runtime_issues(crypto, entries, role, changed_archives, affected):
     """Check affected consumers against fixed producer edges, using pkg_tools versions."""
+    if not changed_archives and not affected:
+        return {}
     match_cache = {}
+    errors = {}
     for identity, item in entries.items():
         # Package patterns only see the names on this consumer's direct edges.
         dependencies = item['node']['dependencies']
@@ -374,7 +383,7 @@ def _check_runtime(crypto, entries, role, changed_archives, affected):
                     match_cache[key] = _matches(crypto, pattern, provider)
                 count += match_cache[key]
             if count != 1:
-                raise SDKError(f'archive dependency absent or ambiguous in resolved runtime graph: {identity}: {pattern}')
+                errors.setdefault(identity, f'archive dependency absent or ambiguous in resolved runtime graph: {identity}: {pattern}')
     if role == 'target':
         # Resolve provided package-prefix paths through the already selected
         # runtime graph.  A separate root cannot satisfy this consumer.
@@ -394,7 +403,8 @@ def _check_runtime(crypto, entries, role, changed_archives, affected):
                 continue
             for path in item['record'].get('REQUIRES', []):
                 if path.startswith('/usr/pkg/') and path not in provided[key]:
-                    raise SDKError(f'package runtime file absent from dependency closure: {key}: {path}')
+                    errors.setdefault(key, f'package runtime file absent from dependency closure: {key}: {path}')
+    return errors
 
 
 def _snapshot(crypto, directory, trust):
@@ -465,7 +475,6 @@ def compose(crypto, spec, ports_root, output, identity, trust, *, current=None,
     if output.exists() or output.is_symlink():
         raise SDKError('release output already exists')
     previous, repositories, indexes = _snapshot(crypto, current, trust) if current else (None, {}, {})
-    withdrawn = _withdrawn_artifacts(indexes)
     prepared = []
     for repo in spec['repositories']:
         old = repositories.get(repo['id'])
@@ -484,6 +493,15 @@ def compose(crypto, spec, ports_root, output, identity, trust, *, current=None,
         if statistics is not None:
             statistics.update(_statistics(previous, previous))
         return previous
+    nonempty = [item for item in prepared if item[2]]
+    return write_catalogs(crypto, spec, output, identity, trust, nonempty,
+                          (previous, repositories, indexes), current=current, statistics=statistics)
+
+
+def write_catalogs(crypto, spec, output, identity, trust, prepared, snapshot, *, current, statistics=None):
+    """Write and seal repository indexes with the current signed inventory."""
+    previous, repositories, indexes = snapshot
+    withdrawn = _withdrawn_artifacts(indexes)
     if previous and spec['release_id'] == previous['release_id']:
         raise SDKError('changed packages or sets require a new release_id')
     release = {key: spec[key] for key in ('release_id', 'created_at', 'sources')}
@@ -496,8 +514,6 @@ def compose(crypto, spec, ports_root, output, identity, trust, *, current=None,
             destination.parent.mkdir(parents=True, exist_ok=True)
             write_new(destination, data)
         for repo, sets, entries in prepared:
-            if not entries:
-                continue
             directory = scratch / repo['id']
             directory.mkdir(exist_ok=True)
             old = repositories.get(repo['id'])
