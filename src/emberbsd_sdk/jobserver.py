@@ -34,6 +34,11 @@ def _options(makeflags):
     return re.split(r'(?:^|\s)--(?:\s|$)', makeflags or '', maxsplit=1)[0]
 
 
+def _parent_jobs(makeflags):
+    counts = _JOBS.findall(_options(makeflags))
+    return int(counts[-1]) if counts else None
+
+
 def _write(descriptor, data):
     """Write all of DATA; a pipe can take less than all of it at once."""
     while data:
@@ -87,8 +92,7 @@ def budget(path, jobs, makeflags):
     if type(jobs) is not int or jobs < 1:
         raise SDKError('the job budget must be a positive integer')
     options = _options(makeflags)
-    counts = _JOBS.findall(options)
-    parent_jobs = int(counts[-1]) if counts else None
+    parent_jobs = _parent_jobs(makeflags)
     inherited = fifo(makeflags) if parent_jobs != 1 else None
     if inherited and parent_jobs is not None and parent_jobs <= jobs:
         # Ninja takes tokens dynamically. Only forward the budget and authentication.
@@ -114,10 +118,20 @@ def slots(makeflags, wanted):
     """Yield the number of job slots, 1 to WANTED, that this job may use.
 
     The job already has one slot from its client. Take the free tokens for
-    the other slots without waiting, and give them back at the end."""
+    the other slots without waiting, and give them back at the end. If
+    MAKEFLAGS advertises a serial or unavailable parent jobserver, use only
+    the implicit slot."""
+    options = _options(makeflags)
+    parent_jobs = _parent_jobs(makeflags)
+    if parent_jobs == 1:
+        yield 1
+        return
     path = fifo(makeflags)
     if path is None:
-        # Without a jobserver, the job uses its own budget.
+        if parent_jobs is not None or _AUTH.search(options):
+            yield 1
+            return
+        # Without parent parallelism, the job uses its own budget.
         yield max(1, wanted)
         return
     if wanted <= 1:

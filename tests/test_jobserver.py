@@ -63,6 +63,13 @@ class JobserverTests(TemporaryCase):
         with jobserver.slots('-k', 1) as jobs:
             self.assertEqual(jobs, 1)
 
+    def test_serial_or_unavailable_parent_jobserver_keeps_only_implicit_slot(self):
+        for flags in ('-j1', '--jobs=1', '-j1 --jobserver-auth=fifo:/stale/missing',
+                      '-j8', '-j8 --jobserver-auth=3,4',
+                      '-j --jobserver-auth=3,4'):
+            with self.subTest(flags=flags), jobserver.slots(flags, 8) as jobs:
+                self.assertEqual(jobs, 1)
+
     def test_a_named_jobserver_must_be_a_fifo(self):
         regular = self.write('regular', '')
         with self.assertRaisesRegex(SDKError, 'is not a FIFO'):
