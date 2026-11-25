@@ -144,6 +144,7 @@ This deliberately narrow contract is not a generic relocator for arbitrary
 applications, scripts or configuration files.
 
 New portable archives use `/usr/pkg` as their packing-list prefix.
+Their default numeric owner and group are zero. Explicit packing-list owners take precedence.
 The producer rewrites its own prefix in build metadata and qualified hooks.
 It also rewrites the declared text files and refreshes their owned Python caches.
 The client uses the archive prefix to relocate these files at installation.

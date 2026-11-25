@@ -45,7 +45,7 @@ class InstallTests(unittest.TestCase):
                 payload='installed data', provides=False, install_script=None, install_script_mode=0o755,
                 package_name='fixture-1.0',
                 payload_path='payload', executable=False, build_version=None, deinstall_script=None,
-                sizes=None, requires=None):
+                sizes=None, requires=None, payload_ownership=''):
         stage = self.work / 'stage'
         stage.mkdir()
         payload_file = stage / payload_path
@@ -57,7 +57,7 @@ class InstallTests(unittest.TestCase):
         if executable:
             payload_file.chmod(0o755)
         prefix = '/usr/pkg' if target else str(self.destination)
-        (stage / 'PLIST').write_text('@name ' + package_name + '\n' + payload_path + '\n' + commands)
+        (stage / 'PLIST').write_text('@name ' + package_name + '\n' + payload_ownership + payload_path + '\n' + commands)
         (stage / 'INFO').write_text('PKGPATH=devel/fixture\nDISTNAME=fixture-1.0\nLICENSE=2-clause-bsd\n' +
             f'LOCALBASE={prefix}\nCFLAGS=-I{prefix}/include\n' +
             (f'REQUIRES={prefix}/payload\n' if requires_self else '') +
@@ -563,6 +563,8 @@ class InstallTests(unittest.TestCase):
             check=True, capture_output=True)
         with tarfile.open(portable, 'r:gz') as archive:
             for member in archive.getmembers():
+                self.assertEqual((member.uid, member.gid), (0, 0), member.name)
+                self.assertFalse(member.uname or member.gname, member.name)
                 if member.isfile():
                     self.assertNotIn(original.encode(), archive.extractfile(member).read(), member.name)
             contents = archive.extractfile('+CONTENTS').read()
@@ -617,7 +619,7 @@ class InstallTests(unittest.TestCase):
     @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
     def test_portable_package_revision_preserves_payload_and_build_provenance(self):
         package = self.package(package_name='fixture-1.0nb2', build_version='original build provenance\n',
-                               commands='@pkgdep mksh>=59c\n')
+                               commands='@pkgdep mksh>=59c\n', payload_ownership='@owner #51\n@group #52\n')
         script = Path(__file__).resolve().parents[1] / 'scripts/package-portable.py'
         def command(revision, output):
             return [sys.executable, '-B', str(script), str(package), '--host-prefix',
@@ -641,6 +643,8 @@ class InstallTests(unittest.TestCase):
             self.assertIn(b'DISTNAME=fixture-1.0\n', member('+BUILD_INFO'))
             self.assertEqual(member('+BUILD_VERSION'), b'original build provenance\n')
             self.assertEqual(member('payload'), b'installed data')
+            payload_header = next(m for m in archive if m.name.removeprefix('./') == 'payload')
+            self.assertEqual((payload_header.uid, payload_header.gid), (51, 52))
 
     @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
     def test_portable_hook_cannot_use_a_different_producer_prefix(self):

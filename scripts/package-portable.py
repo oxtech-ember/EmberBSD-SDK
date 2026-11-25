@@ -246,7 +246,9 @@ def main():
             size_pkg.write_text(str(payload_size) + '\n')
             if old_all is not None:
                 size_all.write_text(str(old_all - old_pkg + payload_size) + '\n')
-            command = ['-F', 'gzip', '-f', plist, '-p', root, '-I', public]
+            # Preserve PLIST owner overrides. Use numeric system ownership for
+            # entries without an override, including pkg_create metadata.
+            command = ['-F', 'gzip', '-u', '#0', '-g', '#0', '-f', plist, '-p', root, '-I', public]
             for flag, member in (('-c', '+COMMENT'), ('-d', '+DESC'), ('-B', '+BUILD_INFO'),
                                  ('-b', '+BUILD_VERSION'), ('-s', '+SIZE_PKG'), ('-S', '+SIZE_ALL'),
                                  ('-n', '+PRESERVE'), ('-D', '+DISPLAY')):
