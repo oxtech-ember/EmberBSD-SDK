@@ -17,7 +17,7 @@ import zipfile
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from emberbsd_sdk.bootstrap_bundle import (MANIFEST, bundle_paths, initialize, make_relative, prepare, unpack_package,
+from emberbsd_sdk.bootstrap_bundle import (MANIFEST, _producer_tokens, bundle_paths, initialize, make_relative, prepare, unpack_package,
                                            relocate_text, text_references, write_archive)
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.jsonio import read_json, write_json
@@ -271,6 +271,19 @@ class BootstrapTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'producer material'):
             write_archive(stage, self.work/'private-bootstrap.tar.gz', metadata['packages'],
                           forbidden_tokens=metadata['_producer_tokens'])
+
+    def test_build_host_tokens_follow_pkgsrc_uname_formats(self):
+        self.assertEqual(_producer_tokens(b'@cwd /usr/pkg\n', b'BUILD_HOST=Darwin arm64\n'), set())
+        legacy = b'BUILD_HOST=Darwin private-node 25.2.0 Darwin Kernel Version 25.2.0 arm64\n'
+        self.assertEqual(_producer_tokens(b'@cwd /producer/sdk\n', legacy),
+                         {b'/producer/sdk', b'private-node'})
+
+    def test_path_tokens_follow_build_fields_and_allow_system_sdk(self):
+        info = (b'HOMEPAGE=https://www.example.org/docs\n'
+                b'CFLAGS=-isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk\n'
+                b'CPPFLAGS=-I"/Users/builder/Downloads/work/include"\n')
+        self.assertEqual(_producer_tokens(b'@cwd /usr/pkg\n', info),
+                         {b'/Users/builder/Downloads/work'})
 
     def test_native_rpath_bare_anchors_and_escapes(self):
         image = self.root / 'bin' / 'example'

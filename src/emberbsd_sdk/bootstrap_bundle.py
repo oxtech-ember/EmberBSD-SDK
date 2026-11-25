@@ -30,49 +30,50 @@ _FAT_ARCHIVES = {
     b'\xca\xfe\xba\xbe': ('>', 20),
     b'\xca\xfe\xba\xbf': ('>', 32),
 }
-_PRODUCER_PATH = re.compile(rb'(?<![A-Za-z0-9_.-])(/[A-Za-z0-9_+.,@%=-]+(?:/[A-Za-z0-9_+.,@%=-]+)*)')
+_PRODUCER_PATH = re.compile(
+    rb'(?:^|[\s=,:])(?:-[A-Za-z][A-Za-z0-9-]*\s*)?["\']?'
+    rb'(/[A-Za-z0-9_+.,@%=-]+(?:/[A-Za-z0-9_+.,@%=-]+)*)')
 _SAFE_BUILD_PATHS = ('/usr/pkg', '/usr/lib', '/usr/include', '/usr/bin', '/usr/sbin',
-                     '/System', '/bin', '/sbin', '/etc')
+                     '/System', '/Library/Developer', '/bin', '/sbin', '/etc')
+_BUILD_PATH_FIELDS = {b'CFLAGS', b'CPPFLAGS', b'LDFLAGS', b'CONFIGURE_ENV',
+                      b'CONFIGURE_ARGS', b'CMAKE_CONFIGURE_ARGS', b'MAKEFLAGS',
+                      b'BUILD_MAKE_ARGS', b'CC', b'CXX', b'LD'}
 
 
-def _producer_tokens(archive_path):
-    """Return private producer identifiers recorded in package metadata."""
-    from .binary_release import _package_payload
+def _producer_tokens(contents, build_info):
+    """Return private producer identifiers from staged package metadata."""
     tokens = set()
-    with open(archive_path, 'rb') as stream:
-        archive = tarfile.open(fileobj=_package_payload(stream), mode='r|*')
-        for member in archive:
-            if member.name.removeprefix('./') not in ('+CONTENTS', '+BUILD_INFO'):
+    for line in contents.decode('utf-8').splitlines():
+        if line.startswith('@cwd '):
+            prefix = line[5:]
+            if prefix != '/usr/pkg':
+                tokens.add(prefix.encode())
+    systems = {b'darwin', b'netbsd', b'linux', b'freebsd', b'openbsd', b'windows', b'macos'}
+    machines = {b'arm64', b'aarch64', b'x86_64', b'amd64', b'i386', b'riscv32', b'riscv64'}
+    for line in build_info.splitlines():
+        key, separator, value = line.partition(b'=')
+        if not separator:
+            continue
+        if key == b'BUILD_HOST' and value:
+            fields = value.split()
+            if len(fields) > 1 and fields[0].lower() in systems:
+                # pkgsrc historically recorded `uname -a` (OS, nodename,
+                # release, version, machine). Current producers use `uname -sm`.
+                if fields[1].lower() not in systems | machines:
+                    tokens.add(fields[1])
+            elif len(fields) == 1 and fields[0].lower() not in systems | machines:
+                tokens.add(fields[0])
+        if key not in _BUILD_PATH_FIELDS and not key.endswith((b'_FLAGS', b'_ARGS', b'_ENV')):
+            continue
+        for match in _PRODUCER_PATH.findall(value):
+            path = match.decode('utf-8', 'ignore')
+            if any(path == safe or path.startswith(safe + '/') for safe in _SAFE_BUILD_PATHS):
                 continue
-            content = archive.extractfile(member).read()
-            if member.name.endswith('+CONTENTS'):
-                for line in content.decode('utf-8').splitlines():
-                    if line.startswith('@cwd '):
-                        prefix = line[5:]
-                        if prefix != '/usr/pkg':
-                            tokens.add(prefix.encode())
-            else:
-                for line in content.splitlines():
-                    key, separator, value = line.partition(b'=')
-                    if not separator:
-                        continue
-                    if key == b'BUILD_HOST' and value:
-                        fields = value.split()
-                        generic_host_tokens = {b'darwin', b'netbsd', b'linux', b'macos', b'arm64',
-                                               b'aarch64', b'x86_64', b'amd64', b'i386',
-                                               b'riscv32', b'riscv64'}
-                        tokens.update(field for field in fields
-                                      if field.lower() not in generic_host_tokens and
-                                      not re.fullmatch(rb'\d+(?:\.\d+)*', field))
-                    for match in _PRODUCER_PATH.findall(value):
-                        path = match.decode('utf-8', 'ignore')
-                        if any(path == safe or path.startswith(safe + '/') for safe in _SAFE_BUILD_PATHS):
-                            continue
-                        parts = path.split('/')
-                        root_depth = {'Users': 4, 'Volumes': 3, 'private': 3,
-                                      'tmp': 2, 'home': 3, 'build': 3,
-                                      'work': 2}.get(parts[1], 4)
-                        tokens.add('/'.join(parts[:root_depth + 1]).encode())
+            parts = path.split('/')
+            root_depth = {'Users': 4, 'Volumes': 3, 'private': 3,
+                          'tmp': 2, 'home': 3, 'build': 3,
+                          'work': 2}.get(parts[1], 4)
+            tokens.add('/'.join(parts[:root_depth + 1]).encode())
     return {token for token in tokens if token}
 
 
@@ -771,11 +772,12 @@ def _prepare_verified(root, archives, crypto, *, host, repository, install_name_
         package, source = unpack_package(archive, root)
         packages.append(package)
         source_prefixes.add(source)
-        forbidden_tokens.update(_producer_tokens(archive))
         if inspect_install_paths(archive, {'prefix': source, 'pkgdb': source + '/pkgdb'}) is None:
             raise SDKError('bootstrap package requires a portable declaration: ' + package)
         database = root / 'pkgdb' / package
         contents = database / '+CONTENTS'
+        build_info = database / '+BUILD_INFO'
+        forbidden_tokens.update(_producer_tokens(contents.read_bytes(), build_info.read_bytes()))
         lines = contents.read_text().splitlines()
         independent = lines.count(package_relocation.INDEPENDENT)
         markers = lines.count(package_relocation.MARKER)
