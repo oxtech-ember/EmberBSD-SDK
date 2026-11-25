@@ -6,8 +6,11 @@ Run the SDK client's explicit foreground controller:
 python3 scripts/packages.py --config /work/client.json auto-update --interval 3600
 ```
 
-The first attempt runs immediately. Each later attempt starts after the previous
-attempt and the interval. The default interval is 3600 seconds. Optional repeated
+The first attempt runs immediately. After success, the controller waits for the
+configured interval. The default is 3600 seconds. After failure, it retries
+after 30 seconds or the configured interval, whichever is shorter. Each
+consecutive failure doubles the delay up to the configured interval. A success
+resets the retry delay. Optional repeated
 `--package ROOT` limits updates to explicitly named installed roots.
 Use `plan --installed` to inspect an update before starting the controller.
 
@@ -18,9 +21,8 @@ It never expands package sets, compiles missing binaries or restores removed
 packages. An explicitly named root removed by the user causes an error until
 the controller is restarted with an updated selection.
 
-No client, cache, build or pkgdb lock is held during the interval. Busy writers
-and failed updates are reported. The next attempt waits the same interval and
-reads pkgdb again; it does not spin or assume the previous batch was atomic.
+No client, cache, build or pkgdb lock is held during a wait. The controller
+reports busy writers and failed updates. Each retry reads pkgdb again.
 Signal handlers request a stop between attempts. Existing subprocess interruption
 and package recovery rules still apply. There is no multi-package rollback.
 Existing build/pkgdb locks remain the coordination boundary. The controller does

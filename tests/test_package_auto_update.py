@@ -54,7 +54,13 @@ class AutomaticUpdateTests(unittest.TestCase):
         self.assertEqual(calls, [0, 1])
         self.assertEqual(stop.waits, [3600, 3600])
 
-    def test_failure_is_reported_and_retried_after_the_interval(self):
+    def test_retry_delay_grows_to_the_interval_and_resets_after_success(self):
+        update = Mock(side_effect=[1, 1, 1, 1, 0, 1, 0])
+        stop = StopAfter(7)
+        self.assertEqual(self.watch(update, 100, stop=stop), 0)
+        self.assertEqual(stop.waits, [30, 60, 100, 100, 100, 30, 100])
+
+    def test_short_interval_limits_the_first_retry(self):
         stop = StopAfter(2)
         update = Mock(side_effect=[1, 0])
         self.assertEqual(self.watch(update, 17, stop=stop), 0)
@@ -124,13 +130,16 @@ print('stopped cleanly', flush=True)
         self.assertIn('signal at locked wait boundary', result.stdout)
         self.assertIn('stopped cleanly', result.stdout)
 
-    def test_real_sigterm_wakes_an_idle_controller(self):
+    def test_real_sigterm_wakes_a_controller_waiting_to_retry(self):
         script = '''
+import select
 from emberbsd_sdk.package_auto_update import watch_updates
-def update():
-    print('ready', flush=True)
-    return 0
-watch_updates(update, 3600)
+wait = select.select
+def report_wait(read, write, errors, timeout):
+    print(f'waiting {timeout:g}', flush=True)
+    return wait(read, write, errors, timeout)
+select.select = report_wait
+watch_updates(lambda: 1, 3600)
 print('stopped cleanly', flush=True)
 '''
         environment = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / 'src'))
@@ -139,7 +148,7 @@ print('stopped cleanly', flush=True)
         try:
             readable, _, _ = select.select([child.stdout], [], [], 5)
             self.assertTrue(readable, 'automatic updater did not start')
-            self.assertEqual(child.stdout.readline(), 'ready\n')
+            self.assertEqual(child.stdout.readline(), 'waiting 30\n')
             child.send_signal(signal.SIGTERM)
             output, errors = child.communicate(timeout=5)
             self.assertEqual(child.returncode, 0, errors)

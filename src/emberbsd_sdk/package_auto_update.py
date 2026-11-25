@@ -19,6 +19,8 @@ def watch_updates(update, interval):
     stopping = False
     reader, writer = os.pipe()
     previous = {}
+    first_retry = min(30, interval)
+    retry_delay = first_retry
 
     def request_stop(_number, _frame):
         nonlocal stopping
@@ -34,13 +36,19 @@ def watch_updates(update, interval):
             number = getattr(signal, name, None)
             if number is not None:
                 previous[number] = signal.signal(number, request_stop)
-        print(f'Automatic package updates: every {interval:g} seconds after each attempt.', file=sys.stderr)
+        print(f'Automatic package updates run every {interval:g} seconds after a successful attempt.', file=sys.stderr)
         while not stopping:
-            if update():
-                print('Automatic update failed; the next attempt will reread pkgdb and retry.', file=sys.stderr)
+            failed = update()
             if stopping:
                 break
-            select.select([reader], [], [], interval)
+            if failed:
+                delay = retry_delay
+                retry_delay = min(interval, retry_delay * 2)
+                print(f'Automatic update failed. Retrying in {delay:g} seconds.', file=sys.stderr)
+            else:
+                delay = interval
+                retry_delay = first_retry
+            select.select([reader], [], [], delay)
         return 0
     finally:
         for number, handler in previous.items():
