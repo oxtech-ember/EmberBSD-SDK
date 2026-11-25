@@ -57,6 +57,24 @@ creates the target compiler commands. Repeating `install` also applies compatibl
 component updates; see the [client update boundary](sdk-client.md#cache-and-interruption).
 Coordinated ABI transitions and additional host platforms remain separate work.
 
+## Select the native catalog in an existing Darwin 0.27 prefix
+
+An early Darwin 0.27 archive stored the server URL in the `repository` field of
+`share/emberbsd/bootstrap.json`. Its client can report a source build for a
+published native package. To keep using that prefix, use the configuration
+example in [SDK client](sdk-client.md). Set `host_prefix`, `prefix` and `pkgdb`
+to the existing installation. Use the catalog ID `darwin-arm64` as the key
+under `repositories` and the package server URL as `url`. Set `sdk` to the
+existing SDK prefix and `config` to the path of this configuration file.
+
+```sh
+"$sdk/bin/ember-sdk" plan --config "$config" --package lang/python315@native
+"$sdk/bin/ember-sdk" install --config "$config" --package lang/python315@native
+```
+
+The plan lists the signed Python package under `packages` and leaves
+`build_roots` empty.
+
 ## Recover an interrupted Darwin gperf 3.3 installation
 
 The first Darwin `gperf-3.3` package used a producer path for its shell.
