@@ -79,7 +79,8 @@ python3 scripts/binary-catalog.py --host-prefix /work/host-pkg-llvm compose \
 ```
 
 The producer selects OpenSSL, pkg_info and pkg_admin from that prefix.
-Public packages omit the producer's configure environment from `+BUILD_INFO`.
+Public packages omit the producer's `CONFIGURE_ENV`, `CONFIGURE_ARGS` and
+`CMAKE_CONFIGURE_ARGS` from `+BUILD_INFO`. Record selected features in `PKG_OPTIONS`.
 If `BUILD_HOST` is present, record the host OS and machine type, such as
 `Darwin arm64`. The catalog checks these fields before it signs new packages.
 

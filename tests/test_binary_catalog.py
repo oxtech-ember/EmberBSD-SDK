@@ -181,6 +181,15 @@ class BinaryReleaseTests(BinaryReleaseFixture):
                 with self.assertRaisesRegex(SDKError, 'BUILD_HOST'):
                     inspect_package(path, None)
 
+    def test_rejects_producer_configure_arguments(self):
+        from emberbsd_sdk.binary_release import inspect_package
+        for key in ('CONFIGURE_ARGS', 'CMAKE_CONFIGURE_ARGS'):
+            with self.subTest(key=key):
+                path = self.package('devel/' + key.lower(),
+                                    extra_build_info=f'{key}=--sysroot=/build/private\n')
+                with self.assertRaisesRegex(SDKError, key):
+                    inspect_package(path, None)
+
     def test_sign_package_command_checks_public_metadata(self):
         from emberbsd_sdk import release_cli
         archive = self.package('devel/cli', extra_build_info='CONFIGURE_ENV=CC=cc\n')
