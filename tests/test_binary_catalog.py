@@ -3,7 +3,9 @@
 """Binary selection follows producer-resolved runtime edges, never build edges."""
 
 from copy import deepcopy
+from contextlib import redirect_stderr
 import gzip
+from io import StringIO
 import os
 from pathlib import Path
 import subprocess
@@ -161,6 +163,39 @@ class BinaryReleaseFixture(unittest.TestCase):
 
 
 class BinaryReleaseTests(BinaryReleaseFixture):
+    def test_rejects_producer_environment_before_signing(self):
+        self.repository(app_options={'extra_build_info': 'CONFIGURE_ENV=CC=/build/agent/bin/cc\n'})
+        with patch.object(self.crypto, 'sign_package', wraps=self.crypto.sign_package) as sign:
+            with self.assertRaisesRegex(SDKError, 'CONFIGURE_ENV'):
+                self.compose()
+            sign.assert_not_called()
+
+    def test_build_host_contains_only_the_host_platform(self):
+        from emberbsd_sdk.binary_release import inspect_package
+        for root, host in [('devel/short', 'Darwin arm64'), ('devel/empty', ''),
+                           ('devel/full', 'Darwin host.example.invalid 27.0 arm64')]:
+            path = self.package(root, extra_build_info='BUILD_HOST=' + host + '\n')
+            if root == 'devel/short':
+                inspect_package(path, None)
+            else:
+                with self.assertRaisesRegex(SDKError, 'BUILD_HOST'):
+                    inspect_package(path, None)
+
+    def test_sign_package_command_checks_public_metadata(self):
+        from emberbsd_sdk import release_cli
+        archive = self.package('devel/cli', extra_build_info='CONFIGURE_ENV=CC=cc\n')
+        output = self.work / 'signed.tgz'
+        errors = StringIO()
+        with redirect_stderr(errors), patch.object(release_cli.ReleaseCrypto, 'sign_package') as sign:
+            result = release_cli.main(['--host-prefix', os.environ['EMBERBSD_TEST_HOST_PREFIX'],
+                                       'sign-package', '--trust-root', str(self.ca.certificate),
+                                       '--signer-directory', str(self.root / 'leaf'),
+                                       '--output', str(output), archive])
+        self.assertNotEqual(result, 0)
+        self.assertIn('CONFIGURE_ENV', errors.getvalue())
+        sign.assert_not_called()
+        self.assertFalse(output.exists())
+
     def _assert_app_license(self, license_value, expected):
         repo = self.repository(app_options={'license_value': license_value})
         repo['sets'] = []

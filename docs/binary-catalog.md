@@ -78,7 +78,10 @@ python3 scripts/binary-catalog.py --host-prefix /work/host-pkg-llvm compose \
   --trust-root trust/emberbsd-release-root.pem --output /work/releases/preview-1
 ```
 
-The producer selects OpenSSL, pkg_info and pkg_admin from that prefix. It:
+The producer selects OpenSSL, pkg_info and pkg_admin from that prefix.
+Public packages omit the producer's configure environment from `+BUILD_INFO`.
+If `BUILD_HOST` is present, record the host OS and machine type, such as
+`Darwin arm64`. The catalog checks these fields before it signs new packages.
 
 1. Projects runtime closures; build, tool and test edges stay out.
 2. Checks path/version/platform, licenses, sizes and archive DEPENDS against

@@ -172,6 +172,8 @@ def main(argv=None):
             identity = crypto.issue_signer(_identity(args.root_directory), args.directory, days=args.days)
             print(f'Created release certificate: {identity.certificate}')
         elif args.command == 'sign-package':
+            from .binary_release import inspect_package
+            inspect_package(args.input, None)
             crypto.sign_package(args.input, args.output, _identity(args.signer_directory), args.trust_root)
             print(f'Signed package: {args.output}')
         elif args.command == 'verify-package':

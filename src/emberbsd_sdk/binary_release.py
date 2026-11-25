@@ -115,6 +115,11 @@ def inspect_package(path, target, *, require_native_relocation=False):
                     fields = stream.read().decode('utf-8').splitlines()
                     for line in fields:
                         key, separator, value = line.partition('=')
+                        if separator and key == 'CONFIGURE_ENV' and value.strip():
+                            raise SDKError('public package contains a producer CONFIGURE_ENV')
+                        if (separator and key == 'BUILD_HOST' and
+                                not re.fullmatch(r'[A-Za-z0-9_-]+ [A-Za-z0-9_-]+', value)):
+                            raise SDKError('public BUILD_HOST must contain only the host OS and architecture')
                         if separator and key in ('NO_BIN_ON_FTP', 'RESTRICTED') and value.strip():
                             raise SDKError(f'package redistribution restriction: {path}: {key}')
                 elif not name.startswith('+'):
