@@ -57,6 +57,26 @@ creates the target compiler commands. Repeating `install` also applies compatibl
 component updates; see the [client update boundary](sdk-client.md#cache-and-interruption).
 Coordinated ABI transitions and additional host platforms remain separate work.
 
+## Recover an interrupted Darwin gperf 3.3 installation
+
+The first Darwin `gperf-3.3` package used a producer path for its shell.
+New installations get `gperf-3.3nb1` from the signed catalog. If the first
+PRE-INSTALL hook failed to start because that shell was missing, the old package
+can remain registered with `+EMBERBSD_RELOCATION_READY`. Its deinstall hook
+uses the same missing shell.
+
+For this case, set `prefix` and `pkgdb` to the native repository paths in your
+client configuration. Set `sdk` to the bootstrap prefix and `config` to the
+configuration file. Confirm the first command selects `gperf-3.3nb1` or newer.
+Then remove the unconfigured package and install its replacement. The
+`-D` option skips the old deinstall hook and keeps the reverse dependency check.
+
+```sh
+"$sdk/bin/ember-sdk" plan --config "$config" --package devel/gperf@native
+"$sdk/sbin/pkg_delete" -D -K "$pkgdb" -p "$prefix" gperf-3.3 &&
+    "$sdk/bin/ember-sdk" install --config "$config" --package devel/gperf@native
+```
+
 ## Producing the archive
 
 `scripts/package-bootstrap.py --help` accepts complete Ports package archives,
