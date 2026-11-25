@@ -647,6 +647,25 @@ class InstallTests(unittest.TestCase):
             self.assertEqual((payload_header.uid, payload_header.gid), (51, 52))
 
     @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
+    def test_portable_size_counts_each_packing_list_spelling(self):
+        (self.work / 'case-probe').touch()
+        if not (self.work / 'CASE-PROBE').exists():
+            self.skipTest('requires a case-insensitive staging volume')
+        package = self.package(payload='data', commands='PAYLOAD\n', sizes=(8, 18))
+        output = self.work / 'portable.tgz'
+        script = Path(__file__).resolve().parents[1] / 'scripts/package-portable.py'
+        subprocess.run([sys.executable, '-B', str(script), str(package), '--output', str(output),
+            '--host-prefix', os.environ['EMBERBSD_TEST_HOST_PREFIX'],
+            '--dependency-prefix', str(self.work / 'unused'), '--relocate-text',
+            '--bootstrap-install-name-tool', '/usr/bin/false', '--codesign', '/usr/bin/false'],
+            check=True, capture_output=True)
+        with tarfile.open(output, 'r:gz') as archive:
+            self.assertEqual(archive.extractfile('payload').read(), b'data')
+            self.assertEqual(archive.extractfile('PAYLOAD').read(), b'data')
+            self.assertEqual(int(archive.extractfile('+SIZE_PKG').read()), 8)
+            self.assertEqual(int(archive.extractfile('+SIZE_ALL').read()), 18)
+
+    @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
     def test_portable_hook_cannot_use_a_different_producer_prefix(self):
         script = Path(__file__).resolve().parents[1] / 'scripts/package-portable.py'
         foreign_shell = self.work / 'tools/bin/mksh'

@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -218,6 +219,7 @@ def main():
             if args.defer_hooks:
                 packing.append(package_relocation.HOOKS)
             ignored = False
+            payload_size = 0
             for line in lines:
                 if args.package_revision is not None and line.startswith('@name '):
                     if line != '@name ' + name:
@@ -229,6 +231,12 @@ def main():
                     ignored = True
                 elif not line.startswith(('@cwd ', '@comment MD5:', '@comment Symlink:')):
                     packing.append(line)
+                    # pkg_create archives each PLIST name, even when two names
+                    # refer to one file on a case-insensitive staging volume.
+                    if line and not line.startswith(('@', '+')):
+                        entry = (root / line).lstat()
+                        if stat.S_ISREG(entry.st_mode):
+                            payload_size += entry.st_size
             plist = Path(directory) / 'PLIST'
             plist.write_text('\n'.join(packing) + '\n')
             # Relocation can change payload sizes (notably Mach-O load commands).
@@ -240,9 +248,6 @@ def main():
             if old_pkg is not None and old_pkg < 0 or old_all is not None and (
                     old_pkg is None or old_all < old_pkg):
                 raise SDKError('invalid original package sizes')
-            payload_size = sum(path.stat().st_size for path in root.rglob('*')
-                               if not path.is_relative_to(root / 'pkgdb') and
-                               not path.is_symlink() and path.is_file())
             size_pkg.write_text(str(payload_size) + '\n')
             if old_all is not None:
                 size_all.write_text(str(old_all - old_pkg + payload_size) + '\n')
