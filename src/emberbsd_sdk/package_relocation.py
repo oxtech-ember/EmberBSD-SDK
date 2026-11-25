@@ -8,6 +8,7 @@ from .bootstrap_bundle import (_replace_file, relative_path, relocate_text,
                                refresh_bytecode, refresh_checksums, relocate_build_info, run_install_hooks)
 from .errors import SDKError
 
+ARCHIVE_PREFIX = '/usr/pkg'
 INDEPENDENT = '@comment emberbsd-prefix-independent-v1'
 MARKER = '@comment emberbsd-prefix-relocation-v1'
 SOURCE = '@comment emberbsd-relocation-prefix='

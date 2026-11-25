@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 import hashlib
 import importlib.util
+import marshal
 import os
 from pathlib import Path
 import py_compile
@@ -12,11 +13,27 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk import package_relocation as relocation
-from emberbsd_sdk.bootstrap_bundle import _replace_file, relocate_text
+from emberbsd_sdk.bootstrap_bundle import _replace_file, refresh_bytecode, relocate_text
 from emberbsd_sdk.errors import SDKError
 
 
 class RelocationTests(unittest.TestCase):
+    def test_producer_writes_public_bytecode_filenames(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'owned.py'
+            source.write_text("def value(): return '/usr/pkg/share'\n")
+            cache = Path(py_compile.compile(str(source), doraise=True))
+            metadata = root / 'pkgdb' / 'example-1'
+            metadata.mkdir(parents=True)
+            (metadata / '+CONTENTS').write_text(f'owned.py\n{cache.relative_to(root)}\n')
+            refresh_bytecode(root, ['example-1'], {source}, only_changed=True,
+                             bytecode_root=relocation.ARCHIVE_PREFIX)
+            code = marshal.loads(cache.read_bytes()[16:])
+            self.assertEqual(code.co_filename, '/usr/pkg/owned.py')
+            self.assertEqual(code.co_consts[0].co_filename, '/usr/pkg/owned.py')
+            self.assertNotIn(directory.encode(), cache.read_bytes())
+
     def check_python_relocation(self, *, same_header=False, deferred=False, interrupted=False,
                                 wrong_python=False):
         with tempfile.TemporaryDirectory() as temporary:

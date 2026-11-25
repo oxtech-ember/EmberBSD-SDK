@@ -16,7 +16,8 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from emberbsd_sdk.bootstrap_bundle import unpack_package, make_relative, _replace_file, text_references
+from emberbsd_sdk.bootstrap_bundle import (unpack_package, make_relative, _replace_file,
+    text_references, relocate_text, refresh_bytecode)
 from emberbsd_sdk import package_relocation
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.host_prefix import load_host_prefix
@@ -179,12 +180,26 @@ def main():
                         continue
                     line = 'REQUIRES=' + ' '.join(required)
                 updated.append(line)
-            _replace_file(info, ('\n'.join(updated) + '\n').encode())
+            # Use one public archive prefix. The build prefix remains local.
+            public = package_relocation.ARCHIVE_PREFIX
+            old, new = prefix.encode(), public.encode()
+            _replace_file(info, relocate_text(('\n'.join(updated) + '\n').encode(), old, new))
             texts = [relative for relative in text_references(root, prefix, [name])
                      if not relative.startswith('pkgdb/')]
+            if args.relocate_text and prefix != public:
+                package_relocation.relocate_declared_text(root, texts, prefix, public)
+                changed = {root / relative for relative in texts if relative.endswith('.py')}
+                if changed:
+                    refresh_bytecode(root, [name], changed, only_changed=True, bytecode_root=public)
+                if args.defer_hooks:
+                    for member in ('+INSTALL', '+DEINSTALL'):
+                        hook = database / member
+                        if hook.is_file():
+                            _replace_file(hook, relocate_text(hook.read_bytes(), old, new))
+            declared_texts = set(texts) if args.relocate_text else set()
             for path in root.rglob('*'):
                 if path.is_file() and not path.is_symlink() and not path.is_relative_to(root / 'pkgdb'):
-                    if args.relocate_text and path.relative_to(root).as_posix() in texts:
+                    if path.relative_to(root).as_posix() in declared_texts:
                         continue
                     # Only a producer check; clients trust the signed qualification.
                     with path.open('rb') as source:
@@ -197,7 +212,7 @@ def main():
                                     raise SDKError('payload still embeds its producer prefix: ' + str(path.relative_to(root)))
                                 break
                             tail = chunk[-len(prefix):]
-            packing = ([package_relocation.MARKER, package_relocation.SOURCE + prefix,
+            packing = ([package_relocation.MARKER, package_relocation.SOURCE + public,
                         *[package_relocation.TEXT + name for name in texts]]
                        if args.relocate_text else [PORTABLE_PREFIX])
             if args.defer_hooks:
@@ -231,7 +246,7 @@ def main():
             size_pkg.write_text(str(payload_size) + '\n')
             if old_all is not None:
                 size_all.write_text(str(old_all - old_pkg + payload_size) + '\n')
-            command = ['-F', 'gzip', '-f', plist, '-p', root, '-I', prefix]
+            command = ['-F', 'gzip', '-f', plist, '-p', root, '-I', public]
             for flag, member in (('-c', '+COMMENT'), ('-d', '+DESC'), ('-B', '+BUILD_INFO'),
                                  ('-b', '+BUILD_VERSION'), ('-s', '+SIZE_PKG'), ('-S', '+SIZE_ALL'),
                                  ('-n', '+PRESERVE'), ('-D', '+DISPLAY')):

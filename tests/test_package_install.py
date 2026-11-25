@@ -561,6 +561,13 @@ class InstallTests(unittest.TestCase):
             '--dependency-prefix', str(self.work / 'unused'), '--output', str(portable), '--relocate-text',
             '--defer-hooks', '--bootstrap-install-name-tool', '/usr/bin/false', '--codesign', '/usr/bin/false'],
             check=True, capture_output=True)
+        with tarfile.open(portable, 'r:gz') as archive:
+            for member in archive.getmembers():
+                if member.isfile():
+                    self.assertNotIn(original.encode(), archive.extractfile(member).read(), member.name)
+            contents = archive.extractfile('+CONTENTS').read()
+            self.assertIn(b'@cwd /usr/pkg\n', contents)
+            self.assertIn(b'@comment emberbsd-relocation-prefix=/usr/pkg\n', contents)
         self.crypto.sign_package(portable, signed, self.signer, self.ca.certificate)
         self.cfg.update(prefix=str(self.work / 'relocated'), pkgdb=str(self.work / 'selected-pkgdb'))
         installer = PackageInstaller(self.crypto, self.ca.certificate)
@@ -774,7 +781,7 @@ class InstallTests(unittest.TestCase):
         self.assertIn('fixture-1.0', installer.installed(self.cfg))
         info = (database / 'fixture-1.0/+BUILD_INFO').read_text()
         self.assertIn('PROVIDES=' + str(destination) + '/payload', info)
-        self.assertIn('CFLAGS=-I' + original + '/include', info)
+        self.assertIn('CFLAGS=-I/usr/pkg/include', info)
         self.assertEqual(self.localbase(database), str(destination))
         self.assertFalse(list(package_relocation.pending(destination, database)))
         self.crypto.run_package('pkg_admin', ['-K', database, 'check', 'fixture-1.0'])

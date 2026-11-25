@@ -501,7 +501,8 @@ def run_install_hooks(root, database, name):
                            result.stderr[-4096:].decode('utf-8', 'replace'))
 
 
-def refresh_bytecode(root, packages, changed_sources, *, database=None, only_changed=False):
+def refresh_bytecode(root, packages, changed_sources, *, database=None, only_changed=False,
+                     bytecode_root=None):
     """Refresh owned caches using this interpreter's checked cache format.
 
     Bootstrap validates all caches; package relocation limits the operation to
@@ -544,7 +545,8 @@ def refresh_bytecode(root, packages, changed_sources, *, database=None, only_cha
         else:
             valid = False
         if source in changed_sources or not valid:
-            py_compile.compile(str(source), cfile=str(path), doraise=True,
+            display = None if bytecode_root is None else str(Path(bytecode_root) / source.relative_to(root))
+            py_compile.compile(str(source), cfile=str(path), dfile=display, doraise=True,
                                optimize=int(optimization or '0'), invalidation_mode=mode)
             changed.add(path.relative_to(root).as_posix())
     return changed

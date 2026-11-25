@@ -143,6 +143,11 @@ scripts, while native target installs run them.
 This deliberately narrow contract is not a generic relocator for arbitrary
 applications, scripts or configuration files.
 
+New portable archives use `/usr/pkg` as their packing-list prefix.
+The producer rewrites its own prefix in build metadata and qualified hooks.
+It also rewrites the declared text files and refreshes their owned Python caches.
+The client uses the archive prefix to relocate these files at installation.
+
 For compiler packages, `--relocate-text` records the owned text files that need
 prefix replacement and permits prefix-local library `PROVIDES`. The signed
 `emberbsd-prefix-relocation-v1` marker declares this contract. After successful
