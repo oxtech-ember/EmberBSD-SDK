@@ -636,6 +636,27 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(member('payload'), b'installed data')
 
     @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
+    def test_portable_hook_cannot_use_a_different_producer_prefix(self):
+        script = Path(__file__).resolve().parents[1] / 'scripts/package-portable.py'
+        foreign_shell = self.work / 'tools/bin/mksh'
+        package = self.package(install_script='#!/bin/sh\nexit 0\n',
+                               deinstall_script=f'#!{foreign_shell}\nexit 0\n')
+        output = self.work / 'portable.tgz'
+        command = [sys.executable, '-B', str(script), str(package),
+            '--host-prefix', os.environ['EMBERBSD_TEST_HOST_PREFIX'], '--dependency-prefix', str(self.work),
+            '--output', str(output), '--relocate-text', '--defer-hooks',
+            '--bootstrap-install-name-tool', '/usr/bin/false', '--codesign', '/usr/bin/false']
+        result = subprocess.run(command, text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('+DEINSTALL interpreter', result.stderr)
+        self.assertFalse(output.exists())
+        replacement = self.work / 'deinstall'
+        replacement.write_text(f'#!{self.destination}/bin/mksh\nexit 0\n')
+        subprocess.run([*command, '--package-revision', '1', '--deinstall-script', str(replacement)],
+                       check=True, capture_output=True)
+        self.assertTrue(output.is_file())
+
+    @unittest.skipUnless(platform.system() == 'Darwin', 'Darwin packaging')
     def test_repackage_portable_payload_with_replacement_hook(self):
         script = Path(__file__).resolve().parents[1] / 'scripts/package-portable.py'
         package = self.package(package_name='fixture-1.0nb1', payload_path='bin/fixture',

@@ -7,6 +7,7 @@ Whole packages only. Text relocation and deferred hooks are explicit;
 retaining binary build paths requires a relocated runtime check.
 """
 import argparse
+import os
 from pathlib import Path
 import platform
 import re
@@ -21,6 +22,20 @@ from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.host_prefix import load_host_prefix
 from emberbsd_sdk.package_install import PORTABLE_PREFIX
 from emberbsd_sdk.release_signing import ReleaseCrypto, read_bytes
+
+
+def check_hook_interpreter(hook, prefix):
+    """A deferred hook must start after its one declared prefix moves."""
+    with hook.open('rb') as stream:
+        line = stream.readline(4096)
+    words = line[2:].split() if line.startswith(b'#!') else []
+    if not words:
+        raise SDKError(f'{hook.name} has no script interpreter')
+    interpreter = Path(os.fsdecode(words[0]))
+    system_dirs = (Path('/bin'), Path('/sbin'), Path('/usr/bin'), Path('/usr/sbin'))
+    if ('..' in interpreter.parts or not interpreter.is_absolute() or
+            not (interpreter.is_relative_to(prefix) or interpreter.parent in system_dirs)):
+        raise SDKError(f'{hook.name} interpreter is outside the package prefix and Darwin system paths: {interpreter}')
 
 
 def dependency_files(crypto, prefix, patterns):
@@ -118,6 +133,9 @@ def main():
                     else:
                         destination.write_bytes(content)
                     destination.chmod(0o755)
+                hook = database / member
+                if args.defer_hooks and hook.is_file():
+                    check_hook_interpreter(hook, prefix)
             if any(line.startswith(('@exec ', '@unexec ')) for line in lines):
                 raise SDKError('package has installation commands')
             # pkg_add's REQUIRES check uses absolute paths, even with -p.
