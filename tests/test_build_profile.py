@@ -25,6 +25,16 @@ PROFILE = {
     'os': {'kernels': ['EMBER64']},
     'ports': {},
 }
+# The --outputs query of the OS kernel builder: only aarch64 has an image.
+KERNEL_OUTPUTS_SH = '''if [ "${1:-}" = --outputs ]; then
+    target=${EMBER_KERNEL_TARGET:-aarch64}
+    case "$target" in aarch64|amd64) ;; *) echo 'EMBER_KERNEL_TARGET must be aarch64 or amd64' >&2; exit 1;; esac
+    config=${2##*/}
+    echo "netbsd-$config"
+    [ "$target" != aarch64 ] || echo "netbsd-$config.img"
+    exit 0
+fi
+'''
 SOURCES = {
     'EMBER_BYACC_SOURCE': {'package': 'devel/byacc', 'producer': 'ports:scripts/source-inputs/byacc'},
     'EMBER_HEIMDAL_SOURCE': {'package': 'security/heimdal', 'producer': 'ports:scripts/source-inputs/heimdal'},
@@ -87,7 +97,8 @@ class ProfileFixture(TemporaryCase):
             'sys/arch/amd64/conf/GENERIC_ARL': 'include "arch/amd64/conf/std.amd64"\n',
             'tools/native-tools/contract': 'EmberBSD-native-tools 2\ncmp cmp -\nreadlink readlink -\n'
                                            'make make -\nsh sh -\n',
-            'ember/tools/shared-sources.py': self.os_tool()})
+            'ember/tools/shared-sources.py': self.os_tool(),
+            'ember/build-kernel.sh': '#!/bin/sh\n' + KERNEL_OUTPUTS_SH + 'exit 1\n'})
         self.ports = self.repository('ports', {
             'scripts/source-inputs/byacc/source.py': "PACKAGE = 'devel/byacc'\n",
             'scripts/source-inputs/heimdal/source.py': "PACKAGE = 'security/heimdal'\n",
@@ -417,7 +428,8 @@ class BuildProfileTests(ProfileFixture):
     def test_a_kernel_of_a_target_without_a_kernel_builder_is_refused(self):
         profile = copy.deepcopy(PROFILE)
         profile['platform']['target'] = 'riscv32'
-        with self.assertRaisesRegex(SDKError, 'os.kernels needs the aarch64 or amd64 target'):
+        with self.assertRaisesRegex(SDKError, 'the OS kernel builder refuses the target or configuration: '
+                                    'EMBER_KERNEL_TARGET must be aarch64 or amd64'):
             self.plan(profile)
 
     def test_missing_kernel_configuration_is_refused(self):

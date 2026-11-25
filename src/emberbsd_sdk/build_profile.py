@@ -46,9 +46,9 @@ EXPORT_NODE = 'ports:pkgsrc-export'
 # The make flags of the tools build in ember/build-kernel.sh, which builds them
 # with the target compiler of the host prefix.
 KERNEL_TOOLS_FLAGS = ('TOOLCHAIN_MISSING=yes', 'MKCROSSGDB=no')
-# The outputs of the OS kernel builder (ember/build-kernel.sh) for each target
-# that it builds. Only evbarm makes a kernel image.
-KERNEL_OUTPUTS = {'aarch64': ('netbsd-{config}', 'netbsd-{config}.img'), 'amd64': ('netbsd-{config}',)}
+# The OS kernel builder; `--outputs CONFIG` prints the kernel files of a
+# build for EMBER_KERNEL_TARGET, one per line.
+KERNEL_BUILDER = 'ember/build-kernel.sh'
 # SDK-side files read by the profile node, ember/build-kernel.sh and the two
 # native runners, including the per-host child launchers and bindings snapshot.
 OS_SCRIPTS = ('scripts/packages.py', 'scripts/run-native-check.py', 'scripts/run-native-os.py')
@@ -286,6 +286,22 @@ def read_shared_sources(os_root):
     except CommandError as exc:
         raise SDKError(exc.stderr.decode('utf-8', 'replace').strip() or 'OS shared sources are invalid') from exc
     return loads_json(data)
+
+
+def kernel_outputs(os_root, target, config):
+    """Return the kernel files that the OS kernel builder makes for TARGET and CONFIG."""
+    builder = os.path.join(os_root, KERNEL_BUILDER)
+    _require(os.path.isfile(builder), f'the OS has no {KERNEL_BUILDER}')
+    environment = dict(process.sanitized_environment(), EMBER_KERNEL_TARGET=target)
+    try:
+        data = process.capture(['/bin/sh', builder, '--outputs', config], env=environment).stdout
+    except CommandError as exc:
+        raise SDKError('profile os.kernels: the OS kernel builder refuses the target or configuration: ' +
+                       (exc.stderr.decode('utf-8', 'replace').strip() or f'{KERNEL_BUILDER} failed')) from exc
+    names = data.decode('utf-8', 'replace').split()
+    _require(names and all(re.fullmatch(r'[A-Za-z0-9_.-]+', name) for name in names),
+             f'{KERNEL_BUILDER} --outputs printed no valid output names')
+    return names
 
 
 def kernel_sources(document, config):
@@ -677,16 +693,14 @@ def make_plan(profile, *, os_root, ports_root, sdk_root, host_prefix, host_bfd_c
 
     tools_stage = stage('os:tools', dict(stage='tools'), prepared_sources.TOOLS_TRAVERSALS,
                         [*KERNEL_TOOLS_FLAGS, *mk], [], ['tools'], None, os_inputs)
-    _require(not profile['os']['kernels'] or profile['platform']['target'] in KERNEL_OUTPUTS,
-             'profile os.kernels needs the aarch64 or amd64 target: the OS kernel builder builds no other kernel')
     for config in profile['os']['kernels']:
+        # The builder checks the target before the configuration file.
+        outputs = kernel_outputs(os_identity['root'], profile['platform']['target'], config)
         path = kernel_config(os_identity['root'], target['machine'], kernel_configs, config)
         # A configuration outside the OS can include the other configurations of its directory.
         inputs = release_inputs if path is None else dict(release_inputs, kernel_config=_directory_digest(path.parent))
         node = stage('os:kernel:' + config, dict(stage='kernel', config=config), (), [*KERNEL_TOOLS_FLAGS, *mk],
-                     kernel_sources(shared, config),
-                     [name.format(config=config) for name in KERNEL_OUTPUTS[profile['platform']['target']]],
-                     'profile os.kernels', inputs)
+                     kernel_sources(shared, config), outputs, 'profile os.kernels', inputs)
         if path is not None:
             # The build uses the file that the key was computed from.
             nodes[node]['kernel_config'] = str(path)

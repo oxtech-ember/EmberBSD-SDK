@@ -29,7 +29,7 @@ from .jsonio import read_json, write_json
 NINJA_FILE = 'build.ninja'
 PLAN_FILE = 'plan.json'
 # The OS producers. The tools build runs inside its consumer.
-KERNEL_BUILDER = 'ember/build-kernel.sh'
+KERNEL_BUILDER = build_profile.KERNEL_BUILDER
 # The Prebuild SDK workspace of profile-build, inside its work directory.
 WORKSPACE = 'sdk'
 # The host and target tools that the OS objects of a release depend on.

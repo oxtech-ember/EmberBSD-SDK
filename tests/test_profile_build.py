@@ -13,7 +13,7 @@ import unittest
 from contextlib import redirect_stderr
 from unittest import mock
 
-from test_build_profile import PROFILE, ProfileFixture, git
+from test_build_profile import KERNEL_OUTPUTS_SH, PROFILE, ProfileFixture, git
 from emberbsd_sdk import profile_build, workspace
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.jsonio import write_json
@@ -37,7 +37,7 @@ open(os.environ['TEST_LOG'], 'a').write('prepare ' + archive + '\\n')
 '''
 # ember/build-kernel.sh: record the selected sources, then write the outputs.
 KERNEL = '''set -eu
-out=$1; config=${2##*/}
+''' + KERNEL_OUTPUTS_SH + '''out=$1; config=${2##*/}
 echo "kernel $2 byacc=$EMBER_BYACC_SOURCE llvm=$EMBER_LLVM_SOURCE jobs=$NETBSD2_JOBS target=$EMBER_KERNEL_TARGET" >> LOG
 # The builder runs in a clean environment; a file selects the failure.
 [ ! -e LOG.fail ] || exit 1
@@ -388,7 +388,7 @@ class ProfileBuildTests(ProfileFixture):
         failure = self.write('log.fail', '')
         # The builder removes the old outputs, then fails.
         self.write('os/ember/build-kernel.sh', KERNEL.replace('LOG', str(self.log)).replace(
-            'set -eu\n', 'set -eu\nrm -f "$1/netbsd-$2" "$1/netbsd-$2.img"\n'))
+            'out=$1;', 'rm -f "$1/netbsd-$2" "$1/netbsd-$2.img"\nout=$1;'))
         git(self.os, 'commit', '-q', '-am', 'builder removes outputs first')
         plan = self.plan(profile, state=self.work,
                          selected_sources=self.config['selected_sources'])
