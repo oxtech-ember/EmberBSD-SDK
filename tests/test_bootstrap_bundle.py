@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-2-Clause
 import io
+import hashlib
 import importlib.util
 import marshal
 import os
@@ -12,6 +13,7 @@ from types import SimpleNamespace
 import tempfile
 import tarfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
@@ -27,6 +29,11 @@ def fat_archive(payload=b'!<arch>\n', *, cpu=0x100000c, subtype=0, offset=32):
     return header.ljust(offset, b'\0') + payload
 
 
+def fake_client(path, **kwargs):
+    with zipfile.ZipFile(path, 'w') as archive:
+        archive.writestr('__main__.py', 'raise SystemExit(0)\n')
+
+
 class BootstrapTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='ember-bootstrap-')
@@ -35,13 +42,19 @@ class BootstrapTests(unittest.TestCase):
         self.root = self.work / 'sdk'
         self.root.mkdir()
 
-    def package(self, *, path='bin/example', link=None, install=False):
+    def package(self, *, path='bin/example', link=None, install=False, bootstrap_tools=False):
         archive = self.work / 'example.tgz'
-        contents = ('@cwd /producer/sdk\n@name example-1\n' + path + '\n' +
+        tools = ['bin/python3.15', 'bin/openssl', 'sbin/pkg_add', 'sbin/pkg_admin', 'sbin/pkg_info'] \
+            if bootstrap_tools else []
+        contents = ('@cwd /producer/sdk\n@name example-1\n'
+                    '@comment emberbsd-prefix-independent-v1\n' + path + '\n' +
+                    ''.join(name + '\n' for name in tools) +
                     ('@comment Symlink:' + link if link else '@comment MD5:old') + '\n')
         with tarfile.open(archive, 'w:gz') as stream:
             entries = [('+CONTENTS', contents.encode()), ('+COMMENT', b'example'),
+                       ('+BUILD_INFO', b'PKGPATH=devel/example\nLOCALBASE=/producer/sdk\n'),
                        (path, b'#!/producer/sdk/bin/sh\n')]
+            entries.extend((name, b'tool') for name in tools)
             if install:
                 entries.append(('+INSTALL', b'#!/bin/sh\n'))
             for name, data in entries:
@@ -61,8 +74,12 @@ class BootstrapTests(unittest.TestCase):
             result = self.work / (name + '.tgz')
             contents = '@name ' + name + '\n@cwd ' + prefix + '\n' + declaration + '\n'
             contents += ''.join(path + '\n' for path in paths)
-            entries = {'+CONTENTS': contents.encode(), '+BUILD_INFO': ('LOCALBASE=' + prefix + '\n').encode(),
-                       '+BUILD_VERSION': ('historical=' + prefix + '\n').encode(), **paths}
+            entries = {'+CONTENTS': contents.encode(),
+                       '+BUILD_INFO': ('LOCALBASE=' + prefix + '\nBUILD_HOST=Darwin private-builder\n'
+                                       'PKGPATH=devel/' + name + '\nLICENSE=mit\n'
+                                       'CFLAGS=-I/private/producer/work/include\n'
+                                       'CONFIGURE_ARGS=--build=/private/producer/work\n').encode(),
+                       '+BUILD_VERSION': b'historical=build-7\n', **paths}
             if hooks:
                 entries['+INSTALL'] = ('#!/bin/sh\n# ' + prefix + '\n').encode()
             with tarfile.open(result, 'w:gz') as stream:
@@ -78,20 +95,40 @@ class BootstrapTests(unittest.TestCase):
                 '@comment emberbsd-relocation-text=share/value\n'
                 '@comment emberbsd-deferred-hooks-v1')
         b = archive('b-1', '/second/sdk', {'share/value': b'/second/sdk/value'}, decl, hooks=True)
-        def client(path, **kwargs): Path(path).write_bytes(b'client')
         stage = self.work / 'assembled'
         crypto = SimpleNamespace(verify_package=lambda archive, trust: None)
         with patch('emberbsd_sdk.bootstrap_bundle.make_relative'), \
-             patch('emberbsd_sdk.client_bundle.package_client', side_effect=client):
+             patch('emberbsd_sdk.client_bundle.package_client', side_effect=fake_client):
             metadata = prepare(stage, [a, b], crypto, trust='test', host={'os':'Darwin','arch':'arm64'},
                                repository='test', install_name_tool='/usr/bin/true',
                                codesign='/usr/bin/true', https_ca='ca')
-        self.assertEqual(metadata['prefix'], '/first/sdk')
-        self.assertEqual((stage/'share/value').read_bytes(), b'/first/sdk/value')
+        self.assertEqual(metadata['prefix'], '/usr/pkg')
+        self.assertEqual((stage/'share/value').read_bytes(), b'/usr/pkg/value')
         db = stage/'pkgdb/b-1'
-        self.assertIn('@comment emberbsd-relocation-prefix=/first/sdk', (db/'+CONTENTS').read_text())
-        self.assertIn('/first/sdk', (db/'+INSTALL').read_text())
-        self.assertIn('/second/sdk', (db/'+BUILD_VERSION').read_text())
+        self.assertIn('@cwd /usr/pkg', (db/'+CONTENTS').read_text())
+        self.assertIn('@comment emberbsd-relocation-prefix=/usr/pkg', (db/'+CONTENTS').read_text())
+        self.assertIn('/usr/pkg', (db/'+INSTALL').read_text())
+        self.assertEqual((db/'+BUILD_VERSION').read_bytes(), b'historical=build-7\n')
+        for name in ('a-1', 'b-1'):
+            info = (stage/'pkgdb'/name/'+BUILD_INFO').read_text()
+            self.assertIn('LOCALBASE=/usr/pkg\n', info)
+            self.assertIn('BUILD_HOST=Darwin arm64\n', info)
+            self.assertIn('PKGPATH=devel/' + name + '\n', info)
+            self.assertIn('LICENSE=mit\n', info)
+            self.assertNotIn('private-builder', info)
+            self.assertNotIn('CFLAGS', info)
+            self.assertNotIn('CONFIGURE_ARGS', info)
+        output = self.work / 'clean-bootstrap.tar.gz'
+        write_archive(stage, output, metadata['packages'],
+                      forbidden_tokens=metadata['_producer_tokens'])
+        with tarfile.open(output) as packed:
+            members = packed.getmembers()
+            self.assertTrue(all((member.uid, member.gid, member.uname, member.gname) == (0, 0, '', '')
+                                for member in members))
+            payloads = [packed.extractfile(member).read()
+                        for member in members if member.isfile()]
+        self.assertFalse(any(b'private-builder' in item or b'/private/producer/work' in item
+                             or b'/first/sdk' in item or b'/second/sdk' in item for item in payloads))
         bad = archive('bad-1', '/third/sdk', {'share/bad': b'bad'}, '')
         with self.assertRaisesRegex(SDKError, 'portable declaration'):
             prepare(self.work/'bad-stage', [bad], crypto, trust='test', host={'os':'Darwin','arch':'arm64'},
@@ -125,11 +162,107 @@ class BootstrapTests(unittest.TestCase):
                               '@comment emberbsd-prefix-independent-v1')
         swapping = SimpleNamespace(verify_package=lambda copy, trust: replacement.write_bytes(b'changed'))
         with patch('emberbsd_sdk.bootstrap_bundle.make_relative'), \
-             patch('emberbsd_sdk.client_bundle.package_client', side_effect=client):
+             patch('emberbsd_sdk.client_bundle.package_client', side_effect=fake_client):
             result = prepare(self.work/'new-parent'/'nested'/'swap-stage', [replacement], swapping, trust='test',
                              host={'os':'Darwin','arch':'arm64'}, repository='test',
                              install_name_tool='/usr/bin/true', codesign='/usr/bin/true', https_ca='ca')
         self.assertEqual(result['packages'], ['swap-1'])
+
+    def test_explicit_client_pyz_is_copied_only_after_sha256_check(self):
+        data = io.BytesIO()
+        with zipfile.ZipFile(data, 'w') as archive:
+            archive.writestr('__main__.py', 'raise SystemExit(0)\n')
+        client = self.work / 'ember-sdk-0.27.pyz'
+        client.write_bytes(data.getvalue())
+        package = self.package(bootstrap_tools=True)
+        crypto = SimpleNamespace(verify_package=lambda archive, trust: None)
+        stage = self.work / 'client-pyz-stage'
+        with patch('emberbsd_sdk.bootstrap_bundle.make_relative'), \
+             patch('emberbsd_sdk.client_bundle.package_client') as build_client:
+            result = prepare(stage, [package], crypto, trust='test',
+                             host={'os':'Darwin','arch':'arm64'}, repository='test',
+                             install_name_tool='/usr/bin/true', codesign='/usr/bin/true', https_ca='ca',
+                             client_pyz=client, client_sha256=hashlib.sha256(client.read_bytes()).hexdigest())
+        build_client.assert_not_called()
+        self.assertEqual((stage/'share/emberbsd/ember-sdk.pyz').read_bytes(), client.read_bytes())
+        self.assertEqual(result['client_sha256'], hashlib.sha256(client.read_bytes()).hexdigest())
+        with patch('emberbsd_sdk.bootstrap_bundle.make_relative'), \
+             patch('emberbsd_sdk.client_bundle.package_client') as default_client:
+            with self.assertRaisesRegex(SDKError, 'SHA256 mismatch'):
+                prepare(self.work/'bad-client-stage', [package], crypto, trust='test',
+                        host={'os':'Darwin','arch':'arm64'}, repository='test',
+                        install_name_tool='/usr/bin/true', codesign='/usr/bin/true', https_ca='ca',
+                        client_pyz=client, client_sha256='0' * 64)
+        default_client.assert_not_called()
+
+    def test_archive_scan_checks_client_zipapp_members(self):
+        data = io.BytesIO()
+        with zipfile.ZipFile(data, 'w') as archive:
+            archive.writestr('__main__.py', 'raise SystemExit(0)\n')
+            archive.writestr('emberbsd_sdk/runtime.py', 'producer = "/producer/sdk"\n')
+        client = self.work / 'private-client.pyz'
+        client.write_bytes(data.getvalue())
+        package = self.package(bootstrap_tools=True)
+        crypto = SimpleNamespace(verify_package=lambda archive, trust: None)
+        stage = self.work/'nested-client-stage'
+        with patch('emberbsd_sdk.bootstrap_bundle.make_relative'), \
+             patch('emberbsd_sdk.client_bundle.package_client'):
+            metadata = prepare(stage, [package], crypto, trust='test',
+                               host={'os':'Darwin','arch':'arm64'}, repository='test',
+                               install_name_tool='/usr/bin/true', codesign='/usr/bin/true', https_ca='ca',
+                               client_pyz=client, client_sha256=hashlib.sha256(client.read_bytes()).hexdigest())
+        with self.assertRaisesRegex(SDKError, 'producer material'):
+            write_archive(stage, self.work/'nested-client.tar.gz', metadata['packages'],
+                          forbidden_tokens=metadata['_producer_tokens'])
+
+    def test_archive_uses_numeric_owners_for_pax_members(self):
+        stage = self.work/'pax-stage'
+        package = 'pax-1'
+        relative = 'share/' + ('nested-' * 20) + 'artifact'
+        target = stage/relative
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b'payload')
+        database = stage/'pkgdb'/package
+        database.mkdir(parents=True)
+        (database/'+CONTENTS').write_text('@name pax-1\n@cwd /usr/pkg\n' + relative + '\n')
+        output = self.work/'pax-bootstrap.tar.gz'
+        write_archive(stage, output, [package])
+        with tarfile.open(output) as packed:
+            members = packed.getmembers()
+            self.assertTrue(any(member.pax_headers for member in members))
+            self.assertTrue(all((member.uid, member.gid, member.uname, member.gname) == (0, 0, '', '')
+                                for member in members))
+
+    def test_rejects_producer_path_and_name_in_bootstrap_files(self):
+        package = self.work / 'private.tgz'
+        contents = ('@name private-1\n@cwd /private/producer/root\n'
+                    '@comment emberbsd-prefix-independent-v1\n'
+                    'bin/python3.15\nbin/openssl\nsbin/pkg_add\nsbin/pkg_admin\n'
+                    'sbin/pkg_info\nshare/private-builder-data\n')
+        with tarfile.open(package, 'w:gz') as archive:
+            for name, data in (('+CONTENTS', contents.encode()),
+                               ('+BUILD_INFO', b'BUILD_HOST=Darwin private-builder\n'),
+                               ('+BUILD_VERSION', b'version=1\n'),
+                               ('bin/python3.15', b'private runtime'),
+                               ('bin/openssl', b'openssl'),
+                               ('sbin/pkg_add', b'pkg_add'),
+                               ('sbin/pkg_admin', b'pkg_admin'),
+                               ('sbin/pkg_info', b'pkg_info'),
+                               ('share/private-builder-data', b'/private/producer/root')):
+                member = tarfile.TarInfo(name)
+                member.mode = 0o755
+                member.size = len(data)
+                archive.addfile(member, io.BytesIO(data))
+        crypto = SimpleNamespace(verify_package=lambda archive, trust: None)
+        with patch('emberbsd_sdk.bootstrap_bundle.make_relative'), \
+             patch('emberbsd_sdk.client_bundle.package_client', side_effect=fake_client):
+            stage = self.work/'private-stage'
+            metadata = prepare(stage, [package], crypto, trust='test',
+                               host={'os':'Darwin','arch':'arm64'}, repository='test',
+                               install_name_tool='/usr/bin/true', codesign='/usr/bin/true', https_ca='ca')
+        with self.assertRaisesRegex(SDKError, 'producer material'):
+            write_archive(stage, self.work/'private-bootstrap.tar.gz', metadata['packages'],
+                          forbidden_tokens=metadata['_producer_tokens'])
 
     def test_native_rpath_bare_anchors_and_escapes(self):
         image = self.root / 'bin' / 'example'

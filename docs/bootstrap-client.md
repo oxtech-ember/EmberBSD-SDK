@@ -83,8 +83,13 @@ Then remove the unconfigured package and install its replacement. The
 a selected native prefix, trusted release root and explicit Mach-O editing/ad-hoc
 signing tools. Every archive must have a verified signature and the current
 `package-portable.py` qualification. Qualified packages may originate from
-different producer prefixes; the producer normalizes their declared owned text
-and active metadata before bundling, without running hooks or bytecode.
+different producer prefixes. The producer stages them under `/usr/pkg`, keeps
+package identity and ABI metadata, normalizes `BUILD_HOST`, omits raw configure
+settings, and removes fields containing producer paths. It rejects producer
+paths or host names found in the final archive. It does not run package hooks or
+bytecode while bundling. `--forbid-prefix` adds explicit producer roots to the
+archive scan. `--client-pyz` with `--client-sha256` reuses an already verified
+client archive; the bundle records its digest and scans the zip members too.
 Use the `sdk-bootstrap` Ports roots with Python's `no-test-modules -x11` options
 and their actual runtime closure. Include the native mksh and bootstrap-mk-files
 providers required by generated package installation scripts. The Mozilla CA
@@ -100,9 +105,9 @@ the provider RPATH; a nested library requires its own library-directory contract
 common Ports recipe resolves standard configuration, certificate and module
 paths relative to its loaded library. First initialization adjusts textual
 prefixes and package checksums, runs package hooks, then rebuilds pkgdb.
-Historical `+BUILD_INFO` and `+BUILD_VERSION` remain original producer evidence;
-only active `LOCALBASE`, `REQUIRES` and `PROVIDES` paths are adjusted in the
-installed database. `LOCALBASE` must name the consumer prefix because Ports
+`+BUILD_VERSION` remains package provenance. The bundle keeps safe `+BUILD_INFO`
+fields such as `PKGPATH`, `LOCALBASE`, `REQUIRES`, `PROVIDES`, and `LICENSE`.
+`LOCALBASE` in package inputs must name the consumer prefix because Ports
 buildlink reads it to find installed headers and libraries.
 
 The archive preserves every exact payload name from the package packing lists,

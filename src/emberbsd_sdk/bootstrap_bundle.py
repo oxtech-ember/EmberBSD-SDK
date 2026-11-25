@@ -4,6 +4,7 @@
 
 from contextlib import ExitStack
 import hashlib
+import io
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -13,6 +14,7 @@ import struct
 import subprocess
 import tarfile
 import tempfile
+import zipfile
 
 from .binary_release import _package_payload
 from .darwin_runtime import read_macho_runtime
@@ -27,6 +29,116 @@ _FAT_ARCHIVES = {
     b'\xca\xfe\xba\xbe': ('>', 20),
     b'\xca\xfe\xba\xbf': ('>', 32),
 }
+_PRODUCER_PATH = re.compile(rb'(?<![A-Za-z0-9_.-])(/[A-Za-z0-9_+.,@%=-]+(?:/[A-Za-z0-9_+.,@%=-]+)*)')
+_SAFE_BUILD_PATHS = ('/usr/pkg', '/usr/lib', '/usr/include', '/usr/bin', '/usr/sbin',
+                     '/System', '/bin', '/sbin', '/etc')
+
+
+def _producer_tokens(archive_path):
+    """Return private producer identifiers recorded in package metadata."""
+    from .binary_release import _package_payload
+    tokens = set()
+    with open(archive_path, 'rb') as stream:
+        archive = tarfile.open(fileobj=_package_payload(stream), mode='r|*')
+        for member in archive:
+            if member.name.removeprefix('./') not in ('+CONTENTS', '+BUILD_INFO'):
+                continue
+            content = archive.extractfile(member).read()
+            if member.name.endswith('+CONTENTS'):
+                for line in content.decode('utf-8').splitlines():
+                    if line.startswith('@cwd '):
+                        prefix = line[5:]
+                        if prefix != '/usr/pkg':
+                            tokens.add(prefix.encode())
+            else:
+                for line in content.splitlines():
+                    key, separator, value = line.partition(b'=')
+                    if not separator:
+                        continue
+                    if key == b'BUILD_HOST' and value:
+                        fields = value.split()
+                        generic_host_tokens = {b'darwin', b'netbsd', b'linux', b'macos', b'arm64',
+                                               b'aarch64', b'x86_64', b'amd64', b'i386',
+                                               b'riscv32', b'riscv64'}
+                        tokens.update(field for field in fields
+                                      if field.lower() not in generic_host_tokens and
+                                      not re.fullmatch(rb'\d+(?:\.\d+)*', field))
+                    for match in _PRODUCER_PATH.findall(value):
+                        path = match.decode('utf-8', 'ignore')
+                        if any(path == safe or path.startswith(safe + '/') for safe in _SAFE_BUILD_PATHS):
+                            continue
+                        parts = path.split('/')
+                        root_depth = {'Users': 4, 'Volumes': 3, 'private': 3,
+                                      'tmp': 2, 'home': 3, 'build': 3,
+                                      'work': 2}.get(parts[1], 4)
+                        tokens.add('/'.join(parts[:root_depth + 1]).encode())
+    return {token for token in tokens if token}
+
+
+def _check_archive_tokens(path, forbidden_tokens):
+    tokens = tuple(token.encode() if isinstance(token, str) else token
+                   for token in forbidden_tokens if token)
+    with tarfile.open(path, 'r:gz') as archive:
+        for member in archive:
+            if member.uid != 0 or member.gid != 0 or member.uname or member.gname:
+                raise SDKError('non-canonical owner metadata in bootstrap archive')
+            if tokens and any(token in member.name.encode() or token in member.linkname.encode()
+                              for token in tokens):
+                raise SDKError('producer material in bootstrap archive')
+            if tokens and any(token in key.encode() or token in value.encode()
+                              for token in tokens
+                              for key, value in member.pax_headers.items()):
+                raise SDKError('producer material in bootstrap archive')
+            if tokens and member.isfile():
+                stream = archive.extractfile(member)
+                carry = b''
+                payload = io.BytesIO() if member.name.endswith('/ember-sdk.pyz') else None
+                while True:
+                    block = stream.read(1024 * 1024)
+                    if not block:
+                        break
+                    if payload is not None:
+                        payload.write(block)
+                    combined = carry + block
+                    if any(token in combined for token in tokens):
+                        raise SDKError('producer material in bootstrap archive')
+                    overlap = max(map(len, tokens)) - 1
+                    carry = combined[-overlap:] if overlap else b''
+                if payload is not None:
+                    try:
+                        with zipfile.ZipFile(payload) as client:
+                            for nested in client.infolist():
+                                name = nested.filename.encode()
+                                content = client.read(nested)
+                                if any(token in name or token in content for token in tokens):
+                                    raise SDKError('producer material in bootstrap archive')
+                    except (OSError, zipfile.BadZipFile) as exc:
+                        raise SDKError('invalid bundled client archive') from exc
+
+
+def _sanitize_build_info(path, source, prefix, host, forbidden_tokens):
+    """Retain package and ABI metadata without producer settings or identities."""
+    if not path.is_file():
+        raise SDKError('bootstrap package lacks build metadata')
+    original = path.read_bytes()
+    updated = []
+    omitted = {b'CONFIGURE_ENV'}
+    relocated = (b'LOCALBASE=', b'REQUIRES=', b'PROVIDES=')
+    tokens = tuple(token.encode() if isinstance(token, str) else token
+                   for token in forbidden_tokens if token)
+    for line in original.splitlines(keepends=True):
+        key, separator, _ = line.partition(b'=')
+        if not separator or key in omitted or key.endswith(b'_CONFIGURE_ARGS') or key == b'CONFIGURE_ARGS':
+            continue
+        if key == b'BUILD_HOST':
+            line = b'BUILD_HOST=' + str(host['os']).encode() + b' ' + str(host['arch']).encode() + \
+                   (b'\n' if line.endswith(b'\n') else b'')
+        elif line.startswith(relocated):
+            line = relocate_text(line, source.encode(), prefix.encode())
+        if any(token in line for token in tokens):
+            continue
+        updated.append(line)
+    _replace_file(path, b''.join(updated))
 
 
 def relative_path(value):
@@ -439,7 +551,7 @@ def bundle_paths(root, packages):
     return [paths[name] for name in sorted(paths)]
 
 
-def write_archive(root, output, packages):
+def write_archive(root, output, packages, *, forbidden_tokens=()):
     """Serialize package names rather than the staging filesystem's case folding."""
     paths = [root, *bundle_paths(root, packages)]
     with Path(output).open('xb') as stream:
@@ -459,6 +571,11 @@ def write_archive(root, output, packages):
                         archive.addfile(member, payload)
                 else:
                     archive.addfile(member)
+    try:
+        _check_archive_tokens(output, forbidden_tokens)
+    except Exception:
+        Path(output).unlink(missing_ok=True)
+        raise
 
 
 def text_references(root, prefix, packages):
@@ -620,7 +737,8 @@ def client_main(argv=None):
         return 1
 
 
-def prepare(root, archives, crypto, *, trust, host, repository, install_name_tool, codesign, https_ca):
+def prepare(root, archives, crypto, *, trust, host, repository, install_name_tool, codesign, https_ca,
+            client_pyz=None, client_sha256=None):
     """Assemble a fresh bundle; keep whole packages and one package database."""
     # Verify and consume the same private copies throughout all three passes.
     # Copying before verification also rejects a source changed during copying.
@@ -634,22 +752,25 @@ def prepare(root, archives, crypto, *, trust, host, repository, install_name_too
             crypto.verify_package(copy, trust)
             copies.append(copy)
         return _prepare_verified(root, copies, crypto, host=host, repository=repository,
-                                 install_name_tool=install_name_tool, codesign=codesign, https_ca=https_ca)
+                                 install_name_tool=install_name_tool, codesign=codesign, https_ca=https_ca,
+                                 client_pyz=client_pyz, client_sha256=client_sha256)
 
 
-def _prepare_verified(root, archives, crypto, *, host, repository, install_name_tool, codesign, https_ca):
+def _prepare_verified(root, archives, crypto, *, host, repository, install_name_tool, codesign, https_ca,
+                      client_pyz=None, client_sha256=None):
     from .binary_release import _matches
     from .client_bundle import package_client
     from .package_install import inspect_install_paths
     from . import package_relocation
     root.mkdir(parents=True, exist_ok=False)
-    packages, prefix = [], None
+    packages, source_prefixes, forbidden_tokens = [], set(), set()
+    prefix = package_relocation.ARCHIVE_PREFIX
     for archive in archives:
         package, source = unpack_package(archive, root)
         packages.append(package)
-        if prefix is None:
-            prefix = source
-        if inspect_install_paths(archive, {'prefix': prefix, 'pkgdb': prefix + '/pkgdb'}) is None:
+        source_prefixes.add(source)
+        forbidden_tokens.update(_producer_tokens(archive))
+        if inspect_install_paths(archive, {'prefix': source, 'pkgdb': source + '/pkgdb'}) is None:
             raise SDKError('bootstrap package requires a portable declaration: ' + package)
         database = root / 'pkgdb' / package
         contents = database / '+CONTENTS'
@@ -663,7 +784,7 @@ def _prepare_verified(root, archives, crypto, *, host, repository, install_name_
             raise SDKError('bootstrap package has undeclared hooks: ' + package)
         if selected:
             package_relocation.relocate_declared_text(root, selected[1], source, prefix)
-        relocate_build_info(database / '+BUILD_INFO', source.encode(), prefix.encode())
+        _sanitize_build_info(database / '+BUILD_INFO', source, prefix, host, forbidden_tokens)
         if package_relocation.HOOKS in lines:
             for member in ('+INSTALL', '+DEINSTALL'):
                 hook = database / member
@@ -681,8 +802,9 @@ def _prepare_verified(root, archives, crypto, *, host, repository, install_name_
             elif line.startswith(package_relocation.SOURCE):
                 lines[index] = package_relocation.SOURCE + prefix
         _replace_file(contents, ('\n'.join(lines) + '\n').encode())
-    if prefix is None:
+    if not packages:
         raise SDKError('bootstrap needs at least one package')
+    forbidden_tokens.update(value.encode() for value in source_prefixes if value != prefix)
     for name in packages:
         for line in (root / 'pkgdb' / name / '+CONTENTS').read_text().splitlines():
             if line.startswith('@pkgdep ') and not any(_matches(crypto, line[8:], item) for item in packages):
@@ -694,12 +816,30 @@ def _prepare_verified(root, archives, crypto, *, host, repository, install_name_
     refresh_checksums(root, packages)
     text_files = text_references(root, prefix, packages)
     (root / 'share/emberbsd').mkdir(parents=True, exist_ok=True)
-    package_client(root / 'share/emberbsd/ember-sdk.pyz', bootstrap=True)
+    client = root / 'share/emberbsd/ember-sdk.pyz'
+    if (client_pyz is None) != (client_sha256 is None):
+        raise SDKError('select both a client archive and its SHA256')
+    if client_pyz is None:
+        package_client(client, bootstrap=True)
+        with client.open('rb') as stream:
+            client_sha256 = hashlib.file_digest(stream, 'sha256').hexdigest()
+    else:
+        client_pyz = Path(client_pyz)
+        if not re.fullmatch(r'[0-9a-f]{64}', client_sha256):
+            raise SDKError('invalid client archive SHA256')
+        shutil.copyfile(client_pyz, client)
+        with client.open('rb') as source:
+            if hashlib.file_digest(source, 'sha256').hexdigest() != client_sha256:
+                client.unlink(missing_ok=True)
+                raise SDKError('client archive SHA256 mismatch')
     launcher = root / 'bin/ember-sdk'
     launcher.write_text('#!/bin/sh\nset -eu\nroot=$(CDPATH= cd -- "${0%/*}/.." && pwd -P)\n'
                         'exec "$root/bin/python3.15" -I -B "$root/share/emberbsd/ember-sdk.pyz" "$@"\n')
     launcher.chmod(0o755)
     metadata = dict(schema='emberbsd.bootstrap.v1', prefix=prefix, initialized=False, host=host, repository=repository,
-                    https_ca=https_ca, packages=packages, text_files=text_files)
-    write_json(root / MANIFEST, metadata)
+                    https_ca=https_ca, packages=packages, text_files=text_files,
+                    client_sha256=client_sha256, _producer_tokens=sorted(token.decode('utf-8', 'replace')
+                                                                         for token in forbidden_tokens))
+    public_metadata = {key: value for key, value in metadata.items() if not key.startswith('_')}
+    write_json(root / MANIFEST, public_metadata)
     return metadata
