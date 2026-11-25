@@ -28,7 +28,7 @@ from .package_cache import PackageCache, check_space, directory_lock
 from .package_install import PackageInstaller, install_mode, install_paths, target_sysroot
 from .package_updates import reuse_compatible_dependencies
 from .package_selection import _package_sets, _parse_root, _read_roots
-from .release_delivery import MetadataCache, artifact_key, fetch_artifact, release_snapshot, _key
+from .release_delivery import MetadataCache, artifact_key, fetch_artifact, fetch_os_update, release_snapshot, _key
 from .release_signing import ReleaseCrypto
 from .release_s3 import HTTPStore, HTTPStatusError
 
@@ -1115,9 +1115,11 @@ def main(argv=None, *, default_config=None):
     parser.add_argument('--config', type=Path, required=default_config is None)
     parser.add_argument('command', choices=('list', 'show', 'plan', 'source-plan', 'profile-plan', 'profile-build',
                                             'profile-node', 'catalog', 'install', 'installed', 'update',
-                                            'auto-update', 'cache-clean', 'fetch-artifact'))
+                                            'auto-update', 'cache-clean', 'fetch-artifact', 'fetch-os-update'))
     parser.add_argument('--artifact', help='fetch-artifact: exact signed artifact ID in current')
-    parser.add_argument('--output', type=Path, help='fetch-artifact: local output file')
+    parser.add_argument('--output', type=Path, help='local artifact file, or a new OS update directory')
+    parser.add_argument('--os-profile', help='fetch-os-update: installed OS profile name')
+    parser.add_argument('--after', type=int, help='fetch-os-update: stage a generation above this floor')
     parser.add_argument('--profile', type=Path, help='build profile for profile-plan and profile-build')
     parser.add_argument('--explain', action='store_true', help='profile-build: let Ninja explain each rebuild')
     parser.add_argument('--node', help=argparse.SUPPRESS)
@@ -1131,14 +1133,21 @@ def main(argv=None, *, default_config=None):
     parser.add_argument('--cache-dir', type=Path, help='read-only command cache directory; does not change the configuration')
     args = parser.parse_args(argv)
     try:
-        fetching = args.command == 'fetch-artifact'
+        os_fetch = args.command == 'fetch-os-update'
+        fetching = os_fetch or args.command == 'fetch-artifact'
         if fetching:
-            if not args.artifact or args.output is None:
-                raise SDKError('fetch-artifact requires --artifact and --output')
             if args.sets or args.roots or args.target is not None or args.state_dir or args.cache_dir:
-                raise SDKError('fetch-artifact takes only --artifact and --output')
+                raise SDKError(f'{args.command} takes only its artifact selection and --output')
+            if args.output is None:
+                raise SDKError(f'{args.command} requires --output')
+            if os_fetch and (args.os_profile is None or args.after is None or args.artifact is not None):
+                raise SDKError('fetch-os-update requires --os-profile and --after')
+            if not os_fetch and not args.artifact:
+                raise SDKError('fetch-artifact requires --artifact and --output')
         elif args.artifact is not None or args.output is not None:
-            raise SDKError('--artifact and --output require fetch-artifact')
+            raise SDKError('--artifact and --output require an artifact download command')
+        if not os_fetch and (args.os_profile is not None or args.after is not None):
+            raise SDKError('--os-profile and --after require fetch-os-update')
         if args.installed and args.command != 'plan':
             raise SDKError('--installed requires plan')
         updating = args.command in ('update', 'auto-update') or args.installed
@@ -1209,6 +1218,15 @@ def main(argv=None, *, default_config=None):
                     resources.files('emberbsd_sdk').joinpath('emberbsd-release-root.pem')))
             store = temporary.enter_context(HTTPStore(config.get('url', DEFAULT_URL),
                                                       ca_file=config.get('https_ca'), proxy_url=config.get('https_proxy')))
+            if os_fetch:
+                targets = [repo['target'] for repo in config['repositories'].values()
+                           if repo.get('target') and install_mode(repo) == 'native']
+                if len(targets) != 1:
+                    raise SDKError('fetch-os-update requires exactly one native target repository')
+                descriptor, staged = fetch_os_update(crypto, store, trust, args.output, args.os_profile,
+                                                     args.after, targets[0], prefix=config.get('url_prefix', ''))
+                sys.stdout.buffer.write(json_bytes(descriptor))
+                return 0 if staged else 3
             if fetching:
                 artifact = fetch_artifact(crypto, store, trust, args.output, args.artifact,
                                           prefix=config.get('url_prefix', ''))

@@ -14,6 +14,7 @@ import secrets
 import tempfile
 import time
 
+from . import os_update
 from .binary_catalog import load_release_catalogs
 from .errors import SDKError
 from .jsonio import json_bytes, loads_json
@@ -183,7 +184,9 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
     if stale_current and not current_retry:
         raise SDKError(f'current changed: expected {expected_current}, found {current_digest}; '
                        'merge the latest current before publishing')
-    if reuse_current:
+    previous_release = None
+    has_os_updates = any(a['id'].startswith(os_update.PREFIX) for a in release['artifacts'])
+    if reuse_current or (previous and has_os_updates):
         if previous is None:
             raise SDKError('--reuse-current requires an existing authenticated current release')
         old = previous['release']
@@ -192,10 +195,13 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
         previous_release = parse_release(crypto.verify_cms(previous_release_envelope, trust))
         if previous_release['release_id'] != old['id']:
             raise SDKError('current channel and authenticated release identities differ')
+    if reuse_current:
         reusable_ids = _verify_sparse_local(crypto, release, previous_release, envelope_path.parent, trust)
         _require_current_coverage(release, previous_release)
     else:
         reusable_ids = set()
+    if has_os_updates:
+        os_update.check_publication(release, envelope_path.parent, previous_release, inherited=reusable_ids)
     keep = {release_key}
     reused = []
     uploads = []
@@ -435,9 +441,11 @@ def _fetch_snapshot(crypto, public, trust, snapshot, prefix, repositories, chann
     if release['release_id'] != reference['id']:
         raise SDKError('channel and release identities differ')
     base = reference['path'].removesuffix('/release.p7m')
-    requested, found = set(repositories), set()
     write_new(snapshot / 'current.p7m', channel_bytes)
     write_new(snapshot / 'release.p7m', envelope)
+    if repositories is None:
+        return release  # A named OS update needs no package indexes.
+    requested, found = set(repositories), set()
     cached = [reference]
     for artifact in release['artifacts']:
         if artifact['kind'] != 'package-index':
@@ -487,12 +495,11 @@ def _artifact_directory(path, links=0):
     return directory
 
 
-def fetch_artifact(crypto, public, trust, output, artifact_id, *, prefix=''):
-    """Download one artifact from authenticated current and atomically replace output."""
-    _pattern(artifact_id, _SLUG, 'artifact id')
+@contextmanager
+def _artifact_destination(output):
     output = Path(output).absolute()
     if output.name in ('', '..'):
-        raise SDKError('select an artifact output file')
+        raise SDKError('select a named artifact output')
     # A privileged caller must select a path controlled by trusted owners.
     parent = _artifact_directory(output.parent) if os.geteuid() == 0 else output.parent
     with ExitStack() as opened:
@@ -501,6 +508,13 @@ def fetch_artifact(crypto, public, trust, output, artifact_id, *, prefix=''):
         info = os.fstat(directory)
         if info.st_uid != os.geteuid() or info.st_mode & 0o022:
             raise SDKError('artifact output directory must be owned by the caller and writable only by its owner')
+        yield output, parent, directory, info
+
+
+def fetch_artifact(crypto, public, trust, output, artifact_id, *, prefix=''):
+    """Download one artifact from authenticated current and atomically replace output."""
+    _pattern(artifact_id, _SLUG, 'artifact id')
+    with _artifact_destination(output) as (output, parent, directory, info), ExitStack() as opened:
         opened.enter_context(directory_lock(output.name + '.sdk-lock', parent_fd=directory))
         # Metadata uses a private temporary directory. All destination access
         # stays relative to the opened directory, including cleanup.
@@ -546,3 +560,44 @@ def fetch_artifact(crypto, public, trust, output, artifact_id, *, prefix=''):
                 except FileNotFoundError:
                     pass
             return artifact
+
+
+def fetch_os_update(crypto, public, trust, output, profile, after, target, *, prefix=''):
+    """Stage all OS set roles from one authenticated generation without activation."""
+    _pattern(profile, _SLUG, 'OS update profile')
+    if type(after) is not int or not 0 <= after <= os_update.MAX_GENERATION:
+        raise SDKError('OS update --after must be a nonnegative 63-bit integer')
+    name = os_update.PREFIX + profile
+    with release_snapshot(crypto, public, trust, None, prefix=prefix,
+                          repositories=None) as (release, snapshot):
+        artifacts = {a['id']: a for a in release['artifacts']}
+        record = artifacts.get(name)
+        if record is None or record['target'] != target:
+            raise SDKError('OS update profile is absent or differs from the configured target')
+        os_update.descriptor_generation(record)
+        # OS sets have versioned payload paths independent of the metadata directory.
+        data = io.BytesIO()
+        public.verify(_key(prefix, artifact_key(record, '')), record['size'], record['sha256'], sink=data)
+        raw = data.getvalue()
+        descriptor = os_update.read_descriptor(raw, record, artifacts)
+        if descriptor['generation'] <= after:
+            return descriptor, False
+        with _artifact_destination(output) as (output, parent, directory, info):
+            if os.path.lexists(output):
+                raise SDKError('OS update output already exists; select a new directory')
+            with tempfile.TemporaryDirectory(prefix='.os-update-', dir=parent) as temporary:
+                staged = Path(temporary)
+                for role, member in descriptor['sets'].items():
+                    item = artifacts[member]
+                    with (staged / (role + '.tar.xz')).open('xb') as stream:
+                        public.verify(_key(prefix, artifact_key(item, '')), item['size'], item['sha256'], sink=stream)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                write_new(staged / 'update.json', raw)
+                for filename in ('current.p7m', 'release.p7m'):
+                    write_new(staged / filename, (snapshot / filename).read_bytes())
+                if not os.path.samestat(info, parent.stat()):
+                    raise SDKError('OS update output directory changed during download')
+                publish_directory_noreplace(staged, parent / output.name)
+                os.fsync(directory)
+    return descriptor, True

@@ -115,6 +115,48 @@ not another dependency solver. `licenses` is a nonempty list of identifiers.
 Generate package indexes after signing packages; include them as artifacts
 so their exact bytes are bound to this release.
 
+## OS update descriptor
+
+Reserve the artifact ID `os-update-PROFILE` for one OS installation profile.
+Use the existing target-only `os-set` kind. Its immutable filename is
+`os-update-PROFILE-gGENERATION.json`. A later generation keeps the same
+artifact ID and target and selects a new filename. Earlier clients can continue
+reading the same release schema.
+
+The descriptor is strict UTF-8 JSON, at most 32 KiB, authenticated by the
+artifact size and SHA-256 in the signed release. For example:
+
+```json
+{
+  "schema": "emberbsd.os-update.v1",
+  "profile": "sample-headless",
+  "generation": 1,
+  "target": {"arch": "aarch64", "triplet": "aarch64--netbsd", "abi": "netbsd-11", "runtime": "libc++"},
+  "os_commit": "0123456789abcdef0123456789abcdef01234567",
+  "sets": {"boot": "sample-boot-v1", "base": "sample-base-v1", "etc": "sample-etc-v1"}
+}
+```
+
+The profile uses the artifact ID alphabet. Generation is an integer from 1 to
+9223372036854775807. The descriptor's target must match its artifact record.
+The OS producer qualifies the kernel, loader profile and matching userland and
+records the full lowercase OS Git commit. The release-wide source record may
+describe other components. Required roles are `boot`, `base` and `etc`. The
+optional `comp` role adds development files. Each value names a different
+nonempty `.tar.xz` leaf `os-set` with the same target. The descriptor record's `depends` must contain
+exactly those IDs. Unknown fields and roles are errors.
+
+For publication, stage the small descriptor file and add its record to the
+complete merged draft. Set `unpacked_size` to its byte length. Keep existing
+members' complete records. Use the [sparse publication procedure](s3-distribution.md#publish)
+to seal with `--reuse-current CURRENT_RELEASE.p7m` and publish with
+`--reuse-current --expected-current CURRENT_POINTER_SHA256`. This reuses
+the verified OS archives without rebuilding or uploading them. The SDK rejects
+a generation regression and changes to a descriptor or its member records
+under the same generation. For a new generation, update the descriptor, its
+filename and its signed dependency list together. Publish a current compatible
+client before enabling [profile downloads](sdk-client.md#download-an-os-update-for-the-installed-profile).
+
 ## Channel: `emberbsd.channel.v2`
 
 ```json

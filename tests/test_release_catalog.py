@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from test_core import TemporaryCase
-from emberbsd_sdk import jsonio, release_catalog as catalog
+from emberbsd_sdk import jsonio, os_update, release_catalog as catalog
 from emberbsd_sdk.errors import ChannelExpired, SDKError
 
 
@@ -192,6 +192,33 @@ class ReleaseFormatTests(unittest.TestCase):
         value['artifacts'][0]['depends'] = ['item-1499']
         with self.assertRaisesRegex(SDKError, 'cycle'):
             catalog.parse_release(encoded(value))
+
+
+class OSUpdateFormatTests(unittest.TestCase):
+    def test_roles_identity_generation_and_target_are_bound(self):
+        roles = {role: role + '-v1' for role in ('boot', 'base', 'etc')}
+        members = {name: dict(artifact(name, kind='os-set'), path=name + '.tar.xz') for name in roles.values()}
+        record = dict(artifact('os-update-example', kind='os-set', depends=roles.values()),
+                      path='os/os-update-example-g1.json', size=200)
+        value = dict(schema='emberbsd.os-update.v1', generation=1, profile='example', target=record['target'],
+                     os_commit='a' * 40, sets=roles)
+        def parse(updated=value, entry=record, items=members):
+            return os_update.read_descriptor(encoded(updated), entry, items)
+        self.assertEqual(parse(), value)
+        for change in (dict(generation=True), dict(generation=0), dict(generation=2), dict(profile='other'),
+                       dict(target=HOST), dict(os_commit='abc'), dict(sets=dict(roles, etc='base-v1')),
+                       dict(sets=dict(roles, etc='absent')), dict(sets=dict(roles, unknown='other')),
+                       dict(sets={'boot': 'boot-v1'}), dict(extra=True)):
+            with self.subTest(change=change), self.assertRaises(SDKError):
+                parse(dict(value, **change))
+        for change in (dict(path='os-update-example.json'), dict(path='os-update-example-g01.json'),
+                       dict(size=os_update.MAX_DESCRIPTOR + 1), dict(depends=[]), dict(kind='image')):
+            with self.subTest(change=change), self.assertRaises(SDKError):
+                parse(entry=dict(record, **change))
+        for change in (dict(kind='image'), dict(target=HOST), dict(depends=['base-v1']),
+                       dict(size=0), dict(path='member.img')):
+            with self.subTest(change=change), self.assertRaises(SDKError):
+                parse(items=dict(members, **{'etc-v1': dict(members['etc-v1'], **change)}))
 
 
 class ChannelFormatTests(unittest.TestCase):

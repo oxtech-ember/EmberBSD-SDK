@@ -296,6 +296,146 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(output.read_bytes(), b'preserve-me')
         self.assertTrue(link.is_symlink())
 
+    def os_update_release(self, name, *, generation=1, previous=None, selection=('boot', 'base', 'etc')):
+        target = dict(arch='aarch64', triplet='aarch64--netbsd', abi='netbsd-11', runtime='libc++')
+        directory = self.work / name
+        directory.mkdir()
+        records = []
+        for role in ('boot', 'base', 'etc', 'comp'):
+            data = ('OS ' + role).encode()
+            path = role + '-v1.tar.xz'
+            if previous is None:
+                (directory / path).write_bytes(data)
+            records.append(dict(id='set-' + role, kind='os-set', path=path, target=target, host=None,
+                                depends=[], unpacked_size=len(data), licenses=['BSD']))
+        descriptor = dict(schema='emberbsd.os-update.v1', profile='sample', generation=generation,
+                          target=target, os_commit='e' * 40, sets={role: 'set-' + role for role in selection})
+        if generation:
+            data = json_bytes(descriptor)
+            path = f'os-update-sample-g{generation}.json'
+            (directory / path).write_bytes(data)
+            records.append(dict(id='os-update-sample', kind='os-set', path=path, host=None, target=target,
+                                depends=list(descriptor['sets'].values()), unpacked_size=len(data), licenses=['BSD']))
+        draft = dict(schema='emberbsd.release.v1', release_id=name, created_at=int(time.time()),
+                     sources={k: 'a' * 40 for k in ('os', 'ports', 'sdk')}, artifacts=records)
+        output = directory / 'release.p7m'
+        seal_release(self.crypto, json_bytes(draft), directory, self.signer, self.ca.certificate,
+                     output, reuse_current=previous)
+        return output, descriptor
+
+    def test_os_update_sparse_publication_and_native_client(self):
+        initial, _ = self.os_update_release('initial', generation=0)
+        self.publish(initial)
+        snapshot = self.work / 'current'
+        fetch_release(self.crypto, self.public, self.ca.certificate, snapshot)
+        candidate, descriptor = self.os_update_release('candidate', previous=snapshot / 'release.p7m',
+                                                        selection=('boot', 'base', 'etc', 'comp'))
+        previous_hash = self.current_digest()
+        with patch.object(self.store, 'put', wraps=self.store.put) as uploads:
+            publish_release(self.crypto, self.store, self.public, candidate, self.signer, self.ca.certificate,
+                            reuse_current=True, expected_current=previous_hash)
+            calls = [call.args[0] for call in uploads.call_args_list]
+        self.assertFalse(any(key.endswith('.tar.xz') for key in calls))
+        self.assertTrue(any(key.endswith('os-update-sample-g1.json') for key in calls))
+        config = dict(schema='emberbsd.sdk-client.v1', host_prefix=os.environ['EMBERBSD_TEST_HOST_PREFIX'],
+                      url=self.url + '/bucket', trust_root=str(self.ca.certificate),
+                      state_dir=str(self.work / 'state'), cache_dir=str(self.work / 'cache'),
+                      repositories={'device': dict(target=descriptor['target'], install_mode='native',
+                                                   os_version='11.0', prefix='/usr/pkg', pkgdb='/usr/pkg/pkgdb')})
+        self.enterContext(patch('emberbsd_sdk.package_install.platform',
+                                SimpleNamespace(system=lambda: 'NetBSD', release=lambda: '11.1')))
+        self.enterContext(patch('emberbsd_sdk.package_install.native_cpu', return_value='aarch64'))
+        output = self.work / 'download'
+        options = ['fetch-os-update', '--os-profile', 'sample', '--output', str(output)]
+        for floor in ('1', '2', '0'):
+            expected = 0 if floor == '0' else 3
+            with patch.object(sys, 'stdout', SimpleNamespace(buffer=io.BytesIO())) as stdout:
+                self.assertEqual(sdk_client.main([*options, '--after', floor], default_config=config), expected)
+                self.assertEqual(json.loads(stdout.buffer.getvalue()), descriptor)
+            self.assertEqual(output.exists(), expected == 0)
+        self.assertEqual(output.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(json.loads((output / 'update.json').read_bytes()), descriptor)
+        self.assertEqual((output / 'release.p7m').read_bytes(), candidate.read_bytes())
+        self.assertEqual((output / 'current.p7m').read_bytes(), self.server.objects['/bucket/current.p7m'])
+        for role in descriptor['sets']:
+            self.assertEqual((output / (role + '.tar.xz')).read_bytes(), ('OS ' + role).encode())
+        with patch.object(sys, 'stderr', io.StringIO()):
+            self.assertEqual(sdk_client.main([*options, '--after', '0'], default_config=config), 1)
+            config['repositories']['device']['target'] = dict(descriptor['target'], abi='other')
+            self.assertEqual(sdk_client.main([*options, '--after', '2'], default_config=config), 1)
+        self.assertFalse((self.work / 'state').exists())
+        self.assertFalse((self.work / 'cache').exists())
+
+    def test_os_update_uses_one_snapshot_and_fails_before_publication(self):
+        envelope, descriptor = self.os_update_release('first')
+        self.publish(envelope)
+        output = self.work / 'download'
+        args = self.crypto, self.public, self.ca.certificate, output, 'sample', 0, descriptor['target']
+        pointer = self.server.objects['/bucket/current.p7m']
+        fetch = self.public.verify
+        def rotate_after_descriptor(key, *args, **kwargs):
+            fetch(key, *args, **kwargs)
+            if key.endswith('.json'):
+                self.server.objects['/bucket/current.p7m'] = b'changed while reading'
+        with patch.object(self.public, 'verify', side_effect=rotate_after_descriptor):
+            self.assertEqual(release_delivery.fetch_os_update(*args), (descriptor, True))
+        self.assertFalse((output / 'comp.tar.xz').exists())
+        self.assertEqual((output / 'current.p7m').read_bytes(), pointer)
+        self.server.objects['/bucket/current.p7m'] = pointer
+        args = (*args[:3], self.work / 'rejected', *args[4:])
+        for filename in ('os-update-sample-g1.json', 'etc-v1.tar.xz'):
+            key = '/bucket/current/target/aarch64/' + filename
+            with self.subTest(file=filename), patch.dict(self.server.objects, {key: b'invalid'}):
+                with self.assertRaises(SDKError):
+                    release_delivery.fetch_os_update(*args)
+                self.assertFalse(args[3].exists())
+                self.assertFalse(list(self.work.glob('.os-update-*')))
+
+    def test_os_update_generation_cannot_replace_a_published_selection(self):
+        current, _ = self.os_update_release('first', generation=2)
+        self.publish(current)
+        saved = self.current_digest()
+        for generation in (1, 2):
+            next_release, _ = self.os_update_release('change-' + str(generation), generation=generation,
+                                                     selection=('boot', 'base', 'etc', 'comp'))
+            with self.assertRaisesRegex(SDKError, 'generation'):
+                self.publish(next_release)
+            self.assertEqual(self.current_digest(), saved)
+
+    def test_sparse_os_update_keeps_member_identity_until_generation_advances(self):
+        current, _ = self.os_update_release('current')
+        self.publish(current)
+        source = parse_release(self.crypto.verify_cms(current.read_bytes(), self.ca.certificate))
+        sparse = self.work / 'sparse'
+        sparse.mkdir()
+        source['release_id'] = 'changed'
+        member = next(a for a in source['artifacts'] if a['id'] == 'set-base')
+        member['path'] = 'base-v2.tar.xz'
+        (sparse / member['path']).write_bytes(b'changed base')
+        with self.assertRaisesRegex(SDKError, 'new generation'):
+            seal_release(self.crypto, json_bytes(source), sparse, self.signer, self.ca.certificate,
+                         sparse / 'release.p7m', reuse_current=current)
+        self.assertFalse((sparse / 'release.p7m').exists())
+        source['artifacts'] = [a for a in source['artifacts'] if a['id'] != 'os-update-sample']
+        previous_record = json.loads((current.parent / 'os-update-sample-g1.json').read_bytes())
+        data = json_bytes(dict(previous_record, generation=2))
+        path = 'os-update-sample-g2.json'
+        (sparse / path).write_bytes(data)
+        source['artifacts'].append(dict(id='os-update-sample', target=previous_record['target'], host=None,
+                                        path=path, kind='os-set', depends=list(previous_record['sets'].values()),
+                                        unpacked_size=len(data), licenses=['BSD']))
+        output = sparse / 'release.p7m'
+        seal_release(self.crypto, json_bytes(source), sparse, self.signer, self.ca.certificate,
+                     output, reuse_current=current)
+        publish_release(self.crypto, self.store, self.public, output, self.signer, self.ca.certificate,
+                        reuse_current=True, expected_current=self.current_digest())
+        result = self.work / 'next'
+        value, staged = release_delivery.fetch_os_update(self.crypto, self.public, self.ca.certificate,
+                                                         result, 'sample', 1, previous_record['target'])
+        self.assertTrue(staged)
+        self.assertEqual(value['generation'], 2)
+        self.assertEqual((result / 'base.tar.xz').read_bytes(), b'changed base')
+
     def test_fetch_artifact_in_an_image_build_directory(self):
         self.publish(self.release())
         # OS ember/image/package-updates.py installs the client in a 0755

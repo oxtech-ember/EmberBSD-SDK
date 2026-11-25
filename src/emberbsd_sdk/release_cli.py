@@ -13,6 +13,7 @@ from .jsonio import json_bytes, loads_json
 from .paths import regular_file, verify_stable
 from .release_catalog import (file_reference, local_artifact,
                               parse_channel, parse_release, verify_payloads)
+from . import os_update
 from .release_signing import ReleaseCrypto, SigningIdentity, read_bytes, write_new
 
 
@@ -27,6 +28,7 @@ def verify_release(crypto, envelope, directory, trust):
     verify_payloads(release, directory)
     load_release_catalogs(release, directory)
     _check_packages(crypto, release, directory, trust)
+    os_update.check_publication(release, directory)
     return release
 
 
@@ -66,6 +68,8 @@ def seal_release(crypto, draft, directory, identity, trust, output, *, reuse_cur
     local_ids = {relative for relative, _, _ in inputs}
     local_release = dict(release, artifacts=[item for item in release['artifacts']
                                              if item['path'] in local_ids])
+    inherited = {a['id'] for a in release['artifacts'] if a['path'] not in local_ids}
+    os_update.check_publication(release, directory, snapshot, inherited=inherited)
     _check_packages(crypto, local_release, directory, trust)
     signed = crypto.sign_cms(content, identity, trust)
     # Hash once; detect changes across signing without rereading every payload.

@@ -119,6 +119,42 @@ replaces an existing regular file and prints the signed artifact record as JSON.
 Download and verification failures preserve an existing file. Installation and
 activation are separate steps.
 
+### Download an OS update for the installed profile
+
+The installed OS supplies its profile name and stores the last installed and
+failed generations. Set `floor` to the greater of those two numbers, or zero
+on the first check. Select a new output name under a directory owned by the
+caller. A private directory on FFS is suitable. The running kernel, libc and
+filesystem must support atomic no-replace directory publication.
+
+```sh
+/usr/pkg/bin/python3.15 -I /usr/local/libexec/ember-sdk.pyz \
+  --config /usr/local/etc/ember-sdk.json fetch-os-update \
+  --os-profile "$profile" --after "$floor" --output "$work/candidate"
+```
+
+The client requires one configured native target repository. It authenticates
+current and its release, then verifies the profile descriptor and the full
+target tuple. All members come from that same release. A missing or superseded
+object fails this attempt. The caller can check current again on the next pass.
+
+Exit 0 publishes the complete directory with mode 0700. It contains the verified
+`update.json`, `boot.tar.xz`, `base.tar.xz`, `etc.tar.xz`, the selected
+`comp.tar.xz` if present, and both signed envelopes (`current.p7m` and
+`release.p7m`). The client preserves the archive bytes and does not extract
+them. An existing output entry is never replaced. Exit 3 means the authenticated
+generation is at or below the floor. The client downloads no member archives
+and creates no output on that path. Both results print the descriptor as JSON.
+An input, trust, transfer or filesystem error returns 1. CLI syntax errors
+return 2. If an error occurs during the final directory sync, check for the
+complete committed directory before retrying.
+
+An ordinary user can stage a download for inspection. A privileged installer
+must control its staging directory and verify the signed records before
+trusting a copy from another user. The OS owns profile selection, installation,
+boot confirmation and the generation floor.
+See the [OS update descriptor](signed-releases.md#os-update-descriptor).
+
 ## Installed versions and updates
 
 `installed` reads each configured pkgdb with one `pkg_info -X -a` query.
