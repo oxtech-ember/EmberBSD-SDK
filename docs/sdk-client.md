@@ -524,10 +524,22 @@ Explicitly requested roots are not elided. If metadata
 is missing, ambiguous, or incompatible, the normal replacement checks still
 apply; the client does not infer ABI compatibility from version numbers alone.
 
-This supports in-place component and package revision updates. It deliberately
-refuses transitions which require removing library providers or replacing an
-installed consumer before its dependency can change. Such coordinated ABI
-transitions require a compatible package selection. Use an explicit target update
+This supports in-place component and package revision updates. A replacement
+may remove a library provider when the payloads prove a versioned implementation
+of a retained loader identity, or when no ELF or Mach-O file of any installed
+consumer loads a library with the removed name. A consumer without a readable
+image, with a missing listed file or with an unsupported image keeps the refusal;
+dlopen users are not seen, as for `REQUIRES`.
+An installed consumer can pin the old dependency exactly, as
+`lz4-1.10.0{,nb*}`. The client replaces the dependency together with that
+consumer when the same selection replaces the consumer later and the replacement
+accepts the new dependency: the dependency is installed with `pkg_add -D`, and
+the consumer follows it. The provider rule keeps the old consumer usable
+between the two `pkg_add` calls; only its recorded dependency is unsatisfied.
+If a later package fails, the error names the incomplete coordinated update,
+and the same install completes it. Other transitions which remove providers or
+replace an installed consumer before its dependency can change are refused;
+they require a compatible package selection. Use an explicit target update
 for a sysroot replacement. Update tools after active builds stop. A build that uses a prefix reads it: the supervised Ports
 stage and `profile-build` with the host prefix. A writer of the prefix, an SDK
 install or a Ports `pkg_add`, waits for other writers. It stops before it
@@ -537,13 +549,11 @@ with 75). The installs of the reading build itself continue. The locks are
 ([prefix locks](../src/emberbsd_sdk/prefix_lock.py)). A configured Ports
 source build and binary installation share the existing build lock. Existing
 Ports source builds retain their owner-defined replacement rules.
-An exact runtime/devel dependency can require such a coordinated transition
-even when both new packages appear in the selection. Checking only the final
-dependency graph would leave the old consumer incompatible between individual
-`pkg_add -U` calls and after a partial failure. Increasing either revision does
-not resolve that ordering constraint. Preserve the accepted prefix and prepare
-the changed stack alongside it through the owning producer until a coordinated
-update contract is available.
+Checking only the final dependency graph is not sufficient: each step must
+leave the installed consumers usable. When an exactly pinned consumer is not
+replaced in the same selection, or its replacement still rejects the new
+dependency, preserve the accepted prefix and prepare the changed stack alongside
+it through the owning producer.
 
 ## Client artifact and validation boundary
 
