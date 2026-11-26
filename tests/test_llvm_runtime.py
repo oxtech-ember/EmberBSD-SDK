@@ -76,6 +76,38 @@ class LLVMRuntimeFixture(TemporaryCase):
 
 
 class LLVMRuntimeTests(LLVMRuntimeFixture):
+    def test_arm_eabi5_bootstrap_checks_each_archive_member(self):
+        self.record.update(target='earmv7hf', triplet='armv7--netbsdelf-eabihf',
+                           machine_arch='earmv7hf', elf_machine=40)
+
+        def object_with(attrs, flags=0x5000000):
+            header = bytearray(52)
+            header[:7] = b'\x7fELF\x01\x01\x01'
+            struct.pack_into('<HHI', header, 16, 1, 40, 1)
+            struct.pack_into('<II', header, 32, 52, flags)
+            struct.pack_into('<6H', header, 40, 52, 0, 0, 40, 2, 0)
+            sections = bytes(40) + struct.pack('<10I', 0, 0x70000003, 0, 0, 132, len(attrs), 0, 0, 1, 0)
+            return bytes(header) + sections + attrs
+
+        def attributes(tags):
+            scope = b'\x01' + struct.pack('<I', 5 + len(tags)) + tags
+            return b'A' + struct.pack('<I', 10 + len(scope)) + b'aeabi\0' + scope
+
+        good = object_with(attributes(b'\x05cortex-a7\0\x06\x0a\x1c\x01'))
+        path = self.stage / self.builtins
+        for supported in (b'', b'\x1c\x01', b'\x1c\x03'):
+            path.write_bytes(archive(good) + archive(object_with(attributes(supported)), 'second.o/')[8:])
+            self.save()
+            llvm_runtime.validate_stage(self.stage, target='earmv7hf')
+        for invalid in (object_with(attributes(b'\x1c\x00')), object_with(attributes(b'\x1c\x02')),
+                        object_with(attributes(b'\x1c')), object_with(attributes(b'\x1c\x01')[:-1]),
+                        object_with(attributes(b''), 0x5000200), object_with(attributes(b''), 0x4000000)):
+            path.write_bytes(archive(good) + archive(invalid, 'second.o/')[8:])
+            self.save()
+            for verify_content in (True, False):
+                with self.assertRaises(SDKError):
+                    llvm_runtime.validate_stage(self.stage, target='earmv7hf', content=verify_content)
+
     def test_riscv32_bootstrap_rejects_wrong_class_and_float_abi(self):
         self.record.update(target='riscv32', triplet='riscv32--netbsd',
                            machine_arch='riscv32', elf_machine=243)

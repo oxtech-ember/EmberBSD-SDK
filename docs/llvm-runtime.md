@@ -314,8 +314,12 @@ The operation uses static, non-PIE OS configuration and keeps its objects and
 stages distinct from the complete SDK. `riscv32` currently selects only this
 intermediate route; its ABI is little-endian RV32 soft-float `ilp32`.
 Select `--target earmv7hf --c-foundation` for the ARMv7 hard-float ABI.
-This route uses ELF32 ARM EABI5 and the `armv7--netbsdelf-eabihf` triplet. Inspect
-`--plan`, the actual compiler commands, and the produced artifacts before use.
+This route uses ELF32 ARM EABI5 and the `armv7--netbsdelf-eabihf` triplet.
+The SDK checks the ELF header and explicit file-scope `Tag_ABI_VFP_args` values
+in every CRT and static archive member. An object can omit the attribute.
+The header alone cannot establish its floating-point calling convention.
+Check scalar floating-point calls across separately compiled C files when
+qualifying a target compiler and its linked programs.
 The target's startup, filesystem and physical execution remain separate work.
 
 For a small static appliance such as ESP-Mosaico, add `--no-jemalloc` to

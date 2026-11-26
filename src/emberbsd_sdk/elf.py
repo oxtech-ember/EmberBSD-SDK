@@ -71,13 +71,103 @@ def parse_elf_header(data, *, label='<bytes>', machine=None, required_type=None,
     return dict({'class': 32 if elf_class == 1 else 64}, endian='little', machine=actual, type=kind)
 
 
+def _arm_file_attributes(data, label):
+    """Reject explicit file-scope VFP calling conventions that conflict with AAPCS-VFP."""
+    def invalid():
+        return SDKError(f'invalid ARM build attributes: {label}')
+
+    def number(pos, end):
+        value = 0
+        for shift in range(0, 32, 7):
+            if pos >= end:
+                raise invalid()
+            byte = data[pos]
+            pos += 1
+            value |= (byte & 0x7f) << shift
+            if byte < 128 and value <= 0xffffffff:
+                return value, pos
+        raise invalid()
+
+    def string_end(pos, end):
+        stop = data.find(b'\0', pos, end)
+        if stop < 0:
+            raise invalid()
+        return stop + 1
+
+    def block_end(start, field, limit):
+        if field + 4 > limit:
+            raise invalid()
+        end = start + struct.unpack_from('<I', data, field)[0]
+        if not field + 4 <= end <= limit:
+            raise invalid()
+        return end
+
+    if data[:1] != b'A':
+        raise invalid()
+    position = 1
+    while position < len(data):
+        vendor_end = block_end(position, position, len(data))
+        name = position + 4
+        position = string_end(name, vendor_end)
+        if data[name:position] == b'aeabi\0':
+            while position < vendor_end:
+                scope, field = number(position, vendor_end)
+                end = block_end(position, field, vendor_end)
+                position = field + 4
+                if scope == 1:  # Tag_File; section and symbol scopes are deprecated.
+                    while position < end:
+                        tag, position = number(position, end)
+                        if tag < 4:
+                            raise invalid()
+                        if tag not in (4, 5) and not (tag > 32 and tag % 2):
+                            value, position = number(position, end)
+                            if tag == 28 and value not in (1, 3):
+                                raise SDKError(f'incompatible ARM Tag_ABI_VFP_args {value}: {label}')
+                        if tag in (4, 5, 32) or (tag > 32 and tag % 2):
+                            position = string_end(position, end)
+                position = end
+        position = vendor_end
+
+
+def _read_object_header(handle, size, label, machine, required_type, riscv32_soft_float, arm_eabihf):
+    base = handle.tell()
+    header = handle.read(min(size, 64))
+    result = parse_elf_header(header, label=label, machine=machine, required_type=required_type,
+                              riscv32_soft_float=riscv32_soft_float, arm_eabihf=arm_eabihf)
+    if result is None or not arm_eabihf or result['type'] != 1:
+        return result
+
+    table = struct.unpack_from('<I', header, 32)[0]
+    entry_size, count = struct.unpack_from('<HH', header, 46)
+    if table == 0 and count == 0:
+        return result
+    if (table < 52 or entry_size != 40 or not 0 < count <= MAX_HEADERS or
+            table + count * entry_size > size):
+        raise SDKError(f'invalid ARM ELF section table: {label}')
+    handle.seek(base + table)
+    entries = handle.read(count * entry_size)
+    if len(entries) != count * entry_size:
+        raise SDKError(f'truncated ARM ELF section table: {label}')
+    for section in struct.iter_unpack('<10I', entries):
+        if section[1] == 0x70000003:  # SHT_ARM_ATTRIBUTES
+            offset, length = section[4:6]
+            if length > 64 * 1024 or offset + length > size:
+                raise SDKError(f'invalid ARM ELF attributes section size: {label}')
+            handle.seek(base + offset)
+            attributes = handle.read(length)
+            if len(attributes) != length:
+                raise SDKError(f'truncated ARM ELF attributes section: {label}')
+            _arm_file_attributes(attributes, label)
+    return result
+
+
 def read_elf_header(path, machine=None, required_type=None, *, riscv32_soft_float=False, arm_eabihf=False):
     handle, before = open_regular(path)
     with handle:
-        data = handle.read(64)
+        result = _read_object_header(handle, before.st_size, str(path), machine, required_type,
+                                     riscv32_soft_float, arm_eabihf)
     verify_stable(path, before)
-    return parse_elf_header(data, label=str(path), machine=machine, required_type=required_type,
-                            riscv32_soft_float=riscv32_soft_float, arm_eabihf=arm_eabihf)
+    return result
 
 
 def _elf64_layout(handle, size, path, machine):
@@ -337,10 +427,9 @@ def read_archive(path, machine, *, riscv32_soft_float=False, arm_eabihf=False):
                     if end == -1:
                         raise SDKError(f'unterminated GNU archive name: {path}')
                     name = names[index:end]
-                data = handle.read(min(finish - handle.tell(), 64))
                 label = f'{path}:{name!r}'
-                parsed = parse_elf_header(data, label=label, machine=machine, required_type=1,
-                                          riscv32_soft_float=riscv32_soft_float, arm_eabihf=arm_eabihf)
+                parsed = _read_object_header(handle, finish - handle.tell(), label, machine, 1,
+                                             riscv32_soft_float, arm_eabihf)
                 if parsed is None:
                     raise SDKError(f'non-ELF archive member: {label}')
                 count += 1
