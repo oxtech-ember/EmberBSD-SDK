@@ -167,6 +167,35 @@ class SysrootPackageTests(TemporaryCase):
         with open(destination / 'usr/pkg/pkgdb.writer', 'rb') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
+    def test_foreign_compiler_alias_precedes_base_and_package_installation(self):
+        from emberbsd_sdk.sdk_client import install_selection
+        from test_sdk_client import Installer
+        self.config['state_dir'] = str(self.root / 'state')
+        commands = Path(self.config['host_prefix']) / 'bin'
+        commands.mkdir(parents=True)
+        (commands / 'clang').touch()
+        alias = commands / (self.target['triplet'] + '-cc')
+        alias.symlink_to(self.root / 'other-sdk' / 'cc')
+        item = dict(self.artifact, id='fixture-package', kind='target-package', path='fixture.tgz')
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                destination = self.root / ('installed-base' if existing else 'new-base')
+                self.config['repositories']['target'] = dict(target=self.target, prefix='/usr/pkg',
+                    pkgdb='/usr/pkg/pkgdb', sysroot=str(destination))
+                if existing:
+                    sysroot_package.install(self.archive, self.select())
+                installer = Installer()
+                store = Store(self.archive.read_bytes())
+                plan = dict(build_roots=[], sysroot=self.select(), download_size=item['size'],
+                    unpacked_size=item['unpacked_size'] * 2,
+                    packages=[dict(artifact=item, repository='target', action='download')])
+                with self.assertRaisesRegex(SDKError, 'compiler command already belongs'):
+                    install_selection(plan, self.config, installer, self.cache, store)
+                self.assertEqual(store.calls, [])
+                self.assertEqual(installer.actions, [])
+                self.assertEqual(destination.exists(), existing)
+                self.assertEqual(alias.readlink(), self.root / 'other-sdk' / 'cc')
+
     def test_signed_package_runtime_mismatch_precedes_new_and_existing_base_mutation(self):
         from emberbsd_sdk.package_install import PackageInstaller
         from emberbsd_sdk.sdk_client import apply_plan

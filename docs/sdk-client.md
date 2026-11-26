@@ -219,6 +219,10 @@ matching target repository's configured `sysroot`, or `HOST_PREFIX/sysroots/TARG
 when only a native repository is configured. An ambiguous target/ABI is refused;
 no board or different compiler family is chosen implicitly. The native compiler
 is shared by all targets. `--target` alone can acquire a sysroot before its compiler.
+When the host prefix contains Clang, installation checks the target compiler
+aliases before downloading the base or packages. For one host prefix and target
+triplet, use the same SDK state directory and target sysroot for every install.
+Give independent SDK installations their own host prefixes.
 
 The archive contains the existing [sysroot transfer](sysroot-transfer.md) bundle.
 All downloads are verified before installation. The base is restored at a new

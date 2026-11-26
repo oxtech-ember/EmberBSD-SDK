@@ -974,6 +974,11 @@ def _read_channel(crypto, store, trust, state, prefix, metadata):
 
 
 def install_selection(plan, config, installer, cache, store, *, refresh_current=None, accepted_release=None):
+    sysroot = plan.get('sysroot')
+    bind_compiler = sysroot and sysroot['action'] != 'replace'
+    if bind_compiler:
+        # Reject a conflicting host prefix before fetching or installing packages.
+        sysroot_package.compiler_binding(config, sysroot)
     with directory_lock(cache.root / '.lock'):
         apply_plan(plan, config, installer, cache, store, release_digest=accepted_release)
     # Compilation may be long; it must not monopolize another target's downloads.
@@ -985,8 +990,8 @@ def install_selection(plan, config, installer, cache, store, *, refresh_current=
         build_missing(config, plan['build_roots'], binaries)
     else:
         reused.extend(extra)
-    if plan.get('sysroot') and plan['sysroot']['action'] != 'replace':
-        sysroot_package.bind_compiler(config, plan['sysroot'])
+    if bind_compiler:
+        sysroot_package.bind_compiler(config, sysroot)
     return reused
 
 
