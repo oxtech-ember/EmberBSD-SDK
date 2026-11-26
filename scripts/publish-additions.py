@@ -26,6 +26,8 @@ def main(argv=None):
     parser.add_argument('--ports-root', required=True, type=Path)
     parser.add_argument('--workdir', required=True, type=Path, help='private reusable state for publication and retry')
     parser.add_argument('--state', type=Path, help='Ports STATE directory: select successful packages of one repository')
+    parser.add_argument('--state-root', action='append', default=[], metavar='PKGPATH',
+                        help='publish this completed state root using the existing graph; repeat for a batch')
     parser.add_argument('--packages', type=Path, help='archive directory for that role, e.g. target PACKAGES/All')
     parser.add_argument('--url', required=True, help='public HTTPS base URL')
     parser.add_argument('--prefix', default='')
@@ -41,10 +43,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if bool(args.state) != bool(args.packages):
         parser.error('--state and --packages must be supplied together')
+    if args.state_root and not args.state:
+        parser.error('--state-root requires --state and --packages')
     try:
         spec, checksums = read_json(args.input), None
         if args.state:
-            spec, checksums = packages_from_state(spec, args.state, args.packages)
+            spec, checksums = packages_from_state(spec, args.state, args.packages, selected_roots=args.state_root)
         with ExitStack() as transports:
             store = transports.enter_context(S3Store.from_environment(
                 endpoint=args.endpoint, region=args.region, bucket=args.bucket, ca_file=args.tls_ca_file))

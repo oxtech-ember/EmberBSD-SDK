@@ -2,6 +2,7 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Publisher-only package updates reuse current binaries and prepared signatures."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,7 +18,7 @@ from test_binary_catalog import BinaryReleaseFixture, graph
 from emberbsd_sdk.binary_release import load_catalogs
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.jsonio import json_bytes
-from emberbsd_sdk.package_publish import update_packages
+from emberbsd_sdk.package_publish import packages_from_state, update_packages
 from emberbsd_sdk.release_catalog import parse_channel
 import emberbsd_sdk.release_delivery as release_delivery
 from emberbsd_sdk.release_delivery import publish_release
@@ -54,6 +55,22 @@ class PackagePublishTests(BinaryReleaseFixture):
     def update(self, workdir, **kwargs):
         return update_packages(self.crypto, self.store, self.public, self.spec,
             self.ports, workdir, self.leaf, self.ca.certificate, **kwargs)
+
+    def test_publish_one_completed_root_with_the_signed_runtime_provider(self):
+        repo, archive, workdir = self.prepare_addition()
+        repo['sets'] = ['app', 'other']
+        state = self.work / 'state'
+        state.mkdir()
+        (state / 'packages').write_text('net/new new-1.0\nnet/other other-1.0\n')
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (state / 'done').write_text(f'net/new new-1.0 {digest}\nnet/other other-1.0 {"0" * 64}\n')
+        self.spec, checksums = packages_from_state(self.spec, state, archive.parent,
+                                                   selected_roots=['net/new'])
+        result = self.update(workdir, checksums=checksums)
+        self.assertEqual(result['statistics']['added'], 1)
+        self.assertEqual(result['statistics']['uploaded_packages'], 1)
+        catalog = json.loads((workdir / 'release' / repo['id'] / 'catalog.json').read_text())
+        self.assertEqual(catalog['sets']['app'], ['net/app'])
 
     def test_addition_fetch_compose_publish_preserves_old_packages_without_get(self):
         _, _, workdir = self.prepare_addition()

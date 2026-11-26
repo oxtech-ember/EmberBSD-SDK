@@ -74,6 +74,25 @@ class PackagesFromStateTests(unittest.TestCase):
         self.assertEqual(checksums, {app_path: '1' * 64})
         self.assertNotIn('host:devel/generator', result['repositories'][0]['packages'])
 
+    def test_selected_state_roots_bound_a_batch_as_other_workers_finish(self):
+        spec = self.target_spec()
+        spec['repositories'][0]['sets'] = ['all']
+        rows = ['net/app app-1.2', 'net/failed failed-2.0']
+        done = [row + ' ' + 'a' * 64 for row in rows]
+        self.write_state(packages=rows, done=done[:1])
+        first = packages_from_state(spec, self.state, self.packages, selected_roots=['net/app'])
+        self.write_state(packages=rows, done=done)
+        repeat = packages_from_state(spec, self.state, self.packages, selected_roots=['net/app'])
+        self.assertEqual(repeat, first)
+        repo = repeat[0]['repositories'][0]
+        self.assertEqual(repo['roots'], ['net/app'])
+        self.assertEqual(repo['sets'], [])
+        self.assertEqual(set(repo['packages']), {'target:net/app'})
+        self.assertEqual(repeat[1], {str(self.packages / 'app-1.2.tgz'): 'a' * 64})
+        self.write_state(packages=rows, done=done, blocked=['net/failed'])
+        with self.assertRaisesRegex(SDKError, 'net/failed'):
+            packages_from_state(spec, self.state, self.packages, selected_roots=['net/app', 'net/failed'])
+
     def test_native_role_uses_native_state_root_and_host_graph_id(self):
         self.graph_path.write_text(json.dumps(graph([('host:devel/generator', '5.0')])), encoding='utf-8')
         spec = dict(schema='emberbsd.package-build.v1', repositories=[dict(

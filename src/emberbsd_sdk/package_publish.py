@@ -20,13 +20,16 @@ from .release_delivery import fetch_release, publish_release
 from .release_signing import read_bytes
 
 
-def packages_from_state(spec, state, packages):
+def packages_from_state(spec, state, packages, *, selected_roots=()):
     """Map successful Ports results to an existing producer graph, without solving."""
     spec = deepcopy(spec)
     if len(spec['repositories']) != 1:
         raise SDKError('--state requires exactly one selected repository in the package-build input')
     repo = spec['repositories'][0]
     role = 'host' if repo['host'] is not None else 'target'
+    selected = {_parse_root(root, '--state-root') for root in selected_roots}
+    if any(root.endswith('@native') != (role == 'host') for root in selected):
+        raise SDKError('selected state root has a different repository role')
     graph = read_json(repo['graph'])
     by_root = {}
     for node in graph['nodes']:
@@ -42,7 +45,7 @@ def packages_from_state(spec, state, packages):
             root = fields[0]
             # Cross-bulk STATE can contain successful results for both roles.
             # Ignore the other role before interpreting its row payload.
-            if root.endswith('@native') != (role == 'host'):
+            if root.endswith('@native') != (role == 'host') or (selected and root not in selected):
                 continue
             if ((name == 'packages' and len(fields) != 2) or
                     (name == 'done' and len(fields) not in (2, 3))):
@@ -82,10 +85,17 @@ def packages_from_state(spec, state, packages):
         paths[nodes[0]['id']] = path
         checksums[path] = done[1]
         roots.append(root)
+    missing = selected.difference(roots)
+    if missing:
+        raise SDKError('no successful archive receipt for selected state roots: ' + ', '.join(sorted(missing)))
     if not roots:
         raise SDKError('no successful packages of the selected role in Ports state')
     repo['packages'] = paths
-    repo['roots'] = sorted(set(repo.get('roots', [])) | set(roots))
+    if selected:
+        repo['sets'] = []
+        repo['roots'] = sorted(selected)
+    else:
+        repo['roots'] = sorted(set(repo.get('roots', [])) | set(roots))
     return spec, checksums
 
 

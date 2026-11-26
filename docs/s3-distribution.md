@@ -168,8 +168,16 @@ python3 scripts/publish-additions.py package-build.json \
 The input can leave `packages` empty in this mode. `STATE/packages` names must
 match successful `STATE/done` entries and graph versions. Completed packages
 outside the supplied graph are ignored, so tasks can share one STATE directory.
-Failed, blocked and skipped entries stay out; native entries stay out of a
-target repository.
+For a rolling publication, export the typed runtime graph once for the producer
+inputs. Reuse it for each batch from those inputs. Add one `--state-root PKGPATH`
+per completed archive to the command above, for example
+`--state-root devel/lib --state-root net/app`. These paths replace the input roots and sets for this
+batch. The publisher keeps the sets in the signed current repository and reuses
+its matching runtime providers. Include each new local provider in the batch.
+Other workers can finish while the publisher retries the same batch.
+The publisher excludes roots in the current `failed`, `blocked` and `skipped`
+files. Cross-bulk archives prior failures on resume. A target repository
+selects target entries from the state.
 For native publication, select a host repository and its native archive directory.
 The state can mix target archives and native tools installed by cross-bulk.
 Two-column `STATE/done` rows omit the archive checksum. Host rows ending in
