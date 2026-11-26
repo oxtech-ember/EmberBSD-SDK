@@ -4,6 +4,7 @@
 """Maintainer-only addition of built packages to authenticated S3 current."""
 
 import argparse
+import json
 from contextlib import ExitStack
 from pathlib import Path
 import subprocess
@@ -14,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.host_prefix import load_host_prefix
 from emberbsd_sdk.jsonio import json_bytes, read_json
-from emberbsd_sdk.package_publish import packages_from_state, update_packages
+from emberbsd_sdk.package_publish import follow_completions, packages_from_state, update_packages
 from emberbsd_sdk.release_s3 import HTTPStore, S3Store
 from emberbsd_sdk.release_signing import ReleaseCrypto, SigningIdentity
 
@@ -28,6 +29,11 @@ def main(argv=None):
     parser.add_argument('--state', type=Path, help='Ports STATE directory: select successful packages of one repository')
     parser.add_argument('--state-root', action='append', default=[], metavar='PKGPATH',
                         help='publish this completed state root using the existing graph; repeat for a batch')
+    parser.add_argument('--follow', action='store_true',
+                        help='publish batches of completed roots until this Ports build releases its build.lock')
+    parser.add_argument('--interval', type=int, help='seconds between receipt checks with --follow (default: 30)')
+    parser.add_argument('--hold-root', action='append', default=[], metavar='PKGPATH',
+                        help='hold a known bad root and its consumers with --follow')
     parser.add_argument('--packages', type=Path, help='archive directory for that role, e.g. target PACKAGES/All')
     parser.add_argument('--url', required=True, help='public HTTPS base URL')
     parser.add_argument('--prefix', default='')
@@ -45,9 +51,13 @@ def main(argv=None):
         parser.error('--state and --packages must be supplied together')
     if args.state_root and not args.state:
         parser.error('--state-root requires --state and --packages')
+    if args.follow and (not args.state or args.state_root):
+        parser.error('--follow requires --state and --packages and selects its own completed roots')
+    if not args.follow and (args.hold_root or args.interval is not None):
+        parser.error('--hold-root and --interval require --follow')
     try:
         spec, checksums = read_json(args.input), None
-        if args.state:
+        if args.state and not args.follow:
             spec, checksums = packages_from_state(spec, args.state, args.packages, selected_roots=args.state_root)
         with ExitStack() as transports:
             store = transports.enter_context(S3Store.from_environment(
@@ -55,6 +65,13 @@ def main(argv=None):
             public = transports.enter_context(HTTPStore(args.url, ca_file=args.tls_ca_file))
             crypto = ReleaseCrypto(load_host_prefix(args.host_prefix, required_roles=('openssl', 'pkg_admin', 'pkg_info')))
             identity = SigningIdentity(args.signer_directory / 'certificate.pem', args.signer_directory / 'private-key.pem')
+            if args.follow:
+                for event in follow_completions(crypto, store, public, spec, args.ports_root,
+                        args.workdir, identity, args.trust_root, args.state, args.packages,
+                        held=args.hold_root, prefix=args.prefix, ttl=args.ttl,
+                        forbidden_prefixes=args.forbid_prefix, interval=30 if args.interval is None else args.interval):
+                    print(json.dumps(event, sort_keys=True), flush=True)
+                return 0
             result = update_packages(crypto, store, public, spec, args.ports_root, args.workdir,
                                      identity, args.trust_root, prefix=args.prefix, ttl=args.ttl,
                                      checksums=checksums, forbidden_prefixes=args.forbid_prefix)

@@ -36,6 +36,10 @@ def main(argv=None):
                           help='authenticated snapshot directory; reuse its packages by metadata and merge additions')
     candidates = commands.add_parser('publication-candidates', help='list completed Ports roots missing or changed in a signed catalog')
     candidates.add_argument('input', type=Path, help='package-build JSON for one producer graph and repository')
+    candidates.add_argument('--ready', action='store_true',
+                            help='order completed roots with available runtime providers')
+    candidates.add_argument('--hold-root', action='append', default=[], metavar='PKGPATH',
+                            help='with --ready, omit this candidate from the batch; repeat for known failures')
     candidates.add_argument('--state', required=True, type=Path)
     candidates.add_argument('--packages', required=True, type=Path)
     candidates.add_argument('--current', required=True, type=Path)
@@ -68,8 +72,10 @@ def main(argv=None):
         if args.command in ('compose', 'recover-selections'):
             signer = SigningIdentity(args.signer_directory / 'certificate.pem', args.signer_directory / 'private-key.pem')
         if args.command == 'publication-candidates':
+            if args.hold_root and not args.ready:
+                parser.error('--hold-root requires --ready')
             value = publication_candidates(crypto, read_json(args.input), args.state,
-                                           args.packages, args.current, args.trust_root)
+                                           args.packages, args.current, args.trust_root, ready=args.ready, held=args.hold_root)
         elif args.command == 'recover-selections':
             sysroots = {name: Path(root) for name, root in args.target_sysroot}
             if len(sysroots) != len(args.target_sysroot):

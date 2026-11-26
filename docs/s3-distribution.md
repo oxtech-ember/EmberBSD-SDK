@@ -191,6 +191,26 @@ Use the graph and state from the same producer. The command reads metadata.
 Pass the selected roots and their new runtime providers to `publish-additions.py`
 with `--state-root`. The publisher checks each new archive and the live catalog.
 
+Use `publication-candidates --ready` to group newly completed roots whose runtime
+providers satisfy the graph dependency patterns in the signed catalog or in the same batch. The
+`ready` list puts providers first. The `waiting` map lists unavailable direct
+providers. Use `--hold-root PKGPATH` to hold a known bad provider and its
+consumers. Supply the resulting roots to the publisher. It checks the package
+dependency patterns, runtime files and producer paths before signing.
+
+For a live Ports build, pass `--follow` to `publish-additions.py` with its
+`--state`, `--packages`, producer graph, private work directory and usual signing
+options. It reads completion receipts when they change and emits one JSON
+result per batch. It checks signed current again when missing providers can
+arrive from another producer. It drains the final receipts when the build
+releases `STATE/build.lock`. Start the follower after the producer takes the lock.
+For a finished build, it scans once and exits. Keep the state directory through
+the final scan. Use a new invocation when the producer or its graph changes.
+The input release ID is the prefix for each batch ID. Each batch is tied to
+its signed parent and checksums. A displaced parent triggers fresh selection.
+An archive failure stops the follower. Fix the archive or restart with
+`--hold-root PKGPATH` to release the independent packages.
+
 The publisher excludes roots in the current `failed`, `blocked` and `skipped`
 files. Cross-bulk archives prior failures on resume. A target repository
 selects target entries from the state.

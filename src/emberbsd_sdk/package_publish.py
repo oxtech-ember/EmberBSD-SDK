@@ -3,24 +3,27 @@
 """Explicit maintainer publication using existing Ports and release mechanisms."""
 
 from copy import deepcopy
+from functools import cache
+from graphlib import TopologicalSorter
 import hashlib
 from pathlib import Path
 import re
 import shutil
+import time
 
-from .binary_catalog import node_root
-from .binary_release import compose, load_catalogs, _statistics
+from .binary_catalog import node_root, runtime_projection
+from .binary_release import compose, load_catalogs, _matches, _statistics
 from .errors import SDKError
-from .jsonio import read_json, write_json
+from .jsonio import json_bytes, read_json, write_json
 from .package_cache import directory_lock
 from .package_selection import _parse_root
 from .paths import real_directory
-from .release_catalog import parse_channel, parse_release
-from .release_delivery import fetch_release, publish_release
+from .release_catalog import MAX_ENVELOPE, parse_channel, parse_release
+from .release_delivery import _key, fetch_release, publish_release, release_snapshot
 from .release_signing import read_bytes
 
 
-def packages_from_state(spec, state, packages, *, selected_roots=(), allow_empty=False):
+def packages_from_state(spec, state, packages, *, selected_roots=(), allow_empty=False, graph=None):
     """Map successful Ports results to an existing producer graph, without solving."""
     spec = deepcopy(spec)
     if len(spec['repositories']) != 1:
@@ -30,7 +33,8 @@ def packages_from_state(spec, state, packages, *, selected_roots=(), allow_empty
     selected = {_parse_root(root, '--state-root') for root in selected_roots}
     if any(root.endswith('@native') != (role == 'host') for root in selected):
         raise SDKError('selected state root has a different repository role')
-    graph = read_json(repo['graph'])
+    if graph is None:
+        graph = read_json(repo['graph'])
     by_root = {}
     for node in graph['nodes']:
         if node['id'].startswith(role + ':'):
@@ -99,9 +103,10 @@ def packages_from_state(spec, state, packages, *, selected_roots=(), allow_empty
     return spec, checksums
 
 
-def publication_candidates(crypto, spec, state, packages, current, trust):
+def publication_candidates(crypto, spec, state, packages, current, trust, *, ready=False, held=()):
     """Compare completed receipts with an authenticated catalog without opening archives."""
-    spec, _ = packages_from_state(spec, state, packages, allow_empty=True)
+    graph = read_json(spec['repositories'][0]['graph']) if ready and len(spec['repositories']) == 1 else None
+    spec, _ = packages_from_state(spec, state, packages, allow_empty=True, graph=graph)
     repo = spec['repositories'][0]
     release, (catalog,) = load_catalogs(crypto, current / 'release.p7m', current, trust, [repo['id']])
     summary = next(item for item in release['artifacts'] if item['id'] == catalog['summary'])
@@ -116,11 +121,56 @@ def publication_candidates(crypto, spec, state, packages, current, trust):
             missing.append(root)
         elif published[root] != name:
             changed.append(dict(root=root, current=published[root], built=name))
-    return dict(release_id=release['release_id'], missing=missing, changed=changed)
+    result = dict(release_id=release['release_id'], missing=missing, changed=changed)
+    if ready:
+        excluded = {_parse_root(root, 'held publication root') for root in held}
+        changed_roots = set(missing).union(item['root'] for item in changed) - excluded
+        names = {identity: Path(path).name.removesuffix('.tgz') for identity, path in repo['packages'].items()
+                 if node_root(identity) in changed_roots}
+        role = 'host' if repo['host'] is not None else 'target'
+        batch, waiting = _ready_roots(crypto, graph, names, published, excluded, role)
+        result.update(ready=batch, waiting=waiting)
+    return result
+
+
+def _ready_roots(crypto, graph, names, published, held, role):
+    if not names:
+        return [], {}
+    projection = runtime_projection(graph, names, role)
+    by_id = {node['id']: node for node in graph['nodes']}
+    edges = {row['root']: {node_root(edge['id']): edge.get('patterns', ())
+                           for edge in by_id[identity]['dependencies'] if edge['kind'] == 'runtime'}
+             for identity, row in projection.items()}
+    candidates = {node_root(identity): name for identity, name in names.items()}
+    available = dict(published)
+    excluded = set(held)
+    batch, waiting = [], {}
+
+    @cache
+    def matches(pattern, name):
+        return _matches(crypto, pattern, name)
+
+    for root in TopologicalSorter(edges).static_order():
+        requirements = edges[root]
+        if root in excluded or excluded.intersection(requirements):
+            excluded.add(root)
+            available.pop(root, None)
+        if root not in candidates:
+            continue
+        absent = sorted(provider for provider, patterns in requirements.items()
+                        if provider not in available or
+                        not all(matches(pattern, available[provider]) for pattern in patterns))
+        if absent:
+            waiting[root] = absent
+            available.pop(root, None)
+        else:
+            batch.append(root)
+            available[root] = candidates[root]
+    return batch, waiting
 
 
 def update_packages(crypto, store, public, spec, ports_root, workdir, identity, trust,
-                    *, prefix='', ttl=7 * 86400, checksums=None, forbidden_prefixes=()):
+                    *, prefix='', ttl=7 * 86400, checksums=None, forbidden_prefixes=(), expected_parent=None):
     """Fetch, merge, seal and publish; resume a prepared release without signing again.
 
     A prepared operation is frozen until success. Use a new release_id for a
@@ -139,6 +189,8 @@ def update_packages(crypto, store, public, spec, ports_root, workdir, identity, 
         request = dict(schema='emberbsd.package-publication.v1', build=spec,
                        ports_root=str(Path(ports_root).absolute()), prefix=prefix,
                        checksums=checksums or {})
+        if expected_parent is not None:
+            request['expected_parent'] = expected_parent
         if forbidden_prefixes:
             request['forbidden_prefixes'] = sorted(set(map(str, forbidden_prefixes)))
         request_path, result_path = workdir / 'request.json', workdir / 'result.json'
@@ -167,6 +219,8 @@ def update_packages(crypto, store, public, spec, ports_root, workdir, identity, 
                 real_directory(snapshot)
                 shutil.rmtree(snapshot)
             previous = fetch_release(crypto, public, trust, snapshot, prefix=prefix)
+            if expected_parent is not None and hashlib.sha256(read_bytes(snapshot / 'current.p7m')).hexdigest() != expected_parent:
+                raise SDKError('current changed since the completed batch was selected')
             channel = parse_channel(crypto.verify_cms(read_bytes(snapshot / 'current.p7m'), trust), 'current')
             statistics = {}
             release = compose(crypto, spec, ports_root, output, identity, trust, current=snapshot,
@@ -187,3 +241,87 @@ def update_packages(crypto, store, public, spec, ports_root, workdir, identity, 
         result = dict(channel=channel, statistics=statistics)
         write_json(result_path, result, exclusive=False)
         return result
+
+
+def _completed_batch(crypto, store, public, spec, ports_root, workdir, identity, trust,
+                     state, packages, held, prefix, ttl, forbidden_prefixes):
+    """Select against signed current and retry a displaced selection from a new parent."""
+    key = _key(prefix, 'current.p7m')
+    for attempt in range(3):
+        with release_snapshot(crypto, public, trust, workdir, prefix=prefix,
+                              repositories=[spec['repositories'][0]['id']]) as (_, snapshot):
+            parent = hashlib.sha256(read_bytes(snapshot / 'current.p7m')).hexdigest()
+            selection = publication_candidates(crypto, spec, state, packages, snapshot, trust,
+                                               ready=True, held=held)
+        roots = selection['ready']
+        if not roots:
+            return dict(parent=parent, roots=[], waiting=selection['waiting'])
+        batch, checksums = packages_from_state(spec, state, packages, selected_roots=roots)
+        fingerprint = hashlib.sha256(json_bytes([parent, spec, checksums])).hexdigest()
+        batch['release_id'] = spec['release_id'] + '-' + fingerprint[:20]
+        try:
+            result = update_packages(crypto, store, public, batch, ports_root, workdir / fingerprint,
+                identity, trust, prefix=prefix, ttl=ttl, checksums=checksums,
+                forbidden_prefixes=forbidden_prefixes, expected_parent=parent)
+        except SDKError:
+            current, _ = public.read(key, MAX_ENVELOPE, headers={'cache-control': 'no-cache'})
+            if attempt == 2 or hashlib.sha256(current).hexdigest() == parent:
+                raise
+            continue
+        return dict(parent=parent, release_id=batch['release_id'], roots=roots,
+                    waiting=selection['waiting'], statistics=result['statistics'])
+
+
+def follow_completions(crypto, store, public, spec, ports_root, workdir, identity, trust,
+                       state, packages, *, held=(), prefix='', ttl=7 * 86400, forbidden_prefixes=(),
+                       interval=30):
+    """Yield release results while this Ports build owns its build.lock."""
+    if interval < 1 or len(spec['repositories']) != 1:
+        raise SDKError('follow requires a positive interval and one producer repository')
+    workdir, state = Path(workdir).absolute(), Path(state)
+    workdir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    real_directory(workdir)
+    graph = Path(spec['repositories'][0]['graph'])
+    source = graph.stat()
+    lock = state / 'build.lock'
+
+    def owner():
+        try:
+            entry = lock.stat()
+        except FileNotFoundError:
+            return None
+        return entry.st_dev, entry.st_ino
+
+    producer = owner()
+    previous = event = None
+    with directory_lock(workdir / 'follow.lock'):
+        while True:
+            active = owner()
+            if active is not None and active != producer:
+                raise SDKError('Ports started another build in this state; select its producer graph')
+            current_graph = graph.stat()
+            if ((current_graph.st_dev, current_graph.st_ino, current_graph.st_mtime_ns, current_graph.st_size) !=
+                    (source.st_dev, source.st_ino, source.st_mtime_ns, source.st_size)):
+                raise SDKError('producer graph changed; select the new graph before publishing')
+            marks = []
+            for name in ('packages', 'done', 'failed', 'blocked', 'skipped'):
+                try:
+                    st = (state / name).stat()
+                    marks.append((st.st_ino, st.st_mtime_ns, st.st_size))
+                except FileNotFoundError:
+                    if name in ('packages', 'done'):
+                        raise
+                    marks.append(None)
+            changed = marks != previous
+            if not changed and event['waiting']:
+                current, _ = public.read(_key(prefix, 'current.p7m'), MAX_ENVELOPE,
+                                         headers={'cache-control': 'no-cache'})
+                changed = hashlib.sha256(current).hexdigest() != event['parent']
+            if changed:
+                event = _completed_batch(crypto, store, public, spec, ports_root, workdir,
+                    identity, trust, state, packages, held, prefix, ttl, forbidden_prefixes)
+                yield event
+                previous = marks
+            if active is None:
+                break
+            time.sleep(interval)

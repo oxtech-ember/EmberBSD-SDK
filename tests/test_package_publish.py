@@ -17,8 +17,8 @@ import test_release_s3 as http_fixture
 from test_binary_catalog import BinaryReleaseFixture, graph
 from emberbsd_sdk.binary_release import load_catalogs
 from emberbsd_sdk.errors import SDKError
-from emberbsd_sdk.jsonio import json_bytes
-from emberbsd_sdk.package_publish import packages_from_state, publication_candidates, update_packages
+from emberbsd_sdk.jsonio import json_bytes, read_json
+from emberbsd_sdk.package_publish import follow_completions, packages_from_state, publication_candidates, update_packages
 from emberbsd_sdk.release_catalog import parse_channel
 import emberbsd_sdk.release_delivery as release_delivery
 from emberbsd_sdk.release_delivery import publish_release
@@ -82,6 +82,110 @@ class PackagePublishTests(BinaryReleaseFixture):
         repo['target']['abi'] = 'another-abi'
         with self.assertRaisesRegex(SDKError, 'platform differs'):
             candidates()
+
+    def test_ready_batch_waits_for_runtime_receipts_and_an_explicit_hold(self):
+        self.prepare_addition()
+        graph = read_json(self.graph_path)
+        template = next(node for node in graph['nodes'] if node['id'] == 'target:net/new')
+        provider = 'net/unpublished'
+        graph['nodes'].append(dict(template, id='target:' + provider, dependencies=[]))
+        template['dependencies'].append(dict(id='target:' + provider, kind='runtime'))
+        self.graph_path.write_bytes(json_bytes(graph))
+        state = self.work / 'state'
+        state.mkdir()
+        names = {'net/new': 'new-1.0', provider: 'unpublished-1.0', 'net/other': 'renamed-1.0'}
+        (state / 'packages').write_text(''.join(f'{root} {name}\n' for root, name in names.items()))
+
+        def complete(roots):
+            (state / 'done').write_text(''.join(f'{root} {names[root]} {"a" * 64}\n' for root in roots))
+
+        def select(*held):
+            return publication_candidates(self.crypto, self.spec, state, self.work / 'no-archives',
+                self.work / 'baseline', self.ca.certificate, ready=True, held=held)
+
+        complete(['net/new', 'net/other'])
+        self.assertEqual(select()['ready'], ['net/other'])
+        self.assertEqual(select()['waiting'], {'net/new': [provider]})
+        complete(names)
+        ready = select()['ready']
+        self.assertEqual(set(ready), set(names))
+        self.assertLess(ready.index(provider), ready.index('net/new'))
+        self.assertEqual(select(provider)['ready'], ['net/other'])
+        self.assertEqual(select('devel/lib')['ready'], [provider])
+        # A published intermediate does not bypass a held provider.
+        template['dependencies'] = [dict(id='target:net/app', kind='runtime')]
+        self.graph_path.write_bytes(json_bytes(graph))
+        self.assertEqual(select('devel/lib')['waiting']['net/new'], ['net/app'])
+        template['dependencies'] = [dict(id='target:devel/lib', kind='runtime', patterns=['lib>=2'])]
+        self.graph_path.write_bytes(json_bytes(graph))
+        self.assertEqual(select()['waiting']['net/new'], ['devel/lib'])
+        template['dependencies'][0]['patterns'] = ['lib>=1']
+        self.graph_path.write_bytes(json_bytes(graph))
+        self.assertIn('net/new', select()['ready'])
+
+
+
+    def test_follow_publishes_final_receipt_resumes_and_leaves_current_on_bad_checksum(self):
+        _, archive, workdir = self.prepare_addition()
+        state = self.work / 'follow-state'
+        state.mkdir()
+        (state / 'packages').write_text('net/new new-1.0\n')
+        (state / 'done').write_text('net/new new-1.0 ' + '0' * 64 + '\n')
+        archive_dir = self.work / 'follow-packages'
+        archive_dir.mkdir()
+        (archive_dir / 'new-1.0.tgz').write_bytes(archive.read_bytes())
+
+        def run():
+            return list(follow_completions(self.crypto, self.store, self.public, self.spec,
+                self.ports, workdir, self.leaf, self.ca.certificate, state, archive_dir, interval=1))
+
+        before = self.public.read('current.p7m', 1024 * 1024)[0]
+        with self.assertRaises(SDKError):
+            run()
+        self.assertEqual(self.public.read('current.p7m', 1024 * 1024)[0], before)
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (state / 'done').write_text('net/new new-1.0 ' + digest + '\n')
+        (state / 'build.lock').mkdir()
+        with patch('emberbsd_sdk.package_publish.time.sleep', side_effect=lambda _: (state / 'build.lock').rmdir()):
+            events = run()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['roots'], ['net/new'])
+        self.assertEqual(events[0]['statistics']['uploaded_packages'], 1)
+        committed = self.public.read('current.p7m', 1024 * 1024)[0]
+        self.assertNotEqual(before, committed)
+        self.assertEqual(run()[0]['roots'], [])
+        self.assertEqual(self.public.read('current.p7m', 1024 * 1024)[0], committed)
+
+    def test_follow_reselects_after_another_authenticated_publisher_advances_current(self):
+        _, archive, workdir = self.prepare_addition()
+        state = self.work / 'follow-state'
+        state.mkdir()
+        (state / 'packages').write_text('net/new new-1.0\n')
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (state / 'done').write_text('net/new new-1.0 ' + digest + '\n')
+        package_directory = self.work / 'follow-packages'
+        package_directory.mkdir()
+        (package_directory / 'new-1.0.tgz').write_bytes(archive.read_bytes())
+        ids = []
+
+        def advance_then_update(*args, **kwargs):
+            ids.append(args[3]['release_id'])
+            if len(ids) == 1:
+                baseline = self.work / 'baseline' / 'release.p7m'
+                metadata = json.loads(self.crypto.verify_cms(baseline.read_bytes(), self.ca.certificate))
+                metadata.update(release_id='concurrent-publisher', created_at=2)
+                peer = baseline.with_name('peer.p7m')
+                peer.write_bytes(self.crypto.sign_cms(json_bytes(metadata), self.leaf, self.ca.certificate))
+                publish_release(self.crypto, self.store, self.public, peer, self.leaf, self.ca.certificate,
+                                expected_current=kwargs['expected_parent'], reuse_current=True)
+            return update_packages(*args, **kwargs)
+
+        with patch('emberbsd_sdk.package_publish.update_packages', side_effect=advance_then_update):
+            result, = follow_completions(self.crypto, self.store, self.public, self.spec, self.ports,
+                workdir, self.leaf, self.ca.certificate, state, package_directory)
+        self.assertEqual(len(set(ids)), 2)
+        self.assertEqual(result['release_id'], ids[-1])
+        self.assertEqual(result['roots'], ['net/new'])
 
     def test_publish_one_completed_root_with_the_signed_runtime_provider(self):
         repo, archive, workdir = self.prepare_addition()
