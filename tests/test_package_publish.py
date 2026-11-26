@@ -154,8 +154,10 @@ class PackagePublishTests(BinaryReleaseFixture):
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         (state / 'done').write_text('net/new new-1.0 ' + digest + '\n')
         (state / 'build.lock').mkdir()
-        with patch('emberbsd_sdk.package_publish.time.sleep', side_effect=lambda _: (state / 'build.lock').rmdir()):
+        with patch('emberbsd_sdk.package_publish.time') as clock:
+            clock.sleep.side_effect = lambda _: (state / 'build.lock').rmdir()
             events = run()
+            clock.sleep.assert_called_once_with(1)
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]['roots'], ['net/new'])
         self.assertEqual(events[0]['statistics']['uploaded_packages'], 1)
