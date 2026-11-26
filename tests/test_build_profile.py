@@ -25,10 +25,10 @@ PROFILE = {
     'os': {'kernels': ['EMBER64']},
     'ports': {},
 }
-# The --outputs query of the OS kernel builder: only aarch64 has an image.
+# The fixture OS owns the output list for each kernel target.
 KERNEL_OUTPUTS_SH = '''if [ "${1:-}" = --outputs ]; then
     target=${EMBER_KERNEL_TARGET:-aarch64}
-    case "$target" in aarch64|amd64) ;; *) echo 'EMBER_KERNEL_TARGET must be aarch64 or amd64' >&2; exit 1;; esac
+    case "$target" in aarch64|amd64|earmv7hf) ;; *) echo 'unsupported kernel target' >&2; exit 1;; esac
     config=${2##*/}
     echo "netbsd-$config"
     [ "$target" != aarch64 ] || echo "netbsd-$config.img"
@@ -425,11 +425,23 @@ class BuildProfileTests(ProfileFixture):
         with self.assertRaisesRegex(SDKError, 'EMBER64 is missing: not in the OS for amd64'):
             self.plan(profile)
 
+    def test_earmv7hf_kernel_uses_the_arm_hard_float_triplet(self):
+        from emberbsd_sdk.targets import target_definition
+        profile = copy.deepcopy(PROFILE)
+        profile['platform']['target'] = 'earmv7hf'
+        profile['os']['kernels'] = ['GENERIC']
+        self.write('os/sys/arch/evbarm/conf/GENERIC', 'include "arch/evbarm/conf/std"\n')
+        kernel = self.nodes(self.plan(profile))['os:kernel:GENERIC']
+        self.assertEqual(kernel['inputs']['target'], dict(name='earmv7hf', machine='evbarm',
+                         arch='earmv7hf', triplet='armv7--netbsdelf-eabihf', elf=40))
+        with self.assertRaisesRegex(SDKError, 'target'):
+            target_definition('earmv7hf')
+
     def test_a_kernel_of_a_target_without_a_kernel_builder_is_refused(self):
         profile = copy.deepcopy(PROFILE)
         profile['platform']['target'] = 'riscv32'
         with self.assertRaisesRegex(SDKError, 'the OS kernel builder refuses the target or configuration: '
-                                    'EMBER_KERNEL_TARGET must be aarch64 or amd64'):
+                                    'unsupported kernel target'):
             self.plan(profile)
 
     def test_missing_kernel_configuration_is_refused(self):

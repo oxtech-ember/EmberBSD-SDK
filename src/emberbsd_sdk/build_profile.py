@@ -23,7 +23,7 @@ from . import libedit, prepared_sources, process
 from .graph import dependency_waves
 from .errors import CommandError, SDKError
 from .jsonio import json_bytes, loads_json, read_json, write_json
-from .targets import target_definition
+from .targets import BUILD_TARGETS, target_definition
 
 PROFILE_SCHEMA = 'emberbsd.build-profile.v1'
 PLAN_SCHEMA = 'build-graph-v2'
@@ -186,7 +186,7 @@ def validate_profile(value):
     platform, system, ports = value['platform'], value['os'], value['ports']
     _require(isinstance(platform, dict) and set(platform) == {'target', 'compiler'},
              'profile platform needs target and compiler')
-    target_definition(platform['target'])
+    target_definition(platform['target'], BUILD_TARGETS)
     compiler = platform['compiler']
     _require(isinstance(compiler, dict) and set(compiler) == {'host', 'target'} and
              compiler['host'] in COMPILERS and compiler['target'] in COMPILERS,
@@ -409,7 +409,7 @@ class _Planner:
                  selected_sources, required_sources, native, jobs, cache=None):
         from .native_os_routing import parse_native_os_contract
         self.state, self.cache, self.target_name = state, cache, target_name
-        self.target = target_definition(target_name)
+        self.target = target_definition(target_name, BUILD_TARGETS)
         self.selected_sources = dict(selected_sources or {})
         self.found = {'os': checkout(os_root), 'ports': checkout(ports_root)}
         self.sdk_root = sdk_root

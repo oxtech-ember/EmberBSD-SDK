@@ -57,8 +57,8 @@ python3 scripts/create-prebuild-sdk.py /absolute/prebuild-sdk-aarch64 --target a
 python3 scripts/inspect-prebuild-sdk.py /absolute/prebuild-sdk-aarch64
 ```
 
-New creation requires `--target aarch64` or `--target amd64`.
-The build host does not select the target implicitly.
+Pass `--target` to create a workspace. Run `create-prebuild-sdk.py --help`
+to list the targets. For an ARMv7 hard-float kernel, use `--target earmv7hf`.
 
 The parent directory must exist. Use build paths without whitespace or control characters. The destination must be new. Creation leaves
 an incomplete marker until the layout is complete. A failed creation does not
@@ -84,8 +84,7 @@ tree. A version 1 manifest remains readable. Both report `target: null`,
 `triplet: null` and `target_status: "unknown"`. Inspection never upgrades them.
 If a manifest exists, its schema and mandatory directories must be valid.
 
-To check a known target during adoption, add `--target aarch64` or
-`--target amd64`. This compares the existing canonical version 2 manifest.
+To check a known target during adoption, add `--target TARGET`. This compares the existing canonical version 2 manifest.
 A mismatch or an unknown target fails before alias creation. Adoption never
 writes a sidecar declaration or changes the source manifest.
 

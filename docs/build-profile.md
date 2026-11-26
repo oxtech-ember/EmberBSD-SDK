@@ -25,15 +25,16 @@ come from the client configuration. Start from an example:
 
 - `platform.target` is a [target](../src/emberbsd_sdk/targets.py) name.
   `platform.compiler` selects the `host` and `target` families, `clang` or
-  `gcc`.
+  `gcc`. For the 32-bit ARMv7 hard-float kernel, select `earmv7hf` and put
+  `GENERIC` in `os.kernels`. Set `build.host_bfd_config` to the `host-bfd.mk`
+  from the common Binutils build for `armv7--netbsdelf-eabihf`.
 - `os.kernels` names kernel configurations of the target machine: a
   general-purpose configuration of the OS, or a local trial configuration in
   a directory of `build.kernel_configs`. The OS kernel builder
   `ember/build-kernel.sh` receives the target in `EMBER_KERNEL_TARGET`. The
   plan takes the outputs of a kernel node from `build-kernel.sh --outputs
-  CONFIG`: currently `netbsd-CONFIG` and `netbsd-CONFIG.img` for `aarch64`,
-  `netbsd-CONFIG` for `amd64`. The builder also builds the modules of its
-  target; the plan refuses a target or configuration that it refuses. `os.sets`
+  CONFIG`. The builder also selects the modules of its target. The plan
+  accepts targets and configurations that the OS builder accepts. `os.sets`
   names installation sets: the OS release builder makes `base`, `comp` and
   `etc` together, so the plan accepts exactly these three, for the aarch64
   target with Clang (the `aarch64-sysroot` release). With sets, the plan

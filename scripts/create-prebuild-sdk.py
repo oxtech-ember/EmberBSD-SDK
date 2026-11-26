@@ -11,14 +11,14 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.workspace import create
-from emberbsd_sdk.targets import TARGETS
+from emberbsd_sdk.targets import BUILD_TARGETS
 
 
 def main():
-    parser = argparse.ArgumentParser(usage='%(prog)s ROOT --target {aarch64,amd64} [--adopt EXISTING]',
+    parser = argparse.ArgumentParser(
         description='Create a target workspace, or a read-only alias. Legacy alias adoption can omit --target.')
     parser.add_argument('root')
-    parser.add_argument('--target', choices=TARGETS)
+    parser.add_argument('--target', choices=BUILD_TARGETS)
     parser.add_argument('--adopt')
     args = parser.parse_args()
     if args.adopt is None and args.target is None:

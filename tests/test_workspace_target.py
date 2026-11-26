@@ -43,7 +43,8 @@ class TargetWorkspaceTests(TemporaryCase):
         self.assertFalse(root.exists())
 
     def test_both_target_clis_and_misleading_names(self):
-        for target, triplet in (('aarch64', 'aarch64--netbsd'), ('amd64', 'x86_64--netbsd')):
+        for target, triplet in (('aarch64', 'aarch64--netbsd'), ('amd64', 'x86_64--netbsd'),
+                                ('earmv7hf', 'armv7--netbsdelf-eabihf')):
             root = self.root / ('not-' + target)
             created = self.cli('create', root, '--target', target)
             self.assertEqual(created.returncode, 0, created.stderr)

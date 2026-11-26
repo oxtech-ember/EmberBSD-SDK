@@ -7,7 +7,7 @@ import stat
 from .errors import SDKError
 from .jsonio import read_json, write_json
 from .paths import canonical_existing, entry, path_string, real_directory
-from .targets import target_definition
+from .targets import BUILD_TARGETS, target_definition
 
 REQUIRED = ('obj', 'sysroot', 'packages')
 DIRECTORIES = (*REQUIRED, 'receipts')
@@ -18,7 +18,7 @@ MANIFEST = dict(format='emberbsd-prebuild-sdk-layout', version=1, scope='workspa
 
 
 def target_manifest(target):
-    definition = target_definition(target)
+    definition = target_definition(target, BUILD_TARGETS)
     return MANIFEST | dict(version=2, target=target, triplet=definition['triplet'])
 
 
@@ -66,7 +66,7 @@ def inspect_layout(root):
 
 
 def require_target(layout, target):
-    definition = target_definition(target)
+    definition = target_definition(target, BUILD_TARGETS)
     if layout['layout_version'] != 2 or layout['target'] is None:
         raise SDKError('workspace target is unknown; create a new target workspace; legacy migration is separate')
     if layout['target'] != target or layout['triplet'] != definition['triplet']:
@@ -76,7 +76,7 @@ def require_target(layout, target):
 def create(root, adopt=None, *, target=None):
     try:
         if adopt is None or target is not None:
-            target_definition(target)
+            target_definition(target, BUILD_TARGETS)
         logical = path_string(root)
         canonical_existing(os.path.dirname(logical))
         if adopt is not None:

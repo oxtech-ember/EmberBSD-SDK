@@ -11,6 +11,12 @@ TARGETS = {
     'riscv32': dict(machine='riscv', arch='riscv32', triplet='riscv32--netbsd', elf=243),
 }
 
+# Build profiles and workspaces also accept targets with a kernel producer only.
+BUILD_TARGETS = {
+    **TARGETS,
+    'earmv7hf': dict(machine='evbarm', arch='earmv7hf', triplet='armv7--netbsdelf-eabihf', elf=40),
+}
+
 # Per-target ABI flags are shared by application compiler bindings. Keep these
 # aligned with the OS target ABI; they are not compiler-family fallbacks.
 TARGET_COMPILER_FLAGS = {
@@ -20,10 +26,10 @@ TARGET_COMPILER_FLAGS = {
 }
 
 
-def target_definition(name):
-    if not isinstance(name, str) or name not in TARGETS:
-        raise SDKError('target must be aarch64, amd64 or riscv32')
-    return TARGETS[name]
+def target_definition(name, supported=TARGETS):
+    if not isinstance(name, str) or name not in supported:
+        raise SDKError('target must be one of: ' + ', '.join(supported))
+    return supported[name]
 
 
 def target_compiler_flags(name):
