@@ -216,13 +216,15 @@ def _publish_current(crypto, store, public, envelope_path, envelope, release, ba
         fresh = {i: h for i, h in withdrawals.items() if (i, h) not in inherited}
         _authorize_withdrawals(release, previous_release, catalogs, fresh)
     withdrawn_ids = {a['id'] for a in release['artifacts'] if (a['id'], a['sha256']) in declared}
+    if any(a['kind'] == 'bootstrap' and a['id'] in withdrawn_ids for a in release['artifacts']):
+        raise SDKError('withdrawn bootstrap remains selectable in the release')
     for catalog in catalogs:
         if any(p['artifact'] in withdrawn_ids for p in catalog['packages']):
             raise SDKError('withdrawn package remains selectable in a current catalog')
     if reuse_current:
         reusable_ids = _verify_sparse_local(crypto, release, previous_release, envelope_path.parent, trust,
                                             withdrawn_ids)
-        _require_current_coverage(release, previous_release)
+        _require_current_coverage(release, previous_release, declared)
     else:
         reusable_ids = set()
     if has_os_updates:
@@ -326,11 +328,13 @@ def _slot(artifact):
     return artifact['id'], role, platform.casefold()
 
 
-def _require_current_coverage(candidate, current):
+def _require_current_coverage(candidate, current, withdrawals):
     slots = {_slot(item) for item in candidate['artifacts']}
-    missing = [_slot(item) for item in current['artifacts'] if _slot(item) not in slots]
-    if missing:
-        raise SDKError('candidate release drops current artifacts; preserve each artifact ID and platform')
+    for item in current['artifacts']:
+        if item['kind'] == 'bootstrap' and (item['id'], item['sha256']) in withdrawals:
+            continue
+        if _slot(item) not in slots:
+            raise SDKError('candidate release drops current artifacts; preserve each artifact ID and platform')
 
 
 def _withdrawal_history(release, read_index, cache):
@@ -348,7 +352,7 @@ def _withdrawal_history(release, read_index, cache):
 
 
 def _authorize_withdrawals(candidate, current, catalogs, withdrawals):
-    """Keep exact revoked package records signed while removing them from selection."""
+    """Check the signed record and disable its package or bootstrap selector."""
     if not withdrawals:
         return set()
     old = {item['id']: item for item in current['artifacts']}
@@ -358,6 +362,13 @@ def _authorize_withdrawals(candidate, current, catalogs, withdrawals):
         _pattern(identity, _SLUG, 'withdrawn artifact id')
         _pattern(digest, _SHA256, 'withdrawn artifact sha256')
         previous, replacement = old.get(identity), new.get(identity)
+        if previous and previous['kind'] == 'bootstrap':
+            # The bootstrap record itself is the client's host selector.
+            if previous['sha256'] != digest:
+                raise SDKError(f'withdrawal must match the exact current bootstrap digest: {identity}')
+            if replacement is not None:
+                raise SDKError('remove the withdrawn bootstrap record from the release')
+            continue
         if (previous is None or replacement is None or
                 previous['kind'] not in ('host-package', 'target-package') or
                 previous['sha256'] != digest or replacement != previous):

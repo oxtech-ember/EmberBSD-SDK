@@ -41,7 +41,7 @@ def main(argv=None):
             command.add_argument('--reuse-current', action='store_true',
                                  help='reuse exact missing records from authenticated current (requires --expected-current)')
             command.add_argument('--withdraw-artifact', action='append', default=[], metavar='ID=SHA256',
-                                 help='mark an exact current package record unavailable and remove its current object')
+                                 help='withdraw an exact current package or bootstrap and remove its object')
             command.add_argument('--previous-channel-time', type=int,
                                  help='publisher recovery only: authenticate the old channel at this past Unix time')
         elif name == 'fetch':

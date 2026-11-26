@@ -172,7 +172,11 @@ several withdrawn hashes.
 
 Publish the sealed candidate with `--reuse-current`,
 `--expected-current CURRENT_POINTER_SHA256`, and one
-`--withdraw-artifact ID=SHA256` per new withdrawal. The publisher removes
+`--withdraw-artifact ID=SHA256` per new withdrawal. To retire a host
+bootstrap, record its exact pair in the same signed index and omit its
+artifact record from the candidate. This removes the installer for that
+host. Publish a clean bootstrap with a new digest to restore installation.
+For package withdrawals, the publisher removes
 the exact package objects. Dependent archives remain available at their
 existing paths. Check the old public URLs and an unrelated installation.
 

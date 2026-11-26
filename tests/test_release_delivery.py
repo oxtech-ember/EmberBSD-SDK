@@ -86,6 +86,15 @@ class WithdrawalTests(unittest.TestCase):
             release_delivery._authorize_withdrawals(
                 self.release, self.release, catalogs, {self.identity: self.digest})
 
+    def test_bootstrap_withdrawal_requires_the_current_digest_and_no_selector(self):
+        bootstrap = dict(artifacts=[dict(self.package, kind='bootstrap')])
+        with self.assertRaisesRegex(SDKError, 'exact current bootstrap digest'):
+            release_delivery._authorize_withdrawals(
+                dict(artifacts=[]), bootstrap, [], {self.identity: 'b' * 64})
+        with self.assertRaisesRegex(SDKError, 'remove the withdrawn bootstrap record'):
+            release_delivery._authorize_withdrawals(
+                bootstrap, bootstrap, [], {self.identity: self.digest})
+
 
 @unittest.skipUnless(os.environ.get('EMBERBSD_TEST_HOST_PREFIX'), 'select native Ports OpenSSL')
 class DeliveryTests(unittest.TestCase):
@@ -126,6 +135,48 @@ class DeliveryTests(unittest.TestCase):
     def publish(self, release):
         return publish_release(self.crypto, self.store, self.public, release, self.signer,
                                self.ca.certificate)
+
+    def test_withdraw_and_restore_bootstrap(self):
+        initial = self.release()
+        self.publish(initial)
+        release = parse_release(self.crypto.verify_cms(initial.read_bytes(), self.ca.certificate))
+        bootstrap = next(a for a in release['artifacts'] if a['kind'] == 'bootstrap')
+        index = next(a for a in release['artifacts'] if a['kind'] == 'package-index')
+        denied = {bootstrap['id']: bootstrap['sha256']}
+
+        def candidate(name, payload=None):
+            root = self.work / name
+            (root / 'host').mkdir(parents=True)
+            (root / index['path']).write_bytes((initial.parent / index['path']).read_bytes())
+            data = json_bytes(dict(schema='emberbsd.withdrawals.v1',
+                                   artifacts=[dict(id=bootstrap['id'], sha256=bootstrap['sha256'])]))
+            (root / 'host/withdrawals.json').write_bytes(data)
+            artifacts = [index, dict(index, id='withdrawals', path='host/withdrawals.json',
+                                     unpacked_size=len(data))]
+            if payload is not None:
+                (root / bootstrap['path']).write_bytes(payload)
+                artifacts.append(dict(bootstrap, unpacked_size=len(payload)))
+            path = root / 'release.p7m'
+            seal_release(self.crypto, json_bytes(dict(release, release_id=name, artifacts=artifacts)),
+                         root, self.signer, self.ca.certificate, path)
+            return path
+
+        def publish(path, withdrawals=None):
+            publish_release(self.crypto, self.store, self.public, path, self.signer, self.ca.certificate,
+                            expected_current=self.current_digest(),
+                            reuse_current=True, withdrawals=withdrawals)
+
+        removed = candidate('removed')
+        with self.assertRaises(SDKError):
+            publish(removed)
+        publish(removed, denied)
+        key = release_delivery.artifact_key(bootstrap, '')
+        with self.assertRaises(release_delivery.HTTPStatusError):
+            self.public.head(key)
+        with self.assertRaisesRegex(SDKError, 'bootstrap'):
+            publish(candidate('replay', (initial.parent / bootstrap['path']).read_bytes()))
+        publish(candidate('restored', b'clean bootstrap'))
+        self.assertEqual(self.public.read(key, 100)[0], b'clean bootstrap')
 
     def sparse_release(self, name, snapshot, *, extra=None):
         previous = parse_release(self.crypto.verify_cms(snapshot.read_bytes(), self.ca.certificate))
