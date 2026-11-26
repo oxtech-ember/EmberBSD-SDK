@@ -25,7 +25,7 @@ from .native_os_routing import (gettext_target_host_flags, gnu_target_host_flags
                                 native_host_flags,
                                 native_path, read_native_os_contract)
 from .native_runtime_install import NativeRuntimeInstaller
-from .targets import TARGETS, target_definition
+from .targets import FOUNDATION_TARGETS, TARGETS, target_definition
 
 NATIVE_ALIASES = (('host-cc', 'cc'), ('host-cxx', 'cxx'), ('python', 'python'))
 OPENSSH_LOCAL_GENERATOR_ROLES = ('autoconf', 'autom4te', 'gm4')
@@ -1525,7 +1525,8 @@ class SysrootBuilder:
         clang = self.compiler_family() == 'clang'
         if self.options.get('base-cxx', False) and not clang:
             raise SDKError('base C++ aliases require the selected Clang runtime')
-        self.target = target_definition(self.options.get('target'))
+        targets = FOUNDATION_TARGETS if self.options.get('c-foundation') else TARGETS
+        self.target = target_definition(self.options.get('target'), targets)
         jobs = str(resolve_jobs(self.options.get('jobs')))
         self.options['jobs'] = jobs
         # Check the workspace target before querying any host tools.

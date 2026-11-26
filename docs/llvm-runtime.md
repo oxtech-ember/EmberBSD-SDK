@@ -312,7 +312,9 @@ an intermediate C foundation, not an application SDK, distribution, image, or
 target execution result. A matching OS revision must provide `bootstrap-c`.
 The operation uses static, non-PIE OS configuration and keeps its objects and
 stages distinct from the complete SDK. `riscv32` currently selects only this
-intermediate route; its ABI is little-endian RV32 soft-float `ilp32`. Inspect
+intermediate route; its ABI is little-endian RV32 soft-float `ilp32`.
+Select `--target earmv7hf --c-foundation` for the ARMv7 hard-float ABI.
+This route uses ELF32 ARM EABI5 and the `armv7--netbsdelf-eabihf` triplet. Inspect
 `--plan`, the actual compiler commands, and the produced artifacts before use.
 The target's startup, filesystem and physical execution remain separate work.
 

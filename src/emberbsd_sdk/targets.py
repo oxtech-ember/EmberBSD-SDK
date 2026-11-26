@@ -17,6 +17,9 @@ BUILD_TARGETS = {
     'earmv7hf': dict(machine='evbarm', arch='earmv7hf', triplet='armv7--netbsdelf-eabihf', elf=40),
 }
 
+# The ARMv7 userland producer stops at the static C foundation.
+FOUNDATION_TARGETS = {**TARGETS, 'earmv7hf': BUILD_TARGETS['earmv7hf']}
+
 # Per-target ABI flags are shared by application compiler bindings. Keep these
 # aligned with the OS target ABI; they are not compiler-family fallbacks.
 TARGET_COMPILER_FLAGS = {

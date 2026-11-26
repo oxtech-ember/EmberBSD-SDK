@@ -121,14 +121,14 @@ class LLVMPhaseBuilder(SysrootBuilder):
             if not self.options.get('c-foundation'):
                 return super().inspect_payload()
             root = self.paths['destination']
+            abi = dict(riscv32_soft_float=self.options.get('target') == 'riscv32',
+                       arm_eabihf=self.options.get('target') == 'earmv7hf')
             for name in ('crt0.o', 'crti.o', 'crtbegin.o', 'crtend.o', 'crtn.o'):
                 path = inventory.required_file(root, 'usr/lib/' + name)
-                if read_elf_header(path, self.target['elf'], 1,
-                                   riscv32_soft_float=self.options.get('target') == 'riscv32') is None:
+                if read_elf_header(path, self.target['elf'], 1, **abi) is None:
                     raise SDKError('required ELF CRT missing: ' + name)
             archive = inventory.required_file(root, 'usr/lib/libc.a')
-            if not read_archive(archive, self.target['elf'],
-                    riscv32_soft_float=self.options.get('target') == 'riscv32')['elf_members']:
+            if not read_archive(archive, self.target['elf'], **abi)['elf_members']:
                 raise SDKError('empty C foundation libc archive')
         for name in ('stdio.h', 'sys/types.h', 'sys/param.h', 'stdint.h', 'limits.h', 'math.h', 'pthread.h'):
             inventory.required_file(self.paths['destination'], 'usr/include/' + name)

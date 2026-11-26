@@ -826,6 +826,20 @@ print((Path(a[a.index(key)+1])/('llvm-source.json' if key=='--source' else 'runt
             with self.assertRaises(SDKError):
                 builder.inspect_payload()
 
+    def test_arm_foundation_elf_abi(self):
+        from emberbsd_sdk.elf import parse_elf_header
+        from test_core import elf32_header, header
+        def arm(kind, flags):
+            data = bytearray(elf32_header(40, kind))
+            data[36:40] = flags.to_bytes(4, 'little')
+            return data
+        self.assertEqual(parse_elf_header(arm(1, 0x05000000), arm_eabihf=True)['class'], 32)
+        self.assertEqual(parse_elf_header(arm(2, 0x05000400), arm_eabihf=True)['type'], 2)
+        for value in (header(40, 1), arm(1, 0x04000000), arm(1, 0x05000200),
+                      arm(2, 0x05000000), arm(3, 0x05000600)):
+            with self.assertRaisesRegex(SDKError, 'ARM EABI5'):
+                parse_elf_header(value, arm_eabihf=True)
+
     def test_riscv_foundation_rejects_rv64_crt(self):
         from test_core import archive, header
         builder = LLVMPhaseBuilder({'c-foundation': True, 'target': 'riscv32'}, 'base')

@@ -9,7 +9,7 @@ import re
 from . import inventory, jsonio, paths
 from .elf import read_archive, read_elf_dynamic
 from .errors import SDKError
-from .targets import target_definition
+from .targets import FOUNDATION_TARGETS, TARGETS, target_definition
 
 LLVM_RUNTIME_API = 1
 MANIFEST = 'runtime.json'
@@ -82,13 +82,14 @@ def validate_identity(record, *, target=None, required_components=()):
     _require(isinstance(record['llvm_version'], str) and
              re.fullmatch(r'[1-9][0-9]*\.[0-9]+\.[0-9]+', record['llvm_version']),
              'invalid LLVM runtime version')
-    definition = target_definition(record['target'])
+    _require(isinstance(record['components'], list) and tuple(record['components']) in _PROFILES,
+             'unsupported LLVM runtime component profile')
+    targets = TARGETS if 'libcxx' in record['components'] else FOUNDATION_TARGETS
+    definition = target_definition(record['target'], targets)
     _require((target is None or record['target'] == target) and
              record['triplet'] == definition['triplet'] and record['machine_arch'] == definition['arch'] and
              type(record['elf_machine']) is int and record['elf_machine'] == definition['elf'],
              'LLVM runtime target identity mismatch')
-    _require(isinstance(record['components'], list) and tuple(record['components']) in _PROFILES,
-             'unsupported LLVM runtime component profile')
     present = set(record['components'])
     if 'libunwind' in present:
         present.add('libunwind-static')
@@ -272,7 +273,8 @@ def _validate_artifacts(root, record):
                              'LLVM runtime has a foreign library search path')
     for name in archives:
         _require(read_archive(inventory.required_file(root, name), record['elf_machine'],
-                              riscv32_soft_float=record['target'] == 'riscv32')['elf_members'] > 0,
+                              riscv32_soft_float=record['target'] == 'riscv32',
+                              arm_eabihf=record['target'] == 'earmv7hf')['elf_members'] > 0,
                  'empty LLVM runtime archive: ' + name)
     if 'cxx_headers' in artifacts:
         inventory.required_file(root, artifacts['cxx_headers'] + '/vector')

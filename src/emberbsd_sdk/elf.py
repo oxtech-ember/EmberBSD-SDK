@@ -33,7 +33,8 @@ _PACKED_RELOCATION_TAGS = {
 }
 
 
-def parse_elf_header(data, *, label='<bytes>', machine=None, required_type=None, riscv32_soft_float=False):
+def parse_elf_header(data, *, label='<bytes>', machine=None, required_type=None,
+                     riscv32_soft_float=False, arm_eabihf=False):
     if not data.startswith(b'\x7fELF'):
         return None
 
@@ -60,16 +61,23 @@ def parse_elf_header(data, *, label='<bytes>', machine=None, required_type=None,
     if riscv32_soft_float and (actual != 243 or elf_class != 1 or
             struct.unpack_from('<I', data, 36)[0] & 0xe):
         raise SDKError(f'expected RV32 soft-float target header: {label}')
+    if arm_eabihf:
+        flags = struct.unpack_from('<I', data, 36)[0]
+        # Relocatable objects can leave the float-ABI flags clear. A linked
+        # EABI hard-float executable or shared object sets EF_ARM_ABI_FLOAT_HARD.
+        if (actual != 40 or elf_class != 1 or flags >> 24 != 5 or
+                flags & 0x200 or (kind in (2, 3) and not flags & 0x400)):
+            raise SDKError(f'expected ARM EABI5 hard-float target header: {label}')
     return dict({'class': 32 if elf_class == 1 else 64}, endian='little', machine=actual, type=kind)
 
 
-def read_elf_header(path, machine=None, required_type=None, *, riscv32_soft_float=False):
+def read_elf_header(path, machine=None, required_type=None, *, riscv32_soft_float=False, arm_eabihf=False):
     handle, before = open_regular(path)
     with handle:
         data = handle.read(64)
     verify_stable(path, before)
     return parse_elf_header(data, label=str(path), machine=machine, required_type=required_type,
-                            riscv32_soft_float=riscv32_soft_float)
+                            riscv32_soft_float=riscv32_soft_float, arm_eabihf=arm_eabihf)
 
 
 def _elf64_layout(handle, size, path, machine):
@@ -289,7 +297,7 @@ def read_elf_relocations(path, *, machine=None):
     return result
 
 
-def read_archive(path, machine, *, riscv32_soft_float=False):
+def read_archive(path, machine, *, riscv32_soft_float=False, arm_eabihf=False):
     count = 0
     handle, before = open_regular(path)
     with handle:
@@ -332,7 +340,7 @@ def read_archive(path, machine, *, riscv32_soft_float=False):
                 data = handle.read(min(finish - handle.tell(), 64))
                 label = f'{path}:{name!r}'
                 parsed = parse_elf_header(data, label=label, machine=machine, required_type=1,
-                                          riscv32_soft_float=riscv32_soft_float)
+                                          riscv32_soft_float=riscv32_soft_float, arm_eabihf=arm_eabihf)
                 if parsed is None:
                     raise SDKError(f'non-ELF archive member: {label}')
                 count += 1
