@@ -84,9 +84,10 @@ class LLVMPhaseBuilder(SysrootBuilder):
                 saved.get('paths', {}).get('objects') == self.paths['objects'])
 
     def prepared_source_traversals(self):
-        # bootstrap-headers enters only header directories; base is "tools libs".
-        if self.llvm_phase == 'headers' or self.options.get('c-foundation'):
-            return prepared_sources.TOOLS_TRAVERSALS
+        if self.llvm_phase == 'headers':
+            return prepared_sources.TOOLS_TRAVERSALS + prepared_sources.BOOTSTRAP_HEADERS_TRAVERSALS
+        if self.options.get('c-foundation'):
+            return prepared_sources.TOOLS_TRAVERSALS + prepared_sources.C_FOUNDATION_TRAVERSALS
         return super().prepared_source_traversals()
 
     def preflight(self):
@@ -286,7 +287,8 @@ class LLVMCoordinator:
             return
         headers = self.headers
         if self.options.get('c-foundation'):
-            headers.require_prepared_sources(headers.flags, prepared_sources.TOOLS_TRAVERSALS)
+            headers.require_prepared_sources(headers.flags, prepared_sources.TOOLS_TRAVERSALS +
+                                             prepared_sources.C_FOUNDATION_TRAVERSALS)
             return
         headers.require_prepared_sources(headers.flags, SysrootBuilder.prepared_source_profile(self.options)[1])
         flags, traversals = self.builder_type.prepared_source_profile(self.options)

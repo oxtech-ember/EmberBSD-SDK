@@ -174,8 +174,7 @@ def builder_sources(options, builder, **plan_options):
     root = layout['canonical_root']
     clang = options.get('compiler-family', 'clang') == 'clang'
     if options.get('c-foundation'):
-        # The C foundation builds the OS tools and headers only.
-        flags, traversals = list(builder.FLAGS), ()
+        flags, traversals = list(builder.FLAGS), prepared_sources.C_FOUNDATION_TRAVERSALS
     else:
         flags, traversals = builder.prepared_source_profile(options)
     if clang:

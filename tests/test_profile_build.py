@@ -499,17 +499,19 @@ class BuilderSourcesTests(ProfileFixture):
         walks = []
         original = self.required_sources
         self.required_sources = lambda traversals, flags: walks.append((traversals, flags)) or original(traversals, flags)
-        cases = (({}, ['MKCXX=yes', 'MKLIBCXX=yes'], 'lib'),
-                 ({'base-cxx': False}, ['MKCXX=yes', 'MKLIBCXX=no'], 'lib'),
-                 ({'c-foundation': True}, ['MKCXX=no', 'MKLIBCXX=no'], None))
-        for changes, cxx, library in cases:
+        cases = (({}, ['MKCXX=yes', 'MKLIBCXX=yes'], ['lib']),
+                 ({'base-cxx': False}, ['MKCXX=yes', 'MKLIBCXX=no'], ['lib']),
+                 ({'c-foundation': True}, ['MKCXX=no', 'MKLIBCXX=no'],
+                  ['etc/mtree', 'include', 'sys', 'lib/libpthread', 'lib/libedit', 'lib/libossaudio',
+                   'lib/csu', 'lib/libc']))
+        for changes, cxx, directories in cases:
             with self.subTest(changes=changes):
                 walks.clear()
                 self.Builder.FLAGS = ('MKCXX=yes', 'MKLIBCXX=no')
                 self.select(self.options(plan=True, **changes))
                 traversals, flags = walks[0]
                 self.assertEqual([flag for flag in flags if flag.startswith('MK') and 'CXX' in flag], cxx)
-                self.assertEqual([path for path, _ in traversals], ['tools'] + ([library] if library else []))
+                self.assertEqual([path for path, _ in traversals], ['tools'] + directories)
         # GCC keeps the flags of its builder.
         walks.clear()
         self.select(self.options(plan=True, **{'compiler-family': 'gcc'}))

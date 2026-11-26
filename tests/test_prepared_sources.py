@@ -59,6 +59,14 @@ DISTRIB = """.if empty(.MAKEFLAGS:M-V*) && make(all)
 # directory -> (SUBDIR, makefiles read); "x11" entries only with MKX11=yes.
 TREE = {
     '.': (['tools', '.WAIT', 'lib', 'external', 'bin', 'distrib', 'missing'], ['Makefile']),
+    'include': ([], ['Makefile']),
+    'etc/mtree': ([], ['Makefile']),
+    'sys': (['arch/acorn32/stand/boot32'], ['Makefile']),
+    'sys/arch/acorn32/stand/boot32': ([], ['Makefile']),
+    'lib/libpthread': ([], ['Makefile']),
+    'lib/libedit': ([], ['Makefile']),
+    'lib/libossaudio': ([], ['Makefile']),
+    'lib/csu': ([], ['Makefile']),
     'tools': (['host'], ['Makefile']),
     'tools/host': ([], ['Makefile']),
     'lib': (['libc', '../external/iscsi/lib'], ['Makefile']),
@@ -530,12 +538,15 @@ class PreparedSourceTests(TemporaryCase):
         with self.assertRaisesRegex(SDKError, 'build command failed'):
             builder.run()
 
-    def test_c_foundation_preflight_includes_host_tool_sources(self):
+    def test_c_foundation_preflight_includes_host_tools_and_bootstrap_headers(self):
         from emberbsd_sdk.llvm_sysroot import LLVMPhaseBuilder
         (self.os / 'tools/host/Makefile').write_text(BYACC)
+        arm_boot = 'sys/arch/acorn32/stand/boot32'
+        (self.os / arm_boot / 'Makefile').write_text(BYACC.replace('BYACC', 'ZLIB'))
         builder = LLVMPhaseBuilder.__new__(LLVMPhaseBuilder)
         builder.options, builder.llvm_phase = {'c-foundation': True}, 'headers'
         needed = self.walk([], builder.prepared_source_traversals())
+        self.assertEqual(needed['EMBER_ZLIB_SOURCE'], arm_boot)
         self.assertEqual(needed.get('EMBER_BYACC_SOURCE'), 'tools/host')
         self.assertEqual(prepared_sources.missing_sources(needed, {})[0], 'EMBER_BYACC_SOURCE for tools/host')
 
@@ -553,7 +564,8 @@ class PreparedSourceTests(TemporaryCase):
                                 'heimdal-source': '/prepared/heimdal'}
         coordinator.headers = SimpleNamespace(flags=[], require_prepared_sources=lambda *args: calls.append(args))
         coordinator.require_prepared_sources()
-        self.assertEqual(calls, [([], prepared_sources.TOOLS_TRAVERSALS)])
+        self.assertEqual(calls, [([], prepared_sources.TOOLS_TRAVERSALS +
+                                      prepared_sources.C_FOUNDATION_TRAVERSALS)])
 
     def test_ordinary_headers_preflight_includes_host_tool_sources(self):
         from emberbsd_sdk.llvm_sysroot import LLVMPhaseBuilder
@@ -579,10 +591,15 @@ class PreparedSourceTests(TemporaryCase):
             for flag in ('HOST_YACC=/host/yacc', 'HOST_MV_CP=/host/cp', 'HOST_MV_RM=/host/rm'):
                 self.assertIn(flag, call.args[0])
 
-    def test_headers_phase_walks_host_tools_only(self):
+    def test_each_phase_walks_its_os_goals(self):
         from emberbsd_sdk.llvm_sysroot import LLVMPhaseBuilder
         builder = LLVMPhaseBuilder.__new__(LLVMPhaseBuilder)
         builder.options, builder.llvm_phase = {}, 'headers'
-        self.assertEqual(builder.prepared_source_traversals(), prepared_sources.TOOLS_TRAVERSALS)
+        self.assertEqual(builder.prepared_source_traversals(), prepared_sources.TOOLS_TRAVERSALS +
+                         prepared_sources.BOOTSTRAP_HEADERS_TRAVERSALS)
         builder.llvm_phase = 'base'
-        self.assertEqual(builder.prepared_source_traversals(), prepared_sources.TOOLS_TRAVERSALS + prepared_sources.LIBS_TRAVERSALS)
+        self.assertEqual(builder.prepared_source_traversals(), prepared_sources.TOOLS_TRAVERSALS +
+                         prepared_sources.LIBS_TRAVERSALS)
+        builder.options['c-foundation'] = True
+        self.assertEqual(builder.prepared_source_traversals(), prepared_sources.TOOLS_TRAVERSALS +
+                         prepared_sources.C_FOUNDATION_TRAVERSALS)

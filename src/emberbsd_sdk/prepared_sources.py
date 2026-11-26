@@ -34,6 +34,13 @@ TARGET_FILTER = re.compile(r':N([A-Za-z0-9_.+-]+)')
 # the release reach each subdirectory with these.
 BUILD_TARGETS = frozenset(('all', 'dependall', 'install'))
 TOOLS_TRAVERSALS = (('tools', BUILD_TARGETS),)
+# The OS bootstrap-headers goal creates objects and installs headers in each
+# directory. On 32-bit ARM, sys/arch includes the Acorn standalone loader.
+BOOTSTRAP_HEADERS_TRAVERSALS = (('etc/mtree', frozenset(('obj',))),) + tuple(
+    (part, frozenset(('obj', 'includes')))
+    for part in ('include', 'sys', 'lib/libpthread', 'lib/libedit', 'lib/libossaudio'))
+C_FOUNDATION_TRAVERSALS = BOOTSTRAP_HEADERS_TRAVERSALS + (
+    ('lib/csu', BUILD_TARGETS | {'obj'}), ('lib/libc', BUILD_TARGETS | {'obj'}))
 # build.sh libs: "make includes" from the top, then "make do-lib", which is
 # "build_install" (dependall, install) in lib.
 LIBS_TRAVERSALS = (('.', frozenset(('includes',))), ('lib', BUILD_TARGETS))
