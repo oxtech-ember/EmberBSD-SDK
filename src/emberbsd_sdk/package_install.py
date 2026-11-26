@@ -278,6 +278,11 @@ class PackageInstaller:
         """Recompute +REQUIRED_BY after a conflict removal and its successor install."""
         self._admin(config, 'pkg_admin', ['rebuild-tree'])
 
+    def has_pending_hooks(self, config):
+        if installation_root(config) is not None:
+            return False
+        return any(package_relocation.pending(*install_paths(config)))
+
     def configure(self, config):
         """Finish deferred native package hooks after the selected batch is installed.
 

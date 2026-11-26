@@ -223,6 +223,9 @@ When the host prefix contains Clang, installation checks the target compiler
 aliases before downloading the base or packages. For one host prefix and target
 triplet, use the same SDK state directory and target sysroot for every install.
 Give independent SDK installations their own host prefixes.
+An install can share a prefix with a running build when it reuses every selected
+package in that prefix. Adding compiler aliases, changing packages, and recovering
+deferred hooks or automatic installation flags need exclusive access.
 
 The archive contains the existing [sysroot transfer](sysroot-transfer.md) bundle.
 All downloads are verified before installation. The base is restored at a new

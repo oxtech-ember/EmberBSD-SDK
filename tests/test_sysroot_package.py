@@ -167,6 +167,33 @@ class SysrootPackageTests(TemporaryCase):
         with open(destination / 'usr/pkg/pkgdb.writer', 'rb') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
+    def test_missing_compiler_alias_requires_exclusive_host_prefix(self):
+        from emberbsd_sdk.sdk_client import install_selection
+        from test_sdk_client import Installer
+        host = Path(self.config['host_prefix'])
+        self.config['state_dir'] = str(self.root / 'state')
+        (host / 'bin').mkdir(parents=True)
+        (host / 'bin/clang').touch()
+        selected = self.select()
+        destination, aliases, _ = sysroot_package.compiler_binding(self.config, selected)
+        destination.mkdir(parents=True)
+        for role, alias in aliases.items():
+            (destination / role).touch()
+            if role != 'cc':
+                alias.symlink_to(destination / role)
+        plan = dict(sysroot=selected, build_roots=[], packages=[], download_size=0, unpacked_size=0)
+        with prefix_lock.reading([host / 'pkgdb']), patch.dict(os.environ, {prefix_lock.READERS: ''}):
+            with self.assertRaisesRegex(SDKError, 'another build uses the prefix'):
+                install_selection(plan, self.config, Installer(), self.cache, Store(self.archive.read_bytes()))
+            self.assertFalse(Path(selected['destination']).exists())
+            with self.assertRaisesRegex(SDKError, 'another build uses the prefix'):
+                sysroot_package.bind_compiler(self.config, selected)
+            self.assertFalse(os.path.lexists(aliases['cc']))
+        sysroot_package.bind_compiler(self.config, selected)
+        self.assertEqual(aliases['cc'].resolve(), destination / 'cc')
+        with prefix_lock.reading([host / 'pkgdb']), patch.dict(os.environ, {prefix_lock.READERS: ''}):
+            sysroot_package.bind_compiler(self.config, selected)
+
     def test_foreign_compiler_alias_precedes_base_and_package_installation(self):
         from emberbsd_sdk.sdk_client import install_selection
         from test_sdk_client import Installer

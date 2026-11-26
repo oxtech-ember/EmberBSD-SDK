@@ -509,13 +509,26 @@ def apply_plan(plan, config, installer, cache, store, *, source_locked=False, re
     next_root = Path(sysroot['destination']).resolve() if new_sysroot else None
     archives = {}
 
+    changing = {p['repository'] for p in pending}
+    read_only = set()
+
     def lock_repositories(locks, repositories):
         for repository in repositories:
-            _, database = install_paths(config['repositories'][repository])
+            cfg = config['repositories'][repository]
+            _, database = install_paths(cfg)
+            if isinstance(installer, PackageInstaller) and repository not in changing:
+                # Inspect recovery state under a reader so a concurrent writer
+                # cannot add deferred work after this check.
+                locks.enter_context(prefix_lock.reading([database]))
+                if not (package_automatic.needs_recovery(cfg) or installer.has_pending_hooks(cfg)):
+                    read_only.add(repository)
+                    continue
             locks.enter_context(prefix_lock.writing(database))
 
     def retain_installed(repositories):
         for repository in repositories:
+            if repository in read_only:
+                continue
             cfg = config['repositories'][repository]
             packages = [p for p in plan['packages'] if p['repository'] == repository]
             plan['compatible_reuse'].extend(reuse_compatible_dependencies(installer.crypto, cfg,
@@ -562,7 +575,7 @@ def apply_plan(plan, config, installer, cache, store, *, source_locked=False, re
         if isinstance(installer, PackageInstaller):
             retain_installed(fresh)
             pending = [p for p in plan['packages'] if p['action'] != 'installed']
-            for repository in sorted(selected_repositories):
+            for repository in sorted(selected_repositories - read_only):
                 cfg = config['repositories'][repository]
                 package_automatic.recover(installer.crypto, cfg, installer.installed(cfg, recover=False))
         automatic_states = {}
@@ -572,7 +585,7 @@ def apply_plan(plan, config, installer, cache, store, *, source_locked=False, re
             cfg = config['repositories'][repository]
             selected = [p for p in plan['packages'] if p['repository'] == repository]
             installer.check_updates(selected, archives, cfg)
-            if isinstance(installer, PackageInstaller):
+            if isinstance(installer, PackageInstaller) and repository not in read_only:
                 automatic_states[repository] = package_automatic.plan(cfg,
                     [p for p in selected if p['action'] != 'installed'], plan['roots'])
         removed = set()
@@ -617,7 +630,7 @@ def apply_plan(plan, config, installer, cache, store, *, source_locked=False, re
         # Configure only after every selected payload has been installed and
         # relocated. Pending hooks are retried even when this selection reused
         # every exact installed package.
-        for repository in sorted(selected_repositories):
+        for repository in sorted(selected_repositories - read_only):
             installer.configure(config['repositories'][repository])
     cache.trim(config.get('cache_limit', 512 * 1024 * 1024))
 
@@ -977,8 +990,9 @@ def install_selection(plan, config, installer, cache, store, *, refresh_current=
     sysroot = plan.get('sysroot')
     bind_compiler = sysroot and sysroot['action'] != 'replace'
     if bind_compiler:
-        # Reject a conflicting host prefix before fetching or installing packages.
-        sysroot_package.compiler_binding(config, sysroot)
+        # Check alias ownership and access before installing the base or any package.
+        with sysroot_package.compiler_binding_change(config, sysroot):
+            pass
     with directory_lock(cache.root / '.lock'):
         apply_plan(plan, config, installer, cache, store, release_digest=accepted_release)
     # Compilation may be long; it must not monopolize another target's downloads.

@@ -17,6 +17,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+from emberbsd_sdk import package_automatic, prefix_lock
 from emberbsd_sdk.errors import ChannelExpired, SDKError, TransportError
 from emberbsd_sdk.package_cache import directory_lock
 from emberbsd_sdk.release_catalog import parse_channel
@@ -352,6 +353,23 @@ class ClientTests(unittest.TestCase):
             self.assertEqual(configure.call_count, 2)
         self.assertTrue(self.installer.recover_args)
         self.assertFalse(any(self.installer.recover_args))
+
+    def test_installed_native_packages_share_a_build_reader_until_recovery_needs_a_write(self):
+        names = {'lib-1', 'app-1'}
+        self.installer.present.update(names)
+        plan = self.plan(sets=['task'])
+        cfg = self.cfg['repositories']['native']
+        database = Path(cfg['pkgdb'])
+        for name in names:
+            (database / name).mkdir(parents=True)
+        installer = PackageInstaller(None, self.root)
+        with prefix_lock.reading([database]), patch.dict(os.environ, {prefix_lock.READERS: ''}), \
+                patch.object(installer, 'installed', return_value=names):
+            apply_plan(plan, self.cfg, installer, self.cache, self.store)
+            package_automatic.prepare(cfg, 'lib-1', 'yes')
+            with self.assertRaisesRegex(SDKError, 'another build uses the prefix'):
+                apply_plan(plan, self.cfg, installer, self.cache, self.store)
+            self.assertTrue((database.parent / 'pkgdb.sdk-automatic/lib-1').is_file())
 
     def test_incompatible_update_stops_before_any_package_mutation(self):
         self.installer.present.add('lib-0')

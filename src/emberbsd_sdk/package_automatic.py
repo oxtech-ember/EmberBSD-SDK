@@ -123,12 +123,8 @@ def finish(crypto, config, name):
     _sync(directory)
 
 
-def recover(crypto, config, installed_names):
-    """Complete intents for packages present in pkgdb; preserve pending ones."""
-    _, directory = _intent_directory(config)
-    if not directory.exists():
-        return
-    installed = {_name(name) for name in installed_names}
+def _pending(directory):
+    """Yield validated names of published automatic-state intents."""
     for path in sorted(directory.iterdir()):
         if path.name.startswith('.'):
             match = re.fullmatch(r'\.(.+)\.([0-9a-f]{32})', path.name)
@@ -140,5 +136,21 @@ def recover(crypto, config, installed_names):
                 continue
         name = _name(path.name)
         _read_intent(path, name)
+        yield name
+
+
+def needs_recovery(config):
+    """A present package with a pending intent can require a pkgdb write."""
+    database, directory = _intent_directory(config)
+    return directory.exists() and any((database / name).is_dir() for name in _pending(directory))
+
+
+def recover(crypto, config, installed_names):
+    """Complete intents for packages present in pkgdb; preserve pending ones."""
+    _, directory = _intent_directory(config)
+    if not directory.exists():
+        return
+    installed = {_name(name) for name in installed_names}
+    for name in _pending(directory):
         if name in installed:
             finish(crypto, config, name)

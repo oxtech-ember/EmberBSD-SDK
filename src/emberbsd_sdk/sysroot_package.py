@@ -11,7 +11,7 @@ import shutil
 import tarfile
 import tempfile
 
-from . import application_toolchain, jsonio, publication, sysroot_transfer, target_toolchain
+from . import application_toolchain, jsonio, prefix_lock, publication, sysroot_transfer, target_toolchain
 from .errors import SDKError
 from .host_prefix import load_host_prefix
 from .package_install import target_sysroot
@@ -164,6 +164,24 @@ def compiler_binding(config, selected):
     return destination, links, triplet
 
 
+@contextmanager
+def compiler_binding_change(config, selected):
+    """Hold the host prefix writer if this target needs new compiler commands."""
+    database = Path(config['host_prefix']) / 'pkgdb'
+    with prefix_lock.reading([database]):
+        binding = compiler_binding(config, selected)
+        if binding is None:
+            yield None
+            return
+        destination, links, _ = binding
+        if destination.is_dir() and all(os.path.lexists(link) for link in links.values()):
+            yield None
+            return
+    with prefix_lock.writing(database):
+        # Another install can bind the commands as we switch from reader to writer.
+        yield compiler_binding(config, selected)
+
+
 def prepare_compiler_binding(config, selected, destination, triplet, runtime):
     native = load_host_prefix(config['host_prefix'], required_roles=('python',))
     compiler = target_toolchain.clang_compiler(config['host_prefix'], triplet, host=native.host,
@@ -174,14 +192,14 @@ def prepare_compiler_binding(config, selected, destination, triplet, runtime):
 
 def bind_compiler(config, selected):
     """Expose the SDK's operation-aware compiler commands after installation."""
-    binding = compiler_binding(config, selected)
-    if binding is None:
-        return
-    destination, links, triplet = binding
-    if not destination.exists():
-        runtime = application_toolchain.load_clang_runtime(selected['destination'], target=selected['target'])
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        prepare_compiler_binding(config, selected, destination, triplet, runtime)
-    for role, link in links.items():
-        if not os.path.lexists(link):
-            link.symlink_to(os.path.relpath(destination / role, link.parent))
+    with compiler_binding_change(config, selected) as binding:
+        if binding is None:
+            return
+        destination, links, triplet = binding
+        if not destination.exists():
+            runtime = application_toolchain.load_clang_runtime(selected['destination'], target=selected['target'])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            prepare_compiler_binding(config, selected, destination, triplet, runtime)
+        for role, link in links.items():
+            if not os.path.lexists(link):
+                link.symlink_to(os.path.relpath(destination / role, link.parent))
