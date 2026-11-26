@@ -121,6 +121,10 @@ activation are separate steps.
 
 ### Download an OS update for the installed profile
 
+Enrolled devices select and activate releases through the base `ember-update` service.
+Image producers and installations with the SDK client can use the command below to obtain a verified kit.
+[Device updates](https://github.com/oxtech-ember/EmberBSD-Docs/blob/main/modules/updates.md)
+
 The installed OS supplies its profile name and stores the last installed and
 failed generations. Set `floor` to the greater of those two numbers, or zero
 on the first check. Select a new output name under a directory owned by the
@@ -424,6 +428,10 @@ This installs package payloads into an existing target environment; base headers
 CRT/libc and producer sysroot bundles retain their existing SDK/OS ownership.
 
 ### Packages on a running EmberBSD device
+
+Newly enrolled devices use the native `ember-update` command for package installation and updates.
+This section describes native package operations for systems managed by the SDK.
+[Native package commands](https://github.com/oxtech-ember/EmberBSD/blob/main/usr.sbin/ember-update/README.md#store-catalog-and-application-installation)
 
 The same signed target repository can install into a live matching system with
 `"install_mode": "native"`, no `sysroot`, and the actual native `prefix`/`pkgdb`.

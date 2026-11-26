@@ -1,6 +1,9 @@
-# Automatic installed-package updates
+# Automatic updates for SDK package installations
 
-Run the SDK client's explicit foreground controller:
+On an enrolled EmberBSD device, `/etc/rc.d/ember_update` starts the native `ember-update` service.
+Configure its package policy in `/etc/rc.conf`. [Device updates](https://github.com/oxtech-ember/EmberBSD-Docs/blob/main/modules/updates.md)
+
+For an SDK-managed installation, run the SDK client in the foreground.
 
 ```sh
 python3 scripts/packages.py --config /work/client.json auto-update --interval 3600
