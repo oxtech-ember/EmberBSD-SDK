@@ -25,19 +25,21 @@ class ApplicationToolchainTests(TemporaryCase):
         self.compiler = self.receipt['signature']['compiler']
 
     def _c_foundation_fixture(self, *, target='riscv32'):
-        """Build a small real-shaped C-foundation receipt and RV32 runtime."""
+        """Build a small real-shaped C-foundation receipt and a target runtime."""
         import struct
         stage, root = self.root/'c-foundation-stage', self.root/'c-foundation-sysroot'
         stage.mkdir(); root.mkdir()
-        triplet = target + '--netbsd'
-        if target != 'riscv32':
-            raise AssertionError('fixture target helper only constructs RV32 ELF input')
+        family, triplet, machine, flags = {
+            'riscv32': ('riscv', 'riscv32--netbsd', 243, 1),
+            'earmv7hf': ('evbarm', 'armv7--netbsdelf-eabihf', 40, 0x5000000),
+        }[target]
         elf = bytearray(52)
         elf[:7] = b'\x7fELF\x01\x01\x01'
-        struct.pack_into('<HHI', elf, 16, 1, 243, 1)
-        struct.pack_into('<I', elf, 36, 1)  # RISC-V soft-float ABI.
+        struct.pack_into('<HHI', elf, 16, 1, machine, 1)
+        struct.pack_into('<I', elf, 36, flags)
         struct.pack_into('<H', elf, 40, 52)
-        builtins = 'usr/pkg/llvm/lib/clang/23/lib/netbsd/libclang_rt.builtins-riscv32.a'
+        archive_arch = 'armhf' if target == 'earmv7hf' else target
+        builtins = 'usr/pkg/llvm/lib/clang/23/lib/netbsd/libclang_rt.builtins-' + archive_arch + '.a'
         unwind = 'usr/pkg/llvm/lib/libunwind.a'
         for name in (builtins, unwind):
             path = stage/name
@@ -48,7 +50,7 @@ class ApplicationToolchainTests(TemporaryCase):
         (root/'usr/include/stdint.h').write_bytes(base_header)
         manifest = dict(format='emberbsd-llvm-runtime', version=1, compiler_family='clang',
             llvm_version='23.1.4', components=['builtins', 'libunwind-static'], target=target,
-            triplet=triplet, machine_arch='riscv32', elf_machine=243, prefix='usr/pkg/llvm',
+            triplet=triplet, machine_arch=target, elf_machine=machine, prefix='usr/pkg/llvm',
             source=dict(archive='llvm-project-23.1.4.src.tar.xz', sha512='a'*128),
             recipe=dict(ports_revision='b'*40, files={'pkgsrc/lang/llvm-runtimes/Makefile':'c'*64}),
             base=dict(os_revision='d'*40, files={'usr/include/stdint.h':hashlib.sha256(base_header).hexdigest()}, symlinks={}),
@@ -60,7 +62,7 @@ class ApplicationToolchainTests(TemporaryCase):
 
         compiler = copy.deepcopy(self.compiler)
         compiler['triplet'] = triplet
-        compiler['reported_triplet'] = 'riscv32-unknown-netbsd'
+        compiler['reported_triplet'] = triplet.replace('--', '-unknown-')
         compiler['commands']['cc'] = [compiler['binaries']['cc']['selected_path'],
             '--target='+triplet, '--ld-path='+compiler['binaries']['ld']['selected_path']]
         compiler['commands']['cxx'] = [compiler['binaries']['cxx']['selected_path'],
@@ -68,7 +70,7 @@ class ApplicationToolchainTests(TemporaryCase):
         compiler['commands']['cpp'] = [compiler['binaries']['cpp']['selected_path'], '-E', '--target='+triplet]
         compiler['commands']['as'] = [compiler['binaries']['as']['selected_path'], '--target='+triplet,
             '-c', '-x', 'assembler']
-        target_definition = dict(machine='riscv', arch='riscv32', triplet=triplet, elf=243)
+        target_definition = dict(machine=family, arch=target, triplet=triplet, elf=machine)
         result = dict(format='emberbsd-llvm-c-foundation', version=1, target=target,
             base=dict(format='emberbsd-llvm-os-stage', phase='base', qualification='built-and-inspected',
                 paths={'destination':str(root), 'llvm-runtime-stage':str(stage)},
@@ -102,6 +104,14 @@ class ApplicationToolchainTests(TemporaryCase):
         record = jsonio.read_json(destination/'commands.json')
         self.assertIn('--rtlib=compiler-rt',
             compiler_bindings.compiler_argv(record, 'cc', ['input.o', '-o', 'output']))
+
+    def test_arm_c_foundation_uses_the_hard_float_triplet(self):
+        root, stage, result, manifest, compiler = self._c_foundation_fixture(target='earmv7hf')
+        binding = application_toolchain.clang_c_foundation_commands(
+            compiler, result, root, target='earmv7hf')
+        for role in ('cc', 'cpp', 'as'):
+            self.assertIn('--target=armv7--netbsdelf-eabihf', binding['commands'][role])
+        self.assertIn('--rtlib=compiler-rt', binding['link_flags']['cc'])
 
     def test_c_foundation_binding_rejects_mismatched_or_modified_inputs(self):
         root, stage, result_path, manifest, compiler = self._c_foundation_fixture()

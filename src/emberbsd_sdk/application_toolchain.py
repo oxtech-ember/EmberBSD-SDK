@@ -18,7 +18,7 @@ IMPORT_RECORD = '.prebuild-sdk-import.json'
 
 def _load_c_foundation_base(foundation_result, *, target):
     """Validate the immutable C-foundation result without selecting its root."""
-    expected = targets.target_definition(target)
+    expected = targets.target_definition(target, targets.FOUNDATION_TARGETS)
     result_path = paths.canonical_existing(foundation_result)
     result = jsonio.read_json(result_path)
     if (not isinstance(result, dict) or result.get('format') != 'emberbsd-llvm-c-foundation' or

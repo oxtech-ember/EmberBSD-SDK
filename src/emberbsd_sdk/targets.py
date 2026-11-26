@@ -25,6 +25,7 @@ FOUNDATION_TARGETS = {**TARGETS, 'earmv7hf': BUILD_TARGETS['earmv7hf']}
 TARGET_COMPILER_FLAGS = {
     'aarch64': (),
     'amd64': (),
+    'earmv7hf': (),
     'riscv32': ('-march=rv32imac_zicsr', '-mabi=ilp32'),
 }
 
@@ -37,5 +38,5 @@ def target_definition(name, supported=TARGETS):
 
 def target_compiler_flags(name):
     if not isinstance(name, str) or name not in TARGET_COMPILER_FLAGS:
-        raise SDKError('target must be aarch64, amd64 or riscv32')
+        raise SDKError('target must be one of: ' + ', '.join(TARGET_COMPILER_FLAGS))
     return TARGET_COMPILER_FLAGS[name]
