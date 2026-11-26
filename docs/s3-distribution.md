@@ -175,6 +175,22 @@ per completed archive to the command above, for example
 batch. The publisher keeps the sets in the signed current repository and reuses
 its matching runtime providers. Include each new local provider in the batch.
 Other workers can finish while the publisher retries the same batch.
+
+For a running build, compare its completed receipts with a signed snapshot:
+
+```sh
+python3 scripts/binary-catalog.py --host-prefix /work/host-pkg-llvm \
+  publication-candidates package-build.json --current /work/current \
+  --state /work/aarch64/state --packages /work/aarch64/packages/All \
+  --trust-root trust/emberbsd-release-root.pem
+```
+
+Use the graph and state from the same producer. The command reads metadata.
+`missing` lists completed roots absent from the selected repository.
+`changed` lists roots with a different published package name and gives both names.
+Pass the selected roots and their new runtime providers to `publish-additions.py`
+with `--state-root`. The publisher checks each new archive and the live catalog.
+
 The publisher excludes roots in the current `failed`, `blocked` and `skipped`
 files. Cross-bulk archives prior failures on resume. A target repository
 selects target entries from the state.

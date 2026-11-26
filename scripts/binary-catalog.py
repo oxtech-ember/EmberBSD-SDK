@@ -16,6 +16,7 @@ from emberbsd_sdk.catalog_recovery import recover
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.host_prefix import load_host_prefix
 from emberbsd_sdk.jsonio import json_bytes, read_json
+from emberbsd_sdk.package_publish import publication_candidates
 from emberbsd_sdk.release_signing import ReleaseCrypto, SigningIdentity
 
 
@@ -33,6 +34,12 @@ def main(argv=None):
                           help='reject new archives that contain this absolute producer path')
     producer.add_argument('--current', type=Path,
                           help='authenticated snapshot directory; reuse its packages by metadata and merge additions')
+    candidates = commands.add_parser('publication-candidates', help='list completed Ports roots missing or changed in a signed catalog')
+    candidates.add_argument('input', type=Path, help='package-build JSON for one producer graph and repository')
+    candidates.add_argument('--state', required=True, type=Path)
+    candidates.add_argument('--packages', required=True, type=Path)
+    candidates.add_argument('--current', required=True, type=Path)
+    candidates.add_argument('--trust-root', required=True, type=Path)
     recovery = commands.add_parser('recover-selections', help='restore available catalogs after a withdrawal')
     recovery.add_argument('--current', required=True, type=Path)
     recovery.add_argument('--withdrawal', action='append', nargs=2, type=Path, required=True,
@@ -60,7 +67,10 @@ def main(argv=None):
         crypto = ReleaseCrypto(load_host_prefix(args.host_prefix, required_roles=roles))
         if args.command in ('compose', 'recover-selections'):
             signer = SigningIdentity(args.signer_directory / 'certificate.pem', args.signer_directory / 'private-key.pem')
-        if args.command == 'recover-selections':
+        if args.command == 'publication-candidates':
+            value = publication_candidates(crypto, read_json(args.input), args.state,
+                                           args.packages, args.current, args.trust_root)
+        elif args.command == 'recover-selections':
             sysroots = {name: Path(root) for name, root in args.target_sysroot}
             if len(sysroots) != len(args.target_sysroot):
                 raise SDKError('select each target sysroot once')

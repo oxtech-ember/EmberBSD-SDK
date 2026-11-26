@@ -18,7 +18,7 @@ from test_binary_catalog import BinaryReleaseFixture, graph
 from emberbsd_sdk.binary_release import load_catalogs
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.jsonio import json_bytes
-from emberbsd_sdk.package_publish import packages_from_state, update_packages
+from emberbsd_sdk.package_publish import packages_from_state, publication_candidates, update_packages
 from emberbsd_sdk.release_catalog import parse_channel
 import emberbsd_sdk.release_delivery as release_delivery
 from emberbsd_sdk.release_delivery import publish_release
@@ -55,6 +55,33 @@ class PackagePublishTests(BinaryReleaseFixture):
     def update(self, workdir, **kwargs):
         return update_packages(self.crypto, self.store, self.public, self.spec,
             self.ports, workdir, self.leaf, self.ca.certificate, **kwargs)
+
+    def test_publication_candidates_compare_receipts_with_signed_names(self):
+        repo, _, _ = self.prepare_addition()
+        state = self.work / 'state'
+        state.mkdir()
+        rows = ['net/new new-1.0', 'net/app app-1.0', 'net/other renamed-1.0',
+                'devel/lib lib-1.0']
+        (state / 'packages').write_text('\n'.join(rows) + '\n')
+        complete = ''.join(row + ' ' + 'a' * 64 + '\n' for row in rows[:3])
+        (state / 'done').write_text(complete + rows[3] + '\n')
+        current = self.work / 'baseline'
+
+        def candidates():
+            return publication_candidates(self.crypto, self.spec, state,
+                self.work / 'no-archives', current, self.ca.certificate)
+
+        result = candidates()
+        self.assertEqual(result['missing'], ['net/new'])
+        self.assertEqual(result['changed'], [dict(root='net/other', current='other-1.0', built='renamed-1.0')])
+        (state / 'done').write_text(complete + 'net/new new-1.0\n')
+        (state / 'failed').write_text('net/other build\n')
+        self.assertEqual(candidates(), dict(release_id=result['release_id'], missing=[], changed=[]))
+        (state / 'done').write_text('')
+        self.assertEqual(candidates(), dict(release_id=result['release_id'], missing=[], changed=[]))
+        repo['target']['abi'] = 'another-abi'
+        with self.assertRaisesRegex(SDKError, 'platform differs'):
+            candidates()
 
     def test_publish_one_completed_root_with_the_signed_runtime_provider(self):
         repo, archive, workdir = self.prepare_addition()

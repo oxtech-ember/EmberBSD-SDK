@@ -9,7 +9,7 @@ import re
 import shutil
 
 from .binary_catalog import node_root
-from .binary_release import compose, _statistics
+from .binary_release import compose, load_catalogs, _statistics
 from .errors import SDKError
 from .jsonio import read_json, write_json
 from .package_cache import directory_lock
@@ -20,7 +20,7 @@ from .release_delivery import fetch_release, publish_release
 from .release_signing import read_bytes
 
 
-def packages_from_state(spec, state, packages, *, selected_roots=()):
+def packages_from_state(spec, state, packages, *, selected_roots=(), allow_empty=False):
     """Map successful Ports results to an existing producer graph, without solving."""
     spec = deepcopy(spec)
     if len(spec['repositories']) != 1:
@@ -88,7 +88,7 @@ def packages_from_state(spec, state, packages, *, selected_roots=()):
     missing = selected.difference(roots)
     if missing:
         raise SDKError('no successful archive receipt for selected state roots: ' + ', '.join(sorted(missing)))
-    if not roots:
+    if not roots and not allow_empty:
         raise SDKError('no successful packages of the selected role in Ports state')
     repo['packages'] = paths
     if selected:
@@ -97,6 +97,26 @@ def packages_from_state(spec, state, packages, *, selected_roots=()):
     else:
         repo['roots'] = sorted(set(repo.get('roots', [])) | set(roots))
     return spec, checksums
+
+
+def publication_candidates(crypto, spec, state, packages, current, trust):
+    """Compare completed receipts with an authenticated catalog without opening archives."""
+    spec, _ = packages_from_state(spec, state, packages, allow_empty=True)
+    repo = spec['repositories'][0]
+    release, (catalog,) = load_catalogs(crypto, current / 'release.p7m', current, trust, [repo['id']])
+    summary = next(item for item in release['artifacts'] if item['id'] == catalog['summary'])
+    if (repo['host'], repo['target']) != (summary['host'], summary['target']):
+        raise SDKError('current repository platform differs from producer: ' + repo['id'])
+    published = {entry['root']: entry['pkgname'] for entry in catalog['packages']}
+    missing, changed = [], []
+    for identity, path in sorted(repo['packages'].items()):
+        root = node_root(identity)
+        name = Path(path).name.removesuffix('.tgz')
+        if root not in published:
+            missing.append(root)
+        elif published[root] != name:
+            changed.append(dict(root=root, current=published[root], built=name))
+    return dict(release_id=release['release_id'], missing=missing, changed=changed)
 
 
 def update_packages(crypto, store, public, spec, ports_root, workdir, identity, trust,
