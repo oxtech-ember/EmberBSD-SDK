@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -122,8 +123,15 @@ class PackagePublishTests(BinaryReleaseFixture):
         template['dependencies'][0]['patterns'] = ['lib>=1']
         self.graph_path.write_bytes(json_bytes(graph))
         self.assertIn('net/new', select()['ready'])
-
-
+        spec = self.work / 'candidates.json'
+        spec.write_bytes(json_bytes(self.spec))
+        command = [sys.executable, str(Path(__file__).resolve().parents[1] / 'scripts/binary-catalog.py'),
+                   '--host-prefix', os.environ['EMBERBSD_TEST_HOST_PREFIX'], 'publication-candidates',
+                   str(spec), '--ready', '--state', str(state), '--packages', str(self.work / 'no-archives'),
+                   '--current', str(self.work / 'baseline'), '--trust-root', str(self.ca.certificate)]
+        result = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), select())
 
     def test_follow_publishes_final_receipt_resumes_and_leaves_current_on_bad_checksum(self):
         _, archive, workdir = self.prepare_addition()

@@ -68,6 +68,8 @@ def main(argv=None):
     try:
         roles = {'compose': ('openssl', 'pkg_admin', 'pkg_info'),
                  'recover-selections': ('openssl', 'pkg_admin')}.get(args.command, ('openssl',))
+        if args.command == 'publication-candidates' and args.ready:
+            roles = ('openssl', 'pkg_admin')
         crypto = ReleaseCrypto(load_host_prefix(args.host_prefix, required_roles=roles))
         if args.command in ('compose', 'recover-selections'):
             signer = SigningIdentity(args.signer_directory / 'certificate.pem', args.signer_directory / 'private-key.pem')
