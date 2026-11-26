@@ -157,6 +157,29 @@ under the same generation. For a new generation, update the descriptor, its
 filename and its signed dependency list together. Publish a current compatible
 client before enabling [profile downloads](sdk-client.md#download-an-os-update-for-the-installed-profile).
 
+### Prepare a transition from the former FFS updater
+
+Use this step once for an enrolled legacy U-Boot FFS profile. Start with the
+completed native OS build. Use its stock base and etc archives and its
+destination METALOG. Stock maketars omits content measurements for its own
+generated mtree files. The producer requires this convention. Select the matching image description from the same OS
+commit.
+
+```sh
+python3 scripts/prepare-os-handoff.py --base "$SETS/base.tar.xz" \
+    --etc "$SETS/etc.tar.xz" --metalog "$DESTDIR/METALOG" \
+    --description "$OS/ember/image/os-profiles/$IMAGE.json" \
+    --generation "$GENERATION" --output "$NEW_DIRECTORY"
+```
+
+The output contains the transition archives, membership lists and METALOG.
+The signed base binds the complete hardware profile to the final compressed
+etc archive. Publish both new archives as distinct OS sets. Select the same
+boot and optional comp inputs as the target build. Advance the existing
+profile ID and retain the previous signed release. Subsequent generations
+use the stock sets.
+[OS transition contract](https://github.com/oxtech-ember/EmberBSD/blob/main/usr.sbin/ember-update/README.md#one-time-transition-from-the-former-ffs-updater)
+
 ### Withdraw a package from the current channel
 
 Use the package artifact ID and SHA-256 from an authenticated current
