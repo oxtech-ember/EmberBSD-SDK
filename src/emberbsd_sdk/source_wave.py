@@ -1188,20 +1188,41 @@ def live_receipt_directory(state):
     return state
 
 
-def _write_seen(lock, seen):
-    if not lock.is_dir():
-        return
-    lines = []
-    for pid in sorted(seen):
-        stamp, start = seen[pid]
-        if pid <= 1 or not stamp or '\t' in stamp or '\n' in stamp:
-            continue
-        start_text = start if isinstance(start, str) and start.isdigit() else '-'
-        lines.append(f'{pid}\t{start_text}\t{stamp}\n')
-    try:
-        _durable_write(lock, 'seen', ''.join(lines).encode())
-    except OSError:
-        return
+def _seen_recorder(lock):
+    """Publish changed process identities durably for the lifetime of one owner."""
+    path = lock / 'seen'
+    last_seen = last_version = None
+
+    def version():
+        st = path.lstat()
+        return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+
+    def record(seen):
+        nonlocal last_seen, last_version
+        if last_seen == seen:
+            try:
+                if version() == last_version:
+                    return
+            except OSError:
+                pass
+        last_seen = None
+        if not lock.is_dir():
+            return
+        lines = []
+        for pid in sorted(seen):
+            stamp, start = seen[pid]
+            if pid <= 1 or not stamp or '\t' in stamp or '\n' in stamp:
+                continue
+            start_text = start if isinstance(start, str) and start.isdigit() else '-'
+            lines.append(f'{pid}\t{start_text}\t{stamp}\n')
+        try:
+            _durable_write(lock, 'seen', ''.join(lines).encode())
+            last_version = version()
+        except OSError:
+            return
+        last_seen = seen.copy()
+
+    return record
 
 
 def _read_seen(lock):
@@ -1233,7 +1254,7 @@ def _merge_seen(into, extra):
             into[pid] = (stamp, start)
 
 
-def _observe(lock, seen, *, persist=False):
+def _observe(lock, seen, *, persist=None):
     """Remember descendants actually parented under the verified controller.
 
     Dead identities are dropped. A PID that has left the tree stays remembered
@@ -1245,7 +1266,7 @@ def _observe(lock, seen, *, persist=False):
         rows = _process_table()
     except SDKError:
         if persist:
-            _write_seen(lock, seen)
+            persist(seen)
         return
     if record is not None:
         pid, created, _private, starttime = record
@@ -1263,7 +1284,7 @@ def _observe(lock, seen, *, persist=False):
         if not _same_identity(rows, child, stamp, start):
             del seen[child]
     if persist:
-        _write_seen(lock, seen)
+        persist(seen)
 
 
 def _any_alive(seen):
@@ -1320,7 +1341,7 @@ def _recover_killed_owner(state, token, owner_pid, seen=None):
     if record is None:
         return False
     pid, created, private, starttime = record
-    _observe(lock, remembered, persist=False)
+    _observe(lock, remembered)
     if not _stop_recorded(pid, created, starttime):
         return False
     if _any_alive(remembered):
@@ -1353,7 +1374,7 @@ def _remember_controller(lock, private):
     return record
 
 
-def _run_build(message, real_state):
+def _run_build(message, real_state, persist_seen):
     ready = message.get('ready')
     if not isinstance(ready, list) or any(not isinstance(root, str) for root in ready):
         raise SDKError('source wave has no schedule')
@@ -1407,7 +1428,7 @@ def _run_build(message, real_state):
                 run_error = exc
     finally:
         try:
-            _observe(lock, _OWNER_SEEN, persist=True)
+            _observe(lock, _OWNER_SEEN, persist=persist_seen)
         except Exception as exc:
             keep = True
             if run_error is None:
@@ -1440,7 +1461,7 @@ def _reap_owner(owner, state, token):
     lock = state / 'build.lock'
     while True:
         try:
-            _observe(lock, seen, persist=False)
+            _observe(lock, seen)
             _merge_seen(seen, _read_seen(lock))
         except Exception:
             pass
@@ -1453,7 +1474,7 @@ def _reap_owner(owner, state, token):
         time.sleep(0.02)
     if os.WIFSIGNALED(status):
         try:
-            _observe(lock, seen, persist=False)
+            _observe(lock, seen)
             _merge_seen(seen, _read_seen(lock))
         except Exception:
             pass
@@ -1467,6 +1488,7 @@ def _owner(sock, death_read, state, token):
     dead = [False]
     drained = [False]
     _OWNER_SEEN.clear()
+    persist_seen = _seen_recorder(lock)
     os.set_blocking(death_read, False)
     lock_scope = _CONTROLLER_LOCK.set(lock)
 
@@ -1475,7 +1497,7 @@ def _owner(sock, death_read, state, token):
             if not drained[0]:
                 drained[0] = _stop_our_children() is True
             return
-        _observe(lock, _OWNER_SEEN, persist=True)
+        _observe(lock, _OWNER_SEEN, persist=persist_seen)
         if _death_requested(death_read):
             dead[0] = True
             drained[0] = _stop_our_children() is True
@@ -1522,7 +1544,7 @@ def _owner(sock, death_read, state, token):
                     return
                 if op in ('build', 'exec'):
                     try:
-                        receipts = _run_build(message, state)
+                        receipts = _run_build(message, state, persist_seen)
                     except Exception as exc:
                         if isinstance(exc, SDKError) and 'not a regular file' in str(exc):
                             retain = True

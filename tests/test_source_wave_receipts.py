@@ -6,6 +6,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
@@ -18,6 +19,45 @@ def _write(state, name, text):
     path = state / name
     path.write_text(text)
     return text
+
+
+class SeenReceiptTests(unittest.TestCase):
+    def test_steady_pulses_reuse_only_a_durable_unchanged_file(self):
+        from emberbsd_sdk import source_wave
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp)
+            record = source_wave._seen_recorder(lock)
+            seen = {17: ('birth', '1700')}
+            with patch.object(source_wave, '_durable_write', wraps=source_wave._durable_write) as write:
+                record(seen)
+                for _ in range(10):
+                    record(seen)
+                self.assertEqual(write.call_count, 1)
+                self.assertEqual(source_wave._read_seen(lock), seen)
+
+                (lock / 'seen').unlink()
+                record(seen)
+                (lock / 'seen').write_text('unexpected content')
+                record(seen)
+                self.assertEqual(write.call_count, 3)
+
+                # A failed directory sync can leave the new bytes visible.
+                seen[31] = ('second', '3100')
+                def fail_after_replace(directory, name, data):
+                    (directory / name).write_bytes(data)
+                    raise OSError('directory sync failed')
+
+                with patch.object(source_wave, '_durable_write', side_effect=fail_after_replace):
+                    record(seen)
+                record(seen)
+                record(seen)
+                self.assertEqual(write.call_count, 4)
+                self.assertEqual(source_wave._read_seen(lock), seen)
+                del seen[17]
+                record(seen)
+                self.assertEqual(write.call_count, 5)
+                self.assertEqual(source_wave._read_seen(lock), seen)
 
 
 class ReceiptMergeTests(unittest.TestCase):
