@@ -168,6 +168,10 @@ python3 scripts/publish-additions.py package-build.json \
 The input can leave `packages` empty in this mode. `STATE/packages` names must
 match successful `STATE/done` entries and graph versions. Completed packages
 outside the supplied graph are ignored, so tasks can share one STATE directory.
+For a Ports `cross-bulk.sh package` run, pass `--receipt packaged` to the
+publisher or to `publication-candidates`. This selects archive checksums from
+`STATE/packaged` and excludes roots in `STATE/package-failed`. Use the same
+producer graph and archive directory. The option also works with `--follow`.
 For a rolling publication, export the typed runtime graph once for the producer
 inputs. Reuse it for each batch from those inputs. Add one `--state-root PKGPATH`
 per completed archive to the command above, for example

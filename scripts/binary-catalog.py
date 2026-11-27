@@ -38,6 +38,8 @@ def main(argv=None):
     candidates.add_argument('input', type=Path, help='package-build JSON for one producer graph and repository')
     candidates.add_argument('--ready', action='store_true',
                             help='order completed roots with available runtime providers')
+    candidates.add_argument('--receipt', choices=('done', 'packaged'), default='done',
+                            help='Ports completion file (default: done)')
     candidates.add_argument('--hold-root', action='append', default=[], metavar='PKGPATH',
                             help='with --ready, omit this candidate from the batch; repeat for known failures')
     candidates.add_argument('--state', required=True, type=Path)
@@ -77,7 +79,8 @@ def main(argv=None):
             if args.hold_root and not args.ready:
                 parser.error('--hold-root requires --ready')
             value = publication_candidates(crypto, read_json(args.input), args.state,
-                                           args.packages, args.current, args.trust_root, ready=args.ready, held=args.hold_root)
+                                           args.packages, args.current, args.trust_root, ready=args.ready,
+                                           held=args.hold_root, receipt=args.receipt)
         elif args.command == 'recover-selections':
             sysroots = {name: Path(root) for name, root in args.target_sysroot}
             if len(sysroots) != len(args.target_sysroot):

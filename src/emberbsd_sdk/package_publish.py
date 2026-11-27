@@ -25,7 +25,15 @@ from .release_signing import read_bytes
 from .source_wave import live_receipt_directory
 
 
-def packages_from_state(spec, state, packages, *, selected_roots=(), allow_empty=False, graph=None):
+def _receipt_files(receipt):
+    if receipt == 'done':
+        return ('packages', 'done', 'failed', 'blocked', 'skipped')
+    if receipt == 'packaged':
+        return ('packages', 'packaged', 'package-failed')
+    raise SDKError('unknown Ports archive receipt: ' + str(receipt))
+
+
+def packages_from_state(spec, state, packages, *, selected_roots=(), allow_empty=False, graph=None, receipt='done'):
     """Map successful Ports results to an existing producer graph, without solving."""
     spec = deepcopy(spec)
     if len(spec['repositories']) != 1:
@@ -43,8 +51,12 @@ def packages_from_state(spec, state, packages, *, selected_roots=(), allow_empty
             by_root.setdefault(node_root(node['id']), []).append(node)
     state, packages = Path(state), Path(packages).absolute()
     planned, completed = {}, {}
-    for name, result in (('packages', planned), ('done', completed)):
-        for line in (state / name).read_text(encoding='utf-8').splitlines():
+    plan_file, archive_file, *failure_files = _receipt_files(receipt)
+    for name, result in ((plan_file, planned), (archive_file, completed)):
+        path = state / name
+        if name == 'packaged' and not path.exists() and (state / 'package-failed').is_file():
+            continue
+        for line in path.read_text(encoding='utf-8').splitlines():
             fields = line.split()
             if not fields:
                 continue
@@ -54,13 +66,15 @@ def packages_from_state(spec, state, packages, *, selected_roots=(), allow_empty
             if root.endswith('@native') != (role == 'host') or (selected and root not in selected):
                 continue
             if ((name == 'packages' and len(fields) != 2) or
-                    (name == 'done' and len(fields) not in (2, 3))):
+                    (name == 'done' and len(fields) not in (2, 3)) or
+                    (name == 'packaged' and len(fields) != 3)):
                 raise SDKError('invalid Ports state row: ' + name)
             root, pkgname = fields[:2]
             _parse_root(root, 'Ports state')
             if (name == 'packages' and root in result) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+\-]*-[0-9][A-Za-z0-9._+]*', pkgname):
                 raise SDKError('invalid or duplicate package in Ports state: ' + root)
-            if name == 'done' and len(fields) == 3 and not (role == 'host' and fields[2] == 'native'):
+            local_install = name == 'done' and role == 'host' and fields[2:] == ['native']
+            if name == archive_file and len(fields) == 3 and not local_install:
                 if not re.fullmatch('[0-9a-f]{64}', fields[2]):
                     raise SDKError('invalid successful package SHA256: ' + root)
             if name == 'done' and len(fields) == 2:
@@ -71,7 +85,7 @@ def packages_from_state(spec, state, packages, *, selected_roots=(), allow_empty
                 # The latest result can also be an installed-only native tool.
                 result[root] = fields[1:]
     excluded = set()
-    for name in ('failed', 'blocked', 'skipped'):
+    for name in failure_files:
         path = state / name
         if path.exists():
             excluded.update(line.split()[0] for line in path.read_text(encoding='utf-8').splitlines() if line.split())
@@ -105,10 +119,10 @@ def packages_from_state(spec, state, packages, *, selected_roots=(), allow_empty
     return spec, checksums
 
 
-def publication_candidates(crypto, spec, state, packages, current, trust, *, ready=False, held=()):
+def publication_candidates(crypto, spec, state, packages, current, trust, *, ready=False, held=(), receipt='done'):
     """Compare completed receipts with an authenticated catalog without opening archives."""
     graph = read_json(spec['repositories'][0]['graph']) if ready and len(spec['repositories']) == 1 else None
-    spec, _ = packages_from_state(spec, state, packages, allow_empty=True, graph=graph)
+    spec, _ = packages_from_state(spec, state, packages, allow_empty=True, graph=graph, receipt=receipt)
     repo = spec['repositories'][0]
     release, (catalog,) = load_catalogs(crypto, current / 'release.p7m', current, trust, [repo['id']])
     summary = next(item for item in release['artifacts'] if item['id'] == catalog['summary'])
@@ -247,7 +261,7 @@ def update_packages(crypto, store, public, spec, ports_root, workdir, identity, 
 
 
 def _completed_batch(crypto, store, public, spec, ports_root, workdir, identity, trust,
-                     state, packages, held, prefix, ttl, forbidden_prefixes, interval, metadata_cache):
+                     state, packages, held, prefix, ttl, forbidden_prefixes, interval, metadata_cache, receipt):
     """Select against signed current and retry a displaced selection from a new parent."""
     key = _key(prefix, 'current.p7m')
     for attempt in range(3):
@@ -255,11 +269,11 @@ def _completed_batch(crypto, store, public, spec, ports_root, workdir, identity,
                               repositories=[spec['repositories'][0]['id']], cache=metadata_cache) as (_, snapshot):
             parent = hashlib.sha256(read_bytes(snapshot / 'current.p7m')).hexdigest()
             selection = publication_candidates(crypto, spec, state, packages, snapshot, trust,
-                                               ready=True, held=held)
+                                               ready=True, held=held, receipt=receipt)
         roots = selection['ready']
         if not roots:
             return dict(parent=parent, roots=[], waiting=selection['waiting'])
-        batch, checksums = packages_from_state(spec, state, packages, selected_roots=roots)
+        batch, checksums = packages_from_state(spec, state, packages, selected_roots=roots, receipt=receipt)
         fingerprint = hashlib.sha256(json_bytes([parent, spec, checksums])).hexdigest()
         batch['release_id'] = spec['release_id'] + '-' + fingerprint[:20]
         try:
@@ -276,16 +290,13 @@ def _completed_batch(crypto, store, public, spec, ports_root, workdir, identity,
                     waiting=selection['waiting'], statistics=result['statistics'])
 
 
-_RECEIPT_FILES = ('packages', 'done', 'failed', 'blocked', 'skipped')
-
-
-def _receipt_marks(directory):
+def _receipt_marks(directory, files):
     return tuple(stable_identity(st) if (st := entry(directory / name)) else None
-                 for name in _RECEIPT_FILES)
+                 for name in files)
 
 
-def _copy_receipts(directory, marks, snapshot):
-    for name, mark in zip(_RECEIPT_FILES, marks):
+def _copy_receipts(directory, files, marks, snapshot):
+    for name, mark in zip(files, marks):
         if mark is None:
             continue
         handle, _ = open_regular(directory / name)
@@ -295,7 +306,7 @@ def _copy_receipts(directory, marks, snapshot):
 
 def follow_completions(crypto, store, public, spec, ports_root, workdir, identity, trust,
                        state, packages, *, held=(), prefix='', ttl=7 * 86400, forbidden_prefixes=(),
-                       interval=30):
+                       interval=30, receipt='done'):
     """Yield release results while this Ports build owns its build.lock."""
     if interval < 1 or len(spec['repositories']) != 1:
         raise SDKError('follow requires a positive interval and one producer repository')
@@ -313,6 +324,13 @@ def follow_completions(crypto, store, public, spec, ports_root, workdir, identit
             return None
         return entry.st_dev, entry.st_ino
 
+    files = _receipt_files(receipt)
+
+    def receipt_directory(active):
+        if active is not None and receipt == 'done':
+            return live_receipt_directory(state)
+        return state
+
     producer = owner()
     previous = event = None
     with directory_lock(workdir / 'follow.lock'), tempfile.TemporaryDirectory(dir=workdir) as cache_dir:
@@ -325,8 +343,8 @@ def follow_completions(crypto, store, public, spec, ports_root, workdir, identit
             if ((current_graph.st_dev, current_graph.st_ino, current_graph.st_mtime_ns, current_graph.st_size) !=
                     (source.st_dev, source.st_ino, source.st_mtime_ns, source.st_size)):
                 raise SDKError('producer graph changed; select the new graph before publishing')
-            receipts = live_receipt_directory(state) if active is not None else state
-            marks = _receipt_marks(receipts)
+            receipts = receipt_directory(active)
+            marks = _receipt_marks(receipts, files)
             if active is not None and None in marks[:2]:
                 time.sleep(interval)
                 continue
@@ -341,19 +359,19 @@ def follow_completions(crypto, store, public, spec, ports_root, workdir, identit
                 with tempfile.TemporaryDirectory(dir=workdir) as temporary:
                     snapshot = Path(temporary)
                     try:
-                        _copy_receipts(receipts, marks, snapshot)
+                        _copy_receipts(receipts, files, marks, snapshot)
                     except (FileNotFoundError, SDKError):
-                        if marks != _receipt_marks(receipts):
+                        if marks != _receipt_marks(receipts, files):
                             continue
                         raise
-                    if marks != _receipt_marks(receipts) or owner() != active:
+                    if marks != _receipt_marks(receipts, files) or owner() != active:
                         continue
-                    if active is not None and receipts != live_receipt_directory(state):
+                    if active is not None and receipts != receipt_directory(active):
                         continue
                     if active is None and producer is not None and marks[0] and marks[1] is None:
-                        (snapshot / 'done').touch()
+                        (snapshot / receipt).touch()
                     event = _completed_batch(crypto, store, public, spec, ports_root, workdir,
-                        identity, trust, snapshot, packages, held, prefix, ttl, forbidden_prefixes, interval, metadata_cache)
+                        identity, trust, snapshot, packages, held, prefix, ttl, forbidden_prefixes, interval, metadata_cache, receipt)
                 yield event
                 previous = receipts, marks
             if active is None:

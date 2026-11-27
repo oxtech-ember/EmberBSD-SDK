@@ -93,6 +93,20 @@ class PackagesFromStateTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, 'net/failed'):
             packages_from_state(spec, self.state, self.packages, selected_roots=['net/app', 'net/failed'])
 
+    def test_package_receipts_use_their_own_failure_state_and_checksum(self):
+        spec = self.target_spec()
+        self.write_state(packages=['net/app app-1.2', 'net/failed failed-2.0'],
+                         done=['net/failed failed-2.0 ' + 'b' * 64], failed=['net/app build'])
+        (self.state / 'packaged').write_text('net/app app-1.2 ' + 'a' * 64 + '\n'
+                                              'net/failed failed-2.0 ' + 'b' * 64 + '\n')
+        (self.state / 'package-failed').write_text('net/failed package\n')
+        result, checksums = packages_from_state(spec, self.state, self.packages, receipt='packaged')
+        self.assertEqual(set(result['repositories'][0]['packages']), {'target:net/app'})
+        self.assertEqual(checksums, {str(self.packages / 'app-1.2.tgz'): 'a' * 64})
+        (self.state / 'packaged').write_text('net/app app-1.2\n')
+        with self.assertRaises(SDKError):
+            packages_from_state(spec, self.state, self.packages, receipt='packaged')
+
     def test_native_role_uses_native_state_root_and_host_graph_id(self):
         self.graph_path.write_text(json.dumps(graph([('host:devel/generator', '5.0')])), encoding='utf-8')
         spec = dict(schema='emberbsd.package-build.v1', repositories=[dict(

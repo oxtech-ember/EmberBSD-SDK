@@ -27,6 +27,7 @@ def main(argv=None):
     parser.add_argument('--ports-root', required=True, type=Path)
     parser.add_argument('--workdir', required=True, type=Path, help='private reusable state for publication and retry')
     parser.add_argument('--state', type=Path, help='Ports STATE directory: select successful packages of one repository')
+    parser.add_argument('--receipt', choices=('done', 'packaged'), help='Ports completion file (default: done)')
     parser.add_argument('--state-root', action='append', default=[], metavar='PKGPATH',
                         help='publish this completed state root using the existing graph; repeat for a batch')
     parser.add_argument('--follow', action='store_true',
@@ -49,6 +50,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if bool(args.state) != bool(args.packages):
         parser.error('--state and --packages must be supplied together')
+    if args.receipt and not args.state:
+        parser.error('--receipt requires --state and --packages')
     if args.state_root and not args.state:
         parser.error('--state-root requires --state and --packages')
     if args.follow and (not args.state or args.state_root):
@@ -58,7 +61,8 @@ def main(argv=None):
     try:
         spec, checksums = read_json(args.input), None
         if args.state and not args.follow:
-            spec, checksums = packages_from_state(spec, args.state, args.packages, selected_roots=args.state_root)
+            spec, checksums = packages_from_state(spec, args.state, args.packages, selected_roots=args.state_root,
+                                                  receipt=args.receipt or 'done')
         with ExitStack() as transports:
             store = transports.enter_context(S3Store.from_environment(
                 endpoint=args.endpoint, region=args.region, bucket=args.bucket, ca_file=args.tls_ca_file))
@@ -68,7 +72,7 @@ def main(argv=None):
             if args.follow:
                 for event in follow_completions(crypto, store, public, spec, args.ports_root,
                         args.workdir, identity, args.trust_root, args.state, args.packages,
-                        held=args.hold_root, prefix=args.prefix, ttl=args.ttl,
+                        held=args.hold_root, prefix=args.prefix, ttl=args.ttl, receipt=args.receipt or 'done',
                         forbidden_prefixes=args.forbid_prefix, interval=30 if args.interval is None else args.interval):
                     print(json.dumps(event, sort_keys=True), flush=True)
                 return 0

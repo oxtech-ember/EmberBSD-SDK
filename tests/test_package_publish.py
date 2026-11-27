@@ -174,7 +174,7 @@ class PackagePublishTests(BinaryReleaseFixture):
         state.mkdir()
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         (state / 'packages').write_text('net/new new-1.0\n')
-        (state / 'done').write_text(f'net/new new-1.0 {digest}\n')
+        (state / 'packaged').write_text(f'net/new new-1.0 {digest}\n')
         packages = self.work / 'archives'
         packages.mkdir()
         (packages / 'new-1.0.tgz').write_bytes(archive.read_bytes())
@@ -193,7 +193,7 @@ class PackagePublishTests(BinaryReleaseFixture):
             clock.time.side_effect = time.time
             clock.sleep.side_effect = finish_peer
             event, = follow_completions(self.crypto, self.store, self.public, self.spec,
-                self.ports, workdir, self.leaf, self.ca.certificate, state, packages, interval=1)
+                self.ports, workdir, self.leaf, self.ca.certificate, state, packages, interval=1, receipt='packaged')
         self.assertEqual(sum(call.args[0] == catalog for call in downloads.call_args_list), 1)
         clock.sleep.assert_called_once_with(1)
         self.assertEqual(event['roots'], ['net/new'])
@@ -219,16 +219,17 @@ class PackagePublishTests(BinaryReleaseFixture):
             (private / 'done').write_text(receipt)
             source_wave._write_controller(lock, os.getpid(), 'test controller', private)
 
-        with patch('emberbsd_sdk.package_publish.time.sleep', side_effect=start_wave) as sleep:
+        with patch('emberbsd_sdk.package_publish.time') as clock:
+            clock.sleep.side_effect = start_wave
             events = follow_completions(self.crypto, self.store, self.public, self.spec,
                 self.ports, workdir, self.leaf, self.ca.certificate, state, packages, interval=1)
             self.assertEqual(next(events)['roots'], ['net/new'])
             self.assertFalse((state / 'done').exists())
-            sleep.assert_called_once_with(1)
+            clock.sleep.assert_called_once_with(1)
             (state / 'done').write_text(receipt)
             shutil.rmtree(lock)
             shutil.rmtree(private)
-            sleep.side_effect = None
+            clock.sleep.side_effect = None
             self.assertEqual([event['roots'] for event in events], [[]])
 
     def test_follow_reselects_after_another_authenticated_publisher_advances_current(self):
