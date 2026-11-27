@@ -169,7 +169,7 @@ class BinaryReleaseFixture(unittest.TestCase):
                                        'OS_VERSION=11.0\n' + ('' if license_value is None else f'LICENSE={license_value}\n') + restriction + extra_build_info)
         (work / 'SIZE').write_text(str(len(payload)))
         output = work / (name + '.tgz')
-        args = ['-c', '-fixture', '-d', '-fixture', '-f', work / 'PLIST', '-p', work,
+        args = ['-c', '-fixture', '-d', '-fixture', '-f', work / 'PLIST', '-p', work, '-I', '/usr/pkg',
                 '-B', work / 'BUILD_INFO', '-s', work / 'SIZE']
         if depends:
             args += ['-P', ' '.join(depends)]
@@ -234,6 +234,16 @@ class BinaryReleaseTests(BinaryReleaseFixture):
         inspect_package(good, None, forbidden_prefixes=[root])
         with self.assertRaisesRegex(SDKError, 'absolute'):
             inspect_package(good, None, forbidden_prefixes=['relative'])
+
+    def test_local_producer_home_is_checked_without_command_line_prefixes(self):
+        from emberbsd_sdk.binary_release import inspect_package
+        home = self.work.resolve()
+        bad = self.package('devel/leak', payload=os.fsencode(home / 'build/tools/date'))
+        clean = self.package('devel/portable', payload=os.fsencode(str(home) + '-other/bin/date'))
+        with patch.object(Path, 'home', return_value=home):
+            with self.assertRaisesRegex(SDKError, 'producer path'):
+                inspect_package(bad, None)
+            inspect_package(clean, None)
 
     def test_composition_rejects_build_path_before_signing(self):
         from emberbsd_sdk.binary_release import compose
@@ -436,7 +446,7 @@ class BinaryReleaseTests(BinaryReleaseFixture):
         self.crypto.sign_package(raw, signed, self.leaf, self.ca.certificate)
         with self.assertRaisesRegex(SDKError, 'qualified relocation'):
             inspect_package(signed, None, require_native_relocation=True)
-        for index, declaration in enumerate((INDEPENDENT, MARKER + '\n' + SOURCE + str(self.work / 'generator-1-1.0-Darwin-aarch64') + '\n' + TEXT + 'payload')):
+        for index, declaration in enumerate((INDEPENDENT, MARKER + '\n' + SOURCE + '/usr/pkg' + '\n' + TEXT + 'payload')):
             path = self.package('devel/generator-' + str(index), opsys='Darwin', marker=declaration + '\n')
             inspect_package(path, None, require_native_relocation=True)
             signed_path = self.work / ('qualified-' + str(index) + '.tgz')
@@ -451,8 +461,7 @@ class BinaryReleaseTests(BinaryReleaseFixture):
 
     def test_text_relocation_host_compose(self):
         from emberbsd_sdk.package_relocation import MARKER, SOURCE, TEXT
-        prefix = self.work / 'generator-1.0-Darwin-aarch64'
-        marker = '\n'.join((MARKER, SOURCE + str(prefix), TEXT + 'payload')) + '\n'
+        marker = '\n'.join((MARKER, SOURCE + '/usr/pkg', TEXT + 'payload')) + '\n'
         package = self.package('devel/generator', opsys='Darwin', marker=marker)
         self.spec['repositories'].append(dict(id='host',
             host=dict(os='Darwin', arch='arm64', abi='macos-27', runtime='libSystem'),

@@ -13,7 +13,8 @@ import tempfile
 import time
 
 from .binary_catalog import node_root, runtime_projection
-from .binary_release import compose, load_catalogs, _matches, _newer_than, _statistics
+from .binary_release import (compose, inspect_package, load_catalogs, local_producer_prefixes,
+                             _matches, _newer_than, _statistics)
 from .errors import SDKError
 from .jsonio import json_bytes, read_json, write_json
 from .package_cache import directory_lock
@@ -201,10 +202,13 @@ def update_packages(crypto, store, public, spec, ports_root, workdir, identity, 
     with directory_lock(workdir / 'update.lock'):
         snapshot, output = workdir / 'snapshot', workdir / 'release'
         # Check before any cleanup, including aliases through symlink parents.
+        inputs = [ports_root]
         for repo in spec['repositories']:
             for value in [repo['graph'], *repo['packages'].values()]:
                 if any(Path(value).resolve().is_relative_to(path.resolve()) for path in (snapshot, output)):
                     raise SDKError('publication inputs must not be inside operation outputs')
+                inputs.append(value)
+        effective_prefixes = local_producer_prefixes(forbidden_prefixes, inputs)
         request = dict(schema='emberbsd.package-publication.v1', build=spec,
                        ports_root=str(Path(ports_root).absolute()), prefix=prefix,
                        checksums=checksums or {})
@@ -244,7 +248,7 @@ def update_packages(crypto, store, public, spec, ports_root, workdir, identity, 
             statistics = {}
             release = compose(crypto, spec, ports_root, output, identity, trust, current=snapshot,
                               additions=True, statistics=statistics, checksums=checksums,
-                              forbidden_prefixes=forbidden_prefixes)
+                              forbidden_prefixes=effective_prefixes)
             if not (output / 'release.p7m').is_file():
                 result = dict(channel=channel, statistics=statistics)
                 write_json(result_path, result, exclusive=False)
@@ -252,6 +256,13 @@ def update_packages(crypto, store, public, spec, ports_root, workdir, identity, 
         else:
             previous = parse_release(crypto.verify_cms(read_bytes(snapshot / 'release.p7m'), trust))
             release = parse_release(crypto.verify_cms(read_bytes(output / 'release.p7m'), trust))
+            # A resumed batch may have been sealed before the local home was
+            # checked. Inspect the signed additions without changing their bytes.
+            if set(effective_prefixes).difference(map(str, forbidden_prefixes)):
+                existing = {(item['path'], item['sha256']) for item in previous['artifacts']}
+                for item in release['artifacts']:
+                    if item['kind'] in ('host-package', 'target-package') and (item['path'], item['sha256']) not in existing:
+                        inspect_package(output / item['path'], item['target'], forbidden_prefixes=effective_prefixes)
             statistics = _statistics(previous, release)
         expected_current = hashlib.sha256(read_bytes(snapshot / 'current.p7m')).hexdigest()
         channel = publish_release(crypto, store, public, output / 'release.p7m', identity, trust,

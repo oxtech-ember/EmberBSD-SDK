@@ -41,14 +41,14 @@ class PackagePublishTests(BinaryReleaseFixture):
         self.assertNotIn('generation', pointer)
         return repo
 
-    def prepare_addition(self, *, root='net/new', release_id='package-update', created_at=2):
+    def prepare_addition(self, *, root='net/new', release_id='package-update', created_at=2, payload=b'fixture data\n'):
         repo = self.publish_baseline()
         value = graph()
         value['nodes'].append(dict(id='target:' + root, version='1.0',
             input_sha256='c' * 64,
             dependencies=[dict(id='target:devel/lib', kind='runtime')]))
         self.graph_path.write_bytes(json_bytes(value))
-        archive = self.package(root, depends=('lib>=1',))
+        archive = self.package(root, depends=('lib>=1',), payload=payload)
         repo['sets'] = []
         repo['roots'] = [root]
         repo['packages'] = {'target:' + root: archive}
@@ -406,6 +406,31 @@ class PackagePublishTests(BinaryReleaseFixture):
             self.assertEqual((package_sign.call_count, cms_sign.call_count), calls)
             self.assertEqual((workdir / 'release/release.p7m').read_bytes(), prepared)
         self.assertNotIn('generation', result['channel'])
+
+    def prepared_without_home_check(self, payload):
+        _, _, workdir = self.prepare_addition(payload=payload)
+        with patch.object(Path, 'home', return_value=Path('/')), \
+                patch('emberbsd_sdk.package_publish.publish_release', side_effect=SDKError('offline')):
+            with self.assertRaisesRegex(SDKError, 'offline'):
+                self.update(workdir)
+        return workdir
+
+    def test_new_home_check_resumes_the_same_prepared_signatures(self):
+        workdir = self.prepared_without_home_check(b'portable')
+        manifest = workdir / 'release/release.p7m'
+        prepared = manifest.read_bytes()
+        with patch.object(Path, 'home', return_value=self.work.resolve()), \
+                patch.object(self.crypto, 'sign_package', side_effect=AssertionError('signed again')):
+            self.update(workdir)
+        self.assertEqual(manifest.read_bytes(), prepared)
+
+    def test_new_home_check_refuses_a_prepared_leak_before_delivery(self):
+        workdir = self.prepared_without_home_check(str(self.work.resolve() / 'bin/date').encode())
+        with patch.object(Path, 'home', return_value=self.work.resolve()), \
+                patch('emberbsd_sdk.package_publish.publish_release') as deliver:
+            with self.assertRaisesRegex(SDKError, 'producer path: payload'):
+                self.update(workdir)
+            deliver.assert_not_called()
 
     def test_partial_current_verify_failure_retries_prepared_signature(self):
         self._run_partial_retry('verify')

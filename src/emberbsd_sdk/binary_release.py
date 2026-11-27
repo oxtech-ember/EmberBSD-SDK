@@ -84,6 +84,17 @@ def _package_payload(stream):
             return _PayloadReader(stream, size)
 
 
+def local_producer_prefixes(prefixes, inputs):
+    """Include the account home when it contains local producer inputs."""
+    values = set(map(str, prefixes))
+    home = Path.home()
+    if home.is_absolute() and home != Path(home.anchor):
+        resolved = home.resolve()
+        if resolved != Path(resolved.anchor) and any(Path(path).resolve().is_relative_to(resolved) for path in inputs):
+            values.add(str(home))
+    return sorted(values)
+
+
 def _producer_paths(prefixes):
     values = set()
     for value in prefixes:
@@ -118,7 +129,7 @@ def inspect_package(path, target, *, require_native_relocation=False, forbidden_
     Header checks catch foreign dynamic payloads. They do not replace the recipe's
     target linkage/ABI checks or inspect objects nested in static archives.
     """
-    pattern, overlap = _producer_paths(forbidden_prefixes)
+    pattern, overlap = _producer_paths(local_producer_prefixes(forbidden_prefixes, [path]))
     handle, before = open_regular(path)
     payload_size = 0
     contents_seen = False
@@ -478,6 +489,7 @@ def compose(crypto, spec, ports_root, output, identity, trust, *, current=None,
     if output.exists() or output.is_symlink():
         raise SDKError('release output already exists')
     previous, repositories, indexes = _snapshot(crypto, current, trust) if current else (None, {}, {})
+    forbidden_prefixes = local_producer_prefixes(forbidden_prefixes, [ports_root])
     prepared = []
     for repo in spec['repositories']:
         old = repositories.get(repo['id'])

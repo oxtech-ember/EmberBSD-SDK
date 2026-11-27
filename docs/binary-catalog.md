@@ -84,10 +84,12 @@ Public packages omit the producer's `CONFIGURE_ENV`, `CONFIGURE_ARGS` and
 If `BUILD_HOST` is present, record the host OS and machine type, such as
 `Darwin arm64`. The catalog checks these fields before it signs new packages.
 
-Pass `--forbid-prefix /work/producer` to `compose`, `publish-additions.py`
-or `sign-package` for each private build directory. The release tool checks
-member names, links, metadata and uncompressed file bytes during package
-inspection. Set the paths from the machine that built the packages.
+The release tool checks member names, links, metadata and uncompressed file
+bytes in one archive pass. It rejects paths to the local account home when
+that home contains the package input. Catalog composition also checks the
+home of a local Ports checkout. Pass `--forbid-prefix /work/producer` for
+each additional private build directory. Include the original build paths
+when you sign packages from another machine.
 
 1. Projects runtime closures; build, tool and test edges stay out.
 2. Checks path/version/platform, licenses, sizes and archive DEPENDS against
