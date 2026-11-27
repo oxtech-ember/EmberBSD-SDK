@@ -19,21 +19,33 @@ _SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 
 class LinkGroup:
-    """Control one foreground PGID in the caller's inherited Darwin SID.
+    """Control one foreground PGID in the caller's inherited Darwin or Linux SID.
 
     Commands must retain their UID, SID and PGID. A surrounding SDK producer
     still owns the complete build session, including this group.
     """
 
     def __init__(self):
-        if sys.platform != 'darwin':
-            raise SDKError('link launcher currently requires the qualified Darwin backend')
+        # Both hosts have a qualified session inspector backend.
+        if sys.platform not in ('darwin', 'linux'):
+            raise SDKError('link launcher requires a Darwin or Linux host')
         self.inspector = SessionInspector()
         self.sid = os.getsid(0)
         self.child = None
 
     def start(self, argv):
         self.child = subprocess.Popen(_argv(argv), process_group=0)
+
+    def birth(self, pid):
+        """Read the start time that identifies one live PID on this host."""
+        native = getattr(self.inspector, 'native', None)
+        if native is None:
+            return self.inspector.identity.birth(pid)
+        # Linux: proc stat starttime of the pinned proc directory.
+        row = native.read(pid)
+        if row is None:
+            raise ProcessLookupError(pid)
+        return row.birth
 
     def members(self):
         # The kernel keeps a process group while any member exists, and
@@ -53,9 +65,9 @@ class LinkGroup:
             found = set()
             for pid in rows:
                 try:
-                    before = self.inspector.identity.birth(pid)
+                    before = self.birth(pid)
                     pgid = os.getpgid(pid)
-                    after = self.inspector.identity.birth(pid)
+                    after = self.birth(pid)
                 except (ProcessLookupError, SDKError):
                     uncertain = True
                     continue
