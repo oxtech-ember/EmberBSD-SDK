@@ -135,6 +135,24 @@ class PackagePublishTests(BinaryReleaseFixture):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), select())
 
+    def test_ready_keeps_a_newer_signed_provider_for_a_completed_consumer(self):
+        self.prepare_addition()
+        graph = read_json(self.graph_path)
+        nodes = {node['id']: node for node in graph['nodes']}
+        nodes['target:devel/lib']['version'] = '0.9nb2'
+        nodes['target:net/new']['dependencies'][0]['patterns'] = ['lib>=1']
+        self.graph_path.write_bytes(json_bytes(graph))
+        state = self.work / 'older-provider'
+        state.mkdir()
+        rows = ['devel/lib lib-0.9nb2', 'net/new new-1.0']
+        (state / 'packages').write_text(''.join(row + '\n' for row in rows))
+        (state / 'done').write_text(''.join(f'{row} {"a" * 64}\n' for row in rows))
+        result = publication_candidates(self.crypto, self.spec, state, self.work / 'no-archives',
+            self.work / 'baseline', self.ca.certificate, ready=True)
+        self.assertEqual(result['ready'], ['net/new'])
+        self.assertEqual(result['waiting'], {})
+        self.assertEqual(result['changed'], [dict(root='devel/lib', current='lib-1.0', built='lib-0.9nb2')])
+
     def test_follow_publishes_final_receipt_resumes_and_leaves_current_on_bad_checksum(self):
         _, archive, workdir = self.prepare_addition()
         state = self.work / 'follow-state'

@@ -193,6 +193,11 @@ def _matches(crypto, pattern, name):
     return result.returncode == 0
 
 
+def _newer_than(crypto, name, version):
+    base, current = name.rsplit('-', 1)
+    return current != version and _matches(crypto, base + '>' + version, name)
+
+
 def _package_license(record):
     """Represent omitted package metadata without asserting license terms."""
     values = record.get('LICENSE', [])
@@ -288,10 +293,8 @@ def _prepare_repository(crypto, spec, ports_root, sources, trust, previous=None,
     paths, reused = [], {}
     for identity in nodes:
         old = previous.get(nodes[identity]['root'])
-        same_version = old is not None and old['name'].rsplit('-', 1)[-1] == nodes[identity]['version']
         reuse = reuses_current(identity, nodes[identity])
-        if old and not same_version and not reuse and _matches(crypto,
-                old['name'].rsplit('-', 1)[0] + '>' + nodes[identity]['version'], old['name']):
+        if old and not reuse and _newer_than(crypto, old['name'], nodes[identity]['version']):
             raise SDKError('package would downgrade current: ' + nodes[identity]['root'])
         if identity not in spec['packages'] or reuse:
             if not reuse:

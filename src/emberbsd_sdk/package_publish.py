@@ -13,7 +13,7 @@ import tempfile
 import time
 
 from .binary_catalog import node_root, runtime_projection
-from .binary_release import compose, load_catalogs, _matches, _statistics
+from .binary_release import compose, load_catalogs, _matches, _newer_than, _statistics
 from .errors import SDKError
 from .jsonio import json_bytes, read_json, write_json
 from .package_cache import directory_lock
@@ -140,7 +140,9 @@ def publication_candidates(crypto, spec, state, packages, current, trust, *, rea
     result = dict(release_id=release['release_id'], missing=missing, changed=changed)
     if ready:
         excluded = {_parse_root(root, 'held publication root') for root in held}
-        changed_roots = set(missing).union(item['root'] for item in changed) - excluded
+        updates = (item['root'] for item in changed
+                   if not _newer_than(crypto, item['current'], item['built'].rsplit('-', 1)[1]))
+        changed_roots = set(missing).union(updates) - excluded
         names = {identity: Path(path).name.removesuffix('.tgz') for identity, path in repo['packages'].items()
                  if node_root(identity) in changed_roots}
         role = 'host' if repo['host'] is not None else 'target'

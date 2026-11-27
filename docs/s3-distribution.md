@@ -197,7 +197,8 @@ with `--state-root`. The publisher checks each new archive and the live catalog.
 
 Use `publication-candidates --ready` to group newly completed roots whose runtime
 providers satisfy the graph dependency patterns in the signed catalog or in the same batch. The
-`ready` list puts providers first. The `waiting` map lists unavailable direct
+`ready` list puts providers first. If another build published a newer version, the
+publisher keeps it and evaluates consumers against its signed package name. The `waiting` map lists unavailable direct
 providers. Use `--hold-root PKGPATH` to hold a known bad provider and its
 consumers. Supply the resulting roots to the publisher. It checks the package
 dependency patterns, runtime files and producer paths before signing.
