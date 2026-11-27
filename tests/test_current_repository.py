@@ -2,7 +2,10 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Only current remains; incomplete publication cannot discard its packages."""
 
+import hashlib
+import json
 import os
+import signal
 import unittest
 from unittest.mock import patch
 
@@ -79,6 +82,34 @@ class CurrentRepositoryTests(fixture.DeliveryTests):
         with self.assertRaisesRegex(SDKError, 'publisher'):
             self.publish(self.release())
         self.assertEqual(self.server.objects, {'/bucket/.publisher-lock': b'busy publisher'})
+
+    def test_stop_during_lock_acquisition_finishes_the_release(self):
+        key = '/bucket/.publisher-lock'
+        for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            with self.subTest(number=number):
+                self.server.objects.clear()
+                envelope = self.version(number.name.lower(), 'bootstrap-1.tgz', b'one')
+                observed = []
+                acquired = []
+                def on_stop(signum, _frame):
+                    observed.append((signum, key in self.server.objects,
+                                     '/bucket/current.p7m' in self.server.objects))
+                put = self.store.put
+                def stop_after_put(name, content, *args, **kwargs):
+                    result = put(name, content, *args, **kwargs)
+                    if name == '.publisher-lock':
+                        acquired.append(json.loads(content))
+                        signal.raise_signal(number)
+                    return result
+                previous = signal.signal(number, on_stop)
+                try:
+                    with patch.object(self.store, 'put', stop_after_put):
+                        self.publish(envelope)
+                finally:
+                    signal.signal(number, previous)
+                self.assertEqual(observed, [(number, False, True)])
+                self.assertEqual(acquired[0]['release_sha256'],
+                                 hashlib.sha256(envelope.read_bytes()).hexdigest())
 
     def test_reader_restarts_if_current_changes_before_metadata_download(self):
         first = self.publish(self.version('first', 'bootstrap-1.tgz', b'one'))

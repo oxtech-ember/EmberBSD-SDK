@@ -126,11 +126,14 @@ catalogs. `publish-additions.py` obtains the hash from its authenticated snapsho
 automatically; users never maintain a counter.
 
 A create-only `.publisher-lock` serializes publication **and cleanup** across
-publishers. Normal exit removes it. After a process crash, inspect the publisher
-and remove that exact object with the storage administrator's tools only when
-no publisher is running, then retry. No lease service or background worker is
-needed. Current still uses ETag compare-and-swap; HTTP 409/412 refuses a competing
-write. ETags are concurrency tokens, not integrity checksums.
+publishers. The SDK publication commands defer `SIGTERM`, `SIGHUP` and
+`SIGINT` until publication and cleanup finish and the lock is released.
+A host crash or `SIGKILL` can leave the lock in S3. Its
+`release_sha256` identifies the signed `release.p7m` in the producer's work
+directory. Compare this digest and the start time with the producer. Remove
+that exact object with the storage administrator's tools only when no publisher
+is running, then retry. Current uses ETag compare-and-swap. HTTP 409/412
+refuses a competing write. ETags are concurrency tokens, not integrity checksums.
 
 A failed upload does not switch current. A failure after switching, including
 cleanup failure, can leave a usable new current and extra old files: retry the

@@ -11,7 +11,9 @@ import re
 import stat
 from pathlib import Path
 import secrets
+import signal
 import tempfile
+import threading
 import time
 
 from . import os_update
@@ -90,25 +92,57 @@ def artifact_key(artifact, metadata_base):
 
 
 @contextmanager
-def _publisher_lock(store, prefix, interval=None):
+def _finish_publication_before_stop():
+    # The CLI publishes on the main thread. Library callers on other threads
+    # keep their application's signal policy.
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    pending = None
+
+    def remember(number, _frame):
+        nonlocal pending
+        if pending is None:
+            pending = number
+
+    try:
+        with ExitStack() as handlers:
+            for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+                previous = signal.getsignal(number)
+                if previous is not None and previous != signal.SIG_IGN:
+                    signal.signal(number, remember)
+                    handlers.callback(signal.signal, number, previous)
+            yield
+    finally:
+        if pending is not None:
+            signal.raise_signal(pending)
+
+
+@contextmanager
+def _publisher_lock(store, prefix, release_sha256, interval=None):
     # Covers both switching and deletion: CAS on current alone cannot prevent
     # an earlier publisher's cleanup from deleting a later publisher's inputs.
     key = _key(prefix, '.publisher-lock')
     while True:
-        token = json_bytes({'token': secrets.token_hex(16), 'started_at': int(time.time())})
-        try:
-            store.put(key, token, **_digest(token))
-            break
-        except HTTPStatusError as exc:
-            if exc.status not in (409, 412):
-                raise
-            if interval is None:
-                raise SDKError(f'publisher is busy; if it crashed, inspect and remove {key}') from exc
-            time.sleep(interval)
-    try:
-        yield
-    finally:
-        store.delete(key)
+        token = json_bytes({'token': secrets.token_hex(16), 'started_at': int(time.time()),
+                            'release_sha256': release_sha256})
+        # A stop can arrive after the store creates the lock but before PUT
+        # returns. Keep it pending through acquisition, publication and DELETE.
+        with _finish_publication_before_stop():
+            try:
+                store.put(key, token, **_digest(token))
+            except HTTPStatusError as exc:
+                if exc.status not in (409, 412):
+                    raise
+                if interval is None:
+                    raise SDKError(f'publisher is busy; if it crashed, inspect and remove {key}') from exc
+            else:
+                try:
+                    yield
+                finally:
+                    store.delete(key)
+                return
+        time.sleep(interval)
 
 
 def _clean_current(store, prefix, keep):
@@ -138,7 +172,8 @@ def publish_release(crypto, store, public, envelope_path, identity, trust,
         catalogs = load_release_catalogs(release, envelope_path.parent)
     else:
         release, catalogs = verify_release_with_catalogs(crypto, envelope, envelope_path.parent, trust)
-    base = 'current/metadata/' + hashlib.sha256(envelope).hexdigest()
+    release_sha256 = hashlib.sha256(envelope).hexdigest()
+    base = 'current/metadata/' + release_sha256
     keys = [artifact_key(item, base) for item in release['artifacts']]
     if len({key.casefold() for key in keys}) != len(keys):
         raise SDKError('multiple artifacts have the same current path')
@@ -152,7 +187,7 @@ def publish_release(crypto, store, public, envelope_path, identity, trust,
             if package in packages:
                 raise SDKError('current permits only one version of each package per platform')
             packages.add(package)
-    with _publisher_lock(store, prefix, publisher_lock_interval):
+    with _publisher_lock(store, prefix, release_sha256, publisher_lock_interval):
         return _publish_current(crypto, store, public, envelope_path, envelope, release,
                                 base, identity, trust, prefix, ttl, refresh, previous_channel_time,
                                 expected_current, reuse_current, withdrawals, catalogs)
