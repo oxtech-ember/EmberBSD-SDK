@@ -331,7 +331,7 @@ def _check_reused_sizes(public, objects):
         if int(headers['content-length']) != size:
             raise SDKError(f'reused current object size differs: {key}')
 
-    pool = ThreadPoolExecutor(max_workers=8)
+    pool = ThreadPoolExecutor(max_workers=16)
     try:
         pending = [pool.submit(check, key, size) for key, size in objects]
         for request in as_completed(pending):
