@@ -6,7 +6,7 @@ import os
 import re
 
 from . import inventory, paths, process
-from .host_prefix import _clang_linker, _member, _require
+from .host_prefix import _clang_route, _member, _require
 
 CLANG_BINARIES = ('cc', 'cxx', 'cpp', 'as', 'ld', 'ar', 'ranlib', 'nm', 'strip',
                   'objcopy', 'objdump', 'readelf', 'size', 'strings')
@@ -89,8 +89,8 @@ def clang_compiler(prefix, triplet, *, host, env):
         current = (match[1], reported, resource)
         _require(identity is None or current == identity, 'target C and C++ compiler inputs differ')
         identity = current
-        actual = _clang_linker(driver, root, host, env, 'c' if role == 'cc' else 'c++',
-                               (target, '--ld-path=' + linker))
+        actual, _ = _clang_route(driver, root, host, env, 'c' if role == 'cc' else 'c++',
+                                 (target, '--ld-path=' + linker))
         _require(paths.canonical_existing(actual) == binaries['ld']['path'],
                  'target driver selects a different LLVM linker')
     return dict(family='clang', version=identity[0], triplet=triplet, reported_triplet=identity[1], resource_dir=identity[2],

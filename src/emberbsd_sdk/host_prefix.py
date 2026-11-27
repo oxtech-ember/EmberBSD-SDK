@@ -105,11 +105,12 @@ def _compiler(value, host):
         _native_triplet(value['triplet'], host)
 
 
-def _clang_linker(driver, root, host, env, language, arguments=()):
+def _clang_route(driver, root, host, env, language, arguments=()):
     """Check a Clang frontend and actual link route without executing either."""
     result = process.capture([driver, *arguments, '-###', '-x', language, os.devnull,
                               '-o', os.devnull], env=env)
-    commands = [shlex.split(line) for line in result.stderr.decode('utf-8', 'strict').splitlines()
+    trace = result.stderr.decode('utf-8', 'strict')
+    commands = [shlex.split(line) for line in trace.splitlines()
                 if line.lstrip().startswith('"')]
     linker, frontend = None, False
     for command in commands:
@@ -125,30 +126,32 @@ def _clang_linker(driver, root, host, env, language, arguments=()):
             _require(linker is None, 'multiple Clang linker routes')
             linker = path
     _require(frontend and linker is not None, 'Clang did not report compiler and linker routes')
-    return linker
+    return linker, trace
 
 
 def _clang(tools, root, host, env, query):
     """Inspect the real Clang routes without producing compilation outputs."""
-    def identity(driver):
-        version = re.search(r'\bclang version ([0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9_.-]+)?)',
-                            query(driver, '--version'))
+    def identity(report):
+        version = re.search(r'^[^"\r\n]*?\bclang version ([0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9_.-]+)?)',
+                            report, re.MULTILINE)
         _require(version is not None, 'selected compiler does not identify Clang')
-        return dict(family='clang', version=version[1], triplet=query(driver, '-dumpmachine'))
-    compiler = identity(tools['cc'])
+        target = re.search(r'^Target:[ \t]+(\S+)[ \t]*$', report, re.MULTILINE)
+        _require(target is not None, 'Clang did not report a target')
+        return dict(family='clang', version=version[1], triplet=target[1])
+    compiler = identity(query(tools['cpp'], '--version'))
     _compiler(compiler, host)
-    _require(all(identity(tools[role]) == compiler for role in ('cxx', 'cpp')),
-             'native C, C++ and preprocessor compilers differ')
-    resource = canonical_existing(query(tools['cc'], '-print-resource-dir'))
-    _require(os.path.isdir(resource) and resource != root and
-             os.path.commonpath((resource, root)) == root, 'Clang resource directory escapes host prefix')
-    components = {'resource-dir': resource}
+    components = {}
     for role, language in (('cc', 'c'), ('cxx', 'c++')):
-        linker = _clang_linker(tools[role], root, host, env, language)
+        linker, report = _clang_route(tools[role], root, host, env, language)
+        _require(identity(report) == compiler, 'native C, C++ and preprocessor compilers differ')
         if 'ld' in components:
             _require(canonical_existing(linker) == canonical_existing(components['ld']),
                      'native C and C++ linkers differ')
         components['ld'] = linker
+    resource = canonical_existing(query(tools['cc'], '-print-resource-dir'))
+    _require(os.path.isdir(resource) and resource != root and
+             os.path.commonpath((resource, root)) == root, 'Clang resource directory escapes host prefix')
+    components['resource-dir'] = resource
     # The Ports clang-as command provides assembler-only driver arguments.
     # Its backend is Clang's integrated assembler, not another assembler.
     components.update(cc1=tools['cc'], cc1as=tools['cc'])

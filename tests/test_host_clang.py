@@ -28,6 +28,7 @@ class ClangFixture(PrefixFixture):
         self.resource.mkdir(parents=True)
         self.linker = self.root / 'bin/ld.lld'
         self.version = '23.1.4'
+        self.triplet = 'x86_64-pc-linux-gnu'
 
     def load(self, roles=('cc', 'sh', 'python', 'make'), **kwargs):
         kwargs.setdefault('compiler_family', 'clang')
@@ -35,13 +36,15 @@ class ClangFixture(PrefixFixture):
 
     def capture(self, argv, *, env):
         self.queries.append((argv, env))
+        banner = f'clang version {self.version}\nTarget: {self.triplet}'
         if '-###' in argv:
             return SimpleNamespace(stdout=b'', stderr=(
+                f'{banner}\n'
                 f'"{self.root}/bin/clang" "-cc1" "-triple" "x86_64-pc-linux-gnu"\n'
                 f'"{self.linker}" "-o" "/dev/null"\n').encode())
         option = argv[-1]
         if option == '--version':
-            output = 'clang version ' + self.version
+            output = banner
         elif option == '-dumpmachine':
             output = 'x86_64-pc-linux-gnu'
         elif option == '-print-resource-dir':
@@ -58,6 +61,7 @@ class HostClangTests(TemporaryCase):
 
     def test_default_selects_llvm_even_when_gcc_is_installed(self):
         selected = self.fixture.load()
+        self.assertEqual(len(self.fixture.queries), 4)
         self.assertEqual(dict(selected.compiler), dict(family='clang', version='23.1.4',
                                                        triplet='x86_64-pc-linux-gnu'))
         self.assertEqual(selected.tool('cc'), str(self.fixture.root / 'bin/clang'))
@@ -105,23 +109,30 @@ class HostClangTests(TemporaryCase):
             self.fixture.load()
 
     def test_target_triplet_cannot_replace_native_compiler(self):
-        original = self.fixture.capture
-        def capture(argv, *, env):
-            if argv[-1] == '-dumpmachine':
-                return SimpleNamespace(stdout=b'aarch64--netbsd\n', stderr=b'')
-            return original(argv, env=env)
-        self.fixture.capture = capture
+        self.fixture.triplet = 'aarch64--netbsd'
         with self.assertRaisesRegex(SDKError, 'actual native host'):
             self.fixture.load()
 
     def test_c_and_cxx_versions_must_match(self):
         original = self.fixture.capture
         def capture(argv, *, env):
-            if argv[0].endswith('/clang++') and argv[-1] == '--version':
-                return SimpleNamespace(stdout=b'clang version 22.1.0\n', stderr=b'')
-            return original(argv, env=env)
+            result = original(argv, env=env)
+            if argv[0].endswith('/clang++') and '-###' in argv:
+                result.stderr = result.stderr.replace(b'23.1.4', b'22.1.0')
+            return result
         self.fixture.capture = capture
         with self.assertRaisesRegex(SDKError, 'compilers differ'):
+            self.fixture.load()
+
+    def test_preprocessor_must_report_its_target(self):
+        original = self.fixture.capture
+        def capture(argv, *, env):
+            result = original(argv, env=env)
+            if argv[0].endswith('/clang-cpp') and argv[-1] == '--version':
+                result.stdout = result.stdout.splitlines()[0] + b'\n'
+            return result
+        self.fixture.capture = capture
+        with self.assertRaisesRegex(SDKError, 'report a target'):
             self.fixture.load()
 
     def test_unknown_family_never_selects_another_compiler(self):
