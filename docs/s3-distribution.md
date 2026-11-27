@@ -201,7 +201,9 @@ dependency patterns, runtime files and producer paths before signing.
 For a live Ports build, pass `--follow` to `publish-additions.py` with its
 `--state`, `--packages`, producer graph, private work directory and usual signing
 options. It reads completion receipts when they change and emits one JSON
-result per batch. It checks signed current again when missing providers can
+result per batch. Selection and composition reuse immutable release indexes by their
+signed digests for the duration of the command. The publisher reads the current
+pointer from S3 for each snapshot. It checks signed current again when missing providers can
 arrive from another producer. It drains the final receipts when the build
 releases `STATE/build.lock`. Start the follower after the producer takes the lock.
 For an SDK source install, pass the configured source state directory. The

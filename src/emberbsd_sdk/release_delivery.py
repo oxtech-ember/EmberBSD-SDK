@@ -493,13 +493,13 @@ def release_snapshot(crypto, public, trust, directory, *, prefix='', repositorie
             return
 
 
-def fetch_release(crypto, public, trust, output, *, prefix='', repositories=()):
+def fetch_release(crypto, public, trust, output, *, prefix='', repositories=(), cache=None):
     """Export one authenticated snapshot without replacing a destination entry."""
     output = Path(output).absolute()
     if output.exists() or output.is_symlink():
         raise SDKError('metadata destination already exists; select a new snapshot directory')
     with release_snapshot(crypto, public, trust, output.parent, prefix=prefix,
-                          repositories=repositories) as (release, snapshot):
+                          repositories=repositories, cache=cache) as (release, snapshot):
         publish_directory_noreplace(snapshot, output)
         return release
 

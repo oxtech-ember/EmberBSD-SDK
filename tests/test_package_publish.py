@@ -185,11 +185,16 @@ class PackagePublishTests(BinaryReleaseFixture):
             self.assertEqual(seconds, 1)
             self.assertEqual(self.server.objects.pop(lock), b'peer')
 
-        with patch('emberbsd_sdk.release_delivery.time') as clock:
+        parent = hashlib.sha256((self.work / 'baseline/release.p7m').read_bytes()).hexdigest()
+        repo = self.spec['repositories'][0]['id']
+        catalog = f'current/metadata/{parent}/{repo}/catalog.json'
+        with patch.object(self.public, 'verify', wraps=self.public.verify) as downloads, \
+                patch('emberbsd_sdk.release_delivery.time') as clock:
             clock.time.side_effect = time.time
             clock.sleep.side_effect = finish_peer
             event, = follow_completions(self.crypto, self.store, self.public, self.spec,
                 self.ports, workdir, self.leaf, self.ca.certificate, state, packages, interval=1)
+        self.assertEqual(sum(call.args[0] == catalog for call in downloads.call_args_list), 1)
         clock.sleep.assert_called_once_with(1)
         self.assertEqual(event['roots'], ['net/new'])
         self.assertNotIn(lock, self.server.objects)

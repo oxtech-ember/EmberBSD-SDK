@@ -20,7 +20,7 @@ from .package_cache import directory_lock
 from .package_selection import _parse_root
 from .paths import entry, open_regular, real_directory, stable_identity
 from .release_catalog import MAX_ENVELOPE, parse_channel, parse_release
-from .release_delivery import _key, fetch_release, publish_release, release_snapshot
+from .release_delivery import MetadataCache, _key, fetch_release, publish_release, release_snapshot
 from .release_signing import read_bytes
 from .source_wave import live_receipt_directory
 
@@ -173,7 +173,7 @@ def _ready_roots(crypto, graph, names, published, held, role):
 
 def update_packages(crypto, store, public, spec, ports_root, workdir, identity, trust,
                     *, prefix='', ttl=7 * 86400, checksums=None, forbidden_prefixes=(), expected_parent=None,
-                    publisher_lock_interval=None):
+                    publisher_lock_interval=None, metadata_cache=None):
     """Fetch, merge, seal and publish; resume a prepared release without signing again.
 
     A prepared operation is frozen until success. Use a new release_id for a
@@ -221,7 +221,7 @@ def update_packages(crypto, store, public, spec, ports_root, workdir, identity, 
             if snapshot.exists():
                 real_directory(snapshot)
                 shutil.rmtree(snapshot)
-            previous = fetch_release(crypto, public, trust, snapshot, prefix=prefix)
+            previous = fetch_release(crypto, public, trust, snapshot, prefix=prefix, cache=metadata_cache)
             if expected_parent is not None and hashlib.sha256(read_bytes(snapshot / 'current.p7m')).hexdigest() != expected_parent:
                 raise SDKError('current changed since the completed batch was selected')
             channel = parse_channel(crypto.verify_cms(read_bytes(snapshot / 'current.p7m'), trust), 'current')
@@ -247,12 +247,12 @@ def update_packages(crypto, store, public, spec, ports_root, workdir, identity, 
 
 
 def _completed_batch(crypto, store, public, spec, ports_root, workdir, identity, trust,
-                     state, packages, held, prefix, ttl, forbidden_prefixes, interval):
+                     state, packages, held, prefix, ttl, forbidden_prefixes, interval, metadata_cache):
     """Select against signed current and retry a displaced selection from a new parent."""
     key = _key(prefix, 'current.p7m')
     for attempt in range(3):
         with release_snapshot(crypto, public, trust, workdir, prefix=prefix,
-                              repositories=[spec['repositories'][0]['id']]) as (_, snapshot):
+                              repositories=[spec['repositories'][0]['id']], cache=metadata_cache) as (_, snapshot):
             parent = hashlib.sha256(read_bytes(snapshot / 'current.p7m')).hexdigest()
             selection = publication_candidates(crypto, spec, state, packages, snapshot, trust,
                                                ready=True, held=held)
@@ -265,7 +265,8 @@ def _completed_batch(crypto, store, public, spec, ports_root, workdir, identity,
         try:
             result = update_packages(crypto, store, public, batch, ports_root, workdir / fingerprint,
                 identity, trust, prefix=prefix, ttl=ttl, checksums=checksums,
-                forbidden_prefixes=forbidden_prefixes, expected_parent=parent, publisher_lock_interval=interval)
+                forbidden_prefixes=forbidden_prefixes, expected_parent=parent,
+                publisher_lock_interval=interval, metadata_cache=metadata_cache)
         except SDKError:
             current, _ = public.read(key, MAX_ENVELOPE, headers={'cache-control': 'no-cache'})
             if attempt == 2 or hashlib.sha256(current).hexdigest() == parent:
@@ -314,7 +315,8 @@ def follow_completions(crypto, store, public, spec, ports_root, workdir, identit
 
     producer = owner()
     previous = event = None
-    with directory_lock(workdir / 'follow.lock'):
+    with directory_lock(workdir / 'follow.lock'), tempfile.TemporaryDirectory(dir=workdir) as cache_dir:
+        metadata_cache = MetadataCache(cache_dir)
         while True:
             active = owner()
             if active is not None and active != producer:
@@ -351,7 +353,7 @@ def follow_completions(crypto, store, public, spec, ports_root, workdir, identit
                     if active is None and producer is not None and marks[0] and marks[1] is None:
                         (snapshot / 'done').touch()
                     event = _completed_batch(crypto, store, public, spec, ports_root, workdir,
-                        identity, trust, snapshot, packages, held, prefix, ttl, forbidden_prefixes, interval)
+                        identity, trust, snapshot, packages, held, prefix, ttl, forbidden_prefixes, interval, metadata_cache)
                 yield event
                 previous = receipts, marks
             if active is None:
