@@ -204,6 +204,9 @@ options. It reads completion receipts when they change and emits one JSON
 result per batch. It checks signed current again when missing providers can
 arrive from another producer. It drains the final receipts when the build
 releases `STATE/build.lock`. Start the follower after the producer takes the lock.
+For an SDK source install, pass the configured source state directory. The
+publisher reads completed packages from the active source wave and drains
+the merged receipts when the SDK releases the lock.
 For a finished build, it scans once and exits. Keep the state directory through
 the final scan. Use a new invocation when the producer or its graph changes.
 The input release ID is the prefix for each batch ID. Each batch is tied to

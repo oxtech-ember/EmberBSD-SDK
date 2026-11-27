@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -165,6 +166,38 @@ class PackagePublishTests(BinaryReleaseFixture):
         self.assertNotEqual(before, committed)
         self.assertEqual(run()[0]['roots'], [])
         self.assertEqual(self.public.read('current.p7m', 1024 * 1024)[0], committed)
+
+    def test_follow_publishes_from_an_active_sdk_wave_before_merge(self):
+        from emberbsd_sdk import source_wave
+
+        _, archive, workdir = self.prepare_addition()
+        state = self.work / 'source-state'
+        lock = state / 'build.lock'
+        lock.mkdir(parents=True)
+        source_wave._write_stamp(lock, '012abc', os.getpid())
+        (state / 'packages').write_text('net/new new-1.0\n')
+        packages = self.work / 'packages'
+        packages.mkdir()
+        shutil.copyfile(archive, packages / 'new-1.0.tgz')
+        receipt = 'net/new new-1.0 ' + hashlib.sha256(archive.read_bytes()).hexdigest() + '\n'
+        private = Path(tempfile.mkdtemp(prefix='ember-wave-', dir=self.work))
+
+        def start_wave(_):
+            shutil.copyfile(state / 'packages', private / 'packages')
+            (private / 'done').write_text(receipt)
+            source_wave._write_controller(lock, os.getpid(), 'test controller', private)
+
+        with patch('emberbsd_sdk.package_publish.time.sleep', side_effect=start_wave) as sleep:
+            events = follow_completions(self.crypto, self.store, self.public, self.spec,
+                self.ports, workdir, self.leaf, self.ca.certificate, state, packages, interval=1)
+            self.assertEqual(next(events)['roots'], ['net/new'])
+            self.assertFalse((state / 'done').exists())
+            sleep.assert_called_once_with(1)
+            (state / 'done').write_text(receipt)
+            shutil.rmtree(lock)
+            shutil.rmtree(private)
+            sleep.side_effect = None
+            self.assertEqual([event['roots'] for event in events], [[]])
 
     def test_follow_reselects_after_another_authenticated_publisher_advances_current(self):
         _, archive, workdir = self.prepare_addition()

@@ -9,6 +9,7 @@ import hashlib
 from pathlib import Path
 import re
 import shutil
+import tempfile
 import time
 
 from .binary_catalog import node_root, runtime_projection
@@ -17,10 +18,11 @@ from .errors import SDKError
 from .jsonio import json_bytes, read_json, write_json
 from .package_cache import directory_lock
 from .package_selection import _parse_root
-from .paths import real_directory
+from .paths import entry, open_regular, real_directory, stable_identity
 from .release_catalog import MAX_ENVELOPE, parse_channel, parse_release
 from .release_delivery import _key, fetch_release, publish_release, release_snapshot
 from .release_signing import read_bytes
+from .source_wave import live_receipt_directory
 
 
 def packages_from_state(spec, state, packages, *, selected_roots=(), allow_empty=False, graph=None):
@@ -272,6 +274,23 @@ def _completed_batch(crypto, store, public, spec, ports_root, workdir, identity,
                     waiting=selection['waiting'], statistics=result['statistics'])
 
 
+_RECEIPT_FILES = ('packages', 'done', 'failed', 'blocked', 'skipped')
+
+
+def _receipt_marks(directory):
+    return tuple(stable_identity(st) if (st := entry(directory / name)) else None
+                 for name in _RECEIPT_FILES)
+
+
+def _copy_receipts(directory, marks, snapshot):
+    for name, mark in zip(_RECEIPT_FILES, marks):
+        if mark is None:
+            continue
+        handle, _ = open_regular(directory / name)
+        with handle, (snapshot / name).open('wb') as output:
+            shutil.copyfileobj(handle, output)
+
+
 def follow_completions(crypto, store, public, spec, ports_root, workdir, identity, trust,
                        state, packages, *, held=(), prefix='', ttl=7 * 86400, forbidden_prefixes=(),
                        interval=30):
@@ -303,25 +322,37 @@ def follow_completions(crypto, store, public, spec, ports_root, workdir, identit
             if ((current_graph.st_dev, current_graph.st_ino, current_graph.st_mtime_ns, current_graph.st_size) !=
                     (source.st_dev, source.st_ino, source.st_mtime_ns, source.st_size)):
                 raise SDKError('producer graph changed; select the new graph before publishing')
-            marks = []
-            for name in ('packages', 'done', 'failed', 'blocked', 'skipped'):
-                try:
-                    st = (state / name).stat()
-                    marks.append((st.st_ino, st.st_mtime_ns, st.st_size))
-                except FileNotFoundError:
-                    if name in ('packages', 'done'):
-                        raise
-                    marks.append(None)
-            changed = marks != previous
+            receipts = live_receipt_directory(state) if active is not None else state
+            marks = _receipt_marks(receipts)
+            if active is not None and None in marks[:2]:
+                time.sleep(interval)
+                continue
+            changed = (receipts, marks) != previous
             if not changed and event['waiting']:
                 current, _ = public.read(_key(prefix, 'current.p7m'), MAX_ENVELOPE,
                                          headers={'cache-control': 'no-cache'})
                 changed = hashlib.sha256(current).hexdigest() != event['parent']
             if changed:
-                event = _completed_batch(crypto, store, public, spec, ports_root, workdir,
-                    identity, trust, state, packages, held, prefix, ttl, forbidden_prefixes)
+                # The SDK merges and removes a private schedule as soon as its
+                # controller ends. Keep these small receipts through signing.
+                with tempfile.TemporaryDirectory(dir=workdir) as temporary:
+                    snapshot = Path(temporary)
+                    try:
+                        _copy_receipts(receipts, marks, snapshot)
+                    except (FileNotFoundError, SDKError):
+                        if marks != _receipt_marks(receipts):
+                            continue
+                        raise
+                    if marks != _receipt_marks(receipts) or owner() != active:
+                        continue
+                    if active is not None and receipts != live_receipt_directory(state):
+                        continue
+                    if active is None and producer is not None and marks[0] and marks[1] is None:
+                        (snapshot / 'done').touch()
+                    event = _completed_batch(crypto, store, public, spec, ports_root, workdir,
+                        identity, trust, snapshot, packages, held, prefix, ttl, forbidden_prefixes)
                 yield event
-                previous = marks
+                previous = receipts, marks
             if active is None:
                 break
             time.sleep(interval)

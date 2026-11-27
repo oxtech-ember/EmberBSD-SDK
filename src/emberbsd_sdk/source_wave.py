@@ -1170,6 +1170,24 @@ def _read_controller(lock):
     return pid, lines[1], private, starttime
 
 
+def live_receipt_directory(state):
+    """Locate the active SDK controller's Ports receipts, or the merged state."""
+    lock = state / 'build.lock'
+    if _read_stamp(lock) is not None:
+        record = _read_controller(lock)
+        if record is not None:
+            private = record[2]
+            try:
+                info = private.lstat()
+                owner = lock.lstat().st_uid
+            except FileNotFoundError:
+                return state
+            if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077 or info.st_uid != owner:
+                raise SDKError('expected a private source wave directory')
+            return private
+    return state
+
+
 def _write_seen(lock, seen):
     if not lock.is_dir():
         return
