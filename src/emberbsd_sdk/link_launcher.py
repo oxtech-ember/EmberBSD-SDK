@@ -19,16 +19,17 @@ _SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 
 class LinkGroup:
-    """Control one foreground PGID in the caller's inherited Darwin or Linux SID.
+    """Control one foreground PGID in the caller's inherited Darwin, Linux or EmberBSD SID.
 
     Commands must retain their UID, SID and PGID. A surrounding SDK producer
     still owns the complete build session, including this group.
     """
 
     def __init__(self):
-        # Both hosts have a qualified session inspector backend.
-        if sys.platform not in ('darwin', 'linux'):
-            raise SDKError('link launcher requires a Darwin or Linux host')
+        # These hosts have a qualified session inspector backend. EmberBSD
+        # reports the NetBSD platform name.
+        if sys.platform not in ('darwin', 'linux', 'netbsd11'):
+            raise SDKError('link launcher requires a Darwin, Linux or EmberBSD host')
         self.inspector = SessionInspector()
         self.sid = os.getsid(0)
         self.child = None
@@ -59,6 +60,11 @@ class LinkGroup:
             return set()
         except PermissionError:
             pass
+        if sys.platform == 'netbsd11':
+            # One KERN_PROC2 census is a coherent kernel snapshot: within it a
+            # PID names one process and one process group.
+            return {row.pid for row in self.inspector.native.rows().values()
+                    if row.pgid == self.child.pid and row.sid == self.sid}
         deadline = time.monotonic() + self.inspector.empty_snapshot_timeout
         while True:
             rows, uncertain = self.inspector._scan(self.sid)

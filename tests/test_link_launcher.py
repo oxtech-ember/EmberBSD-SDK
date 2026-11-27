@@ -17,7 +17,7 @@ from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.process import ContextLocks
 
 
-@unittest.skipUnless(sys.platform in ('darwin', 'linux'), 'native Darwin and Linux launcher contracts')
+@unittest.skipUnless(sys.platform in ('darwin', 'linux', 'netbsd11'), 'native Darwin, Linux and EmberBSD launcher contracts')
 class LauncherTests(TemporaryCase):
     def argv(self, code, *args):
         return [sys.executable, '-B', str(SDK_SOURCE / 'scripts/link-launcher.py'),

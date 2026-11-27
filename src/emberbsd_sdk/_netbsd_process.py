@@ -53,6 +53,8 @@ class ProcessRow:
     sid: int
     uid: int
     state: int
+    # Process group of the same census record; -1 when a caller does not know it.
+    pgid: int = -1
 
 
 def decode_rows(data):
@@ -65,7 +67,7 @@ def decode_rows(data):
         if (p.pid < 0 or p.pid in rows or p.ppid < 0 or p.sid < 0 or
                 not 1 <= p.state <= 8):
             raise SDKError('invalid or duplicate NetBSD process identity')
-        rows[p.pid] = ProcessRow(p.pid, p.ppid, p.sid, p.uid, p.state)
+        rows[p.pid] = ProcessRow(p.pid, p.ppid, p.sid, p.uid, p.state, p.pgid)
     return rows
 
 
