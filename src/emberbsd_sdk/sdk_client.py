@@ -744,13 +744,17 @@ def _ready_wave(order, deps, pending):
     return [root for root in order if root in selected]
 
 
-def _installed_names(config, installer, role):
+def _installed_names(config, installer, role, inventories=None):
     names = set()
-    for cfg in config['repositories'].values():
+    if inventories is None:
+        inventories = {}
+    for repository, cfg in config['repositories'].items():
         cfg_role = 'host' if cfg.get('host') else 'target'
         if cfg_role != role:
             continue
-        names.update(installer.installed(cfg, recover=False))
+        if repository not in inventories:
+            inventories[repository] = installer.installed(cfg, recover=False)
+        names.update(inventories[repository])
     return names
 
 
@@ -798,10 +802,17 @@ def _adopt_published(config, installer, cache, store, release, catalogs, names, 
     replacement.
     """
     candidates = []
+    inventories = None
     for root in order:
         if root not in pending or not _catalog_closure_matches(root, names, release, catalogs, config):
             continue
-        one = installation_plan(release, catalogs, config, installer, cache, roots=[root])
+        if inventories is None:
+            # Candidate plans share one inventory. The final installation plan
+            # reads the databases again after candidate selection.
+            repositories = {catalog['repository'] for catalog in catalogs}
+            inventories = {repo: installer.installed(cfg, recover=False)
+                           for repo, cfg in config['repositories'].items() if repo in repositories}
+        one = installation_plan(release, catalogs, config, installer, cache, roots=[root], installed=inventories)
         own = [package for package in one['packages'] if package['root'] == root]
         # A newer installed package stays with Ports. An older installed package
         # is an exact catalog upgrade and is downloaded. Dependencies may still
@@ -810,7 +821,7 @@ def _adopt_published(config, installer, cache, store, release, catalogs, names, 
             continue
         if own[0]['replaces']:
             role = 'host' if root.endswith('@native') else 'target'
-            if not _replacement_is_upgrade(installer, names[root], _installed_names(config, installer, role)):
+            if not _replacement_is_upgrade(installer, names[root], _installed_names(config, installer, role, inventories)):
                 continue
         candidates.append(root)
     supplied = set(order).difference(pending).union(candidates)

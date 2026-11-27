@@ -23,7 +23,7 @@ from emberbsd_sdk.package_cache import directory_lock
 from emberbsd_sdk.release_catalog import parse_channel
 from emberbsd_sdk.release_s3 import HTTPStatusError, HTTPStore
 from emberbsd_sdk.sdk_client import (
-    ArchiveUnavailable, _ready_wave, installation_plan, apply_plan, include_source_dependencies, install_selection)
+    ArchiveUnavailable, _adopt_published, _ready_wave, installation_plan, apply_plan, include_source_dependencies, install_selection)
 from emberbsd_sdk.source_wave import SourceWaveLock
 from emberbsd_sdk.package_cache import PackageCache
 from emberbsd_sdk.package_install import PackageInstaller
@@ -752,6 +752,25 @@ class ClientTests(unittest.TestCase):
                             lambda: (*published, 'new-release'), accepted='initial-release')
         self.assertEqual(failure.exception.release_digest, 'new-release')
         self.assertFalse(self.installer.actions)
+
+    def test_adoption_shares_candidate_inventory_and_refreshes_the_final_plan(self):
+        lib, app = 'devel/lib@native', 'net/app@native'
+        self.installer.present.update(('lib-1', 'app-1'))
+        _adopt_published(self.cfg, self.installer, self.cache, self.store, self.release,
+            self.catalogs, {lib: 'lib-1', app: 'app-1'}, [lib, app], {lib, app}, [],
+            roots=[app], dependencies={lib: set(), app: {lib}}, release_digest='release')
+        self.assertEqual(self.installer.recover_args, [False, False])
+        self.assertEqual(self.installer.actions, [])
+        self.assertEqual(self.store.calls, [])
+
+    def test_adoption_refreshes_a_package_removed_during_selection(self):
+        lib, app = 'devel/lib@native', 'net/app@native'
+        inventories = [{'lib-1', 'app-1'}, {'lib-1'}]
+        with patch.object(self.installer, 'installed', side_effect=inventories):
+            _adopt_published(self.cfg, self.installer, self.cache, self.store, self.release,
+                self.catalogs, {lib: 'lib-1', app: 'app-1'}, [lib, app], {lib, app}, [],
+                roots=[app], dependencies={lib: set(), app: {lib}}, release_digest='release')
+        self.assertEqual([action[0] for action in self.installer.actions], ['check', 'install', 'configure'])
 
     def test_running_install_adopts_new_current_between_source_waves(self):
         lib, app = 'devel/lib@native', 'net/app@native'
