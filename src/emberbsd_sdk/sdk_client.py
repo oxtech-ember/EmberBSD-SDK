@@ -869,12 +869,13 @@ def _retain_current(config, installer, names, pending):
     schedule. A current native package is the same ``BASE>=version`` result
     Ports already treats as done.
     """
+    inventories = {}
     for root in list(pending):
         name = names.get(root)
         if not name:
             continue
         role = 'host' if root.endswith('@native') else 'target'
-        installed = _installed_names(config, installer, role)
+        installed = _installed_names(config, installer, role, inventories)
         if _installed_is_current(installer, name, installed):
             pending.discard(root)
             continue
@@ -917,12 +918,13 @@ def _accept_built_wave(config, installer, names, ready, pending, receipts):
     if mismatched:
         raise SDKError('Ports receipt does not match the graph: ' + '; '.join(mismatched))
     missing = []
+    inventories = {}
     for root in ready:
         if root in done:
             pending.discard(root)
             continue
         role = 'host' if root.endswith('@native') else 'target'
-        installed = _installed_names(config, installer, role)
+        installed = _installed_names(config, installer, role, inventories)
         name = names.get(root)
         if role == 'host' and name and _installed_is_current(installer, name, installed):
             pending.discard(root)

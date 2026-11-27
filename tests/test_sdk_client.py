@@ -763,6 +763,23 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(self.installer.actions, [])
         self.assertEqual(self.store.calls, [])
 
+    def test_source_wave_reads_each_used_database_once_per_phase(self):
+        from emberbsd_sdk.sdk_client import _accept_built_wave, _retain_current
+        self.cfg['repositories']['target'] = {'target': {'arch': 'aarch64'}}
+        names = {'devel/lib@native': 'lib-1', 'net/app@native': 'app-1',
+                 'devel/lib': 'lib-1', 'net/app': 'app-1'}
+        pending = set(names)
+        self.installer.present.add('lib-1')
+        _retain_current(self.cfg, self.installer, names, pending)
+        self.assertEqual(pending, set(names) - {'devel/lib@native'})
+        self.assertEqual(self.installer.recover_args, [False, False])
+        self.installer.present.add('app-1')
+        self.installer.target_present.update(('lib-1', 'app-1'))
+        receipts = dict(done=[], skipped=[], failed=[], blocked=[])
+        _accept_built_wave(self.cfg, self.installer, names, sorted(pending), pending, receipts)
+        self.assertEqual(pending, set())
+        self.assertEqual(self.installer.recover_args, [False] * 4)
+
     def test_adoption_refreshes_a_package_removed_during_selection(self):
         lib, app = 'devel/lib@native', 'net/app@native'
         inventories = [{'lib-1', 'app-1'}, {'lib-1'}]
