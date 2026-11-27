@@ -198,6 +198,25 @@ Use the graph and state from the same producer. The command reads metadata.
 Pass the selected roots and their new runtime providers to `publish-additions.py`
 with `--state-root`. The publisher checks each new archive and the live catalog.
 
+Install available binary providers before `cross-bulk.sh build` takes the prefix read lock.
+Use a binary-only SDK configuration for the producer's prefix and target.
+Match the catalog's repository, `root`, and `pkgname` to the entries in `STATE/packages`.
+Set `config` to the client configuration file. The following commands request two providers.
+Check the package names and the empty `build_roots` list in the plan before installing.
+
+```sh
+ember-sdk --config "$config" catalog
+ember-sdk --config "$config" plan --package devel/zlib --package graphics/png
+ember-sdk --config "$config" install --package devel/zlib --package graphics/png
+```
+
+Read the catalog again after a successful installation. For each exact target match with
+`action=installed`, write one `PKGPATH PKGNAME` line to the file selected by
+`CROSS_BULK_BINARY_INSTALLED`. Ports checks `@native` entries separately in the host prefix.
+If the prefix is busy, retry after its owner releases the lock. If `pkg_add`
+rejects an archive, keep its error and build the affected provider from source.
+Start `publish-additions.py --follow` after the Ports build acquires `STATE/build.lock`.
+
 Use `publication-candidates --ready` to group newly completed roots whose runtime
 providers satisfy the graph dependency patterns in the signed catalog or in the same batch. The
 `ready` list puts providers first. If another build published a newer version, the
