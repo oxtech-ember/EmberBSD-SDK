@@ -227,6 +227,14 @@ class AnchorTests(unittest.TestCase):
         self.child.pump()
         self.assertEqual(self.child.poll(), 0)
 
+    def test_poll_drains_events_of_a_running_tree(self):
+        event = types.SimpleNamespace(ident=50, filter=self.n.PROC,
+                  fflags=self.n.FORK, flags=0, data=0)
+        self.child.queue.control.side_effect = [[event] * 3]
+        with patch.object(os, 'waitid', return_value=None):
+            self.assertIsNone(self.child.poll())
+        self.assertEqual(self.child.queue.control.call_count, 1)
+
     def test_lost_root_wait_is_ownership_error(self):
         with patch.object(os, 'waitid', side_effect=ChildProcessError()):
             with self.assertRaises(SDKError): self.child.poll()

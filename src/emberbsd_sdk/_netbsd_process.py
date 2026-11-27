@@ -308,9 +308,9 @@ class NetBSDChild:
         if self.queue is None:
             raise SDKError('NetBSD process tracking was not established')
         # A full batch does not establish that all pending birth notes were read.
-        # Events of a long build wait in the queue until the next drain, so
-        # their number has no fixed limit. Bound the drain by time: a process
-        # tree that forks faster than one reader drains is a failure.
+        # poll() drains while the tree runs, but a caller can wait longer
+        # between drains. Bound the drain by time, not by a batch count: a
+        # process tree that forks faster than one reader drains is a failure.
         deadline = time.monotonic() + PUMP_SECONDS
         while True:
             try:
@@ -326,6 +326,9 @@ class NetBSDChild:
     def poll(self):
         if self.pid is None or self.reaped:
             return self.returncode
+        # Drain lifetime events while the tree runs. A supervisor polls often,
+        # so a long build leaves no backlog for the drain at stop time.
+        self.pump()
         try:
             status = os.waitid(os.P_PID, self.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
         except OSError as exc:
