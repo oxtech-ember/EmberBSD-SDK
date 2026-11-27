@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -166,6 +167,32 @@ class PackagePublishTests(BinaryReleaseFixture):
         self.assertNotEqual(before, committed)
         self.assertEqual(run()[0]['roots'], [])
         self.assertEqual(self.public.read('current.p7m', 1024 * 1024)[0], committed)
+
+    def test_follow_waits_for_a_concurrent_publisher_before_the_final_batch(self):
+        _, archive, workdir = self.prepare_addition()
+        state = self.work / 'completed'
+        state.mkdir()
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (state / 'packages').write_text('net/new new-1.0\n')
+        (state / 'done').write_text(f'net/new new-1.0 {digest}\n')
+        packages = self.work / 'archives'
+        packages.mkdir()
+        (packages / 'new-1.0.tgz').write_bytes(archive.read_bytes())
+
+        lock = '/bucket/.publisher-lock'
+        self.server.objects[lock] = b'peer'
+        def finish_peer(seconds):
+            self.assertEqual(seconds, 1)
+            self.assertEqual(self.server.objects.pop(lock), b'peer')
+
+        with patch('emberbsd_sdk.release_delivery.time') as clock:
+            clock.time.side_effect = time.time
+            clock.sleep.side_effect = finish_peer
+            event, = follow_completions(self.crypto, self.store, self.public, self.spec,
+                self.ports, workdir, self.leaf, self.ca.certificate, state, packages, interval=1)
+        clock.sleep.assert_called_once_with(1)
+        self.assertEqual(event['roots'], ['net/new'])
+        self.assertNotIn(lock, self.server.objects)
 
     def test_follow_publishes_from_an_active_sdk_wave_before_merge(self):
         from emberbsd_sdk import source_wave

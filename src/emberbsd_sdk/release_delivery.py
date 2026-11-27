@@ -90,17 +90,21 @@ def artifact_key(artifact, metadata_base):
 
 
 @contextmanager
-def _publisher_lock(store, prefix):
+def _publisher_lock(store, prefix, interval=None):
     # Covers both switching and deletion: CAS on current alone cannot prevent
     # an earlier publisher's cleanup from deleting a later publisher's inputs.
     key = _key(prefix, '.publisher-lock')
-    token = json_bytes({'token': secrets.token_hex(16), 'started_at': int(time.time())})
-    try:
-        store.put(key, token, **_digest(token))
-    except HTTPStatusError as exc:
-        if exc.status in (409, 412):
-            raise SDKError(f'publisher is busy; if it crashed, inspect and remove {key}') from exc
-        raise
+    while True:
+        token = json_bytes({'token': secrets.token_hex(16), 'started_at': int(time.time())})
+        try:
+            store.put(key, token, **_digest(token))
+            break
+        except HTTPStatusError as exc:
+            if exc.status not in (409, 412):
+                raise
+            if interval is None:
+                raise SDKError(f'publisher is busy; if it crashed, inspect and remove {key}') from exc
+            time.sleep(interval)
     try:
         yield
     finally:
@@ -117,7 +121,7 @@ def _clean_current(store, prefix, keep):
 
 def publish_release(crypto, store, public, envelope_path, identity, trust,
                     *, prefix='', ttl=7 * 86400, refresh=False, previous_channel_time=None,
-                    expected_current=None, reuse_current=False, withdrawals=None):
+                    expected_current=None, reuse_current=False, withdrawals=None, publisher_lock_interval=None):
     if type(ttl) is not int or ttl <= 0:
         raise SDKError('channel lifetime must be a positive number of seconds')
     if expected_current is not None and expected_current != 'absent':
@@ -148,7 +152,7 @@ def publish_release(crypto, store, public, envelope_path, identity, trust,
             if package in packages:
                 raise SDKError('current permits only one version of each package per platform')
             packages.add(package)
-    with _publisher_lock(store, prefix):
+    with _publisher_lock(store, prefix, publisher_lock_interval):
         return _publish_current(crypto, store, public, envelope_path, envelope, release,
                                 base, identity, trust, prefix, ttl, refresh, previous_channel_time,
                                 expected_current, reuse_current, withdrawals, catalogs)

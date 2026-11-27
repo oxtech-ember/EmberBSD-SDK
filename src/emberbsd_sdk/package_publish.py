@@ -172,7 +172,8 @@ def _ready_roots(crypto, graph, names, published, held, role):
 
 
 def update_packages(crypto, store, public, spec, ports_root, workdir, identity, trust,
-                    *, prefix='', ttl=7 * 86400, checksums=None, forbidden_prefixes=(), expected_parent=None):
+                    *, prefix='', ttl=7 * 86400, checksums=None, forbidden_prefixes=(), expected_parent=None,
+                    publisher_lock_interval=None):
     """Fetch, merge, seal and publish; resume a prepared release without signing again.
 
     A prepared operation is frozen until success. Use a new release_id for a
@@ -239,14 +240,14 @@ def update_packages(crypto, store, public, spec, ports_root, workdir, identity, 
         expected_current = hashlib.sha256(read_bytes(snapshot / 'current.p7m')).hexdigest()
         channel = publish_release(crypto, store, public, output / 'release.p7m', identity, trust,
                                   prefix=prefix, ttl=ttl, expected_current=expected_current,
-                                  reuse_current=True)
+                                  reuse_current=True, publisher_lock_interval=publisher_lock_interval)
         result = dict(channel=channel, statistics=statistics)
         write_json(result_path, result, exclusive=False)
         return result
 
 
 def _completed_batch(crypto, store, public, spec, ports_root, workdir, identity, trust,
-                     state, packages, held, prefix, ttl, forbidden_prefixes):
+                     state, packages, held, prefix, ttl, forbidden_prefixes, interval):
     """Select against signed current and retry a displaced selection from a new parent."""
     key = _key(prefix, 'current.p7m')
     for attempt in range(3):
@@ -264,7 +265,7 @@ def _completed_batch(crypto, store, public, spec, ports_root, workdir, identity,
         try:
             result = update_packages(crypto, store, public, batch, ports_root, workdir / fingerprint,
                 identity, trust, prefix=prefix, ttl=ttl, checksums=checksums,
-                forbidden_prefixes=forbidden_prefixes, expected_parent=parent)
+                forbidden_prefixes=forbidden_prefixes, expected_parent=parent, publisher_lock_interval=interval)
         except SDKError:
             current, _ = public.read(key, MAX_ENVELOPE, headers={'cache-control': 'no-cache'})
             if attempt == 2 or hashlib.sha256(current).hexdigest() == parent:
@@ -350,7 +351,7 @@ def follow_completions(crypto, store, public, spec, ports_root, workdir, identit
                     if active is None and producer is not None and marks[0] and marks[1] is None:
                         (snapshot / 'done').touch()
                     event = _completed_batch(crypto, store, public, spec, ports_root, workdir,
-                        identity, trust, snapshot, packages, held, prefix, ttl, forbidden_prefixes)
+                        identity, trust, snapshot, packages, held, prefix, ttl, forbidden_prefixes, interval)
                 yield event
                 previous = receipts, marks
             if active is None:

@@ -211,6 +211,8 @@ For a finished build, it scans once and exits. Keep the state directory through
 the final scan. Use a new invocation when the producer or its graph changes.
 The input release ID is the prefix for each batch ID. Each batch is tied to
 its signed parent and checksums. A displaced parent triggers fresh selection.
+If another publisher holds the S3 lock, the follower retries at `--interval`.
+It keeps the prepared batch and checks the signed parent after it obtains the lock.
 An archive failure stops the follower. Fix the archive or restart with
 `--hold-root PKGPATH` to release the independent packages.
 
