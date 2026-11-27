@@ -71,6 +71,10 @@ def decode_rows(data):
     return rows
 
 
+# Longest drain of queued process events before tracking fails.
+PUMP_SECONDS = 60
+
+
 class TrackedTree:
     """Birth tokens come from kernel attachment, never sampled wall clock."""
     def __init__(self, root):
@@ -304,7 +308,11 @@ class NetBSDChild:
         if self.queue is None:
             raise SDKError('NetBSD process tracking was not established')
         # A full batch does not establish that all pending birth notes were read.
-        for _ in range(1024):
+        # Events of a long build wait in the queue until the next drain, so
+        # their number has no fixed limit. Bound the drain by time: a process
+        # tree that forks faster than one reader drains is a failure.
+        deadline = time.monotonic() + PUMP_SECONDS
+        while True:
             try:
                 events = self.queue.control(None, 256, 0)
             except OSError as exc:
@@ -312,7 +320,8 @@ class NetBSDChild:
             self.tree.accept(events)
             if len(events) < 256:
                 return
-        raise SDKError('NetBSD process tracking did not reach a complete batch')
+            if time.monotonic() > deadline:
+                raise SDKError('NetBSD process tracking did not reach a complete batch')
 
     def poll(self):
         if self.pid is None or self.reaped:

@@ -238,6 +238,22 @@ class AnchorTests(unittest.TestCase):
         self.child.pump()
         self.assertEqual(self.child.queue.control.call_count, 2)
 
+    def test_long_backlog_is_drained_beyond_a_count_limit(self):
+        # One knote per exited build process waits until the next drain.
+        event = types.SimpleNamespace(ident=50, filter=self.n.PROC,
+                  fflags=self.n.FORK, flags=0, data=0)
+        self.child.queue.control.side_effect = [[event] * 256] * 5000 + [[]]
+        self.child.pump()
+        self.assertEqual(self.child.queue.control.call_count, 5001)
+
+    def test_endless_full_batches_fail_after_the_deadline(self):
+        event = types.SimpleNamespace(ident=50, filter=self.n.PROC,
+                  fflags=self.n.FORK, flags=0, data=0)
+        self.child.queue.control.return_value = [event] * 256
+        clock = iter(range(0, 10000, 10))
+        with patch.object(self.n.time, 'monotonic', side_effect=lambda: next(clock)):
+            with self.assertRaises(SDKError): self.child.pump()
+
 class GateTests(unittest.TestCase):
     def test_kernel_registration_and_identity_precede_exec_release(self):
         from emberbsd_sdk import _netbsd_process as n
