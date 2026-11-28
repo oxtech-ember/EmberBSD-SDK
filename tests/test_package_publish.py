@@ -2,6 +2,7 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Publisher-only package updates reuse current binaries and prepared signatures."""
 
+import gzip
 import hashlib
 import json
 import os
@@ -21,7 +22,9 @@ from test_binary_catalog import BinaryReleaseFixture, graph
 from emberbsd_sdk.binary_release import load_catalogs
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.jsonio import json_bytes, read_json
-from emberbsd_sdk.package_publish import follow_completions, packages_from_state, publication_candidates, update_packages
+from emberbsd_sdk.package_publish import (check_package_names, follow_completions,
+                                          packages_from_state, publication_candidates,
+                                          update_packages)
 from emberbsd_sdk.release_catalog import parse_channel
 import emberbsd_sdk.release_delivery as release_delivery
 from emberbsd_sdk.release_delivery import publish_release
@@ -56,6 +59,159 @@ class PackagePublishTests(BinaryReleaseFixture):
             release_dir / 'release.p7m', self.leaf, self.ca.certificate)
         self.assertNotIn('generation', pointer)
         return repo
+
+    def test_package_names_reuse_and_revision_conflicts_without_payload_io(self):
+        """Name admission lists S3 once and never reads or writes package bytes."""
+        repo = self.publish_baseline()
+        state = self.work / 'name-state'
+        state.mkdir()
+        (state / 'packages').write_text(
+            'net/app app-1.0\n'
+            'net/new new-1.0\n'
+            'devel/generator@native generator-1.0\n'
+            'net/free free-1.0\n')
+
+        for archive in ('new-1.0.tgz', 'new-1.0nb3.tgz'):
+            self.server.objects['/bucket/current/target/aarch64/' + archive] = b'occupied'
+        self.server.objects['/bucket/current/host/darwin-arm64/free-1.0.tgz'] = b'host'
+        with (patch.object(self.store, 'list_keys', wraps=self.store.list_keys) as listed,
+              patch.object(self.store, 'put') as put, patch.object(self.store, 'delete') as delete,
+              patch.object(self.public, 'read', wraps=self.public.read) as read,
+              patch.object(self.public, 'verify', wraps=self.public.verify) as verify):
+            result = check_package_names(self.crypto, self.store, self.public, repo['id'],
+                                         state, self.ca.certificate)
+        self.assertEqual(result['release_id'], self.spec['release_id'])
+        self.assertEqual(result['repository'], repo['id'])
+        self.assertEqual(result['planned'], 3)
+        self.assertEqual(result['reusable'], 1)
+        self.assertEqual(result['conflicts'], [
+            dict(root='net/new', pkgname='new-1.0', occupied=True,
+                 withdrawn=False, next_revision=4)])
+        listed.assert_called_once_with('current/target/aarch64/')
+        put.assert_not_called()
+        delete.assert_not_called()
+        self.assertFalse(any(call.args[0].endswith('.tgz') for call in read.call_args_list + verify.call_args_list))
+
+    def test_package_names_reusable_needs_no_s3_listing(self):
+        repo = self.publish_baseline()
+        state = self.work / 'empty-name-state'
+        state.mkdir()
+        (state / 'packages').write_text('net/app app-1.0\n')
+        with patch.object(self.store, 'list_keys', wraps=self.store.list_keys) as listed:
+            result = check_package_names(self.crypto, self.store, self.public, repo['id'],
+                                         state, self.ca.certificate)
+        self.assertEqual(result['planned'], 1)
+        self.assertEqual(result['reusable'], 1)
+        self.assertEqual(result['conflicts'], [])
+        listed.assert_not_called()
+
+    def test_package_names_resolve_signed_withdrawal_without_archive_io(self):
+        from emberbsd_sdk.binary_catalog import CATALOG_SCHEMA
+        from emberbsd_sdk.release_catalog import CHANNEL_SCHEMA, RELEASE_SCHEMA
+        from emberbsd_sdk.release_cli import seal_channel, seal_release
+
+        host = dict(os='Darwin', arch='arm64', abi='macos-27', runtime='libSystem-libcxx')
+        target = dict(arch='aarch64', triplet='aarch64--netbsd', abi='netbsd-11', runtime='libc++')
+        sources = {name: 'a' * 40 for name in ('os', 'ports', 'sdk')}
+
+        def artifact(identity, path, kind, *, host=None, target=None):
+            return dict(id=identity, path=path, kind=kind, host=host, target=target,
+                        size=0, unpacked_size=0, sha256='0' * 64, depends=[], licenses=['2-clause-bsd'])
+
+        def seal(directory, draft):
+            path = directory / 'release.p7m'
+            seal_release(self.crypto, json_bytes(draft), directory, self.leaf,
+                         self.ca.certificate, path)
+            return path
+
+        history = self.work / 'history'
+        history.mkdir()
+        old_host_path = history / 'darwin-arm64/old-tool-1.0nb3.tgz'
+        old_target_path = history / 'aarch64/target-only-2.0nb4.tgz'
+        old_host_path.parent.mkdir(parents=True)
+        old_target_path.parent.mkdir(parents=True)
+        old_host_path.write_bytes(b'previous signed host archive fixture')
+        old_target_path.write_bytes(b'previous signed target archive fixture')
+        old_host = artifact('old-host-id', 'darwin-arm64/old-tool-1.0nb3.tgz',
+                            'host-package', host=host)
+        old_target = artifact('old-target-id', 'aarch64/target-only-2.0nb4.tgz',
+                              'target-package', target=target)
+        for item, path in ((old_host, old_host_path), (old_target, old_target_path)):
+            item.update(size=path.stat().st_size, unpacked_size=path.stat().st_size,
+                        sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+        with patch.object(self.crypto, 'verify_package'):
+            history_release = seal(history, dict(schema=RELEASE_SCHEMA, release_id='history-one',
+                created_at=1, sources=sources, artifacts=[old_host, old_target]))
+
+        def current(release_id, withdrawal_pairs):
+            directory = self.work / release_id
+            directory.mkdir()
+            repo = 'darwin-arm64'
+            (directory / repo).mkdir()
+            catalog = dict(schema=CATALOG_SCHEMA, repository=repo, summary=repo + '-summary',
+                           packages=[], sets={})
+            (directory / repo / 'catalog.json').write_bytes(json_bytes(catalog))
+            (directory / repo / 'pkg_summary.gz').write_bytes(gzip.compress(b'', mtime=0))
+            (directory / repo / 'withdrawals.json').write_bytes(json_bytes(dict(
+                schema='emberbsd.withdrawals.v1', artifacts=[dict(id=i, sha256=h) for i, h in withdrawal_pairs])))
+            indexes = [artifact(repo + '-catalog', repo + '/catalog.json', 'package-index', host=host),
+                       artifact(repo + '-summary', repo + '/pkg_summary.gz', 'package-index', host=host),
+                       artifact(repo + '-withdrawals', repo + '/withdrawals.json', 'package-index', host=host)]
+            envelope = seal(directory, dict(schema=RELEASE_SCHEMA, release_id=release_id,
+                created_at=2, sources=sources, artifacts=indexes))
+            base = 'releases/' + release_id
+            channel_release = directory / base / 'release.p7m'
+            channel_release.parent.mkdir(parents=True)
+            channel_release.write_bytes(envelope.read_bytes())
+            pointer = directory / 'current.p7m'
+            seal_channel(self.crypto, json_bytes(dict(schema=CHANNEL_SCHEMA, channel='current',
+                issued_at=int(time.time()) - 10, expires_at=int(time.time()) + 3600,
+                release=dict(id=release_id, path=base + '/release.p7m', size=1, sha256='0' * 64))),
+                directory, self.leaf, self.ca.certificate, pointer)
+            remote = '/bucket/staging/'
+            self.server.objects[remote + 'current.p7m'] = pointer.read_bytes()
+            self.server.objects[remote + base + '/release.p7m'] = channel_release.read_bytes()
+            for relative in (repo + '/catalog.json', repo + '/pkg_summary.gz', repo + '/withdrawals.json'):
+                self.server.objects[remote + base + '/' + relative] = (directory / relative).read_bytes()
+
+        state = self.work / 'native-state'
+        state.mkdir()
+        (state / 'packages').write_text('devel/old-tool@native old-tool-1.0nb3\n'
+                                        'devel/target-only@native target-only-2.0nb4\n')
+        host_key = '/bucket/staging/current/host/darwin-arm64/old-tool-1.0nb3.tgz'
+        self.assertNotIn(host_key, self.server.objects)  # Revoked archive was deleted.
+        self.assertNotIn('/bucket/staging/.publisher-lock', self.server.objects)
+        self.server.objects['/bucket/staging/current/target/aarch64/target-only-2.0nb4.tgz'] = b'target only'
+        current('host-current', [(old_host['id'], old_host['sha256']),
+                                 (old_target['id'], old_target['sha256'])])
+        with patch.object(self.store, 'list_keys', wraps=self.store.list_keys) as listed, \
+             patch.object(self.public, 'read', wraps=self.public.read) as read, \
+             patch.object(self.public, 'verify', wraps=self.public.verify) as verify, \
+             patch.object(self.store, 'head') as head, patch.object(self.store, 'put') as put, \
+             patch.object(self.store, 'delete') as delete:
+            exact = check_package_names(self.crypto, self.store, self.public, 'darwin-arm64', state,
+                self.ca.certificate, prefix='staging', history=[history_release])
+            self.assertEqual(exact['conflicts'], [dict(root='devel/old-tool@native',
+                pkgname='old-tool-1.0nb3', occupied=False, withdrawn=True, next_revision=4)])
+            listed.assert_called_once_with('staging/current/host/darwin-arm64/')
+            self.assertFalse(any(c.args[0].endswith('.tgz') for c in read.call_args_list + verify.call_args_list))
+            head.assert_not_called()
+            put.assert_not_called()
+            delete.assert_not_called()
+
+            current('wrong-digest-current', [(old_host['id'], 'f' * 64),
+                                             (old_target['id'], old_target['sha256'])])
+            listed.reset_mock()
+            read.reset_mock()
+            verify.reset_mock()
+            wrong = check_package_names(self.crypto, self.store, self.public, 'darwin-arm64', state,
+                self.ca.certificate, prefix='staging', history=[history_release])
+            self.assertEqual(wrong['conflicts'], [])  # Wrong digest and target-role name do not reserve host names.
+            listed.assert_called_once_with('staging/current/host/darwin-arm64/')
+            self.assertFalse(any(c.args[0].endswith('.tgz') for c in read.call_args_list + verify.call_args_list))
+            head.assert_not_called()
+            put.assert_not_called()
+            delete.assert_not_called()
 
     def prepare_addition(self, *, root='net/new', release_id='package-update', created_at=2, payload=b'fixture data\n'):
         repo = self.publish_baseline()

@@ -12,16 +12,18 @@ import shutil
 import tempfile
 import time
 
-from .binary_catalog import node_root, runtime_projection
+from .binary_catalog import node_root, parse_catalog, runtime_projection
 from .binary_release import (compose, inspect_package, load_catalogs, local_producer_prefixes,
                              _matches, _newer_than, _statistics)
 from .errors import SDKError
 from .jsonio import json_bytes, read_json, write_json
 from .package_cache import directory_lock
 from .package_selection import _parse_root
+from .package_withdrawals import parse_withdrawals
 from .paths import entry, open_regular, real_directory, stable_identity
 from .release_catalog import MAX_ENVELOPE, parse_channel, parse_release
-from .release_delivery import MetadataCache, _key, fetch_release, publish_release, release_snapshot
+from .release_delivery import (MetadataCache, _key, fetch_release, package_object_directory,
+                               publish_release, release_snapshot)
 from .release_signing import read_bytes
 from .source_wave import live_receipt_directory
 
@@ -32,6 +34,117 @@ def _receipt_files(receipt):
     if receipt == 'packaged':
         return ('packages', 'packaged', 'package-failed')
     raise SDKError('unknown Ports archive receipt: ' + str(receipt))
+
+
+def _state_packages(state, name, role, selected=()):
+    result = {}
+    path = state / name
+    if name == 'packaged' and not path.exists() and (state / 'package-failed').is_file():
+        return {}
+    for line in path.read_text(encoding='utf-8').splitlines():
+        fields = line.split()
+        if not fields:
+            continue
+        root = fields[0]
+        # Cross-bulk STATE can contain successful results for both roles.
+        # Ignore the other role before interpreting its row payload.
+        if root.endswith('@native') != (role == 'host') or (selected and root not in selected):
+            continue
+        if ((name == 'packages' and len(fields) != 2) or
+                (name == 'done' and len(fields) not in (2, 3)) or
+                (name == 'packaged' and len(fields) != 3)):
+            raise SDKError('invalid Ports state row: ' + name)
+        root, pkgname = fields[:2]
+        _parse_root(root, 'Ports state')
+        if (name == 'packages' and root in result) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+\-]*-[0-9][A-Za-z0-9._+]*', pkgname):
+            raise SDKError('invalid or duplicate package in Ports state: ' + root)
+        local_install = name == 'done' and role == 'host' and fields[2:] == ['native']
+        if len(fields) == 3 and not local_install:
+            if not re.fullmatch('[0-9a-f]{64}', fields[2]):
+                raise SDKError('invalid successful package SHA256: ' + root)
+        if name == 'done' and len(fields) == 2:
+            # A successful install row without an archive checksum is not
+            # publishable and supersedes any older archived result.
+            result[root] = [pkgname, None]
+        else:
+            # The latest result can also be an installed-only native tool.
+            result[root] = fields[1:]
+    return result
+
+
+def _archive_conflicts(planned, published, occupied, withdrawn):
+    def version(name):
+        match = re.fullmatch(r'(.+?)nb([0-9]+)', name)
+        return (match[1], int(match[2])) if match else (name, 0)
+
+    owners = {name: root for root, name in published.items()}
+    reserved = occupied | withdrawn | owners.keys()
+    latest = {}
+    for name in reserved | set(planned.values()):
+        base, revision = version(name)
+        latest[base] = max(revision, latest.get(base, 0))
+    conflicts = []
+    for root, name in sorted(planned.items()):
+        if published.get(root) == name or name not in reserved:
+            continue
+        base, _ = version(name)
+        latest[base] += 1
+        conflict = dict(root=root, pkgname=name, occupied=name in occupied,
+                        withdrawn=name in withdrawn, next_revision=latest[base])
+        if name in owners:
+            conflict['published_root'] = owners[name]
+        conflicts.append(conflict)
+    return conflicts
+
+
+def check_package_names(crypto, store, public, repository, state, trust, *, prefix='', history=()):
+    """Check one Ports order against signed metadata and immutable object names."""
+    with release_snapshot(crypto, public, trust, tempfile.gettempdir(), prefix=prefix,
+                          repositories=[repository]) as (release, snapshot):
+        artifacts = {item['path']: item for item in release['artifacts']}
+        index = artifacts.get(repository + '/catalog.json')
+        if not index or index['kind'] != 'package-index':
+            raise SDKError('release has no package catalog for ' + repository)
+        catalog = parse_catalog(read_bytes(snapshot / index['path']), release, index)
+        if catalog['repository'] != repository:
+            raise SDKError('catalog repository differs from its signed path')
+        role = 'host' if index['host'] else 'target'
+        planned = {root: name for root, (name,) in _state_packages(Path(state), 'packages', role).items()}
+        if len(set(planned.values())) != len(planned):
+            raise SDKError('multiple planned roots have the same package name')
+        published = {row['root']: row['pkgname'] for row in catalog['packages']}
+        withdrawal = artifacts.get(repository + '/withdrawals.json')
+        pairs = parse_withdrawals(read_bytes(snapshot / withdrawal['path'])) if withdrawal else set()
+        if pairs:
+            selected = {row['artifact'] for row in catalog['packages']}
+            if any(item['id'] in selected and (item['id'], item['sha256']) in pairs
+                   for item in release['artifacts']):
+                raise SDKError('signed catalog selects a withdrawn package')
+        reusable = sum(published.get(root) == name for root, name in planned.items())
+        result = dict(release_id=release['release_id'], repository=repository, planned=len(planned),
+                      reusable=reusable, conflicts=[])
+        if reusable == len(planned):
+            return result
+        platform_directory = package_object_directory(index)
+        directory = _key(prefix, platform_directory) + '/'
+        occupied = {key[len(directory):-4] for key in store.list_keys(directory)
+                    if key.endswith('.tgz') and '/' not in key[len(directory):]}
+        withdrawn = set()
+
+        def record_names(entries):
+            for item in entries:
+                if (item['kind'] == role + '-package' and item['path'].startswith(repository + '/')
+                        and (item['id'], item['sha256']) in pairs
+                        and package_object_directory(item) == platform_directory):
+                    withdrawn.add(Path(item['path']).name.removesuffix('.tgz'))
+
+        if pairs:
+            record_names(release['artifacts'])
+            for path in history:
+                previous = parse_release(crypto.verify_cms(read_bytes(path), trust))
+                record_names(previous['artifacts'])
+        result['conflicts'] = _archive_conflicts(planned, published, occupied, withdrawn)
+        return result
 
 
 def packages_from_state(spec, state, packages, *, selected_roots=(), allow_empty=False, graph=None, receipt='done'):
@@ -51,40 +164,9 @@ def packages_from_state(spec, state, packages, *, selected_roots=(), allow_empty
         if node['id'].startswith(role + ':'):
             by_root.setdefault(node_root(node['id']), []).append(node)
     state, packages = Path(state), Path(packages).absolute()
-    planned, completed = {}, {}
     plan_file, archive_file, *failure_files = _receipt_files(receipt)
-    for name, result in ((plan_file, planned), (archive_file, completed)):
-        path = state / name
-        if name == 'packaged' and not path.exists() and (state / 'package-failed').is_file():
-            continue
-        for line in path.read_text(encoding='utf-8').splitlines():
-            fields = line.split()
-            if not fields:
-                continue
-            root = fields[0]
-            # Cross-bulk STATE can contain successful results for both roles.
-            # Ignore the other role before interpreting its row payload.
-            if root.endswith('@native') != (role == 'host') or (selected and root not in selected):
-                continue
-            if ((name == 'packages' and len(fields) != 2) or
-                    (name == 'done' and len(fields) not in (2, 3)) or
-                    (name == 'packaged' and len(fields) != 3)):
-                raise SDKError('invalid Ports state row: ' + name)
-            root, pkgname = fields[:2]
-            _parse_root(root, 'Ports state')
-            if (name == 'packages' and root in result) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+\-]*-[0-9][A-Za-z0-9._+]*', pkgname):
-                raise SDKError('invalid or duplicate package in Ports state: ' + root)
-            local_install = name == 'done' and role == 'host' and fields[2:] == ['native']
-            if name == archive_file and len(fields) == 3 and not local_install:
-                if not re.fullmatch('[0-9a-f]{64}', fields[2]):
-                    raise SDKError('invalid successful package SHA256: ' + root)
-            if name == 'done' and len(fields) == 2:
-                # A successful install row without an archive checksum is not
-                # publishable and supersedes any older archived result.
-                result[root] = [pkgname, None]
-            else:
-                # The latest result can also be an installed-only native tool.
-                result[root] = fields[1:]
+    planned = _state_packages(state, plan_file, role, selected)
+    completed = _state_packages(state, archive_file, role, selected)
     excluded = set()
     for name in failure_files:
         path = state / name

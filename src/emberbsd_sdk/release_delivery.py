@@ -77,10 +77,8 @@ def _immutable(store, public, key, body, size, sha256, content_type):
     public.verify(key, size, sha256)
 
 
-def artifact_key(artifact, metadata_base):
-    """Ordinary versioned package names; only metadata needs a temporary snapshot."""
-    if artifact['kind'] == 'package-index':
-        return metadata_base + '/' + artifact['path']
+def package_object_directory(artifact):
+    """Return the immutable object directory for the signed platform."""
     if artifact['host']:
         host = artifact['host']
         platform = host['os'].lower() + '-' + host['arch']
@@ -88,7 +86,14 @@ def artifact_key(artifact, metadata_base):
     else:
         platform, role = artifact['target']['arch'], 'target'
     _pattern(platform, _SLUG, 'repository platform')
-    return 'current/' + role + '/' + platform + '/' + artifact['path'].split('/')[-1]
+    return 'current/' + role + '/' + platform
+
+
+def artifact_key(artifact, metadata_base):
+    """Ordinary versioned package names; only metadata needs a temporary snapshot."""
+    if artifact['kind'] == 'package-index':
+        return metadata_base + '/' + artifact['path']
+    return package_object_directory(artifact) + '/' + artifact['path'].split('/')[-1]
 
 
 @contextmanager

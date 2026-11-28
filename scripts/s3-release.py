@@ -12,6 +12,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from emberbsd_sdk.errors import SDKError
 from emberbsd_sdk.jsonio import json_bytes
+from emberbsd_sdk.package_publish import check_package_names
 from emberbsd_sdk.release_delivery import fetch_artifact, fetch_release, publish_release
 from emberbsd_sdk.release_s3 import HTTPStore, S3Store
 from emberbsd_sdk.release_signing import ReleaseCrypto, SigningIdentity
@@ -23,17 +24,18 @@ def main(argv=None):
     parser.add_argument('--tls-ca-file', type=Path, help='HTTPS trust bundle; separate from the release root')
     parser.add_argument('--https-proxy', help='explicit HTTP CONNECT proxy URL for HTTPS')
     commands = parser.add_subparsers(dest='command', required=True)
-    for name in ('publish', 'fetch', 'fetch-artifact'):
+    for name in ('publish', 'fetch', 'fetch-artifact', 'check-package-names'):
         command = commands.add_parser(name)
         command.add_argument('--url', required=True, help='public HTTPS base URL, without S3 credentials')
         command.add_argument('--prefix', default='', help='optional repository key prefix, shared by S3 and HTTPS')
         command.add_argument('--trust-root', required=True, type=Path)
-        if name == 'publish':
-            command.add_argument('release', type=Path, help='local release.p7m beside its payloads')
-            command.add_argument('--signer-directory', required=True, type=Path)
+        if name in ('publish', 'check-package-names'):
             command.add_argument('--endpoint', help='defaults to EMBERBSD_S3_ENDPOINT')
             command.add_argument('--region', help='defaults to EMBERBSD_S3_REGION')
             command.add_argument('--bucket', help='defaults to EMBERBSD_S3_BUCKET')
+        if name == 'publish':
+            command.add_argument('release', type=Path, help='local release.p7m beside its payloads')
+            command.add_argument('--signer-directory', required=True, type=Path)
             command.add_argument('--ttl', type=int, default=7 * 86400, help='channel lifetime in seconds')
             command.add_argument('--refresh', action='store_true', help='refresh expiry even for the same release')
             command.add_argument('--expected-current',
@@ -44,6 +46,11 @@ def main(argv=None):
                                  help='withdraw an exact current package or bootstrap and remove its object')
             command.add_argument('--previous-channel-time', type=int,
                                  help='publisher recovery only: authenticate the old channel at this past Unix time')
+        elif name == 'check-package-names':
+            command.add_argument('--repository', required=True, help='signed package repository ID')
+            command.add_argument('--state', required=True, type=Path, help='prepared Ports order directory')
+            command.add_argument('--history', action='append', default=[], type=Path, metavar='RELEASE.P7M',
+                                 help='signed release used to identify previously withdrawn names')
         elif name == 'fetch':
             command.add_argument('--output', required=True, type=Path, help='new local metadata snapshot directory')
             command.add_argument('--repository', action='append', default=[])
@@ -55,9 +62,10 @@ def main(argv=None):
         with ExitStack() as transports:
             crypto = ReleaseCrypto.from_prefix(args.host_prefix, packages=args.command == 'publish')
             public = transports.enter_context(HTTPStore(args.url, ca_file=args.tls_ca_file, proxy_url=args.https_proxy))
-            if args.command == 'publish':
+            if args.command in ('publish', 'check-package-names'):
                 store = transports.enter_context(S3Store.from_environment(
                     endpoint=args.endpoint, region=args.region, bucket=args.bucket, ca_file=args.tls_ca_file, proxy_url=args.https_proxy))
+            if args.command == 'publish':
                 identity = SigningIdentity(args.signer_directory / 'certificate.pem',
                                            args.signer_directory / 'private-key.pem')
                 withdrawals = {}
@@ -71,6 +79,9 @@ def main(argv=None):
                                         previous_channel_time=args.previous_channel_time,
                                         expected_current=args.expected_current,
                                         reuse_current=args.reuse_current, withdrawals=withdrawals)
+            elif args.command == 'check-package-names':
+                value = check_package_names(crypto, store, public, args.repository, args.state,
+                                            args.trust_root, prefix=args.prefix, history=args.history)
             elif args.command == 'fetch':
                 value = fetch_release(crypto, public, args.trust_root, args.output,
                                       prefix=args.prefix, repositories=args.repository)
@@ -78,7 +89,7 @@ def main(argv=None):
                 value = fetch_artifact(crypto, public, args.trust_root, args.output,
                                        args.artifact, prefix=args.prefix)
         sys.stdout.buffer.write(json_bytes(value))
-        return 0
+        return 3 if args.command == 'check-package-names' and value['conflicts'] else 0
     except (SDKError, OSError, ValueError) as exc:
         print(f's3-release: {exc}', file=sys.stderr)
         return 1

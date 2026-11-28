@@ -139,6 +139,24 @@ A failed upload does not switch current. A failure after switching, including
 cleanup failure, can leave a usable new current and extra old files: retry the
 same input. Deletion never happens before public verification of current.
 
+## Check package names before a bulk build
+
+After Ports writes its order, check the planned package names against one signed repository.
+Run this maintainer command once for the batch. It needs permission to list the S3 package directory.
+
+```sh
+python3 scripts/s3-release.py --host-prefix "$HOST_PREFIX" check-package-names \
+  --url "$PUBLIC_URL" --trust-root trust/emberbsd-release-root.pem \
+  --repository netbsd-aarch64 --state "$STATE"
+```
+
+The command reads `STATE/packages` and the signed package metadata. Exact matches for the same root count as `reusable`.
+For the remaining names it lists the selected host or target directory once.
+Withdrawal records identify exact artifact IDs and SHA-256 values. The current and earlier signed releases supply their archive names.
+Add `--history /path/to/release.p7m` for each earlier signed release that identifies removed archives by ID and SHA-256.
+The JSON report lists each conflicting root, package name and next free revision above the known revisions for that version.
+Exit status 3 means the report contains conflicts. Status 0 means the checked names are clear. Publication checks concurrent changes again.
+
 ## Optional maintainer command: publish built additions
 
 `scripts/publish-additions.py` automates fetch, catalog composition, sealing and
