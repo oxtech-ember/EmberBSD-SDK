@@ -389,6 +389,11 @@ def follow_completions(crypto, store, public, spec, ports_root, workdir, identit
                         identity, trust, snapshot, packages, held, prefix, ttl, forbidden_prefixes, interval, metadata_cache, receipt)
                 yield event
                 previous = receipts, marks
+                if active is not None and event['roots']:
+                    # The builder can finish more archives while S3 is publishing.
+                    next_owner = owner()
+                    if next_owner != active or _receipt_marks(receipt_directory(next_owner), files) != marks:
+                        continue
             if active is None:
                 break
             time.sleep(interval)

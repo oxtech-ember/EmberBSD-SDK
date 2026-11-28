@@ -274,6 +274,36 @@ class PackagePublishTests(BinaryReleaseFixture):
             clock.sleep.side_effect = None
             self.assertEqual([event['roots'] for event in events], [[]])
 
+    def test_follow_rescans_receipts_after_a_batch_finishes(self):
+        _, archive, workdir = self.prepare_addition()
+        state = self.work / 'rescan-state'
+        state.mkdir()
+        (state / 'build.lock').mkdir()
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (state / 'packages').write_text('net/new new-1.0\nnet/other other-1.0\n')
+        (state / 'packaged').write_text(f'net/new new-1.0 {digest}\n')
+        packages = self.work / 'rescan-packages'
+        packages.mkdir()
+        shutil.copyfile(archive, packages / 'new-1.0.tgz')
+        batches = []
+
+        def publish_batch(*_args):
+            batches.append(True)
+            if len(batches) == 1:
+                with (state / 'packaged').open('a') as output:
+                    output.write('net/other other-1.0 ' + digest + '\n')
+                return dict(roots=['net/new'], waiting={})
+            shutil.rmtree(state / 'build.lock')
+            return dict(roots=['net/other'], waiting={})
+
+        with patch('emberbsd_sdk.package_publish._completed_batch', side_effect=publish_batch), \
+                patch('emberbsd_sdk.package_publish.time') as clock:
+            clock.sleep.side_effect = AssertionError('new receipt should be consumed immediately')
+            events = list(follow_completions(self.crypto, self.store, self.public, self.spec,
+                self.ports, workdir, self.leaf, self.ca.certificate, state, packages, interval=1))
+        self.assertEqual([event['roots'] for event in events], [['net/new'], ['net/other']])
+        clock.sleep.assert_not_called()
+
     def test_follow_reselects_after_another_authenticated_publisher_advances_current(self):
         _, archive, workdir = self.prepare_addition()
         state = self.work / 'follow-state'
