@@ -2,6 +2,7 @@
 # Copyright (c) 2026 EmberBSD contributors.
 """Keep all process groups of one owned session inside its lock lifetime."""
 
+import itertools
 import os
 from pathlib import Path
 import signal
@@ -165,6 +166,19 @@ except SDKError as exc:
                 process.run_logged([sys.executable, '-c', 'pass'], log)
         self.assertIsInstance(failure.exception.sid, int)
         self.assertEqual(failure.exception.log, str(log))
+
+    def test_unproven_drain_names_remaining_members(self):
+        from emberbsd_sdk.errors import ProcessOwnershipError
+        group = object.__new__(process.OwnedProcessGroup)
+        group.child = Mock(pid=42)
+        group.inspector = Mock(spec=[])
+        with patch.object(group, '_members', return_value={77, 5}), \
+                patch.object(group, '_signal'), patch.object(process.time, 'sleep'), \
+                patch.object(process.time, 'monotonic', side_effect=itertools.cycle((0, 100))):
+            with self.assertRaises(ProcessOwnershipError) as failure:
+                group.stop()
+        self.assertEqual(failure.exception.sid, 42)
+        self.assertIn('did not disappear: 5 77', str(failure.exception))
 
     def test_empty_session_requires_a_complete_scan(self):
         inspector = object.__new__(process.SessionInspector)

@@ -406,6 +406,7 @@ class OwnedProcessGroup:
         while True:
             self.poll()
             members = self._members()
+            self._remaining = members
             if not members:
                 return True
             native = getattr(self.inspector, 'native', None)
@@ -424,7 +425,10 @@ class OwnedProcessGroup:
         for number, delay in ((signal.SIGTERM, 2), (signal.SIGKILL, 10)):
             if self._drain(delay, number):
                 return
-        raise ProcessOwnershipError(self.pid, 'session members did not disappear')
+        # Name the remaining PIDs: a tracked PID that is absent from the process
+        # table identifies a lost exit event, which the log cannot show later.
+        remaining = ' '.join(str(pid) for pid in sorted(self._remaining))
+        raise ProcessOwnershipError(self.pid, f'session members did not disappear: {remaining}')
 
 
 class ContextLocks:
