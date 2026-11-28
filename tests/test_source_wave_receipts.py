@@ -81,6 +81,25 @@ class ReceiptMergeTests(unittest.TestCase):
             (self.private / name).write_text(text)
         return before
 
+    def test_wave_merges_archive_receipts_without_target_registration(self):
+        from emberbsd_sdk.source_wave import _private_schedule
+        import shutil
+
+        old = 'devel/old old-1.0 ' + '1' * 64 + '\n'
+        other = 'devel/other other-1.0 ' + '2' * 64 + '\n'
+        fresh = 'devel/new new-2.0 ' + '3' * 64 + '\n'
+        _write(self.real, 'packaged', old + other)
+        _write(self.real, 'package-failed', 'devel/new package\n')
+        private = _private_schedule(self.real, ['devel/old', 'devel/new'])
+        self.addCleanup(shutil.rmtree, private)
+        self.assertEqual((private / 'packaged').read_text(), old + other)
+        _write(private, 'packaged', other + fresh)
+        _write(private, 'package-failed', 'devel/old package-hash\n')
+        _merge_receipts(self.real, private, {})
+        self.assertEqual((self.real / 'packaged').read_text(), other + fresh)
+        self.assertEqual((self.real / 'package-failed').read_text(), 'devel/old package-hash\n')
+        self.assertFalse((self.real / 'done').exists())
+
     def test_success_this_wave_drops_previous_failed_row(self):
         before = self._seed(
             failed='x11/plasma6-layer-shell-qt incompatible-workdir\n'

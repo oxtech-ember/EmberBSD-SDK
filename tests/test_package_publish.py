@@ -27,6 +27,22 @@ import emberbsd_sdk.release_delivery as release_delivery
 from emberbsd_sdk.release_delivery import publish_release
 
 
+class FollowReceiptTests(unittest.TestCase):
+    def test_host_follows_done_and_honors_archive_selection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            plan = state / 'packages'
+            plan.write_text('devel/tool@native tool-1\n')
+            spec = {'repositories': [{'host': {'arch': 'arm64'}, 'graph': str(plan)}]}
+            for override, expected in ((None, 'done'), ('packaged', 'packaged')):
+                with self.subTest(override=override):
+                    (state / expected).write_text('devel/tool@native tool-1 ' + 'a' * 64 + '\n')
+                    with patch('emberbsd_sdk.package_publish._completed_batch', return_value={}) as batch:
+                        list(follow_completions(None, None, None, spec, state, state / 'work',
+                             None, None, state, state, receipt=override))
+                    self.assertEqual(batch.call_args.args[-1], expected)
+
+
 class PackagePublishTests(BinaryReleaseFixture):
     def setUp(self):
         http_fixture.HTTPTests.setUp(self)
@@ -158,7 +174,7 @@ class PackagePublishTests(BinaryReleaseFixture):
         state = self.work / 'follow-state'
         state.mkdir()
         (state / 'packages').write_text('net/new new-1.0\n')
-        (state / 'done').write_text('net/new new-1.0 ' + '0' * 64 + '\n')
+        (state / 'packaged').write_text('net/new new-1.0 ' + '0' * 64 + '\n')
         archive_dir = self.work / 'follow-packages'
         archive_dir.mkdir()
         (archive_dir / 'new-1.0.tgz').write_bytes(archive.read_bytes())
@@ -172,7 +188,7 @@ class PackagePublishTests(BinaryReleaseFixture):
             run()
         self.assertEqual(self.public.read('current.p7m', 1024 * 1024)[0], before)
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-        (state / 'done').write_text('net/new new-1.0 ' + digest + '\n')
+        (state / 'packaged').write_text('net/new new-1.0 ' + digest + '\n')
         (state / 'build.lock').mkdir()
         with patch('emberbsd_sdk.package_publish.time') as clock:
             clock.sleep.side_effect = lambda _: (state / 'build.lock').rmdir()
@@ -218,6 +234,12 @@ class PackagePublishTests(BinaryReleaseFixture):
         self.assertNotIn(lock, self.server.objects)
 
     def test_follow_publishes_from_an_active_sdk_wave_before_merge(self):
+        self._follow_active_wave('done')
+
+    def test_follow_publishes_packaged_before_sdk_registration(self):
+        self._follow_active_wave('packaged')
+
+    def _follow_active_wave(self, receipt_file):
         from emberbsd_sdk import source_wave
 
         _, archive, workdir = self.prepare_addition()
@@ -234,17 +256,19 @@ class PackagePublishTests(BinaryReleaseFixture):
 
         def start_wave(_):
             shutil.copyfile(state / 'packages', private / 'packages')
-            (private / 'done').write_text(receipt)
+            self.assertFalse((private / receipt_file).exists(), 'follower missed the active wave')
+            (private / receipt_file).write_text(receipt)
             source_wave._write_controller(lock, os.getpid(), 'test controller', private)
 
         with patch('emberbsd_sdk.package_publish.time') as clock:
             clock.sleep.side_effect = start_wave
             events = follow_completions(self.crypto, self.store, self.public, self.spec,
-                self.ports, workdir, self.leaf, self.ca.certificate, state, packages, interval=1)
+                self.ports, workdir, self.leaf, self.ca.certificate, state, packages, interval=1,
+                receipt=None if receipt_file == 'packaged' else receipt_file)
             self.assertEqual(next(events)['roots'], ['net/new'])
             self.assertFalse((state / 'done').exists())
             clock.sleep.assert_called_once_with(1)
-            (state / 'done').write_text(receipt)
+            (state / receipt_file).write_text(receipt)
             shutil.rmtree(lock)
             shutil.rmtree(private)
             clock.sleep.side_effect = None
@@ -256,7 +280,7 @@ class PackagePublishTests(BinaryReleaseFixture):
         state.mkdir()
         (state / 'packages').write_text('net/new new-1.0\n')
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-        (state / 'done').write_text('net/new new-1.0 ' + digest + '\n')
+        (state / 'packaged').write_text('net/new new-1.0 ' + digest + '\n')
         package_directory = self.work / 'follow-packages'
         package_directory.mkdir()
         (package_directory / 'new-1.0.tgz').write_bytes(archive.read_bytes())

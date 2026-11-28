@@ -319,10 +319,12 @@ def _copy_receipts(directory, files, marks, snapshot):
 
 def follow_completions(crypto, store, public, spec, ports_root, workdir, identity, trust,
                        state, packages, *, held=(), prefix='', ttl=7 * 86400, forbidden_prefixes=(),
-                       interval=30, receipt='done'):
+                       interval=30, receipt=None):
     """Yield release results while this Ports build owns its build.lock."""
     if interval < 1 or len(spec['repositories']) != 1:
         raise SDKError('follow requires a positive interval and one producer repository')
+    if receipt is None:
+        receipt = 'packaged' if spec['repositories'][0]['host'] is None else 'done'
     workdir, state = Path(workdir).absolute(), Path(state)
     workdir.mkdir(mode=0o700, parents=True, exist_ok=True)
     real_directory(workdir)
@@ -340,7 +342,7 @@ def follow_completions(crypto, store, public, spec, ports_root, workdir, identit
     files = _receipt_files(receipt)
 
     def receipt_directory(active):
-        if active is not None and receipt == 'done':
+        if active is not None:
             return live_receipt_directory(state)
         return state
 

@@ -33,7 +33,8 @@ from .host_services import _service_path
 
 
 _RECEIPTS = ('done', 'failed', 'blocked', 'skipped')
-_COPIED = ('edges', 'packages', 'progress', *_RECEIPTS)
+_ARCHIVE_RECEIPTS = ('packaged', 'package-failed')
+_COPIED = ('edges', 'packages', 'progress', *_RECEIPTS, *_ARCHIVE_RECEIPTS)
 _CONTROLLER_READY = contextvars.ContextVar('ember_controller_ready', default=None)
 _CONTROLLER_PULSE = contextvars.ContextVar('ember_controller_pulse', default=None)
 _CONTROLLER_LOCK = contextvars.ContextVar('ember_controller_lock', default=None)
@@ -970,6 +971,24 @@ def _merge_receipts(real_state, private, before, planned=None):
     receipts = {}
     collected = {}
     planned = dict(planned or {})
+    # Ports replaces archive rows by root, including withdrawal before a retry.
+    # Transfer the selected roots under the existing state lock on exit or recovery.
+    wave = set(_read_text(private / 'order').splitlines())
+    for name in _ARCHIVE_RECEIPTS:
+        source, target = private / name, real_state / name
+        if not wave or (not source.exists() and not source.is_symlink()):
+            continue
+        if source.is_symlink() or not source.is_file() or target.is_symlink() or (target.exists() and not target.is_file()):
+            raise SDKError(f'Ports receipt is not a regular file: {name}')
+        previous = _read_text(target)
+        current = source.read_text()
+        if previous == current and (target.exists() or name == 'package-failed'):
+            continue
+        rows = [line for line in previous.splitlines() if _row_root(line) not in wave]
+        rows.extend(line for line in current.splitlines() if _row_root(line) in wave)
+        updated = ''.join(line + '\n' for line in rows)
+        if updated != previous or (name == 'packaged' and not target.exists()):
+            _durable_write(real_state, name, updated.encode())
     for name in (*_RECEIPTS, 'progress'):
         collected[name] = _new_lines(before.get(name, ''), _read_text(private / name))
     resolved = _done_packages(before.get('done', '')) + _done_packages(_read_text(private / 'done'))
@@ -1091,12 +1110,11 @@ def _safe_private(text):
 
 def _durable_write(directory, name, data):
     temporary = directory / f'{name}.tmp'
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
-    try:
-        os.write(fd, data)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0)
+    with os.fdopen(os.open(temporary, flags, 0o644), 'wb') as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
     os.replace(temporary, directory / name)
     directory_fd = os.open(directory, os.O_RDONLY)
     try:

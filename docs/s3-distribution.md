@@ -171,8 +171,8 @@ python3 scripts/publish-additions.py package-build.json \
 The input can leave `packages` empty in this mode. `STATE/packages` names must
 match successful `STATE/done` entries and graph versions. Completed packages
 outside the supplied graph are ignored, so tasks can share one STATE directory.
-For a Ports `cross-bulk.sh package` run, pass `--receipt packaged` to the
-publisher or to `publication-candidates`. This selects archive checksums from
+For ready archives from a target build or a Ports `cross-bulk.sh package` run,
+pass `--receipt packaged` to the publisher or to `publication-candidates`. This selects archive checksums from
 `STATE/packaged` and excludes roots in `STATE/package-failed`. Use the same
 producer graph and archive directory. The option also works with `--follow`.
 For a rolling publication, export the typed runtime graph once for the producer
@@ -227,7 +227,12 @@ dependency patterns, runtime files and producer paths before signing.
 
 For a live Ports build, pass `--follow` to `publish-additions.py` with its
 `--state`, `--packages`, producer graph, private work directory and usual signing
-options. It reads completion receipts when they change and emits one JSON
+options. For a target repository, the follower selects verified archives from
+`STATE/packaged` while Ports installs or replaces them in the build sysroot.
+For host repositories it selects `STATE/done` by default. Pass `--receipt`
+to select a specific receipt. After publication, install the released packages
+from the signed S3 catalog in a control prefix and run `pkg_admin check`.
+The follower reads completion receipts when they change and emits one JSON
 result per batch. Selection and composition reuse immutable release indexes by their
 signed digests for the duration of the command. The publisher reads the current
 pointer from S3 for each snapshot. It checks signed current again when missing providers can
